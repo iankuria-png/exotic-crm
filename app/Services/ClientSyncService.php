@@ -67,7 +67,9 @@ class ClientSyncService
         $lastSync = Client::where('platform_id', $this->platform->id)
             ->max('last_synced_at');
 
-        $modifiedAfter = $lastSync ? $lastSync->toIso8601String() : null;
+        $modifiedAfter = $lastSync
+            ? \Carbon\Carbon::parse($lastSync)->toIso8601String()
+            : null;
 
         $page = 1;
         $created = 0;
