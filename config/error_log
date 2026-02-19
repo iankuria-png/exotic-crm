@@ -1,0 +1,108 @@
+[01-Dec-2025 13:03:55 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/database.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/database.php on line 18
+[01-Dec-2025 13:03:55 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/app.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/app.php on line 18
+[01-Dec-2025 13:03:55 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php on line 16
+[28-Jan-2026 17:39:09 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/database.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/database.php on line 18
+[28-Jan-2026 17:39:09 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php on line 16
+[28-Jan-2026 17:39:09 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/app.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/app.php on line 18
+[28-Jan-2026 17:39:09 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/services.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/services.php on line 18
+[28-Jan-2026 17:39:31 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/cache.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/cache.php on line 18
+[28-Jan-2026 17:40:29 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/filesystems.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/filesystems.php on line 16
+[28-Jan-2026 17:40:29 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/queue.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/queue.php on line 16
+[28-Jan-2026 17:40:29 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/session.php:21
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/session.php on line 21
+[28-Jan-2026 17:40:29 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function resource_path() in /home/d9410/testing.exotic-ads.com/management/api/config/view.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/view.php on line 17
+[28-Jan-2026 17:40:29 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/logging.php:20
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/logging.php on line 20
+[28-Jan-2026 17:40:29 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/broadcasting.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/broadcasting.php on line 18
+[12-Feb-2026 20:46:11 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php on line 16
+[12-Feb-2026 20:46:12 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/services.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/services.php on line 18
+[14-Feb-2026 09:52:35 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/database.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/database.php on line 18
+[14-Feb-2026 09:52:35 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/mail.php on line 16
+[14-Feb-2026 09:52:35 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/app.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/app.php on line 18
+[14-Feb-2026 09:52:35 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/services.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/services.php on line 18
+[14-Feb-2026 09:52:50 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/cache.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/cache.php on line 18
+[14-Feb-2026 09:53:28 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/filesystems.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/filesystems.php on line 16
+[14-Feb-2026 09:53:28 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/queue.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/queue.php on line 16
+[14-Feb-2026 09:53:28 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/session.php:21
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/session.php on line 21
+[14-Feb-2026 09:53:28 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function resource_path() in /home/d9410/testing.exotic-ads.com/management/api/config/view.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/view.php on line 17
+[14-Feb-2026 09:53:28 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/logging.php:20
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/logging.php on line 20
+[14-Feb-2026 09:53:28 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/d9410/testing.exotic-ads.com/management/api/config/broadcasting.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/d9410/testing.exotic-ads.com/management/api/config/broadcasting.php on line 18

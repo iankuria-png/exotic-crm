@@ -1,0 +1,1207 @@
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<script>
+jQuery(document).ready(function($) {
+    if (typeof escortwp_user_id !== 'undefined' && $('.dropdownlinks-dropdown h4:contains("My Account")').length > 0) {
+        // Add the activate button with better styling
+        var activateBtn = `
+            <div class="activate-account-btn-wrapper" style="margin: 15px 0;">
+                <button id="activate-account-btn" class="premium-button" 
+                    data-user-id="${escortwp_user_id}">
+                    <span class="button-icon">✨</span>
+                    <span class="button-text">Upgrade to Premium</span>
+                </button>
+                <style>
+                    .premium-button {
+                        width: 100%;
+                        padding: 12px;
+                        border: none;
+                        border-radius: 30px;
+                        background: linear-gradient(135deg, #6e8efb, #a777e3);
+                        color: white;
+                        font-weight: bold;
+                        font-size: 15px;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 8px;
+                        transition: all 0.3s ease;
+                        box-shadow: 0 4px 15px rgba(110, 142, 251, 0.3);
+                    }
+                    .premium-button:hover {
+                        transform: translateY(-2px);
+                        box-shadow: 0 6px 20px rgba(110, 142, 251, 0.4);
+                    }
+                    .premium-button:active {
+                        transform: translateY(0);
+                    }
+                    .button-icon {
+                        font-size: 18px;
+                    }
+                </style>
+            </div>
+        `;
+
+        $('.dropdownlinks-dropdown h4:contains("My Account")').closest('.dropdownlinks-dropdown')
+            .prepend(activateBtn);
+
+        // Handle click
+        $('#activate-account-btn').click(function(e) {
+            e.preventDefault();
+            showPackageSelection();
+        });
+    }
+});
+
+function showPackageSelection() {
+    // Show animated loading state
+    Swal.fire({
+        title: 'Loading Premium Packages',
+        html: `
+            <div style="margin: 20px 0;">
+                <div class="loading-wave" style="display: flex; justify-content: center; gap: 5px; height: 30px;">
+                    <div style="background: #6e8efb; height: 100%; width: 6px; animation: wave 1s ease-in-out infinite; animation-delay: 0.1s; border-radius: 3px;"></div>
+                    <div style="background: #a777e3; height: 100%; width: 6px; animation: wave 1s ease-in-out infinite; animation-delay: 0.2s; border-radius: 3px;"></div>
+                    <div style="background: #6e8efb; height: 100%; width: 6px; animation: wave 1s ease-in-out infinite; animation-delay: 0.3s; border-radius: 3px;"></div>
+                    <div style="background: #a777e3; height: 100%; width: 6px; animation: wave 1s ease-in-out infinite; animation-delay: 0.4s; border-radius: 3px;"></div>
+                </div>
+                <style>
+                    @keyframes wave {
+                        0%, 60%, 100% { transform: scaleY(0.6); }
+                        30% { transform: scaleY(1); }
+                    }
+                </style>
+            </div>
+            <p style="color: #666; margin-top: 15px;">Preparing exclusive offers for you...</p>
+        `,
+        allowOutsideClick: false,
+        showConfirmButton: false
+    });
+
+    // Fetch products from Laravel API
+    $.ajax({
+        url: 'https://api.exoticnairobi.com/api/products',
+        method: 'GET',
+        success: function(response) {
+            Swal.close();
+            
+            // Check if response is valid and contains products array
+            if (!response || !response.products || !Array.isArray(response.products)) {
+                console.error('Invalid API response format:', response);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Data Error',
+                    text: response?.message || 'Received invalid data format from server',
+                    confirmButtonColor: '#6e8efb',
+                    background: '#ffffff',
+                    backdrop: 'rgba(110, 142, 251, 0.1)'
+                });
+                return;
+            }
+            
+            const products = response.products;
+            
+            // Check if products array is empty
+            if (products.length === 0) {
+                Swal.fire({
+                    icon: 'info',
+                    title: 'No packages available',
+                    text: response.message || 'Please contact support for assistance.',
+                    confirmButtonColor: '#6e8efb',
+                    background: '#ffffff',
+                    backdrop: 'rgba(110, 142, 251, 0.1)'
+                });
+                return;
+            }
+
+            // Build product list HTML with horizontal layout
+            let productOptions = products.map((p, index) => {
+                // Ensure product has required fields with fallbacks
+                const productId = p.id || 'unknown';
+                const productName = p.name || 'Unnamed Package';
+                const monthlyPrice = parseFloat(p.monthly_price) || 0;
+                const biweeklyPrice = parseFloat(p.biweekly_price) || 0;
+                const productCurrency = p.currency || 'KES';
+                const productDesc = p.description || 'Premium account features';
+                
+                let popularBadge = '';
+                let recommendedBadge = '';
+                let ribbonClass = '';
+                
+                // Mark the middle package as "Most Popular"
+                if (index === Math.floor(products.length / 2)) {
+                    popularBadge = `<div class="popular-badge">MOST POPULAR</div>`;
+                    ribbonClass = 'popular-ribbon';
+                }
+                
+                // Mark the last package as "Recommended"
+                if (index === products.length - 1) {
+                    recommendedBadge = `<div class="recommended-badge">BEST VALUE</div>`;
+                    ribbonClass = 'recommended-ribbon';
+                }
+                
+                return `
+                    <div class="package-card ${ribbonClass}">
+                        ${popularBadge}
+                        ${recommendedBadge}
+                        <div class="package-name">${productName}</div>
+                        
+                        <div class="pricing-options">
+                            <div class="pricing-option active" data-price="${monthlyPrice}" data-duration="monthly">
+                                <div class="option-name">Monthly</div>
+                                <div class="option-price">
+                                    <span class="currency">${productCurrency}</span>
+                                    <span class="amount">${monthlyPrice.toLocaleString()}</span>
+                                </div>
+                            </div>
+                            <div class="pricing-option" data-price="${biweeklyPrice}" data-duration="biweekly">
+                                <div class="option-name">2Weeks</div>
+                                <div class="option-price">
+                                    <span class="currency">${productCurrency}</span>
+                                    <span class="amount">${biweeklyPrice.toLocaleString()}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="package-features">
+                            ${productDesc.split('\n').map(feature => 
+                                `<div class="feature-item">
+                                    <span class="feature-icon">✓</span>
+                                    <span class="feature-text">${feature.trim()}</span>
+                                </div>`
+                            ).join('')}
+                        </div>
+                      <button class="select-package-btn" 
+                            onclick="selectPackage(event, '${productId}', '${productName.replace(/'/g, "\\'")}', ${monthlyPrice}, ${biweeklyPrice}, '${productCurrency}')">
+                            Select Plan
+                    </button>
+                    </div>
+                `;
+            }).join('');
+
+            Swal.fire({
+                title: 'Choose Your Premium Plan',
+                html: `
+                    <div class="package-selection-header">
+                        <div class="header-icon">🏆</div>
+                        <h3>Unlock Exclusive Features</h3>
+                        <p>Select the plan that fits your needs</p>
+                    </div>
+                    <div class="horizontal-scroll-container">
+                        <div class="package-horizontal-container">
+                            ${productOptions}
+                        </div>
+                    </div>
+                    <style>
+                        .package-selection-header {
+                            text-align: center;
+                            margin-bottom: 20px;
+                        }
+                        .package-selection-header .header-icon {
+                            font-size: 40px;
+                            margin-bottom: 10px;
+                        }
+                        .package-selection-header h3 {
+                            margin: 5px 0;
+                            color: #333;
+                        }
+                        .package-selection-header p {
+                            color: #666;
+                            margin: 0;
+                        }
+                        .horizontal-scroll-container {
+                            width: 100%;
+                            overflow-x: auto;
+                            padding-bottom: 20px;
+                            margin-top: 20px;
+                        }
+                        .package-horizontal-container {
+                            display: inline-flex;
+                            gap: 20px;
+                            padding: 0 10px;
+                        }
+                        .package-card {
+                            position: relative;
+                            border: 1px solid #e0e0e0;
+                            border-radius: 15px;
+                            padding: 25px;
+                            min-width: 280px;
+                            transition: all 0.3s ease;
+                            background: white;
+                            overflow: hidden;
+                        }
+                        .popular-ribbon {
+                            border-top: 3px solid #6e8efb;
+                        }
+                        .recommended-ribbon {
+                            border-top: 3px solid #a777e3;
+                        }
+                        .popular-badge, .recommended-badge {
+                            position: absolute;
+                            top: 10px;
+                            right: -25px;
+                            background: #6e8efb;
+                            color: white;
+                            padding: 3px 30px;
+                            font-size: 12px;
+                            font-weight: bold;
+                            transform: rotate(45deg);
+                        }
+                        .recommended-badge {
+                            background: #a777e3;
+                        }
+                        .package-card:hover {
+                            transform: translateY(-5px);
+                            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+                            border-color: #a777e3;
+                        }
+                        .package-name {
+                            font-size: 20px;
+                            font-weight: bold;
+                            margin-bottom: 15px;
+                            color: #333;
+                            text-align: center;
+                        }
+                        .pricing-options {
+                            display: flex;
+                            gap: 10px;
+                            margin-bottom: 20px;
+                            background: #f8f9ff;
+                            padding: 10px;
+                            border-radius: 10px;
+                        }
+                        .pricing-option {
+                            flex: 1;
+                            padding: 10px;
+                            border-radius: 8px;
+                            text-align: center;
+                            cursor: pointer;
+                            transition: all 0.3s ease;
+                        }
+                        .pricing-option.active {
+                            background: white;
+                            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                            border: 1px solid #a777e3;
+                        }
+                        .pricing-option:not(.active):hover {
+                            background: rgba(255,255,255,0.7);
+                        }
+                        .option-name {
+                            font-size: 14px;
+                            font-weight: bold;
+                            color: #666;
+                            margin-bottom: 5px;
+                        }
+                        .pricing-option.active .option-name {
+                            color: #6e8efb;
+                        }
+                        .option-price {
+                            font-size: 18px;
+                            font-weight: bold;
+                            color: #333;
+                            display: flex;
+                            align-items: flex-start;
+                            justify-content: center;
+                            gap: 3px;
+                        }
+                        .pricing-option.active .option-price {
+                            color: #a777e3;
+                        }
+                        .option-price .currency {
+                            font-size: 12px;
+                            margin-top: 3px;
+                        }
+                        .package-features {
+                            font-size: 14px;
+                            color: #666;
+                            line-height: 1.6;
+                            margin-bottom: 20px;
+                        }
+                        .feature-item {
+                            display: flex;
+                            align-items: flex-start;
+                            margin-bottom: 10px;
+                        }
+                        .feature-icon {
+                            color: #6e8efb;
+                            margin-right: 8px;
+                            font-weight: bold;
+                        }
+                        .select-package-btn {
+                            background: linear-gradient(135deg, #6e8efb, #a777e3);
+                            color: white;
+                            border: none;
+                            width: 100%;
+                            padding: 12px;
+                            border-radius: 30px;
+                            font-weight: bold;
+                            cursor: pointer;
+                            transition: all 0.3s ease;
+                        }
+                        .select-package-btn:hover {
+                            background: linear-gradient(135deg, #5d7de8, #9666d8);
+                        }
+                        .swal2-popup {
+                            max-width: 900px !important;
+                            border-radius: 15px !important;
+                        }
+                        .swal2-title {
+                            color: #333;
+                        }
+                        /* Scrollbar styling */
+                        .horizontal-scroll-container::-webkit-scrollbar {
+                            height: 8px;
+                        }
+                        .horizontal-scroll-container::-webkit-scrollbar-track {
+                            background: #f1f1f1;
+                            border-radius: 10px;
+                        }
+                        .horizontal-scroll-container::-webkit-scrollbar-thumb {
+                            background: #6e8efb;
+                            border-radius: 10px;
+                        }
+                        .horizontal-scroll-container::-webkit-scrollbar-thumb:hover {
+                            background: #5d7de8;
+                        }
+                    </style>
+                `,
+                showConfirmButton: false,
+                showCloseButton: true,
+                width: 'auto'
+            });
+
+            // Add click handler for pricing options
+            $('.pricing-option').click(function() {
+                $(this).siblings().removeClass('active');
+                $(this).addClass('active');
+            });
+        },
+        error: function(xhr) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Connection Error',
+                text: xhr.responseJSON?.message || 'Could not load packages. Please check your connection and try again.',
+                confirmButtonColor: '#6e8efb',
+                background: '#ffffff',
+                backdrop: 'rgba(110, 142, 251, 0.1)'
+            });
+        }
+    });
+}
+
+function selectPackage(event, id, name, monthlyPrice, biweeklyPrice, currency) {
+    // Get the parent package card element
+    const packageCard = $(event.target).closest('.package-card');
+    
+    // Get selected pricing option within this card
+    const selectedOption = packageCard.find('.pricing-option.active');
+    const price = parseFloat(selectedOption.data('price'));
+    const duration = selectedOption.data('duration');
+    
+    Swal.fire({
+        title: 'Select Payment Method',
+        html: `
+            <div class="payment-header">
+                <div class="selected-package">
+                    <span class="package-name">${name} (${duration === 'monthly' ? 'Monthly' : 'Biweekly'})</span>
+                    <span class="package-price">${currency} ${price.toLocaleString()}</span>
+                </div>
+            </div>
+            <div class="payment-method-container">
+                <div class="payment-method" onclick="showMobileMoneyOptions('${id}', '${name}', ${price}, '${currency}', '${duration}')">
+                    <div class="payment-icon">📱</div>
+                    <div class="payment-content">
+                        <div class="payment-name">Mobile Money</div>
+                        <div class="payment-desc">MPESA, Airtel Money</div>
+                    </div>
+                    <div class="payment-arrow">→</div>
+                </div>
+                
+                <div class="payment-method" onclick="showBankPayment('${id}', '${name}', ${price}, '${currency}', '${duration}')">
+                    <div class="payment-icon">🏦</div>
+                    <div class="payment-content">
+                        <div class="payment-name">Bank Transfer</div>
+                        <div class="payment-desc">Co-op Bank</div>
+                    </div>
+                    <div class="payment-arrow">→</div>
+                </div>
+                
+                <div class="payment-method" onclick="showPaypalPayment('${id}', '${name}', ${price}, '${currency}', '${duration}')">
+                    <div class="payment-icon">💳</div>
+                    <div class="payment-content">
+                        <div class="payment-name">PayPal</div>
+                        <div class="payment-desc">Credit/Debit Card</div>
+                    </div>
+                    <div class="payment-arrow">→</div>
+                </div>
+            </div>
+            <style>
+                .payment-header {
+                    background: #f8f9ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin-bottom: 20px;
+                    text-align: center;
+                }
+                .selected-package {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 15px;
+                    background: white;
+                    padding: 10px 20px;
+                    border-radius: 30px;
+                    box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+                }
+                .package-name {
+                    font-weight: bold;
+                    color: #333;
+                }
+                .package-price {
+                    font-weight: bold;
+                    color: #6e8efb;
+                }
+                .payment-method-container {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
+                    margin-top: 15px;
+                }
+                .payment-method {
+                    display: flex;
+                    align-items: center;
+                    gap: 15px;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 12px;
+                    padding: 15px;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                    background: white;
+                }
+                .payment-method:hover {
+                    transform: translateY(-3px);
+                    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+                    border-color: #a777e3;
+                }
+                .payment-icon {
+                    font-size: 28px;
+                    width: 50px;
+                    height: 50px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    background: #f5f9ff;
+                    border-radius: 50%;
+                    color: #6e8efb;
+                }
+                .payment-content {
+                    flex: 1;
+                }
+                .payment-name {
+                    font-weight: bold;
+                    font-size: 16px;
+                    margin-bottom: 3px;
+                    color: #333;
+                }
+                .payment-desc {
+                    font-size: 13px;
+                    color: #666;
+                }
+                .payment-arrow {
+                    color: #999;
+                    font-size: 20px;
+                    padding-right: 5px;
+                }
+            </style>
+        `,
+        showConfirmButton: false,
+        showCloseButton: true,
+        width: '500px'
+    });
+}
+
+function showMobileMoneyOptions(id, name, price, currency, duration) {
+    Swal.fire({
+        title: 'Pay with Mobile Money',
+        html: `
+            <div class="mobile-money-header">
+                <div class="package-info">
+                    <span class="package-name">${name} (${duration === 'monthly' ? 'Monthly' : 'Biweekly'})</span>
+                    <span class="package-price">${currency} ${price.toLocaleString()}</span>
+                </div>
+            </div>
+            <p class="provider-prompt">Select your mobile money provider:</p>
+            <div class="mobile-money-options">
+                <div class="mobile-option" onclick="requestPhoneNumber('${id}', '${name}', ${price}, '${currency}', 'mpesa', '${duration}')">
+                    <div class="provider-logo">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/1/15/M-PESA_LOGO-01.svg" alt="MPESA">
+                    </div>
+                    <div class="provider-name">MPESA</div>
+                </div>
+                <div class="mobile-option" onclick="requestPhoneNumber('${id}', '${name}', ${price}, '${currency}', 'airtel', '${duration}')">
+                    <div class="provider-logo">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/7/7d/Airtel_Money_Logo.svg" alt="Airtel Money">
+                    </div>
+                    <div class="provider-name">Airtel Money</div>
+                </div>
+            </div>
+            <style>
+                .mobile-money-header {
+                    background: #f8f9ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin-bottom: 20px;
+                }
+                .package-info {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 15px;
+                    background: white;
+                    padding: 10px 20px;
+                    border-radius: 30px;
+                    box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+                }
+                .package-name {
+                    font-weight: bold;
+                    color: #333;
+                }
+                .package-price {
+                    font-weight: bold;
+                    color: #6e8efb;
+                }
+                .provider-prompt {
+                    text-align: center;
+                    color: #666;
+                    margin: 15px 0;
+                }
+                .mobile-money-options {
+                    display: flex;
+                    justify-content: center;
+                    gap: 30px;
+                    margin: 20px 0;
+                }
+                .mobile-option {
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                    padding: 20px;
+                    border-radius: 12px;
+                    text-align: center;
+                    width: 150px;
+                    background: white;
+                    border: 1px solid #e0e0e0;
+                }
+                .mobile-option:hover {
+                    transform: translateY(-5px);
+                    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+                    border-color: #a777e3;
+                }
+                .provider-logo {
+                    height: 50px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin-bottom: 10px;
+                }
+                .provider-logo img {
+                    max-height: 100%;
+                    max-width: 100%;
+                }
+                .provider-name {
+                    font-weight: bold;
+                    color: #333;
+                }
+            </style>
+        `,
+        showConfirmButton: false,
+        showCloseButton: true,
+        width: '500px'
+    });
+}
+
+function requestPhoneNumber(id, name, price, currency, provider, duration) {
+    Swal.fire({
+        title: `Pay with ${provider === 'mpesa' ? 'MPESA' : 'Airtel Money'}`,
+        html: `
+            <div class="payment-summary">
+                <div class="package-name">${name} (${duration === 'monthly' ? 'Monthly' : 'Biweekly'})</div>
+                <div class="package-price">${currency} ${price.toLocaleString()}</div>
+            </div>
+            <div class="phone-input-container">
+                <label for="payment-phone">Enter your phone number:</label>
+                <div class="input-wrapper">
+                    <span class="country-code">+254</span>
+                    <input type="tel" id="payment-phone" class="phone-input" 
+                        placeholder="${provider === 'mpesa' ? '7XXXXXXXX' : '7XXXXXXXX'}" 
+                        pattern="[0-9]{9}" 
+                        inputmode="numeric" />
+                </div>
+                <small class="input-hint">Enter your 9-digit phone number without the country code</small>
+            </div>
+            <style>
+                .payment-summary {
+                    background: #f8f9ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin-bottom: 20px;
+                    text-align: center;
+                }
+                .package-name {
+                    font-weight: bold;
+                    color: #333;
+                }
+                .package-price {
+                    font-weight: bold;
+                    color: #6e8efb;
+                    font-size: 18px;
+                    margin-top: 5px;
+                }
+                .phone-input-container {
+                    margin-top: 20px;
+                }
+                .phone-input-container label {
+                    display: block;
+                    text-align: left;
+                    margin-bottom: 8px;
+                    color: #555;
+                    font-weight: 500;
+                }
+                .input-wrapper {
+                    display: flex;
+                    border: 1px solid #ddd;
+                    border-radius: 8px;
+                    overflow: hidden;
+                }
+                .country-code {
+                    padding: 10px 12px;
+                    background: #f5f5f5;
+                    color: #666;
+                    font-weight: bold;
+                }
+                .phone-input {
+                    flex: 1;
+                    padding: 10px 12px;
+                    border: none;
+                    outline: none;
+                    font-size: 15px;
+                }
+                .phone-input:focus {
+                    background: #f8f9ff;
+                }
+                .input-hint {
+                    display: block;
+                    text-align: left;
+                    margin-top: 8px;
+                    color: #888;
+                    font-size: 13px;
+                }
+            </style>
+        `,
+        showCancelButton: true,
+        confirmButtonText: 'Proceed to Payment',
+        confirmButtonColor: '#6e8efb',
+        focusConfirm: false,
+        preConfirm: () => {
+            const phone = document.getElementById('payment-phone').value;
+            if (!phone || !/^[0-9]{9}$/.test(phone)) {
+                Swal.showValidationMessage('Please enter a valid 9-digit phone number');
+                return false;
+            }
+            
+            const formattedPhone = '254' + phone;
+            return { phone: formattedPhone };
+        }
+    }).then((result) => {
+        if (result.isConfirmed) {
+            processPayment(id, name, price, currency, provider, result.value.phone, duration);
+        }
+    });
+}
+
+function showBankPayment(id, name, price, currency, duration) {
+    Swal.fire({
+        title: 'Bank Transfer',
+        html: `
+            <div class="bank-payment-container">
+                <div class="payment-summary">
+                    <div class="package-name">${name} (${duration === 'monthly' ? 'Monthly' : 'Biweekly'})</div>
+                    <div class="package-price">${currency} ${price.toLocaleString()}</div>
+                </div>
+                
+                <div class="bank-details">
+                    <h4>Bank Account Details</h4>
+                    <div class="detail-item">
+                        <span class="detail-label">Bank:</span>
+                        <span class="detail-value">Co-operative Bank of Kenya</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Account Name:</span>
+                        <span class="detail-value">Exotic Nairobi</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Account Number:</span>
+                        <span class="detail-value">0112345678900</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Branch:</span>
+                        <span class="detail-value">Nairobi CBD</span>
+                    </div>
+                </div>
+                
+                <div class="payment-form">
+                    <div class="form-group">
+                        <label for="bank-reference">Payment Reference/Transaction ID</label>
+                        <input type="text" id="bank-reference" class="form-input" 
+                            placeholder="Enter your transaction code" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="bank-sender">Your Full Name (as per bank)</label>
+                        <input type="text" id="bank-sender" class="form-input" 
+                            placeholder="Enter your full name" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="bank-phone">Your Phone Number</label>
+                        <input type="tel" id="bank-phone" class="form-input" 
+                            placeholder="Enter phone number for confirmation" 
+                            pattern="[0-9]{10}" required>
+                    </div>
+                </div>
+            </div>
+            <style>
+                .bank-payment-container {
+                    text-align: left;
+                }
+                .payment-summary {
+                    background: #f8f9ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin-bottom: 20px;
+                    text-align: center;
+                }
+                .package-name {
+                    font-weight: bold;
+                    color: #333;
+                }
+                .package-price {
+                    font-weight: bold;
+                    color: #6e8efb;
+                    font-size: 18px;
+                    margin-top: 5px;
+                }
+                .bank-details {
+                    background: #f5f9ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin: 15px 0;
+                }
+                .bank-details h4 {
+                    margin-top: 0;
+                    margin-bottom: 15px;
+                    color: #333;
+                }
+                .detail-item {
+                    display: flex;
+                    margin-bottom: 10px;
+                }
+                .detail-label {
+                    font-weight: bold;
+                    width: 120px;
+                    color: #555;
+                }
+                .detail-value {
+                    flex: 1;
+                }
+                .payment-form {
+                    margin-top: 20px;
+                }
+                .form-group {
+                    margin-bottom: 15px;
+                }
+                .form-group label {
+                    display: block;
+                    margin-bottom: 8px;
+                    color: #555;
+                    font-weight: 500;
+                }
+                .form-input {
+                    width: 100%;
+                    padding: 10px 12px;
+                    border: 1px solid #ddd;
+                    border-radius: 8px;
+                    font-size: 15px;
+                }
+                .form-input:focus {
+                    outline: none;
+                    border-color: #6e8efb;
+                    box-shadow: 0 0 0 2px rgba(110, 142, 251, 0.2);
+                }
+            </style>
+        `,
+        showCancelButton: true,
+        confirmButtonText: 'Submit Payment Details',
+        confirmButtonColor: '#6e8efb',
+        focusConfirm: false,
+        preConfirm: () => {
+            const reference = document.getElementById('bank-reference').value;
+            const sender = document.getElementById('bank-sender').value;
+            const phone = document.getElementById('bank-phone').value;
+            
+            if (!reference) {
+                Swal.showValidationMessage('Please enter the transaction reference');
+                return false;
+            }
+            if (!sender) {
+                Swal.showValidationMessage('Please enter your full name');
+                return false;
+            }
+            if (!phone || !/^0[0-9]{9}$/.test(phone)) {
+                Swal.showValidationMessage('Please enter a valid 10-digit phone number starting with 0');
+                return false;
+            }
+            
+            return { reference, sender, phone };
+        }
+    }).then((result) => {
+        if (result.isConfirmed) {
+            // Show confirmation with animation
+            Swal.fire({
+                title: 'Payment Submitted!',
+                html: `
+                    <div class="confirmation-animation">
+                        <svg class="checkmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 52 52">
+                            <circle class="checkmark__circle" cx="26" cy="26" r="25" fill="none"/>
+                            <path class="checkmark__check" fill="none" d="M14.1 27.2l7.1 7.2 16.7-16.8"/>
+                        </svg>
+                        <p>Your payment details have been received.</p>
+                        <p>We will verify your payment and activate your account shortly.</p>
+                        <p class="confirmation-note">You'll receive a confirmation email/SMS once processed.</p>
+                    </div>
+                    <style>
+                        .confirmation-animation {
+                            text-align: center;
+                        }
+                        .checkmark {
+                            width: 80px;
+                            height: 80px;
+                            margin: 0 auto 20px;
+                        }
+                        .checkmark__circle {
+                            stroke: #6e8efb;
+                            stroke-width: 2;
+                            stroke-dasharray: 166;
+                            stroke-dashoffset: 166;
+                            stroke-linecap: round;
+                            fill: none;
+                            animation: stroke 0.6s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+                        }
+                        .checkmark__check {
+                            stroke: #6e8efb;
+                            stroke-width: 2;
+                            stroke-dasharray: 48;
+                            stroke-dashoffset: 48;
+                            animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.6s forwards;
+                        }
+                        @keyframes stroke {
+                            100% { stroke-dashoffset: 0; }
+                        }
+                        .confirmation-note {
+                            font-size: 14px;
+                            color: #666;
+                            margin-top: 15px;
+                        }
+                    </style>
+                `,
+                icon: 'success',
+                confirmButtonColor: '#6e8efb'
+            });
+            
+            // Send details to backend
+            jQuery.ajax({
+                url: 'https://api.exoticnairobi.com/api/bank-payment',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    product_id: id,
+                    reference: result.value.reference,
+                    sender_name: result.value.sender,
+                    phone: result.value.phone,
+                    user_id: escortwp_user_id,
+                    duration: duration
+                }),
+                success: function(response) {
+                    console.log('Bank payment details submitted', response);
+                },
+                error: function(xhr) {
+                    console.error('Error submitting bank payment', xhr);
+                }
+            });
+        }
+    });
+}
+
+function showPaypalPayment(id, name, price, currency, duration) {
+    Swal.fire({
+        title: 'PayPal Payment',
+        html: `
+            <div class="paypal-payment-container">
+                <div class="payment-summary">
+                    <div class="package-name">${name} (${duration === 'monthly' ? 'Monthly' : 'Biweekly'})</div>
+                    <div class="package-price">${currency} ${price.toLocaleString()}</div>
+                </div>
+                
+                <div class="paypal-logo">
+                    <img src="https://www.paypalobjects.com/webstatic/mktg/logo/pp_cc_mark_37x23.jpg" alt="PayPal">
+                </div>
+                
+                <p class="paypal-description">
+                    You will be redirected to PayPal to complete your payment.
+                    Click "Continue to PayPal" to proceed with the secure checkout.
+                </p>
+            </div>
+            <style>
+                .paypal-payment-container {
+                    text-align: center;
+                }
+                .payment-summary {
+                    background: #f8f9ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin-bottom: 20px;
+                }
+                .package-name {
+                    font-weight: bold;
+                    color: #333;
+                }
+                .package-price {
+                    font-weight: bold;
+                    color: #6e8efb;
+                    font-size: 18px;
+                    margin-top: 5px;
+                }
+                .paypal-logo {
+                    margin: 20px 0;
+                }
+                .paypal-logo img {
+                    height: 40px;
+                }
+                .paypal-description {
+                    color: #666;
+                    line-height: 1.5;
+                }
+            </style>
+        `,
+        showCancelButton: true,
+        confirmButtonText: 'Continue to PayPal',
+        confirmButtonColor: '#6e8efb',
+        icon: 'info',
+        focusConfirm: false
+    }).then((result) => {
+        if (result.isConfirmed) {
+            // Show animated redirect
+            Swal.fire({
+                title: 'Redirecting to PayPal',
+                html: `
+                    <div class="redirect-animation">
+                        <div class="loading-dots">
+                            <div></div>
+                            <div></div>
+                            <div></div>
+                        </div>
+                        <p>Please wait while we connect you to PayPal...</p>
+                    </div>
+                    <style>
+                        .redirect-animation {
+                            text-align: center;
+                        }
+                        .loading-dots {
+                            display: flex;
+                            justify-content: center;
+                            gap: 8px;
+                            margin: 20px 0;
+                        }
+                        .loading-dots div {
+                            width: 12px;
+                            height: 12px;
+                            background: #6e8efb;
+                            border-radius: 50%;
+                            animation: bounce 1.4s infinite ease-in-out;
+                        }
+                        .loading-dots div:nth-child(1) {
+                            animation-delay: -0.32s;
+                        }
+                        .loading-dots div:nth-child(2) {
+                            animation-delay: -0.16s;
+                        }
+                        @keyframes bounce {
+                            0%, 80%, 100% { transform: scale(0); }
+                            40% { transform: scale(1); }
+                        }
+                    </style>
+                `,
+                timer: 3000,
+                timerProgressBar: true,
+                showConfirmButton: false,
+                allowOutsideClick: false,
+                willClose: () => {
+                    // In a real implementation, you would redirect to PayPal
+                    console.log('Redirecting to PayPal payment');
+                    // window.location.href = 'https://api.exoticnairobi.com/paypal-checkout?product=' + id + '&duration=' + duration;
+                }
+            });
+        }
+    });
+}
+
+function processPayment(id, name, price, currency, provider, phone, duration) {
+    Swal.fire({
+        title: 'Processing Payment',
+        html: `
+            <div class="processing-payment">
+                <div class="loading-spinner">
+                    <div class="spinner"></div>
+                </div>
+                <p class="processing-text">Sending payment request to your ${provider === 'mpesa' ? 'MPESA' : 'Airtel Money'}...</p>
+            </div>
+            <style>
+                .processing-payment {
+                    text-align: center;
+                }
+                .loading-spinner {
+                    margin: 20px auto;
+                    width: 60px;
+                    height: 60px;
+                    position: relative;
+                }
+                .spinner {
+                    width: 100%;
+                    height: 100%;
+                    border: 5px solid #f3f3f3;
+                    border-top: 5px solid #6e8efb;
+                    border-radius: 50%;
+                    animation: spin 1s linear infinite;
+                }
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+                .processing-text {
+                    color: #666;
+                    margin-top: 15px;
+                }
+            </style>
+        `,
+        allowOutsideClick: false,
+        showConfirmButton: false
+    });
+    
+    // Prepare the payment data according to your controller requirements
+    const paymentData = {
+        product_id: id,
+        phone: phone,
+        user_id: escortwp_user_id,
+        duration: duration,
+        amount: price // Make sure to include the actual selected price
+    };
+
+    // Make the AJAX request to initiate payment
+    jQuery.ajax({
+        url: 'https://api.exoticnairobi.com/api/initiate-payment',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(paymentData),
+        success: function(response) {
+            // Handle response based on your controller's return structure
+            if (response.status === true) {
+                Swal.fire({
+                    title: 'Payment Request Sent!',
+                    html: `
+                        <div class="payment-success">
+                            <div class="success-icon">📱</div>
+                            <p>A payment request has been sent to your ${provider === 'mpesa' ? 'MPESA' : 'Airtel Money'} number.</p>
+                            <p>Please complete the payment on your phone to activate your account.</p>
+                            
+                            <div class="manual-instructions">
+                                <h4>If you don't receive the prompt:</h4>
+                                <ol>
+                                    <li>Go to your ${provider === 'mpesa' ? 'MPESA' : 'Airtel Money'} menu</li>
+                                    <li>Select "Pay Bill"</li>
+                                    <li>Enter Business Number <strong>68</strong></li>
+                                    <li>Enter Account Number <strong>${phone}</strong></li>
+                                    <li>Enter Amount <strong>${price}</strong></li>
+                                </ol>
+                            </div>
+                        </div>
+                        <style>
+                            .payment-success {
+                                text-align: center;
+                            }
+                            .success-icon {
+                                font-size: 50px;
+                                margin-bottom: 15px;
+                            }
+                            .manual-instructions {
+                                background: #f8f9ff;
+                                padding: 15px;
+                                border-radius: 10px;
+                                margin-top: 20px;
+                                text-align: left;
+                            }
+                            .manual-instructions h4 {
+                                margin-top: 0;
+                                color: #333;
+                            }
+                            .manual-instructions ol {
+                                padding-left: 20px;
+                                margin-bottom: 0;
+                            }
+                            .manual-instructions li {
+                                margin-bottom: 8px;
+                            }
+                        </style>
+                    `,
+                    icon: 'success',
+                    confirmButtonColor: '#6e8efb'
+                });
+            } else {
+                // Handle error cases from your API
+                const errorMsg = response.error || 
+                                response.message || 
+                                'Payment initiation failed. Please try again.';
+                
+                Swal.fire({
+                    title: 'Payment Failed',
+                    text: errorMsg,
+                    icon: 'error',
+                    confirmButtonColor: '#6e8efb'
+                });
+            }
+        },
+        error: function(xhr) {
+            // Handle AJAX errors
+            let errorMessage = 'Payment initiation failed. Please try again.';
+            
+            try {
+                const response = xhr.responseJSON;
+                errorMessage = response.error || 
+                              response.message || 
+                              errorMessage;
+            } catch (e) {
+                console.error('Error parsing error response:', e);
+            }
+            
+            Swal.fire({
+                title: 'Error',
+                text: errorMessage,
+                icon: 'error',
+                confirmButtonColor: '#6e8efb'
+            });
+        }
+    });
+}
+</script>
+
+
+</body>
+</html>
