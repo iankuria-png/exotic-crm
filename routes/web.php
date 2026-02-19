@@ -1,7 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\API\PaymentController;
 
 
 /*
@@ -15,9 +15,10 @@ use App\Http\Controllers\PaymentController;
 |
 */
 
-Route::get('/', function () {
-    return view('welcome');
-});
+// CRM SPA — serve React for all frontend routes
+Route::get('/{any?}', function () {
+    return view('crm');
+})->where('any', '^(?!api|response|cancel|success|failed|error|auth|debug).*$');
 
 
 // Payment response routes (these are called by CyberSource)

@@ -10,9 +10,42 @@ use App\Http\Controllers\API\PaymentController;
 use App\Http\Controllers\API\SmsLogController;
 use App\Http\Controllers\API\ActivityLogController;
 use App\Http\Controllers\AfricanCountryController;
+use App\Http\Controllers\CRM\AuthController as CrmAuthController;
+use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
+use App\Http\Controllers\CRM\ClientController;
+use App\Http\Controllers\CRM\LeadController;
+use App\Http\Controllers\CRM\PaymentQueueController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
+});
+
+// ==================== CRM ROUTES ====================
+
+// CRM Auth (public)
+Route::post('/crm/login', [CrmAuthController::class, 'login']);
+
+// CRM Protected Routes (Sanctum token required)
+Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
+    // Auth
+    Route::get('/me', [CrmAuthController::class, 'me']);
+    Route::post('/logout', [CrmAuthController::class, 'logout']);
+
+    // Dashboard
+    Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
+
+    // Clients
+    Route::get('/clients', [ClientController::class, 'index']);
+    Route::get('/clients/{client}', [ClientController::class, 'show']);
+
+    // Leads
+    Route::get('/leads', [LeadController::class, 'index']);
+    Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
+    Route::get('/leads/{lead}', [LeadController::class, 'show']);
+    Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
+
+    // Payments
+    Route::get('/payments', [PaymentQueueController::class, 'index']);
 });
 
 // ==================== ALL ROUTES ARE PUBLIC (No authentication required) ====================

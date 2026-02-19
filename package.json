@@ -1,12 +1,22 @@
 {
     "private": true,
+    "type": "module",
     "scripts": {
         "dev": "vite",
         "build": "vite build"
     },
     "devDependencies": {
-        "axios": "^1.1.2",
-        "laravel-vite-plugin": "^0.7.2",
-        "vite": "^4.0.0"
+        "@tailwindcss/vite": "^4.0.0",
+        "@vitejs/plugin-react": "^4.0.0",
+        "laravel-vite-plugin": "^1.0.0",
+        "tailwindcss": "^4.0.0",
+        "vite": "^6.0.0"
+    },
+    "dependencies": {
+        "@tanstack/react-query": "^5.90.21",
+        "axios": "^1.13.5",
+        "react": "^19.2.4",
+        "react-dom": "^19.2.4",
+        "react-router-dom": "^7.13.0"
     }
 }
