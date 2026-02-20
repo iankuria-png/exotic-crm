@@ -67,6 +67,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
     Route::post('/leads/import', [LeadController::class, 'import']);
     Route::get('/leads/{lead}', [LeadController::class, 'show']);
+    Route::patch('/leads/{lead}/archive', [LeadController::class, 'archive']);
+    Route::delete('/leads/{lead}', [LeadController::class, 'destroy']);
     Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
     Route::patch('/leads/{lead}/assign', [LeadController::class, 'assign']);
 

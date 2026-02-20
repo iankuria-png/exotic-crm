@@ -15,11 +15,13 @@ class Lead extends Model
         'source', 'status', 'assigned_to',
         'first_contact_at', 'last_contact_at',
         'response_time_seconds', 'converted_client_id',
+        'archived_at',
     ];
 
     protected $casts = [
         'first_contact_at' => 'datetime',
         'last_contact_at' => 'datetime',
+        'archived_at' => 'datetime',
     ];
 
     public function platform()

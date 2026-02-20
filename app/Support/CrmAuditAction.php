@@ -8,6 +8,8 @@ final class CrmAuditAction
     public const LEAD_CREATE = 'lead_create';
     public const LEAD_ASSIGN = 'lead_assign';
     public const LEAD_STATUS_UPDATE = 'lead_status_update';
+    public const LEAD_ARCHIVE = 'lead_archive';
+    public const LEAD_DELETE = 'lead_delete';
     public const ROLE_UPDATE = 'role_update';
     public const DEAL_ACTIVATE = 'deal_activate';
     public const DEAL_DEACTIVATE = 'deal_deactivate';

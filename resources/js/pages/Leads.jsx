@@ -10,6 +10,8 @@ import { useToast } from '../components/ToastProvider';
 
 const STATUSES = ['new', 'contacted', 'qualified', 'converted', 'lost'];
 const CSV_ERROR_PREVIEW_LIMIT = 8;
+const DEFAULT_LEAD_ARCHIVE_REASON = 'Lead archived from leads page';
+const DEFAULT_LEAD_DELETE_REASON = 'Lead deleted from leads page';
 
 function nextLeadStage(currentStatus) {
     const currentIndex = STATUSES.indexOf(currentStatus);
@@ -44,6 +46,14 @@ export default function Leads() {
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
     const [csvResult, setCsvResult] = useState(null);
     const [assignDialog, setAssignDialog] = useState({ lead: null, assigned_to: '', reason: 'Lead reassigned from leads page' });
+    const [archiveDialog, setArchiveDialog] = useState({ lead: null, reason: DEFAULT_LEAD_ARCHIVE_REASON });
+    const [deleteDialog, setDeleteDialog] = useState({ lead: null, reason: DEFAULT_LEAD_DELETE_REASON });
+    const [bulkLeadActionDialog, setBulkLeadActionDialog] = useState({
+        open: false,
+        action: 'archive',
+        leads: [],
+        reason: 'Bulk lead archive from leads page',
+    });
 
     const [createForm, setCreateForm] = useState({
         platform_id: '',
@@ -150,6 +160,79 @@ export default function Leads() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Lead assignment failed.');
+        },
+    });
+
+    const archiveLeadMutation = useMutation({
+        mutationFn: ({ leadId, reason }) =>
+            api.patch(`/crm/leads/${leadId}/archive`, {
+                reason,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setArchiveDialog({ lead: null, reason: DEFAULT_LEAD_ARCHIVE_REASON });
+            toast.success(`Lead archived: ${variables.leadName || 'Lead'}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Lead archive failed.');
+        },
+    });
+
+    const deleteLeadMutation = useMutation({
+        mutationFn: ({ leadId, reason }) =>
+            api.delete(`/crm/leads/${leadId}`, {
+                data: { reason },
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setDeleteDialog({ lead: null, reason: DEFAULT_LEAD_DELETE_REASON });
+            toast.success(`Lead deleted: ${variables.leadName || 'Lead'}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Lead deletion failed.');
+        },
+    });
+
+    const bulkLeadActionMutation = useMutation({
+        mutationFn: async ({ action, rowsSelection, reason }) => {
+            const results = await Promise.allSettled(rowsSelection.map((row) => (
+                action === 'delete'
+                    ? api.delete(`/crm/leads/${row.id}`, { data: { reason } })
+                    : api.patch(`/crm/leads/${row.id}/archive`, { reason })
+            )));
+
+            const success = results.filter((result) => result.status === 'fulfilled').length;
+            const failed = rowsSelection.length - success;
+
+            return {
+                action,
+                total: rowsSelection.length,
+                success,
+                failed,
+            };
+        },
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setClearSelectionKey((value) => value + 1);
+            setBulkLeadActionDialog({
+                open: false,
+                action: 'archive',
+                leads: [],
+                reason: 'Bulk lead archive from leads page',
+            });
+
+            if (result.failed > 0) {
+                toast.warning(`Bulk ${result.action} completed with issues: ${result.success}/${result.total} succeeded.`);
+                return;
+            }
+
+            toast.success(`Bulk ${result.action} complete: ${result.success}/${result.total} processed.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Bulk lead action failed.');
         },
     });
 
@@ -316,6 +399,32 @@ export default function Leads() {
                 await bulkStatusMutation.mutateAsync({ rowsSelection, targetStatus: bulkTargetStatus });
             },
         },
+        {
+            key: 'bulk-archive',
+            label: 'Archive selected',
+            variant: 'secondary',
+            onClick: (rowsSelection) => {
+                setBulkLeadActionDialog({
+                    open: true,
+                    action: 'archive',
+                    leads: rowsSelection,
+                    reason: 'Bulk lead archive from leads page',
+                });
+            },
+        },
+        {
+            key: 'bulk-delete',
+            label: 'Delete selected',
+            variant: 'danger',
+            onClick: (rowsSelection) => {
+                setBulkLeadActionDialog({
+                    open: true,
+                    action: 'delete',
+                    leads: rowsSelection,
+                    reason: 'Bulk lead delete from leads page',
+                });
+            },
+        },
     ];
 
     const columns = [
@@ -383,6 +492,34 @@ export default function Leads() {
                             className="crm-btn-secondary px-2.5 py-1 text-xs"
                         >
                             Assign
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                setArchiveDialog({
+                                    lead: row,
+                                    reason: DEFAULT_LEAD_ARCHIVE_REASON,
+                                });
+                            }}
+                            className="crm-btn-secondary px-2.5 py-1 text-xs"
+                        >
+                            Archive
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                setDeleteDialog({
+                                    lead: row,
+                                    reason: DEFAULT_LEAD_DELETE_REASON,
+                                });
+                            }}
+                            className="crm-btn-danger px-2.5 py-1 text-xs"
+                        >
+                            Delete
                         </button>
                     </div>
                 );
@@ -508,7 +645,7 @@ export default function Leads() {
                 </div>
 
                 <p className="mt-2 text-xs text-slate-500">
-                    “Sync from WordPress” imports registered profiles needing payment follow-up into this lead pipeline.
+                    “Sync from WordPress” imports registered profiles needing payment follow-up into this lead pipeline. Archive and delete actions always require a reason.
                 </p>
             </section>
 
@@ -629,6 +766,112 @@ export default function Leads() {
                     rows={3}
                     value={assignDialog.reason}
                     onChange={(event) => setAssignDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={!!archiveDialog.lead}
+                title="Archive Lead"
+                message={archiveDialog.lead ? `Archive ${archiveDialog.lead.name || `Lead #${archiveDialog.lead.id}`} from the active sales pipeline?` : ''}
+                confirmLabel={archiveLeadMutation.isPending ? 'Archiving...' : 'Archive lead'}
+                onCancel={() => setArchiveDialog({ lead: null, reason: DEFAULT_LEAD_ARCHIVE_REASON })}
+                onConfirm={() => {
+                    if (!archiveDialog.lead?.id) return;
+                    archiveLeadMutation.mutate({
+                        leadId: archiveDialog.lead.id,
+                        leadName: archiveDialog.lead.name,
+                        reason: archiveDialog.reason.trim(),
+                    });
+                }}
+                confirmDisabled={!archiveDialog.reason.trim() || archiveLeadMutation.isPending}
+                isPending={archiveLeadMutation.isPending}
+            >
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <p>This removes the lead from default pipeline views but keeps audit history and timeline logs.</p>
+                </div>
+                <label htmlFor="archive-lead-reason" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Reason</label>
+                <textarea
+                    id="archive-lead-reason"
+                    rows={3}
+                    value={archiveDialog.reason}
+                    onChange={(event) => setArchiveDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={!!deleteDialog.lead}
+                title="Delete Lead"
+                message={deleteDialog.lead ? `Delete ${deleteDialog.lead.name || `Lead #${deleteDialog.lead.id}`} permanently?` : ''}
+                confirmLabel={deleteLeadMutation.isPending ? 'Deleting...' : 'Delete lead'}
+                onCancel={() => setDeleteDialog({ lead: null, reason: DEFAULT_LEAD_DELETE_REASON })}
+                onConfirm={() => {
+                    if (!deleteDialog.lead?.id) return;
+                    deleteLeadMutation.mutate({
+                        leadId: deleteDialog.lead.id,
+                        leadName: deleteDialog.lead.name,
+                        reason: deleteDialog.reason.trim(),
+                    });
+                }}
+                confirmDisabled={!deleteDialog.reason.trim() || deleteLeadMutation.isPending}
+                isPending={deleteLeadMutation.isPending}
+                tone="danger"
+            >
+                <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    <p>This action is permanent and removes the lead record from CRM tables.</p>
+                </div>
+                <label htmlFor="delete-lead-reason" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Reason</label>
+                <textarea
+                    id="delete-lead-reason"
+                    rows={3}
+                    value={deleteDialog.reason}
+                    onChange={(event) => setDeleteDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={bulkLeadActionDialog.open}
+                title={bulkLeadActionDialog.action === 'delete' ? 'Delete Selected Leads' : 'Archive Selected Leads'}
+                message={`Apply this action to ${bulkLeadActionDialog.leads.length} selected lead(s)?`}
+                confirmLabel={bulkLeadActionMutation.isPending
+                    ? (bulkLeadActionDialog.action === 'delete' ? 'Deleting...' : 'Archiving...')
+                    : (bulkLeadActionDialog.action === 'delete' ? 'Delete selected' : 'Archive selected')}
+                onCancel={() => setBulkLeadActionDialog({
+                    open: false,
+                    action: 'archive',
+                    leads: [],
+                    reason: 'Bulk lead archive from leads page',
+                })}
+                onConfirm={() => {
+                    bulkLeadActionMutation.mutate({
+                        action: bulkLeadActionDialog.action,
+                        rowsSelection: bulkLeadActionDialog.leads,
+                        reason: bulkLeadActionDialog.reason.trim(),
+                    });
+                }}
+                confirmDisabled={!bulkLeadActionDialog.reason.trim() || bulkLeadActionMutation.isPending}
+                isPending={bulkLeadActionMutation.isPending}
+                tone={bulkLeadActionDialog.action === 'delete' ? 'danger' : 'default'}
+            >
+                <div className={`rounded-md border px-3 py-2 text-xs ${
+                    bulkLeadActionDialog.action === 'delete'
+                        ? 'border-rose-200 bg-rose-50 text-rose-700'
+                        : 'border-slate-200 bg-slate-50 text-slate-700'
+                }`}>
+                    <p>
+                        {bulkLeadActionDialog.action === 'delete'
+                            ? 'Bulk delete permanently removes selected leads.'
+                            : 'Bulk archive removes selected leads from default pipeline views.'}
+                    </p>
+                </div>
+                <label htmlFor="bulk-lead-reason" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Reason</label>
+                <textarea
+                    id="bulk-lead-reason"
+                    rows={3}
+                    value={bulkLeadActionDialog.reason}
+                    onChange={(event) => setBulkLeadActionDialog((current) => ({ ...current, reason: event.target.value }))}
                     className="crm-input"
                 />
             </ConfirmDialog>

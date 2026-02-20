@@ -220,3 +220,57 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 - Renewal reminder telemetry is computed from `timeline_events` to preserve audit-source truth and avoid duplicate counters.
 - Manual renew from renewals requires an explicit reason for operational traceability.
 - Tab deep-links improve self-service handoff between teams (renewals -> client payments context) without extra navigation steps.
+
+---
+
+## Tranche 6 (Completed)
+
+### Plan
+- Deliver lead lifecycle controls requested in feedback:
+  - archive lead with explicit reason + confirmation
+  - delete lead with explicit reason + confirmation
+  - add safe bulk archive/delete actions with consequences copy
+  - ensure archived leads leave active pipeline views without losing audit traceability
+
+### Progress
+- Backend:
+  - Added `archived_at` support for leads via migration:
+    - `database/migrations/2026_02_20_000013_add_archived_at_to_leads_table.php`
+  - Added lead archive endpoint:
+    - `PATCH /api/crm/leads/{lead}/archive`
+  - Added lead delete endpoint:
+    - `DELETE /api/crm/leads/{lead}`
+  - Required `reason` validation for both archive and delete actions.
+  - Added timeline + audit log coverage for:
+    - `lead_archived`
+    - `lead_deleted`
+  - Default lead listing and pipeline metrics now exclude archived records unless `include_archived=1`.
+- Frontend:
+  - Leads table actions now include `Archive` and `Delete` per row.
+  - Added archive/delete confirmation dialogs with:
+    - explicit effect copy
+    - required reason field
+    - destructive tone for delete actions
+  - Added bulk actions:
+    - `Archive selected`
+    - `Delete selected`
+  - Added bulk confirmation dialog with required reason and risk-aware copy.
+  - Leads helper microcopy now clarifies reason requirements for archive/delete operations.
+- Domain constants:
+  - Added audit action constants:
+    - `LEAD_ARCHIVE`
+    - `LEAD_DELETE`
+
+### Verification
+- `php artisan migrate --force` -> pass.
+- `php artisan test --filter CrmStreamFourAuthorizationTest` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5c-2026-02-20/leads.png`
+  - `output/playwright/sprint5c-2026-02-20/leads-archive-modal.png`
+  - `output/playwright/sprint5c-2026-02-20/leads-delete-modal.png`
+
+### Decision Notes
+- Archive keeps lead history available for audit/reconciliation while reducing pipeline noise for agents.
+- Delete remains available but guarded by required reason and destructive confirmation to reduce accidental data loss.

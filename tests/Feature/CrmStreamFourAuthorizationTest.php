@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Deal;
+use App\Models\Lead;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
@@ -318,6 +319,61 @@ class CrmStreamFourAuthorizationTest extends TestCase
             ->assertJsonPath('assigned_to', $salesUser->id);
     }
 
+    public function test_sales_user_can_archive_lead_and_include_archived_filter_returns_it(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $lead = $this->createLead($platform, [
+            'name' => 'Archive Target',
+            'status' => 'new',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $archiveResponse = $this->patchJson("/api/crm/leads/{$lead->id}/archive", [
+            'reason' => 'Duplicate profile follow-up merged',
+        ]);
+
+        $archiveResponse->assertOk()
+            ->assertJsonPath('lead.id', $lead->id);
+
+        $this->assertDatabaseHas('leads', [
+            'id' => $lead->id,
+        ]);
+        $this->assertNotNull($lead->fresh()->archived_at);
+
+        $defaultList = $this->getJson('/api/crm/leads');
+        $defaultList->assertOk()
+            ->assertJsonPath('total', 0);
+
+        $archivedList = $this->getJson('/api/crm/leads?include_archived=1');
+        $archivedList->assertOk()
+            ->assertJsonPath('data.0.id', $lead->id);
+    }
+
+    public function test_delete_lead_requires_reason_and_removes_record(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $lead = $this->createLead($platform, [
+            'name' => 'Delete Target',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $withoutReason = $this->deleteJson("/api/crm/leads/{$lead->id}");
+        $withoutReason->assertStatus(422)->assertJsonValidationErrors(['reason']);
+
+        $withReason = $this->deleteJson("/api/crm/leads/{$lead->id}", [
+            'reason' => 'Invalid contact details',
+        ]);
+
+        $withReason->assertOk();
+        $this->assertDatabaseMissing('leads', [
+            'id' => $lead->id,
+        ]);
+    }
+
     public function test_admin_can_update_role_and_market_assignments(): void
     {
         $platformA = $this->createPlatform('Kenya');
@@ -534,6 +590,17 @@ CSV;
             'duration' => 'monthly',
             'status' => 'pending',
             'assigned_to' => $owner->id,
+        ], $overrides));
+    }
+
+    private function createLead(Platform $platform, array $overrides = []): Lead
+    {
+        return Lead::query()->create(array_merge([
+            'platform_id' => $platform->id,
+            'name' => 'Lead ' . Str::random(5),
+            'phone_normalized' => '2547' . random_int(10000000, 99999999),
+            'source' => 'outbound',
+            'status' => 'new',
         ], $overrides));
     }
 

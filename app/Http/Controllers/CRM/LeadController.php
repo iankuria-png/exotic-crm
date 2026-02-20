@@ -35,6 +35,10 @@ class LeadController extends Controller
         $query = Lead::with(['platform', 'assignedAgent']);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
+        if (!$request->boolean('include_archived')) {
+            $query->whereNull('archived_at');
+        }
+
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
@@ -255,6 +259,112 @@ class LeadController extends Controller
         return response()->json($lead);
     }
 
+    public function archive(Request $request, Lead $lead)
+    {
+        $this->authorizeLeadAccess($request, $lead);
+
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
+
+        if ($lead->archived_at) {
+            return response()->json([
+                'message' => 'Lead is already archived.',
+            ], 422);
+        }
+
+        $beforeState = [
+            'status' => $lead->status,
+            'archived_at' => optional($lead->archived_at)->toDateTimeString(),
+        ];
+
+        $lead->update([
+            'archived_at' => now(),
+        ]);
+
+        TimelineEvent::create([
+            'platform_id' => $lead->platform_id,
+            'entity_type' => 'lead',
+            'entity_id' => $lead->id,
+            'event_type' => 'lead_archived',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'status' => $lead->status,
+                'reason' => $validated['reason'],
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $lead->platform_id,
+            CrmAuditAction::LEAD_ARCHIVE,
+            'lead',
+            (int) $lead->id,
+            $beforeState,
+            [
+                'status' => $lead->status,
+                'archived_at' => optional($lead->archived_at)->toDateTimeString(),
+            ],
+            $validated['reason']
+        );
+
+        $lead->load(['platform', 'assignedAgent', 'convertedClient']);
+
+        return response()->json([
+            'message' => 'Lead archived.',
+            'lead' => $lead,
+        ]);
+    }
+
+    public function destroy(Request $request, Lead $lead)
+    {
+        $this->authorizeLeadAccess($request, $lead);
+
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $beforeState = [
+            'name' => $lead->name,
+            'status' => $lead->status,
+            'assigned_to' => $lead->assigned_to,
+            'archived_at' => optional($lead->archived_at)->toDateTimeString(),
+            'converted_client_id' => $lead->converted_client_id,
+        ];
+
+        TimelineEvent::create([
+            'platform_id' => $lead->platform_id,
+            'entity_type' => 'lead',
+            'entity_id' => $lead->id,
+            'event_type' => 'lead_deleted',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'name' => $lead->name,
+                'status' => $lead->status,
+                'reason' => $validated['reason'],
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $lead->platform_id,
+            CrmAuditAction::LEAD_DELETE,
+            'lead',
+            (int) $lead->id,
+            $beforeState,
+            null,
+            $validated['reason']
+        );
+
+        $lead->delete();
+
+        return response()->json([
+            'message' => 'Lead deleted.',
+        ]);
+    }
+
     public function updateStatus(Request $request, Lead $lead)
     {
         $this->authorizeLeadAccess($request, $lead);
@@ -353,7 +463,7 @@ class LeadController extends Controller
             'You do not have access to this lead market.'
         );
 
-        $baseQuery = Lead::query();
+        $baseQuery = Lead::query()->whereNull('archived_at');
         $this->marketAuthorizationService->applyPlatformScope($baseQuery, $request->user());
 
         $platformId = $request->get('platform_id');
