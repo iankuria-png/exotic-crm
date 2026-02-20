@@ -35,11 +35,18 @@ class ClientController extends Controller
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
         if ($request->filled('search')) {
-            $search = $request->search;
+            $search = trim((string) $request->search);
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
                   ->orWhere('phone_normalized', 'like', "%{$search}%")
                   ->orWhere('email', 'like', "%{$search}%");
+
+                if (ctype_digit($search)) {
+                    $numeric = (int) $search;
+                    $q->orWhere('id', $numeric)
+                        ->orWhere('wp_post_id', $numeric)
+                        ->orWhere('wp_user_id', $numeric);
+                }
             });
         }
 

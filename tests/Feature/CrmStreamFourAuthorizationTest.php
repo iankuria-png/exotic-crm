@@ -9,6 +9,7 @@ use App\Models\Platform;
 use App\Models\Product;
 use App\Models\RenewalCampaign;
 use App\Models\Template;
+use App\Models\TimelineEvent;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -173,6 +174,56 @@ class CrmStreamFourAuthorizationTest extends TestCase
         $response->assertJsonPath('totals.targeted', 1);
     }
 
+    public function test_renewal_overview_returns_reminder_counts_per_subscription(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $deal = $this->createDeal($platform, [
+            'status' => 'active',
+            'expires_at' => now()->addDays(6),
+        ]);
+
+        TimelineEvent::query()->create([
+            'platform_id' => $platform->id,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'event_type' => 'renewal_sms_sent',
+            'actor_id' => $salesUser->id,
+            'content' => ['campaign_id' => 1],
+            'created_at' => now()->subDays(3),
+        ]);
+
+        TimelineEvent::query()->create([
+            'platform_id' => $platform->id,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'event_type' => 'renewal_sms_sent',
+            'actor_id' => $salesUser->id,
+            'content' => ['campaign_id' => 2],
+            'created_at' => now()->subDay(),
+        ]);
+
+        TimelineEvent::query()->create([
+            'platform_id' => $platform->id,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'event_type' => 'renewal_sms_failed',
+            'actor_id' => $salesUser->id,
+            'content' => ['campaign_id' => 3],
+            'created_at' => now()->subHours(10),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/renewals?platform_id=' . $platform->id);
+
+        $response->assertOk();
+        $response->assertJsonPath('targets.data.0.id', $deal->id);
+        $response->assertJsonPath('targets.data.0.reminders_sent_count', 2);
+        $response->assertJsonPath('targets.data.0.reminders_failed_count', 1);
+        $this->assertNotNull($response->json('targets.data.0.last_renewal_reminder_at'));
+    }
+
     public function test_sales_user_can_create_manual_client_in_scope(): void
     {
         $platform = $this->createPlatform('Kenya');
@@ -199,6 +250,41 @@ class CrmStreamFourAuthorizationTest extends TestCase
             'platform_id' => $platform->id,
             'profile_status' => 'private',
         ]);
+    }
+
+    public function test_client_search_supports_crm_and_wordpress_ids_in_scope(): void
+    {
+        $platformA = $this->createPlatform('Kenya');
+        $platformB = $this->createPlatform('Uganda');
+        $salesUser = $this->createUser('sales', [$platformA->id]);
+
+        $clientA = $this->createClient($platformA, [
+            'wp_post_id' => 456700,
+            'wp_user_id' => 76540,
+            'name' => 'Traceable Client A',
+        ]);
+
+        $this->createClient($platformB, [
+            'wp_post_id' => 456701,
+            'wp_user_id' => 76541,
+            'name' => 'Out of scope Client',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $byCrmId = $this->getJson('/api/crm/clients?search=' . $clientA->id);
+        $byWpPostId = $this->getJson('/api/crm/clients?search=456700');
+        $byWpUserId = $this->getJson('/api/crm/clients?search=76540');
+
+        $byCrmId->assertOk()
+            ->assertJsonPath('data.0.id', $clientA->id)
+            ->assertJsonCount(1, 'data');
+        $byWpPostId->assertOk()
+            ->assertJsonPath('data.0.id', $clientA->id)
+            ->assertJsonCount(1, 'data');
+        $byWpUserId->assertOk()
+            ->assertJsonPath('data.0.id', $clientA->id)
+            ->assertJsonCount(1, 'data');
     }
 
     public function test_sales_user_can_create_and_reassign_lead_in_scope(): void

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import MetricCard from '../components/MetricCard';
@@ -23,6 +24,7 @@ function bucketLabel(bucket) {
 }
 
 export default function Renewals() {
+    const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [page, setPage] = useState(1);
     const [searchInput, setSearchInput] = useState('');
@@ -30,6 +32,12 @@ export default function Renewals() {
     const [bucketFilter, setBucketFilter] = useState('');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [feedback, setFeedback] = useState(null);
+    const [renewDialog, setRenewDialog] = useState({
+        open: false,
+        deal: null,
+        days: '30',
+        reason: 'Manual renewal from renewals workspace',
+    });
 
     const { data, isLoading } = useQuery({
         queryKey: ['renewals-overview', page, search, bucketFilter],
@@ -69,6 +77,34 @@ export default function Renewals() {
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
+        },
+    });
+
+    const manualRenewMutation = useMutation({
+        mutationFn: ({ dealId, days, reason }) =>
+            api.post(`/crm/deals/${dealId}/extend`, {
+                additional_days: Number(days),
+                reason,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setRenewDialog({
+                open: false,
+                deal: null,
+                days: '30',
+                reason: 'Manual renewal from renewals workspace',
+            });
+            setFeedback({
+                tone: 'success',
+                text: `Subscription renewed for ${variables.days} days.`,
+            });
+        },
+        onError: (error) => {
+            setFeedback({
+                tone: 'warning',
+                text: error?.response?.data?.message || 'Manual renewal failed.',
+            });
         },
     });
 
@@ -172,23 +208,83 @@ export default function Renewals() {
             ),
         },
         {
+            key: 'reminders_sent_count',
+            label: 'Reminders',
+            render: (row) => {
+                const sent = Number(row.reminders_sent_count || 0);
+                const failed = Number(row.reminders_failed_count || 0);
+                return (
+                    <div>
+                        <p className="text-xs font-semibold text-slate-800">{sent} sent{failed > 0 ? ` • ${failed} failed` : ''}</p>
+                        <p className="text-[11px] text-slate-500">
+                            {row.last_renewal_reminder_at ? new Date(row.last_renewal_reminder_at).toLocaleString() : 'No reminders yet'}
+                        </p>
+                    </div>
+                );
+            },
+        },
+        {
             key: 'actions',
             label: 'Actions',
             render: (row) => (
-                <button
-                    type="button"
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        remindMutation.mutate({ dealId: row.id }, {
-                            onSuccess: () => setFeedback({ tone: 'success', text: `Reminder sent for ${row.client?.name || 'client'}.` }),
-                            onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${row.client?.name || 'client'}.` }),
-                        });
-                    }}
-                    disabled={remindMutation.isPending}
-                    className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    Remind
-                </button>
+                <div className="flex items-center gap-1.5">
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            remindMutation.mutate({ dealId: row.id }, {
+                                onSuccess: () => setFeedback({ tone: 'success', text: `Reminder sent for ${row.client?.name || 'client'}.` }),
+                                onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${row.client?.name || 'client'}.` }),
+                            });
+                        }}
+                        disabled={remindMutation.isPending}
+                        className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Remind
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setRenewDialog({
+                                open: true,
+                                deal: row,
+                                days: '30',
+                                reason: 'Manual renewal from renewals workspace',
+                            });
+                        }}
+                        className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                    >
+                        Renew
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            if (row.client?.id) {
+                                navigate(`/clients/${row.client.id}`);
+                            }
+                        }}
+                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                    >
+                        Profile
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            if (row.client?.id) {
+                                navigate(`/clients/${row.client.id}?tab=payments`);
+                            }
+                        }}
+                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                    >
+                        Payments
+                    </button>
+                </div>
             ),
         },
     ];
@@ -309,6 +405,78 @@ export default function Renewals() {
                 bulkActions={bulkActions}
                 clearSelectionKey={clearSelectionKey}
             />
+
+            {renewDialog.open && renewDialog.deal ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+                    onClick={() => setRenewDialog({ open: false, deal: null, days: '30', reason: 'Manual renewal from renewals workspace' })}
+                >
+                    <div
+                        className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Manual Renew Subscription</h3>
+                                <p className="crm-panel-subtitle">
+                                    {renewDialog.deal.client?.name || 'Unknown client'} • {renewDialog.deal.product?.name || renewDialog.deal.plan_type}
+                                </p>
+                            </div>
+                        </header>
+
+                        <div className="space-y-3 p-4">
+                            <div>
+                                <label htmlFor="renew-days" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Additional days
+                                </label>
+                                <input
+                                    id="renew-days"
+                                    type="number"
+                                    min={1}
+                                    value={renewDialog.days}
+                                    onChange={(event) => setRenewDialog((current) => ({ ...current, days: event.target.value }))}
+                                    className="crm-input"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="renew-reason" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Reason
+                                </label>
+                                <textarea
+                                    id="renew-reason"
+                                    rows={3}
+                                    value={renewDialog.reason}
+                                    onChange={(event) => setRenewDialog((current) => ({ ...current, reason: event.target.value }))}
+                                    className="crm-input"
+                                />
+                            </div>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                onClick={() => setRenewDialog({ open: false, deal: null, days: '30', reason: 'Manual renewal from renewals workspace' })}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!renewDialog.reason.trim() || Number(renewDialog.days) < 1 || manualRenewMutation.isPending}
+                                onClick={() => manualRenewMutation.mutate({
+                                    dealId: renewDialog.deal.id,
+                                    days: Number(renewDialog.days),
+                                    reason: renewDialog.reason.trim(),
+                                })}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {manualRenewMutation.isPending ? 'Renewing...' : 'Confirm renewal'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

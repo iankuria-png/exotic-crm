@@ -335,7 +335,7 @@ export default function Clients() {
                                 type="text"
                                 value={searchInput}
                                 onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search by name, phone, or email..."
+                                placeholder="Search by name, phone, email, CRM ID, WP Post ID, or WP User ID..."
                                 className="crm-input pr-10"
                             />
                             <button type="submit" aria-label="Run client search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
@@ -391,7 +391,7 @@ export default function Clients() {
                         </button>
                     ) : null}
                 </div>
-                <p className="mt-2 text-xs text-slate-500">Plan labels: Basic = standard listing, Featured = promoted visibility, Premium = top-tier placement, Verified = identity badge.</p>
+                <p className="mt-2 text-xs text-slate-500">Plan labels: Basic = standard listing, Featured = promoted visibility, Premium = top-tier placement, Verified = identity badge. Numeric search supports CRM/WP IDs.</p>
             </section>
 
             {csvResult ? (

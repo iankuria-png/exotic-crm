@@ -169,3 +169,54 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 - Kept backend `deals` domain and routes intact to avoid high-risk schema/API churn; terminology migration is UI-layer-first.
 - Dashboard date filtering is optional; when unset, operational queues stay broad while KPI revenue window remains backend-defaulted.
 - Candidate search was prioritized in payments manual match to remove phone-only matching bottlenecks before deeper queue policy changes.
+
+---
+
+## Tranche 5 (Completed)
+
+### Plan
+- Close high-friction traceability and renewals workflow gaps from Sprint 5 backlog:
+  - searchable client traceability by CRM ID and WordPress IDs
+  - renewal reminder visibility per subscription row
+  - manual renew action directly from renewals workspace
+  - direct navigation to client profile and payment history from renewals
+  - client detail deep-link support for tabbed views
+
+### Progress
+- Backend:
+  - Extended client search to include numeric matching on `id`, `wp_post_id`, and `wp_user_id`.
+  - Enriched renewal overview payload with:
+    - `reminders_sent_count`
+    - `reminders_failed_count`
+    - `last_renewal_reminder_at`
+  - Added `created_at` to `TimelineEvent::$fillable` so reminder timeline events keep authored timestamps.
+- Frontend:
+  - Clients page search microcopy now explicitly supports CRM/WP ID lookup.
+  - Renewals table now shows reminder telemetry (`sent`, `failed`, last event timestamp).
+  - Added renewals row actions: `Remind`, `Renew`, `Profile`, `Payments`.
+  - Implemented manual renew modal with required reason and day extension input.
+  - Added client detail query-param tab state (e.g., `?tab=payments`) with URL sync on tab clicks.
+- Tests:
+  - Added feature test coverage for:
+    - client search by CRM/WP IDs with market scoping
+    - renewal overview reminder counts and last reminder timestamp
+
+### Verification
+- `php artisan test --filter CrmStreamFourAuthorizationTest` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5b-2026-02-20/dashboard.png`
+  - `output/playwright/sprint5b-2026-02-20/clients.png`
+  - `output/playwright/sprint5b-2026-02-20/leads.png`
+  - `output/playwright/sprint5b-2026-02-20/payments.png`
+  - `output/playwright/sprint5b-2026-02-20/renewals.png`
+  - `output/playwright/sprint5b-2026-02-20/renewals-manual-renew-modal.png`
+  - `output/playwright/sprint5b-2026-02-20/client-detail-payments-tab.png`
+  - `output/playwright/sprint5b-2026-02-20/reports.png`
+  - `output/playwright/sprint5b-2026-02-20/settings.png`
+
+### Decision Notes
+- Renewal reminder telemetry is computed from `timeline_events` to preserve audit-source truth and avoid duplicate counters.
+- Manual renew from renewals requires an explicit reason for operational traceability.
+- Tab deep-links improve self-service handoff between teams (renewals -> client payments context) without extra navigation steps.

@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import StatusBadge from '../components/StatusBadge';
@@ -39,9 +39,13 @@ function DefinitionRow({ label, value, mono = false }) {
 export default function ClientDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const toast = useToast();
-    const [activeTab, setActiveTab] = useState('overview');
+    const tabs = useMemo(() => ['overview', 'deals', 'notes', 'timeline', 'payments'], []);
+    const requestedTab = (searchParams.get('tab') || '').toLowerCase();
+    const initialTab = tabs.includes(requestedTab) ? requestedTab : 'overview';
+    const [activeTab, setActiveTab] = useState(initialTab);
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
     const [showSyncConfirm, setShowSyncConfirm] = useState(false);
@@ -121,13 +125,20 @@ export default function ClientDetail() {
         },
     });
 
-    const tabs = useMemo(() => [
+    const tabLinks = useMemo(() => [
         { key: 'overview', label: 'Overview' },
         { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
         { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
         { key: 'timeline', label: 'Timeline' },
         { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
     ], [client]);
+
+    useEffect(() => {
+        const nextTab = tabs.includes(requestedTab) ? requestedTab : 'overview';
+        if (nextTab !== activeTab) {
+            setActiveTab(nextTab);
+        }
+    }, [activeTab, requestedTab, tabs]);
 
     if (isLoading) {
         return (
@@ -246,10 +257,19 @@ export default function ClientDetail() {
 
             <section className="crm-surface p-2">
                 <nav className="flex flex-wrap gap-1">
-                    {tabs.map((tab) => (
+                    {tabLinks.map((tab) => (
                         <button
                             key={tab.key}
-                            onClick={() => setActiveTab(tab.key)}
+                            onClick={() => {
+                                setActiveTab(tab.key);
+                                const next = new URLSearchParams(searchParams);
+                                if (tab.key === 'overview') {
+                                    next.delete('tab');
+                                } else {
+                                    next.set('tab', tab.key);
+                                }
+                                setSearchParams(next, { replace: true });
+                            }}
                             className={`rounded-md px-3 py-2 text-sm font-medium transition ${activeTab === tab.key ? 'bg-white text-slate-900 ring-1 ring-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
                         >
                             {tab.label}

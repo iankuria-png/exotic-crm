@@ -10,7 +10,7 @@ class TimelineEvent extends Model
 
     protected $fillable = [
         'platform_id', 'entity_type', 'entity_id',
-        'event_type', 'actor_id', 'content',
+        'event_type', 'actor_id', 'content', 'created_at',
     ];
 
     protected $casts = [

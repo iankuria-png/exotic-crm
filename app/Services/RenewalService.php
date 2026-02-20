@@ -30,6 +30,30 @@ class RenewalService
     {
         $query = Deal::query()
             ->with(['client.platform', 'product', 'assignedAgent'])
+            ->select('deals.*')
+            ->selectSub(function ($builder) {
+                $builder->from('timeline_events')
+                    ->selectRaw('COUNT(*)')
+                    ->where('entity_type', 'deal')
+                    ->where('event_type', 'renewal_sms_sent')
+                    ->whereColumn('entity_id', 'deals.id');
+            }, 'reminders_sent_count')
+            ->selectSub(function ($builder) {
+                $builder->from('timeline_events')
+                    ->selectRaw('COUNT(*)')
+                    ->where('entity_type', 'deal')
+                    ->where('event_type', 'renewal_sms_failed')
+                    ->whereColumn('entity_id', 'deals.id');
+            }, 'reminders_failed_count')
+            ->selectSub(function ($builder) {
+                $builder->from('timeline_events')
+                    ->select('created_at')
+                    ->where('entity_type', 'deal')
+                    ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed'])
+                    ->whereColumn('entity_id', 'deals.id')
+                    ->orderByDesc('created_at')
+                    ->limit(1);
+            }, 'last_renewal_reminder_at')
             ->whereIn('status', ['active', 'expired']);
 
         if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
@@ -60,6 +84,9 @@ class RenewalService
                 return array_merge($deal->toArray(), [
                     'days_left' => $daysLeft,
                     'renewal_bucket' => $this->bucketForDays($daysLeft),
+                    'reminders_sent_count' => (int) ($deal->reminders_sent_count ?? 0),
+                    'reminders_failed_count' => (int) ($deal->reminders_failed_count ?? 0),
+                    'last_renewal_reminder_at' => $deal->last_renewal_reminder_at,
                 ]);
             });
 
