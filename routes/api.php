@@ -63,6 +63,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Leads
     Route::get('/leads', [LeadController::class, 'index']);
     Route::post('/leads', [LeadController::class, 'store']);
+    Route::post('/leads/scrape-entry', [LeadController::class, 'scrapeEntry']);
     Route::post('/leads/upload-csv', [LeadController::class, 'uploadCsv']);
     Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
     Route::post('/leads/import', [LeadController::class, 'import']);
@@ -80,6 +81,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/renewals/runs', [RenewalController::class, 'runs']);
     Route::post('/renewals/run', [RenewalController::class, 'run']);
     Route::post('/renewals/remind', [RenewalController::class, 'remind']);
+    Route::post('/renewals/pause', [RenewalController::class, 'pause']);
+    Route::post('/renewals/resume', [RenewalController::class, 'resume']);
 
     // Reports
     Route::get('/reports/summary', [ReportController::class, 'summary']);

@@ -20,6 +20,7 @@ function bucketLabel(bucket) {
     if (bucket === 'pending') return 'Pending';
     if (bucket === 'stable') return 'Stable';
     if (bucket === 'expired') return 'Expired';
+    if (bucket === 'paused') return 'Paused';
     return 'Unknown';
 }
 
@@ -32,11 +33,23 @@ export default function Renewals() {
     const [bucketFilter, setBucketFilter] = useState('');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [feedback, setFeedback] = useState(null);
+    const [activeDeal, setActiveDeal] = useState(null);
     const [renewDialog, setRenewDialog] = useState({
         open: false,
         deal: null,
         days: '30',
         reason: 'Manual renewal from renewals workspace',
+    });
+    const [pauseDialog, setPauseDialog] = useState({
+        open: false,
+        deal: null,
+        pauseUntil: '',
+        reason: 'Pause reminders from renewals workspace',
+    });
+    const [resumeDialog, setResumeDialog] = useState({
+        open: false,
+        deal: null,
+        reason: 'Resume reminders from renewals workspace',
     });
 
     const { data, isLoading } = useQuery({
@@ -108,6 +121,60 @@ export default function Renewals() {
         },
     });
 
+    const pauseRemindersMutation = useMutation({
+        mutationFn: ({ dealId, pauseUntil, reason }) =>
+            api.post('/crm/renewals/pause', {
+                deal_id: dealId,
+                pause_until: pauseUntil || null,
+                reason,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
+            setPauseDialog({
+                open: false,
+                deal: null,
+                pauseUntil: '',
+                reason: 'Pause reminders from renewals workspace',
+            });
+            setFeedback({
+                tone: 'success',
+                text: `Reminders paused for ${variables.dealName || 'subscription'}.`,
+            });
+        },
+        onError: (error) => {
+            setFeedback({
+                tone: 'warning',
+                text: error?.response?.data?.message || 'Pause reminders failed.',
+            });
+        },
+    });
+
+    const resumeRemindersMutation = useMutation({
+        mutationFn: ({ dealId, reason }) =>
+            api.post('/crm/renewals/resume', {
+                deal_id: dealId,
+                reason,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
+            setResumeDialog({
+                open: false,
+                deal: null,
+                reason: 'Resume reminders from renewals workspace',
+            });
+            setFeedback({
+                tone: 'success',
+                text: `Reminders resumed for ${variables.dealName || 'subscription'}.`,
+            });
+        },
+        onError: (error) => {
+            setFeedback({
+                tone: 'warning',
+                text: error?.response?.data?.message || 'Resume reminders failed.',
+            });
+        },
+    });
+
     const bulkRemindMutation = useMutation({
         mutationFn: async (rowsSelection) => {
             const results = await Promise.allSettled(
@@ -139,10 +206,19 @@ export default function Renewals() {
     };
 
     const rows = data?.targets?.data || [];
+    const activeDealRow = useMemo(() => {
+        if (!activeDeal?.id) {
+            return null;
+        }
+
+        return rows.find((row) => Number(row.id) === Number(activeDeal.id)) || activeDeal;
+    }, [activeDeal, rows]);
+
     const summary = {
         risk: data?.summary?.risk ?? 0,
         pending: data?.summary?.pending ?? 0,
         renewedThisMonth: data?.summary?.renewed_this_month ?? 0,
+        paused: data?.summary?.paused_reminders ?? 0,
     };
 
     const activeCampaigns = useMemo(
@@ -195,7 +271,9 @@ export default function Renewals() {
             label: 'Renewal State',
             render: (row) => (
                 <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
-                    row.renewal_bucket === 'risk'
+                    row.renewal_bucket === 'paused'
+                        ? 'bg-slate-100 text-slate-700 ring-slate-300'
+                        : row.renewal_bucket === 'risk'
                         ? 'bg-rose-50 text-rose-700 ring-rose-200'
                         : row.renewal_bucket === 'pending'
                             ? 'bg-amber-50 text-amber-700 ring-amber-200'
@@ -219,6 +297,11 @@ export default function Renewals() {
                         <p className="text-[11px] text-slate-500">
                             {row.last_renewal_reminder_at ? new Date(row.last_renewal_reminder_at).toLocaleString() : 'No reminders yet'}
                         </p>
+                        {row.reminders_paused ? (
+                            <p className="text-[11px] font-medium text-amber-700">
+                                Paused {row.renewal_paused_until ? `until ${new Date(row.renewal_paused_until).toLocaleDateString()}` : 'until resumed'}
+                            </p>
+                        ) : null}
                     </div>
                 );
             },
@@ -237,52 +320,20 @@ export default function Renewals() {
                                 onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${row.client?.name || 'client'}.` }),
                             });
                         }}
-                        disabled={remindMutation.isPending}
+                        disabled={remindMutation.isPending || row.reminders_paused}
                         className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Remind
+                        {row.reminders_paused ? 'Paused' : 'Remind'}
                     </button>
-
                     <button
                         type="button"
                         onClick={(event) => {
                             event.stopPropagation();
-                            setRenewDialog({
-                                open: true,
-                                deal: row,
-                                days: '30',
-                                reason: 'Manual renewal from renewals workspace',
-                            });
-                        }}
-                        className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                    >
-                        Renew
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            if (row.client?.id) {
-                                navigate(`/clients/${row.client.id}`);
-                            }
+                            setActiveDeal(row);
                         }}
                         className="crm-btn-secondary px-3 py-1.5 text-xs"
                     >
-                        Profile
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            if (row.client?.id) {
-                                navigate(`/clients/${row.client.id}?tab=payments`);
-                            }
-                        }}
-                        className="crm-btn-secondary px-3 py-1.5 text-xs"
-                    >
-                        Payments
+                        Manage
                     </button>
                 </div>
             ),
@@ -318,10 +369,11 @@ export default function Renewals() {
                 )}
             />
 
-            <section className="grid gap-4 md:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-5">
                 <MetricCard label="At Risk (0-3 days)" value={summary.risk.toLocaleString()} meta="urgent outreach" tone="danger" />
                 <MetricCard label="Pending (4-14 days)" value={summary.pending.toLocaleString()} meta="scheduled reminders" tone="warning" />
                 <MetricCard label="Renewed This Month" value={summary.renewedThisMonth.toLocaleString()} meta="already extended" tone="success" />
+                <MetricCard label="Paused Reminders" value={summary.paused.toLocaleString()} meta="manual hold state" tone="warning" />
                 <MetricCard label="Active Campaigns" value={activeCampaigns.toLocaleString()} meta="enabled automation rules" tone="accent" />
             </section>
 
@@ -347,7 +399,7 @@ export default function Renewals() {
                                 placeholder="Search by client name or phone..."
                                 className="crm-input pr-10"
                             />
-                            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                            <button type="submit" aria-label="Run renewals search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
                                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                 </svg>
@@ -368,6 +420,7 @@ export default function Renewals() {
                         <option value="pending">Pending</option>
                         <option value="stable">Stable</option>
                         <option value="expired">Expired</option>
+                        <option value="paused">Paused</option>
                     </select>
 
                     {(search || bucketFilter) ? (
@@ -398,6 +451,7 @@ export default function Renewals() {
                 data={rows}
                 pagination={data?.targets}
                 onPageChange={setPage}
+                onRowClick={(row) => setActiveDeal(row)}
                 isLoading={isLoading}
                 emptyMessage="No renewals match current filters."
                 compact
@@ -405,6 +459,128 @@ export default function Renewals() {
                 bulkActions={bulkActions}
                 clearSelectionKey={clearSelectionKey}
             />
+
+            {activeDealRow ? (
+                <div className="fixed inset-0 z-40 bg-slate-900/25" onClick={() => setActiveDeal(null)}>
+                    <aside
+                        className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-slate-200 bg-white shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="crm-panel-header sticky top-0 z-10 border-b border-slate-100 bg-white">
+                            <div>
+                                <h3 className="crm-panel-title">Renewal Control Panel</h3>
+                                <p className="crm-panel-subtitle">{activeDealRow.client?.name || 'Unknown client'} • {activeDealRow.product?.name || activeDealRow.plan_type}</p>
+                            </div>
+                            <button
+                                type="button"
+                                className="crm-btn-secondary px-2 py-1 text-xs"
+                                onClick={() => setActiveDeal(null)}
+                            >
+                                Close
+                            </button>
+                        </header>
+
+                        <div className="space-y-4 p-4">
+                            <section className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                                <p className="font-semibold text-slate-900">Subscription Snapshot</p>
+                                <p className="mt-1 text-slate-600">Expires: {activeDealRow.expires_at ? new Date(activeDealRow.expires_at).toLocaleString() : 'Not set'}</p>
+                                <p className="text-slate-600">Days left: {activeDealRow.days_left ?? '--'}</p>
+                                <p className="text-slate-600">State: {bucketLabel(activeDealRow.renewal_bucket)}</p>
+                                <p className="text-slate-600">
+                                    Reminders: {Number(activeDealRow.reminders_sent_count || 0)} sent
+                                    {Number(activeDealRow.reminders_failed_count || 0) > 0 ? ` • ${Number(activeDealRow.reminders_failed_count)} failed` : ''}
+                                </p>
+                                {activeDealRow.reminders_paused ? (
+                                    <p className="mt-1 font-medium text-amber-700">
+                                        Paused {activeDealRow.renewal_paused_until ? `until ${new Date(activeDealRow.renewal_paused_until).toLocaleDateString()}` : 'until resumed'}
+                                    </p>
+                                ) : null}
+                            </section>
+
+                            <section className="space-y-2">
+                                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Actions</p>
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            remindMutation.mutate({ dealId: activeDealRow.id }, {
+                                                onSuccess: () => setFeedback({ tone: 'success', text: `Reminder sent for ${activeDealRow.client?.name || 'client'}.` }),
+                                                onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${activeDealRow.client?.name || 'client'}.` }),
+                                            });
+                                        }}
+                                        disabled={activeDealRow.reminders_paused || remindMutation.isPending}
+                                        className="crm-btn-secondary text-xs"
+                                    >
+                                        {activeDealRow.reminders_paused ? 'Reminders paused' : 'Send reminder'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setRenewDialog({
+                                            open: true,
+                                            deal: activeDealRow,
+                                            days: '30',
+                                            reason: 'Manual renewal from renewals workspace',
+                                        })}
+                                        className="crm-btn-primary text-xs"
+                                    >
+                                        Manual renew
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (activeDealRow.reminders_paused) {
+                                                setResumeDialog({
+                                                    open: true,
+                                                    deal: activeDealRow,
+                                                    reason: 'Resume reminders from renewals workspace',
+                                                });
+                                                return;
+                                            }
+
+                                            setPauseDialog({
+                                                open: true,
+                                                deal: activeDealRow,
+                                                pauseUntil: '',
+                                                reason: 'Pause reminders from renewals workspace',
+                                            });
+                                        }}
+                                        className="crm-btn-secondary text-xs"
+                                    >
+                                        {activeDealRow.reminders_paused ? 'Resume reminders' : 'Pause reminders'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (activeDealRow.client?.id) {
+                                                navigate(`/clients/${activeDealRow.client.id}`);
+                                            }
+                                        }}
+                                        className="crm-btn-secondary text-xs"
+                                    >
+                                        View client profile
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (activeDealRow.client?.id) {
+                                                navigate(`/clients/${activeDealRow.client.id}?tab=payments`);
+                                            }
+                                        }}
+                                        className="crm-btn-secondary text-xs sm:col-span-2"
+                                    >
+                                        View payment history
+                                    </button>
+                                </div>
+                            </section>
+
+                            <section className="rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                                <p className="font-semibold text-slate-900">Progressive disclosure</p>
+                                <p className="mt-1">Use this panel for high-impact actions while keeping the table focused on triage.</p>
+                            </section>
+                        </div>
+                    </aside>
+                </div>
+            ) : null}
 
             {renewDialog.open && renewDialog.deal ? (
                 <div
@@ -472,6 +648,138 @@ export default function Renewals() {
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 {manualRenewMutation.isPending ? 'Renewing...' : 'Confirm renewal'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            {pauseDialog.open && pauseDialog.deal ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+                    onClick={() => setPauseDialog({ open: false, deal: null, pauseUntil: '', reason: 'Pause reminders from renewals workspace' })}
+                >
+                    <div
+                        className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Pause Renewal Reminders</h3>
+                                <p className="crm-panel-subtitle">
+                                    {pauseDialog.deal.client?.name || 'Unknown client'} • {pauseDialog.deal.product?.name || pauseDialog.deal.plan_type}
+                                </p>
+                            </div>
+                        </header>
+
+                        <div className="space-y-3 p-4">
+                            <div>
+                                <label htmlFor="pause-until" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Pause until (optional)
+                                </label>
+                                <input
+                                    id="pause-until"
+                                    type="date"
+                                    value={pauseDialog.pauseUntil}
+                                    onChange={(event) => setPauseDialog((current) => ({ ...current, pauseUntil: event.target.value }))}
+                                    className="crm-input"
+                                />
+                                <p className="mt-1 text-xs text-slate-500">Leave blank to pause until a manual resume action.</p>
+                            </div>
+
+                            <div>
+                                <label htmlFor="pause-reason" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Reason
+                                </label>
+                                <textarea
+                                    id="pause-reason"
+                                    rows={3}
+                                    value={pauseDialog.reason}
+                                    onChange={(event) => setPauseDialog((current) => ({ ...current, reason: event.target.value }))}
+                                    className="crm-input"
+                                />
+                            </div>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                onClick={() => setPauseDialog({ open: false, deal: null, pauseUntil: '', reason: 'Pause reminders from renewals workspace' })}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!pauseDialog.reason.trim() || pauseRemindersMutation.isPending}
+                                onClick={() => pauseRemindersMutation.mutate({
+                                    dealId: pauseDialog.deal.id,
+                                    dealName: pauseDialog.deal.client?.name,
+                                    pauseUntil: pauseDialog.pauseUntil || null,
+                                    reason: pauseDialog.reason.trim(),
+                                })}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {pauseRemindersMutation.isPending ? 'Pausing...' : 'Confirm pause'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            {resumeDialog.open && resumeDialog.deal ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+                    onClick={() => setResumeDialog({ open: false, deal: null, reason: 'Resume reminders from renewals workspace' })}
+                >
+                    <div
+                        className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Resume Renewal Reminders</h3>
+                                <p className="crm-panel-subtitle">{resumeDialog.deal.client?.name || 'Unknown client'}</p>
+                            </div>
+                        </header>
+
+                        <div className="space-y-3 p-4">
+                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                Reminders will rejoin automated campaign targeting immediately after resume.
+                            </div>
+                            <div>
+                                <label htmlFor="resume-reason" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Reason
+                                </label>
+                                <textarea
+                                    id="resume-reason"
+                                    rows={3}
+                                    value={resumeDialog.reason}
+                                    onChange={(event) => setResumeDialog((current) => ({ ...current, reason: event.target.value }))}
+                                    className="crm-input"
+                                />
+                            </div>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                onClick={() => setResumeDialog({ open: false, deal: null, reason: 'Resume reminders from renewals workspace' })}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!resumeDialog.reason.trim() || resumeRemindersMutation.isPending}
+                                onClick={() => resumeRemindersMutation.mutate({
+                                    dealId: resumeDialog.deal.id,
+                                    dealName: resumeDialog.deal.client?.name,
+                                    reason: resumeDialog.reason.trim(),
+                                })}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {resumeRemindersMutation.isPending ? 'Resuming...' : 'Confirm resume'}
                             </button>
                         </footer>
                     </div>

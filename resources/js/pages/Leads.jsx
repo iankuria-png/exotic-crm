@@ -12,6 +12,7 @@ const STATUSES = ['new', 'contacted', 'qualified', 'converted', 'lost'];
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DEFAULT_LEAD_ARCHIVE_REASON = 'Lead archived from leads page';
 const DEFAULT_LEAD_DELETE_REASON = 'Lead deleted from leads page';
+const DEFAULT_SCRAPE_REASON = 'Scrape lead intake from leads page';
 
 function nextLeadStage(currentStatus) {
     const currentIndex = STATUSES.indexOf(currentStatus);
@@ -43,6 +44,7 @@ export default function Leads() {
     const [showImportConfirm, setShowImportConfirm] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
+    const [showScrapeModal, setShowScrapeModal] = useState(false);
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
     const [csvResult, setCsvResult] = useState(null);
     const [assignDialog, setAssignDialog] = useState({ lead: null, assigned_to: '', reason: 'Lead reassigned from leads page' });
@@ -68,6 +70,15 @@ export default function Leads() {
         has_header: true,
         file: null,
         reason: 'CSV lead upload from leads page',
+    });
+    const [scrapeForm, setScrapeForm] = useState({
+        platform_id: '',
+        source_url: '',
+        name: '',
+        phone_normalized: '',
+        email: '',
+        assigned_to: '',
+        reason: DEFAULT_SCRAPE_REASON,
     });
 
     const { data, isLoading } = useQuery({
@@ -117,6 +128,19 @@ export default function Leads() {
         }
     }, [showCsvModal, platformOptions, csvForm.platform_id]);
 
+    useEffect(() => {
+        if (!showScrapeModal) {
+            return;
+        }
+
+        if (!scrapeForm.platform_id && platformOptions.length > 0) {
+            setScrapeForm((current) => ({
+                ...current,
+                platform_id: String(platformOptions[0].platform_id),
+            }));
+        }
+    }, [showScrapeModal, platformOptions, scrapeForm.platform_id]);
+
     const { data: createOwnersData, isLoading: createOwnersLoading } = useQuery({
         queryKey: ['settings-owners', 'lead-create', createForm.platform_id],
         queryFn: () =>
@@ -133,6 +157,15 @@ export default function Leads() {
                 params: { platform_id: Number(assignDialog.lead?.platform_id) },
             }).then((response) => response.data),
         enabled: !!assignDialog.lead?.platform_id,
+    });
+
+    const { data: scrapeOwnersData, isLoading: scrapeOwnersLoading } = useQuery({
+        queryKey: ['settings-owners', 'lead-scrape', scrapeForm.platform_id],
+        queryFn: () =>
+            api.get('/crm/settings/owners', {
+                params: { platform_id: Number(scrapeForm.platform_id) },
+            }).then((response) => response.data),
+        enabled: showScrapeModal && !!scrapeForm.platform_id,
     });
 
     const updateStatusMutation = useMutation({
@@ -296,6 +329,28 @@ export default function Leads() {
         },
     });
 
+    const scrapeLeadMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/leads/scrape-entry', payload).then((response) => response.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setShowScrapeModal(false);
+            setScrapeForm({
+                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                source_url: '',
+                name: '',
+                phone_normalized: '',
+                email: '',
+                assigned_to: '',
+                reason: DEFAULT_SCRAPE_REASON,
+            });
+            toast.success(`Scrape intake created lead ${result?.lead?.name || ''}`.trim());
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Scrape intake failed.');
+        },
+    });
+
     const uploadCsvMutation = useMutation({
         mutationFn: (payload) => {
             const formData = new FormData();
@@ -357,7 +412,9 @@ export default function Leads() {
     const rows = data?.data || [];
     const owners = createOwnersData?.owners || [];
     const assignOwners = assignOwnersData?.owners || [];
+    const scrapeOwners = scrapeOwnersData?.owners || [];
     const selectedCsvPlatformName = platformOptions.find((platform) => String(platform.platform_id) === String(csvForm.platform_id))?.platform_name || 'Selected market';
+    const selectedAssignOwner = assignOwners.find((owner) => String(owner.id) === String(assignDialog.assigned_to));
 
     const ownerOptions = useMemo(() => {
         const map = new Map();
@@ -548,6 +605,13 @@ export default function Leads() {
                             className="crm-btn-secondary"
                         >
                             Upload CSV
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowScrapeModal(true)}
+                            className="crm-btn-secondary"
+                        >
+                            Scrape lead
                         </button>
                         <button
                             type="button"
@@ -755,10 +819,48 @@ export default function Leads() {
                     <option value="">{assignOwnersLoading ? 'Loading owners...' : 'Select owner'}</option>
                     {assignOwners.map((owner) => (
                         <option key={owner.id} value={owner.id}>
-                            {owner.name} ({owner.role})
+                            {owner.name} ({owner.role_label || owner.role})
                         </option>
                     ))}
                 </select>
+
+                {selectedAssignOwner ? (
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        <p className="font-semibold text-slate-900">{selectedAssignOwner.name}</p>
+                        <p className="mt-0.5">
+                            Role: <span className="font-medium">{selectedAssignOwner.role_label || selectedAssignOwner.role}</span>
+                        </p>
+                        <p className="mt-1 text-slate-600">
+                            Markets: {(selectedAssignOwner.assigned_markets || []).map((market) => market.name).join(', ') || 'None configured'}
+                        </p>
+                    </div>
+                ) : null}
+
+                {assignOwners.length > 0 ? (
+                    <div className="space-y-2 rounded-md border border-slate-200 bg-white p-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Owner Directory</p>
+                        <div className="max-h-36 space-y-1.5 overflow-y-auto pr-1">
+                            {assignOwners.map((owner) => (
+                                <button
+                                    key={`assign-owner-card-${owner.id}`}
+                                    type="button"
+                                    onClick={() => setAssignDialog((current) => ({ ...current, assigned_to: String(owner.id) }))}
+                                    className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition ${
+                                        String(assignDialog.assigned_to) === String(owner.id)
+                                            ? 'border-teal-300 bg-teal-50'
+                                            : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                                    }`}
+                                >
+                                    <p className="font-semibold text-slate-900">{owner.name}</p>
+                                    <p className="text-slate-600">{owner.role_label || owner.role}</p>
+                                    <p className="text-slate-500">
+                                        {(owner.assigned_markets || []).map((market) => market.name).join(', ') || 'No assigned markets'}
+                                    </p>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                ) : null}
 
                 <label htmlFor="assign-reason" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Reason</label>
                 <textarea
@@ -901,6 +1003,143 @@ export default function Leads() {
                 </div>
             </ConfirmDialog>
 
+            {showScrapeModal ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowScrapeModal(false)}>
+                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Scrape Lead Intake</h3>
+                                <p className="crm-panel-subtitle">Create a lead from an external source URL with controlled metadata.</p>
+                            </div>
+                        </header>
+
+                        <div className="grid gap-3 p-4 md:grid-cols-2">
+                            <div className="md:col-span-2">
+                                <label htmlFor="scrape-market" className="mb-1 block text-sm font-medium text-slate-700">Market</label>
+                                <select
+                                    id="scrape-market"
+                                    value={scrapeForm.platform_id}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, platform_id: event.target.value, assigned_to: '' }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="">Select market</option>
+                                    {platformOptions.map((platform) => (
+                                        <option key={platform.platform_id} value={platform.platform_id}>
+                                            {platform.platform_name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label htmlFor="scrape-source-url" className="mb-1 block text-sm font-medium text-slate-700">Source URL</label>
+                                <input
+                                    id="scrape-source-url"
+                                    type="url"
+                                    value={scrapeForm.source_url}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, source_url: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="https://example.com/listing/lead-profile"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-name" className="mb-1 block text-sm font-medium text-slate-700">Lead name (optional)</label>
+                                <input
+                                    id="scrape-name"
+                                    type="text"
+                                    value={scrapeForm.name}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, name: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Derived from URL if blank"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-phone" className="mb-1 block text-sm font-medium text-slate-700">Phone (optional)</label>
+                                <input
+                                    id="scrape-phone"
+                                    type="text"
+                                    value={scrapeForm.phone_normalized}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, phone_normalized: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="e.g. 254712345678"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-email" className="mb-1 block text-sm font-medium text-slate-700">Email (optional)</label>
+                                <input
+                                    id="scrape-email"
+                                    type="email"
+                                    value={scrapeForm.email}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, email: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="name@example.com"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-owner" className="mb-1 block text-sm font-medium text-slate-700">Owner (optional)</label>
+                                <select
+                                    id="scrape-owner"
+                                    value={scrapeForm.assigned_to}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, assigned_to: event.target.value }))}
+                                    className="crm-select w-full"
+                                    disabled={!scrapeForm.platform_id || scrapeOwnersLoading}
+                                >
+                                    <option value="">{scrapeOwnersLoading ? 'Loading owners...' : 'Auto-assign owner'}</option>
+                                    {scrapeOwners.map((owner) => (
+                                        <option key={owner.id} value={owner.id}>
+                                            {owner.name} ({owner.role_label || owner.role})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label htmlFor="scrape-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                                <textarea
+                                    id="scrape-reason"
+                                    rows={3}
+                                    value={scrapeForm.reason}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, reason: event.target.value }))}
+                                    className="crm-input"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="mx-4 mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                            This is a controlled intake path. It records the source URL in audit/timeline and creates a lead in the standard pipeline.
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button type="button" className="crm-btn-secondary" onClick={() => setShowScrapeModal(false)}>
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!scrapeForm.platform_id || !scrapeForm.source_url.trim() || !scrapeForm.reason.trim() || scrapeLeadMutation.isPending}
+                                onClick={() => {
+                                    scrapeLeadMutation.mutate({
+                                        platform_id: Number(scrapeForm.platform_id),
+                                        source_url: scrapeForm.source_url.trim(),
+                                        name: scrapeForm.name.trim() || null,
+                                        phone_normalized: normalizePhone(scrapeForm.phone_normalized.trim()) || null,
+                                        email: scrapeForm.email.trim() || null,
+                                        assigned_to: scrapeForm.assigned_to ? Number(scrapeForm.assigned_to) : null,
+                                        reason: scrapeForm.reason.trim(),
+                                    });
+                                }}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {scrapeLeadMutation.isPending ? 'Creating...' : 'Create scrape entry'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
             {showCreateModal ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowCreateModal(false)}>
                     <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
@@ -992,7 +1231,7 @@ export default function Leads() {
                                     <option value="">{createOwnersLoading ? 'Loading owners...' : 'Auto-assign owner'}</option>
                                     {owners.map((owner) => (
                                         <option key={owner.id} value={owner.id}>
-                                            {owner.name} ({owner.role})
+                                            {owner.name} ({owner.role_label || owner.role})
                                         </option>
                                     ))}
                                 </select>

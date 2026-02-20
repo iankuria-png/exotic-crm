@@ -225,6 +225,78 @@ class CrmStreamFourAuthorizationTest extends TestCase
         $this->assertNotNull($response->json('targets.data.0.last_renewal_reminder_at'));
     }
 
+    public function test_sales_user_can_pause_and_resume_renewal_reminders_in_scope(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $deal = $this->createDeal($platform, [
+            'status' => 'active',
+            'expires_at' => now()->addDays(5),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $pauseResponse = $this->postJson('/api/crm/renewals/pause', [
+            'deal_id' => $deal->id,
+            'pause_until' => now()->addDays(2)->toDateString(),
+            'reason' => 'Client requested temporary pause',
+        ]);
+
+        $pauseResponse->assertOk()
+            ->assertJsonPath('status', 'paused');
+        $this->assertTrue((bool) $deal->fresh()->renewal_reminders_paused);
+
+        $overviewPaused = $this->getJson('/api/crm/renewals?bucket=paused');
+        $overviewPaused->assertOk()
+            ->assertJsonPath('targets.data.0.id', $deal->id)
+            ->assertJsonPath('targets.data.0.reminders_paused', true);
+
+        $resumeResponse = $this->postJson('/api/crm/renewals/resume', [
+            'deal_id' => $deal->id,
+            'reason' => 'Client requested reminders back on',
+        ]);
+
+        $resumeResponse->assertOk()
+            ->assertJsonPath('status', 'active');
+
+        $this->assertFalse((bool) $deal->fresh()->renewal_reminders_paused);
+    }
+
+    public function test_paused_renewal_target_is_excluded_from_campaign_run(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $template = $this->createTemplate();
+
+        RenewalCampaign::query()->create([
+            'trigger_days' => -7,
+            'channel' => 'sms',
+            'template_id' => $template->id,
+            'enabled' => true,
+        ]);
+
+        $this->createDeal($platform, [
+            'status' => 'active',
+            'expires_at' => now()->addDays(7),
+            'renewal_reminders_paused' => false,
+        ]);
+
+        $this->createDeal($platform, [
+            'status' => 'active',
+            'expires_at' => now()->addDays(7),
+            'renewal_reminders_paused' => true,
+            'renewal_paused_until' => now()->addDays(3),
+            'renewal_pause_reason' => 'Temporary stop',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->postJson('/api/crm/renewals/run');
+
+        $response->assertOk()
+            ->assertJsonPath('totals.targeted', 1);
+    }
+
     public function test_sales_user_can_create_manual_client_in_scope(): void
     {
         $platform = $this->createPlatform('Kenya');
@@ -317,6 +389,44 @@ class CrmStreamFourAuthorizationTest extends TestCase
 
         $assignResponse->assertOk()
             ->assertJsonPath('assigned_to', $salesUser->id);
+    }
+
+    public function test_sales_user_can_create_scrape_entry_lead_in_scope(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $owner = $this->createUser('sales', [$platform->id]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->postJson('/api/crm/leads/scrape-entry', [
+            'platform_id' => $platform->id,
+            'source_url' => 'https://example.com/profile/traceable-listing',
+            'name' => 'Scraped Listing',
+            'phone_normalized' => '0712555111',
+            'assigned_to' => $owner->id,
+            'reason' => 'Scrape intake QA',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('lead.platform_id', $platform->id)
+            ->assertJsonPath('lead.name', 'Scraped Listing')
+            ->assertJsonPath('lead.assigned_to', $owner->id)
+            ->assertJsonPath('lead.source', 'import');
+
+        $leadId = (int) $response->json('lead.id');
+
+        $this->assertDatabaseHas('timeline_events', [
+            'entity_type' => 'lead',
+            'entity_id' => $leadId,
+            'event_type' => 'lead_scrape_intake',
+        ]);
+
+        $this->assertDatabaseHas('audit_log', [
+            'entity_type' => 'lead',
+            'entity_id' => $leadId,
+            'action' => 'lead_scrape_intake',
+        ]);
     }
 
     public function test_sales_user_can_archive_lead_and_include_archived_filter_returns_it(): void

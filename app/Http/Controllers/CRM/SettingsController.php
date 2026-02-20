@@ -128,14 +128,52 @@ class SettingsController extends Controller
             'You do not have access to this market.'
         );
 
+        $platformMap = Platform::query()
+            ->select(['id', 'name', 'country'])
+            ->orderBy('name')
+            ->get()
+            ->keyBy('id');
+
         $owners = $this->marketAuthorizationService
             ->eligibleOwnersForPlatform($platformId)
-            ->map(fn (User $owner) => [
-                'id' => (int) $owner->id,
-                'name' => $owner->name,
-                'email' => $owner->email,
-                'role' => $owner->role,
-            ])
+            ->map(function (User $owner) use ($platformMap) {
+                $accessibleIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($owner);
+
+                if ($accessibleIds === null) {
+                    $assignedMarkets = [[
+                        'id' => null,
+                        'name' => 'All markets',
+                        'country' => 'Global',
+                    ]];
+                } else {
+                    $assignedMarkets = collect($accessibleIds)
+                        ->map(function ($marketId) use ($platformMap) {
+                            $platform = $platformMap->get((int) $marketId);
+                            if (!$platform) {
+                                return null;
+                            }
+
+                            return [
+                                'id' => (int) $platform->id,
+                                'name' => $platform->name,
+                                'country' => $platform->country,
+                            ];
+                        })
+                        ->filter()
+                        ->values()
+                        ->all();
+                }
+
+                return [
+                    'id' => (int) $owner->id,
+                    'name' => $owner->name,
+                    'email' => $owner->email,
+                    'role' => $owner->role,
+                    'role_label' => $this->roleLabel($owner->role),
+                    'assigned_markets' => $assignedMarkets,
+                    'market_scope' => $accessibleIds === null ? 'all' : 'restricted',
+                ];
+            })
             ->values();
 
         return response()->json([
@@ -391,6 +429,16 @@ class SettingsController extends Controller
         }
 
         return [];
+    }
+
+    private function roleLabel(string $role): string
+    {
+        return match ($role) {
+            'admin' => 'Admin',
+            'sub_admin' => 'Sub-admin',
+            'sales' => 'Sales',
+            default => ucfirst(str_replace('_', ' ', $role)),
+        };
     }
 
     private function resolveAuditPlatformId(array $assignedMarketIds): ?int

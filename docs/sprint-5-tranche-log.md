@@ -274,3 +274,64 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 ### Decision Notes
 - Archive keeps lead history available for audit/reconciliation while reducing pipeline noise for agents.
 - Delete remains available but guarded by required reason and destructive confirmation to reduce accidental data loss.
+
+---
+
+## Tranche 7 (Completed)
+
+### Plan
+- Execute next backlog slice from reconciliation plan:
+  - complete `CRM-512` (renewals pause flow + progressive disclosure control panel)
+  - complete remaining `CRM-511` scope (owner identity context in assignment + scrape lead controlled intake)
+
+### Progress
+- Backend:
+  - Added renewal pause/resume endpoints:
+    - `POST /api/crm/renewals/pause`
+    - `POST /api/crm/renewals/resume`
+  - Added renewal pause fields to deals:
+    - `renewal_reminders_paused`
+    - `renewal_paused_until`
+    - `renewal_pause_reason`
+  - Renewal overview now returns pause metadata and supports `bucket=paused`.
+  - Automated campaign target selection now excludes paused reminders.
+  - Manual reminder API now returns paused-state validation when reminders are paused.
+  - Added scrape lead intake endpoint:
+    - `POST /api/crm/leads/scrape-entry`
+  - Settings owners payload now includes:
+    - `role_label`
+    - `assigned_markets`
+    - `market_scope`
+- Frontend:
+  - Renewals page upgraded with progressive disclosure:
+    - row `Manage` action + side control panel drawer
+    - in-panel actions: remind, manual renew, pause/resume reminders, view profile, view payments
+  - Added pause reminders modal with optional pause-until date and required reason.
+  - Added resume reminders modal with required reason.
+  - Added paused reminder KPI card + paused state filter.
+  - Leads page:
+    - added `Scrape lead` CTA and controlled intake modal
+    - assign modal now shows owner role label and assigned market context
+    - owner directory card list added for faster informed assignment selection
+- Data model and audit:
+  - Added audit action constants:
+    - `LEAD_SCRAPE_INTAKE`
+    - `RENEWAL_PAUSE`
+    - `RENEWAL_RESUME`
+
+### Verification
+- `php artisan migrate --force` -> pass.
+- `php artisan test --filter CrmStreamFourAuthorizationTest` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5d-2026-02-20/renewals.png`
+  - `output/playwright/sprint5d-2026-02-20/renewals-control-drawer.png`
+  - `output/playwright/sprint5d-2026-02-20/renewals-pause-modal.png`
+  - `output/playwright/sprint5d-2026-02-20/leads.png`
+  - `output/playwright/sprint5d-2026-02-20/leads-assign-modal-context.png`
+  - `output/playwright/sprint5d-2026-02-20/leads-scrape-modal.png`
+
+### Decision Notes
+- Pause/resume is implemented as an explicit state on subscriptions to keep campaign targeting deterministic and auditable.
+- Scrape lead in this tranche is a controlled intake path (URL-led lead creation with audit trace), while full crawler orchestration remains in advanced scope (`CRM-518`).

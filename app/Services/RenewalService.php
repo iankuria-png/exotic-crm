@@ -80,13 +80,18 @@ class RenewalService
             ->paginate($perPage)
             ->through(function (Deal $deal) {
                 $daysLeft = $this->daysUntil($deal->expires_at);
+                $remindersPaused = $this->isReminderPaused($deal);
+                $renewalBucket = $remindersPaused ? 'paused' : $this->bucketForDays($daysLeft);
 
                 return array_merge($deal->toArray(), [
                     'days_left' => $daysLeft,
-                    'renewal_bucket' => $this->bucketForDays($daysLeft),
+                    'renewal_bucket' => $renewalBucket,
                     'reminders_sent_count' => (int) ($deal->reminders_sent_count ?? 0),
                     'reminders_failed_count' => (int) ($deal->reminders_failed_count ?? 0),
                     'last_renewal_reminder_at' => $deal->last_renewal_reminder_at,
+                    'reminders_paused' => $remindersPaused,
+                    'renewal_paused_until' => optional($deal->renewal_paused_until)->toDateTimeString(),
+                    'renewal_pause_reason' => $deal->renewal_pause_reason,
                 ]);
             });
 
@@ -108,6 +113,13 @@ class RenewalService
             'renewed_this_month' => (int) (clone $summaryBase)
                 ->whereNotNull('activated_at')
                 ->where('activated_at', '>=', now()->startOfMonth())
+                ->count(),
+            'paused_reminders' => (int) (clone $summaryBase)
+                ->where('renewal_reminders_paused', true)
+                ->where(function (Builder $builder) {
+                    $builder->whereNull('renewal_paused_until')
+                        ->orWhere('renewal_paused_until', '>=', now());
+                })
                 ->count(),
         ];
 
@@ -172,6 +184,16 @@ class RenewalService
     public function sendManualReminder(Deal $deal, ?int $templateId = null, ?int $actorId = null): array
     {
         $deal->loadMissing(['client.platform', 'product']);
+
+        if ($this->isReminderPaused($deal)) {
+            $resumeOn = $deal->renewal_paused_until ? Carbon::parse($deal->renewal_paused_until)->toDateTimeString() : 'manual resume';
+
+            return [
+                'success' => false,
+                'status' => 'paused',
+                'reason' => 'Renewal reminders are paused for this subscription until ' . $resumeOn . '.',
+            ];
+        }
 
         if (!$deal->client) {
             return [
@@ -268,6 +290,109 @@ class RenewalService
             'template_id' => $template->id,
             'message' => $rendered['body'],
         ], $delivery);
+    }
+
+    public function pauseReminders(Deal $deal, string $reason, ?int $actorId = null, ?string $pauseUntil = null): array
+    {
+        $pauseUntilDate = null;
+        if ($pauseUntil) {
+            $pauseUntilDate = Carbon::parse($pauseUntil)->endOfDay();
+        }
+
+        $beforeState = [
+            'renewal_reminders_paused' => (bool) $deal->renewal_reminders_paused,
+            'renewal_paused_until' => optional($deal->renewal_paused_until)->toDateTimeString(),
+            'renewal_pause_reason' => $deal->renewal_pause_reason,
+        ];
+
+        $deal->update([
+            'renewal_reminders_paused' => true,
+            'renewal_paused_until' => $pauseUntilDate,
+            'renewal_pause_reason' => $reason,
+        ]);
+
+        TimelineEvent::create([
+            'platform_id' => $deal->platform_id,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'event_type' => 'renewal_reminders_paused',
+            'actor_id' => $actorId,
+            'content' => [
+                'reason' => $reason,
+                'renewal_paused_until' => optional($pauseUntilDate)->toDateTimeString(),
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->record([
+            'platform_id' => $deal->platform_id,
+            'actor_id' => $actorId,
+            'action' => CrmAuditAction::RENEWAL_PAUSE,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'before_state' => $beforeState,
+            'after_state' => [
+                'renewal_reminders_paused' => true,
+                'renewal_paused_until' => optional($pauseUntilDate)->toDateTimeString(),
+                'renewal_pause_reason' => $reason,
+            ],
+            'reason' => $reason,
+        ]);
+
+        return [
+            'success' => true,
+            'status' => 'paused',
+            'deal_id' => $deal->id,
+            'renewal_paused_until' => optional($pauseUntilDate)->toDateTimeString(),
+        ];
+    }
+
+    public function resumeReminders(Deal $deal, string $reason, ?int $actorId = null): array
+    {
+        $beforeState = [
+            'renewal_reminders_paused' => (bool) $deal->renewal_reminders_paused,
+            'renewal_paused_until' => optional($deal->renewal_paused_until)->toDateTimeString(),
+            'renewal_pause_reason' => $deal->renewal_pause_reason,
+        ];
+
+        $deal->update([
+            'renewal_reminders_paused' => false,
+            'renewal_paused_until' => null,
+            'renewal_pause_reason' => null,
+        ]);
+
+        TimelineEvent::create([
+            'platform_id' => $deal->platform_id,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'event_type' => 'renewal_reminders_resumed',
+            'actor_id' => $actorId,
+            'content' => [
+                'reason' => $reason,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->record([
+            'platform_id' => $deal->platform_id,
+            'actor_id' => $actorId,
+            'action' => CrmAuditAction::RENEWAL_RESUME,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'before_state' => $beforeState,
+            'after_state' => [
+                'renewal_reminders_paused' => false,
+                'renewal_paused_until' => null,
+                'renewal_pause_reason' => null,
+            ],
+            'reason' => $reason,
+        ]);
+
+        return [
+            'success' => true,
+            'status' => 'active',
+            'deal_id' => $deal->id,
+        ];
     }
 
     private function runSingleCampaign(RenewalCampaign $campaign, ?int $actorId, ?array $platformIds = null): array
@@ -405,6 +530,14 @@ class RenewalService
         return Deal::query()
             ->whereIn('status', ['active', 'expired'])
             ->whereDate('expires_at', $targetDate->toDateString())
+            ->where(function (Builder $builder) {
+                $builder->where('renewal_reminders_paused', false)
+                    ->orWhere(function (Builder $pausedBuilder) {
+                        $pausedBuilder->where('renewal_reminders_paused', true)
+                            ->whereNotNull('renewal_paused_until')
+                            ->where('renewal_paused_until', '<', now());
+                    });
+            })
             ->when(
                 is_array($platformIds),
                 fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds)
@@ -416,6 +549,15 @@ class RenewalService
 
     private function applyBucketFilter(Builder $query, string $bucket): void
     {
+        if ($bucket === 'paused') {
+            $query->where('renewal_reminders_paused', true)
+                ->where(function (Builder $builder) {
+                    $builder->whereNull('renewal_paused_until')
+                        ->orWhere('renewal_paused_until', '>=', now());
+                });
+            return;
+        }
+
         if ($bucket === 'risk') {
             $query->whereBetween('expires_at', [now(), now()->addDays(3)]);
             return;
@@ -540,6 +682,19 @@ class RenewalService
         }
 
         return 'stable';
+    }
+
+    private function isReminderPaused(Deal $deal): bool
+    {
+        if (!(bool) $deal->renewal_reminders_paused) {
+            return false;
+        }
+
+        if (!$deal->renewal_paused_until) {
+            return true;
+        }
+
+        return Carbon::parse($deal->renewal_paused_until)->isFuture();
     }
 
     private function resolveActorId(?int $actorId): int

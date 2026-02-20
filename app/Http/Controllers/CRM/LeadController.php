@@ -109,6 +109,88 @@ class LeadController extends Controller
         return response()->json($lead, 201);
     }
 
+    public function scrapeEntry(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|exists:platforms,id',
+            'source_url' => 'required|url|max:500',
+            'name' => 'nullable|string|max:255',
+            'phone_normalized' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'assigned_to' => 'nullable|exists:users,id',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $sourceUrl = trim((string) $validated['source_url']);
+        $derivedName = trim((string) ($validated['name'] ?? ''));
+        if ($derivedName === '') {
+            $derivedName = $this->deriveLeadNameFromSourceUrl($sourceUrl);
+        }
+
+        if ($derivedName === '') {
+            return response()->json([
+                'message' => 'Could not derive a lead name from URL. Provide a manual lead name.',
+            ], 422);
+        }
+
+        $reason = $validated['reason'] ?? 'Scrape lead intake from leads page';
+
+        try {
+            $lead = $this->createManualLead(
+                $request,
+                [
+                    'platform_id' => (int) $validated['platform_id'],
+                    'name' => $derivedName,
+                    'phone_normalized' => $validated['phone_normalized'] ?? null,
+                    'email' => $validated['email'] ?? null,
+                    'source' => 'import',
+                    'status' => 'new',
+                    'assigned_to' => $validated['assigned_to'] ?? null,
+                ],
+                $reason
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        $host = parse_url($sourceUrl, PHP_URL_HOST);
+
+        TimelineEvent::create([
+            'platform_id' => $lead->platform_id,
+            'entity_type' => 'lead',
+            'entity_id' => $lead->id,
+            'event_type' => 'lead_scrape_intake',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'source_url' => $sourceUrl,
+                'source_host' => $host,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $lead->platform_id,
+            CrmAuditAction::LEAD_SCRAPE_INTAKE,
+            'lead',
+            (int) $lead->id,
+            null,
+            [
+                'source_url' => $sourceUrl,
+                'source_host' => $host,
+            ],
+            $reason
+        );
+
+        return response()->json([
+            'lead' => $lead,
+            'source_url' => $sourceUrl,
+            'source_host' => $host,
+        ], 201);
+    }
+
     public function uploadCsv(Request $request)
     {
         $validated = $request->validate([
@@ -763,5 +845,22 @@ class LeadController extends Controller
         fclose($handle);
 
         return $rows;
+    }
+
+    private function deriveLeadNameFromSourceUrl(string $sourceUrl): string
+    {
+        $path = trim((string) parse_url($sourceUrl, PHP_URL_PATH), '/');
+        $host = trim((string) parse_url($sourceUrl, PHP_URL_HOST));
+
+        $candidate = $path !== '' ? basename($path) : $host;
+        $candidate = str_replace(['-', '_'], ' ', $candidate);
+        $candidate = preg_replace('/[^a-zA-Z0-9 ]+/', ' ', $candidate) ?? '';
+        $candidate = trim(preg_replace('/\s+/', ' ', $candidate) ?? '');
+
+        if ($candidate === '') {
+            return $host !== '' ? 'Lead from ' . $host : '';
+        }
+
+        return substr(ucwords($candidate), 0, 255);
     }
 }

@@ -10,6 +10,7 @@ final class CrmAuditAction
     public const LEAD_STATUS_UPDATE = 'lead_status_update';
     public const LEAD_ARCHIVE = 'lead_archive';
     public const LEAD_DELETE = 'lead_delete';
+    public const LEAD_SCRAPE_INTAKE = 'lead_scrape_intake';
     public const ROLE_UPDATE = 'role_update';
     public const DEAL_ACTIVATE = 'deal_activate';
     public const DEAL_DEACTIVATE = 'deal_deactivate';
@@ -18,6 +19,8 @@ final class CrmAuditAction
     public const CONVERSATION_SMS_FAILED = 'conversation_sms_failed';
     public const RENEWAL_SMS_SENT = 'renewal_sms_sent';
     public const RENEWAL_SMS_FAILED = 'renewal_sms_failed';
+    public const RENEWAL_PAUSE = 'renewal_pause';
+    public const RENEWAL_RESUME = 'renewal_resume';
     public const PAYMENT_MATCH_AUTO = 'payment_match_auto';
     public const PAYMENT_MATCH_CONFIRM = 'payment_match_confirm';
     public const PAYMENT_MATCH_BATCH = 'payment_match_batch';

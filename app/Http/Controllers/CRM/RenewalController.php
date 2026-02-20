@@ -22,7 +22,7 @@ class RenewalController extends Controller
         $validated = $request->validate([
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'search' => 'nullable|string|max:255',
-            'bucket' => 'nullable|in:risk,pending,stable,expired',
+            'bucket' => 'nullable|in:risk,pending,stable,expired,paused',
             'page' => 'nullable|integer|min:1',
             'per_page' => 'nullable|integer|min:10|max:100',
         ]);
@@ -96,6 +96,52 @@ class RenewalController extends Controller
         $status = !empty($result['success']) ? 200 : 422;
 
         return response()->json($result, $status);
+    }
+
+    public function pause(Request $request)
+    {
+        $validated = $request->validate([
+            'deal_id' => 'required|integer|exists:deals,id',
+            'reason' => 'required|string|max:500',
+            'pause_until' => 'nullable|date|after_or_equal:today',
+        ]);
+
+        $deal = Deal::query()->with(['client.platform', 'product'])->findOrFail((int) $validated['deal_id']);
+
+        if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $deal->platform_id)) {
+            return response()->json(['message' => 'You do not have access to this market.'], 403);
+        }
+
+        $result = $this->renewalService->pauseReminders(
+            $deal,
+            $validated['reason'],
+            $request->user()->id,
+            $validated['pause_until'] ?? null
+        );
+
+        return response()->json($result);
+    }
+
+    public function resume(Request $request)
+    {
+        $validated = $request->validate([
+            'deal_id' => 'required|integer|exists:deals,id',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $deal = Deal::query()->with(['client.platform', 'product'])->findOrFail((int) $validated['deal_id']);
+
+        if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $deal->platform_id)) {
+            return response()->json(['message' => 'You do not have access to this market.'], 403);
+        }
+
+        $result = $this->renewalService->resumeReminders(
+            $deal,
+            $validated['reason'],
+            $request->user()->id
+        );
+
+        return response()->json($result);
     }
 
     public function runs(Request $request)

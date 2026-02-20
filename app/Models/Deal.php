@@ -14,12 +14,15 @@ class Deal extends Model
         'product_id', 'plan_type', 'amount', 'currency',
         'duration', 'status', 'activated_at', 'expires_at',
         'assigned_to',
+        'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
         'activated_at' => 'datetime',
         'expires_at' => 'datetime',
+        'renewal_reminders_paused' => 'boolean',
+        'renewal_paused_until' => 'datetime',
     ];
 
     public function platform()
