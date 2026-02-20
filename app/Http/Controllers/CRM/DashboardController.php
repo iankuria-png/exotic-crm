@@ -11,6 +11,7 @@ use App\Models\Payment;
 use App\Models\Product;
 use App\Models\ClientNote;
 use App\Services\MarketAuthorizationService;
+use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
@@ -21,6 +22,21 @@ class DashboardController extends Controller
 
     public function summary(Request $request)
     {
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'search' => 'nullable|string|max:120',
+        ]);
+
+        $from = !empty($validated['from'])
+            ? Carbon::parse($validated['from'])->startOfDay()
+            : now()->startOfMonth();
+        $to = !empty($validated['to'])
+            ? Carbon::parse($validated['to'])->endOfDay()
+            : now()->endOfDay();
+        $search = trim((string) ($validated['search'] ?? ''));
+        $hasExplicitDateFilter = !empty($validated['from']) || !empty($validated['to']);
+
         $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
             $request,
             'platform_id',
@@ -37,6 +53,12 @@ class DashboardController extends Controller
         if (is_array($platformIds)) {
             $expiringDealsQuery->whereIn('platform_id', $platformIds);
         }
+        if ($search !== '') {
+            $expiringDealsQuery->whereHas('client', function ($query) use ($search) {
+                $query->where('name', 'like', "%{$search}%")
+                    ->orWhere('phone_normalized', 'like', "%{$search}%");
+            });
+        }
         $expiringDeals = $expiringDealsQuery->limit(10)->get();
 
         $paymentReviewQueueQuery = Payment::where('status', 'completed')
@@ -45,6 +67,15 @@ class DashboardController extends Controller
             ->orderBy('created_at', 'desc');
         if (is_array($platformIds)) {
             $paymentReviewQueueQuery->whereIn('platform_id', $platformIds);
+        }
+        if ($search !== '') {
+            $paymentReviewQueueQuery->where(function ($query) use ($search) {
+                $query->where('phone', 'like', "%{$search}%")
+                    ->orWhere('transaction_reference', 'like', "%{$search}%");
+            });
+        }
+        if ($hasExplicitDateFilter) {
+            $paymentReviewQueueQuery->whereBetween('created_at', [$from, $to]);
         }
         $paymentReviewQueue = $paymentReviewQueueQuery->limit(10)->get();
 
@@ -56,6 +87,18 @@ class DashboardController extends Controller
                 $query->whereIn('platform_id', $platformIds);
             });
         }
+        if ($hasExplicitDateFilter) {
+            $upcomingFollowUpsQuery->whereBetween('follow_up_at', [$from, $to]);
+        }
+        if ($search !== '') {
+            $upcomingFollowUpsQuery->where(function ($query) use ($search) {
+                $query->where('content', 'like', "%{$search}%")
+                    ->orWhereHas('client', function ($clientQuery) use ($search) {
+                        $clientQuery->where('name', 'like', "%{$search}%")
+                            ->orWhere('phone_normalized', 'like', "%{$search}%");
+                    });
+            });
+        }
         $upcomingFollowUps = $upcomingFollowUpsQuery->limit(10)->get();
 
         $activeClientsQuery = Client::active();
@@ -64,8 +107,8 @@ class DashboardController extends Controller
         $totalLeadsQuery = Lead::query();
         $activeDealsQuery = Deal::active();
         $expiringSoonQuery = Deal::expiringSoon(7);
-        $paymentsMtdQuery = Payment::where('status', 'completed')->where('created_at', '>=', now()->startOfMonth());
-        $unmatchedPaymentsQuery = Payment::whereNull('client_id')->where('status', 'completed');
+        $paymentsWindowQuery = Payment::where('status', 'completed')->whereBetween('created_at', [$from, $to]);
+        $unmatchedPaymentsQuery = Payment::whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
 
         if (is_array($platformIds)) {
             $activeClientsQuery->whereIn('platform_id', $platformIds);
@@ -74,13 +117,16 @@ class DashboardController extends Controller
             $totalLeadsQuery->whereIn('platform_id', $platformIds);
             $activeDealsQuery->whereIn('platform_id', $platformIds);
             $expiringSoonQuery->whereIn('platform_id', $platformIds);
-            $paymentsMtdQuery->whereIn('platform_id', $platformIds);
+            $paymentsWindowQuery->whereIn('platform_id', $platformIds);
             $unmatchedPaymentsQuery->whereIn('platform_id', $platformIds);
         }
 
         return response()->json([
             'filters' => [
                 'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+                'search' => $search !== '' ? $search : null,
             ],
             'kpis' => [
                 'active_clients' => $activeClientsQuery->count(),
@@ -89,9 +135,10 @@ class DashboardController extends Controller
                 'total_leads' => $totalLeadsQuery->count(),
                 'active_deals' => $activeDealsQuery->count(),
                 'expiring_soon' => $expiringSoonQuery->count(),
-                'completed_payments_mtd' => (clone $paymentsMtdQuery)->count(),
-                'recent_payments' => (clone $paymentsMtdQuery)->count(),
-                'revenue_mtd' => (float) (clone $paymentsMtdQuery)->sum('amount'),
+                'completed_payments_window' => (clone $paymentsWindowQuery)->count(),
+                'completed_payments_mtd' => (clone $paymentsWindowQuery)->count(),
+                'recent_payments' => (clone $paymentsWindowQuery)->count(),
+                'revenue_mtd' => (float) (clone $paymentsWindowQuery)->sum('amount'),
                 'unmatched_payments' => $unmatchedPaymentsQuery->count(),
             ],
             'expiring_deals' => $expiringDeals,

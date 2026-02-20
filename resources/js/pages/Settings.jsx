@@ -91,7 +91,7 @@ function IntegrationsWorkspace() {
                                 <p className="text-sm font-semibold text-slate-900">{service.label}</p>
                                 <p className="text-xs text-slate-500">{service.detail}</p>
                             </div>
-                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(service.status)}`}>
+                            <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(service.status)}`}>
                                 {service.status.replaceAll('_', ' ')}
                             </span>
                         </div>
@@ -127,7 +127,7 @@ function IntegrationsWorkspace() {
                                         <td className="px-4 py-2.5 text-sm font-semibold text-slate-900">{platform.platform_name}</td>
                                         <td className="px-4 py-2.5 text-sm text-slate-600">{platform.country || '—'}</td>
                                         <td className="px-4 py-2.5">
-                                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(platform.wp_sync?.status)}`}>
+                                            <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(platform.wp_sync?.status)}`}>
                                                 {(platform.wp_sync?.status || 'pending').replaceAll('_', ' ')}
                                             </span>
                                         </td>
@@ -209,7 +209,7 @@ function TemplatesWorkspace({ canManageTemplates }) {
             key: 'channel',
             label: 'Channel',
             render: (row) => (
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium uppercase text-slate-700 ring-1 ring-inset ring-slate-200">
+                <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium uppercase text-slate-700 ring-1 ring-inset ring-slate-200">
                     {row.channel}
                 </span>
             ),
@@ -662,12 +662,12 @@ function RolesWorkspace() {
                                                 <p className="text-xs text-slate-500">{user.email}</p>
                                             </td>
                                             <td className="px-4 py-2.5">
-                                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${roleClasses(user.role)}`}>
+                                                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${roleClasses(user.role)}`}>
                                                     {user.role.replace('_', ' ')}
                                                 </span>
                                             </td>
                                             <td className="px-4 py-2.5">
-                                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                                                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
                                                     user.status === 'active'
                                                         ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
                                                         : 'bg-slate-200 text-slate-700 ring-slate-300'

@@ -33,7 +33,7 @@
     }
 
     .crm-surface {
-        @apply rounded-lg border border-slate-200 bg-white shadow-sm;
+        @apply rounded-xl border border-slate-200 bg-white shadow-sm;
     }
 
     .crm-panel-header {
@@ -57,23 +57,23 @@
     }
 
     .crm-btn-primary {
-        @apply inline-flex items-center justify-center rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600;
+        @apply inline-flex items-center justify-center rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600;
     }
 
     .crm-btn-secondary {
-        @apply inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400;
+        @apply inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400;
     }
 
     .crm-btn-danger {
-        @apply inline-flex items-center justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300;
+        @apply inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300;
     }
 
     .crm-filter-row {
-        @apply rounded-lg border border-slate-200 bg-white p-3 shadow-sm;
+        @apply rounded-xl border border-slate-200 bg-white p-3 shadow-sm;
     }
 
     .crm-kpi {
-        @apply rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm;
+        @apply rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm;
     }
 
     .crm-kpi-label {

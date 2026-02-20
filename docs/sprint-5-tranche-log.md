@@ -114,3 +114,58 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 ### Decision Notes
 - Row-level CSV errors are shown inline for immediate operator recovery, while retaining toast notifications for quick action feedback.
 - Error previews are capped for scanability; detailed CSV export can be added in a later tranche.
+
+---
+
+## Tranche 4 (Completed)
+
+### Plan
+- Execute Sprint 5A UX foundation priorities from the approved reconciliation backlog:
+  - shell/navigation breathing room and hierarchy clean-up
+  - remove duplicated top-title context
+  - unify status and metric visual language
+  - improve dashboard filter/action ergonomics and queue clarity
+  - apply user-facing terminology migration from `Deals` to `Subscriptions`
+  - reduce payment action ambiguity and enable searchable manual match candidates
+
+### Progress
+- Frontend shell and shared components:
+  - Refined `MainLayout` top bar into utility controls (no duplicated `Exotic Sales CRM` title).
+  - Improved sidebar spacing and icon weight; renamed nav label `Deals` -> `Subscriptions`.
+  - Updated `StatusBadge` from pill/full-round styling to refined rounded chips.
+  - Reworked shared `MetricCard` to remove top border accents and use dot-indicator semantics.
+- Dashboard UX and copy:
+  - Added search input, date range controls, and stronger quick actions.
+  - Improved market filter affordance with active-state indicator.
+  - Renamed `Expiring Deals` section to `Expiring Subscriptions`.
+  - Added follow-up context tooltip and clearer queue/renewal microcopy.
+- Payments operational clarity:
+  - Renamed per-row actions to `Auto-match` and `Match manually`.
+  - Added explicit helper copy explaining auto vs manual behavior.
+  - Added manual-candidate search UX in drawer.
+- Backend contracts:
+  - Enhanced dashboard API to accept/validate `from`, `to`, and `search` inputs.
+  - Enhanced payment candidate endpoint to support `search` across name/phone/email and numeric IDs (`id`, `wp_post_id`, `wp_user_id`).
+- Terminology pass:
+  - Updated key user-facing strings from `Deal(s)` to `Subscription(s)` on navigation and core pages while preserving backend route/model names for compatibility.
+
+### Verification
+- Build:
+  - `npm run build` -> pass.
+- Tests:
+  - `php artisan test --filter CrmStreamFourAuthorizationTest` -> pass.
+  - `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5a-2026-02-20/dashboard.png`
+  - `output/playwright/sprint5a-2026-02-20/clients.png`
+  - `output/playwright/sprint5a-2026-02-20/subscriptions.png`
+  - `output/playwright/sprint5a-2026-02-20/payments.png`
+  - `output/playwright/sprint5a-2026-02-20/payments-manual-match.png`
+  - `output/playwright/sprint5a-2026-02-20/renewals.png`
+  - `output/playwright/sprint5a-2026-02-20/reports.png`
+  - `output/playwright/sprint5a-2026-02-20/settings.png`
+
+### Decision Notes
+- Kept backend `deals` domain and routes intact to avoid high-risk schema/API churn; terminology migration is UI-layer-first.
+- Dashboard date filtering is optional; when unset, operational queues stay broad while KPI revenue window remains backend-defaulted.
+- Candidate search was prioritized in payments manual match to remove phone-only matching bottlenecks before deeper queue policy changes.

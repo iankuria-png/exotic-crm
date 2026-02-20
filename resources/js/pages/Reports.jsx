@@ -132,7 +132,7 @@ export default function Reports() {
         () => (data?.owner_performance || []).map((row) => ({
             label: row.owner,
             value: asNumber(row.deals),
-            formattedValue: `${row.deals} deals`,
+            formattedValue: `${row.deals} subscriptions`,
         })),
         [data?.owner_performance],
     );
@@ -166,7 +166,7 @@ export default function Reports() {
         (data.revenue_trend || []).forEach((row) => rows.push(toCsvRow(['Revenue Trend', row.label, row.value])));
         (data.lead_sources || []).forEach((row) => rows.push(toCsvRow(['Lead Source', row.source, row.value])));
         (data.package_revenue || []).forEach((row) => rows.push(toCsvRow(['Package Revenue', row.label, row.value])));
-        (data.owner_performance || []).forEach((row) => rows.push(toCsvRow(['Owner Performance', row.owner, `${row.deals} deals | ${row.revenue} revenue`])));
+        (data.owner_performance || []).forEach((row) => rows.push(toCsvRow(['Owner Performance', row.owner, `${row.deals} subscriptions | ${row.revenue} revenue`])));
 
         const filename = `crm-reports-${data?.range?.from || 'from'}-to-${data?.range?.to || 'to'}.csv`;
         downloadCsv(filename, rows);
@@ -258,11 +258,11 @@ export default function Reports() {
                 </div>
 
                 <div className="space-y-4 xl:col-span-6">
-                    <ReportPanel title="Revenue by Package" subtitle="Deal value grouped by package">
+                    <ReportPanel title="Revenue by Package" subtitle="Subscription value grouped by package">
                         {packageRevenue.length > 0 ? <BarList rows={packageRevenue} colorClass="bg-emerald-600" /> : <p className="text-sm text-slate-500">No package revenue data.</p>}
                     </ReportPanel>
 
-                    <ReportPanel title="Owner Performance" subtitle="Deals handled by owner">
+                    <ReportPanel title="Owner Performance" subtitle="Subscriptions handled by owner">
                         {ownerLeaderboard.length > 0 ? <BarList rows={ownerLeaderboard} colorClass="bg-indigo-600" /> : <p className="text-sm text-slate-500">No ownership data found.</p>}
                     </ReportPanel>
                 </div>
@@ -270,4 +270,3 @@ export default function Reports() {
         </div>
     );
 }
-

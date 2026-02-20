@@ -251,7 +251,7 @@ export default function Clients() {
             label: 'Plan',
             render: (row) => (
                 <div className="flex items-center gap-1.5">
-                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
                         row.plan_label === 'Premium'
                             ? 'bg-teal-50 text-teal-700 ring-teal-200'
                             : row.plan_label === 'Featured'
@@ -261,7 +261,7 @@ export default function Clients() {
                         {row.plan_label || 'Basic'}
                     </span>
                     {row.verified ? (
-                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                        <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
                             Verified
                         </span>
                     ) : null}

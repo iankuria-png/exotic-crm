@@ -16,11 +16,11 @@ function formatEventDescription(event) {
 
     switch (event.event_type) {
         case 'deal_created':
-            return `Deal created: ${content.plan_type || ''} (${content.duration || ''}) KES ${content.amount || 0}`;
+            return `Subscription created: ${content.plan_type || ''} (${content.duration || ''}) KES ${content.amount || 0}`;
         case 'deal_activated':
-            return `Deal activated, expires ${content.expires_at ? new Date(content.expires_at).toLocaleDateString() : ''}`;
+            return `Subscription activated, expires ${content.expires_at ? new Date(content.expires_at).toLocaleDateString() : ''}`;
         case 'deal_extended':
-            return `Deal extended by ${content.additional_days || 0} days`;
+            return `Subscription extended by ${content.additional_days || 0} days`;
         case 'profile_activated':
             return `Profile activated for ${content.duration_days || 0} days`;
         case 'profile_deactivated':

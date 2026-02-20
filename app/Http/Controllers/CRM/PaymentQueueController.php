@@ -81,17 +81,33 @@ class PaymentQueueController extends Controller
     public function candidates(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
+        $validated = $request->validate([
+            'search' => 'nullable|string|max:120',
+        ]);
 
         if (!$payment->platform_id) {
             return response()->json(['data' => []]);
         }
 
         $phone = $this->normalizePhone($payment->phone);
+        $search = trim((string) ($validated['search'] ?? ''));
 
         $query = Client::where('platform_id', $payment->platform_id)
-            ->select(['id', 'name', 'phone_normalized', 'email', 'city', 'profile_status', 'premium', 'featured', 'verified']);
+            ->select(['id', 'wp_post_id', 'wp_user_id', 'name', 'phone_normalized', 'email', 'city', 'profile_status', 'premium', 'featured', 'verified']);
 
-        if ($phone) {
+        if ($search !== '') {
+            $query->where(function ($builder) use ($search) {
+                $builder->where('name', 'like', "%{$search}%")
+                    ->orWhere('phone_normalized', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
+
+                if (ctype_digit($search)) {
+                    $builder->orWhere('id', (int) $search)
+                        ->orWhere('wp_post_id', (int) $search)
+                        ->orWhere('wp_user_id', (int) $search);
+                }
+            });
+        } elseif ($phone) {
             $query->where('phone_normalized', $phone);
         } else {
             $query->limit(25);

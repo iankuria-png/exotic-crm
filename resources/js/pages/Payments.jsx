@@ -66,6 +66,8 @@ export default function Payments() {
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
+    const [candidateSearchInput, setCandidateSearchInput] = useState('');
+    const [candidateSearch, setCandidateSearch] = useState('');
     const [selectedRows, setSelectedRows] = useState([]);
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [queueAutoMatchDialog, setQueueAutoMatchDialog] = useState({
@@ -88,8 +90,13 @@ export default function Payments() {
     });
 
     const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
-        queryKey: ['payment-candidates', selectedPayment?.id],
-        queryFn: () => api.get(`/crm/payments/${selectedPayment.id}/candidates`).then((response) => response.data),
+        queryKey: ['payment-candidates', selectedPayment?.id, candidateSearch],
+        queryFn: () =>
+            api.get(`/crm/payments/${selectedPayment.id}/candidates`, {
+                params: {
+                    ...(candidateSearch ? { search: candidateSearch } : {}),
+                },
+            }).then((response) => response.data),
         enabled: !!selectedPayment?.id,
     });
 
@@ -214,6 +221,14 @@ export default function Payments() {
         setPage(1);
     };
 
+    const openManualMatch = (paymentRow) => {
+        setSelectedPayment(paymentRow);
+        setSelectedClientId('');
+        setConfirmReason('Manual payment match from queue');
+        setCandidateSearch('');
+        setCandidateSearchInput('');
+    };
+
     const rows = data?.data || [];
 
     const summary = useMemo(() => {
@@ -269,9 +284,7 @@ export default function Payments() {
             label: 'Open first selected',
             onClick: (rowsSelection) => {
                 if (!rowsSelection.length) return;
-                setSelectedPayment(rowsSelection[0]);
-                setSelectedClientId('');
-                setConfirmReason('Manual payment match from queue');
+                openManualMatch(rowsSelection[0]);
             },
         },
     ];
@@ -350,18 +363,16 @@ export default function Payments() {
                         }}
                         className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
                     >
-                        Auto
+                        Auto-match
                     </button>
                     <button
                         onClick={(event) => {
                             event.stopPropagation();
-                            setSelectedPayment(row);
-                            setSelectedClientId('');
-                            setConfirmReason('Manual payment match from queue');
+                            openManualMatch(row);
                         }}
                         className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                     >
-                        Manual
+                        Match manually
                     </button>
                 </div>
             ),
@@ -401,7 +412,7 @@ export default function Payments() {
                                 placeholder="Search by phone or reference..."
                                 className="crm-input pr-10"
                             />
-                            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                            <button type="submit" aria-label="Run payment search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
                                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                 </svg>
@@ -455,7 +466,7 @@ export default function Payments() {
 
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-slate-500">Bulk shortcut: press <span className="crm-mono">Ctrl/Cmd + Enter</span> to confirm selected rows.</p>
-                    <span className="text-xs text-slate-500">All destructive or high-impact actions require a reason and confirmation.</span>
+                    <span className="text-xs text-slate-500">Auto-match attempts phone-based matching. Manual match lets you search and pick any client in scope.</span>
                 </div>
             </section>
 
@@ -489,10 +500,44 @@ export default function Payments() {
                         </header>
 
                         <div className="h-[calc(100%-132px)] overflow-y-auto p-4">
+                            <form
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    setCandidateSearch(candidateSearchInput.trim());
+                                }}
+                                className="mb-3"
+                            >
+                                <div className="relative">
+                                    <input
+                                        value={candidateSearchInput}
+                                        onChange={(event) => setCandidateSearchInput(event.target.value)}
+                                        placeholder="Search client by name, phone, CRM/WP IDs..."
+                                        className="crm-input pr-10"
+                                    />
+                                    <button type="submit" aria-label="Search client candidates" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                        </svg>
+                                    </button>
+                                </div>
+                                {candidateSearch ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setCandidateSearch('');
+                                            setCandidateSearchInput('');
+                                        }}
+                                        className="mt-2 text-xs font-semibold text-teal-700 underline decoration-teal-200 underline-offset-2 hover:text-teal-800"
+                                    >
+                                        Clear candidate search
+                                    </button>
+                                ) : null}
+                            </form>
+
                             {candidatesLoading ? (
                                 <p className="text-sm text-slate-500">Loading candidate clients...</p>
                             ) : modalCandidates.length === 0 ? (
-                                <p className="text-sm text-slate-500">No phone-based candidates found for this payment.</p>
+                                <p className="text-sm text-slate-500">No candidates found. Try searching by client name, phone, or WP IDs.</p>
                             ) : (
                                 <div className="space-y-2">
                                     {modalCandidates.map((client) => {
@@ -506,7 +551,7 @@ export default function Payments() {
                                                 <span className="min-w-0 flex-1">
                                                     <span className="block truncate font-semibold text-slate-900">{client.name || `Client #${client.id}`}</span>
                                                     <span className="mt-0.5 block truncate text-xs text-slate-500">{client.phone_normalized || 'No phone'} • {client.profile_status}</span>
-                                                    <span className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${tone}`}>
+                                                    <span className={`mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${tone}`}>
                                                         Match score {client.score}%
                                                     </span>
                                                 </span>

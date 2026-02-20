@@ -158,7 +158,7 @@ export default function Renewals() {
             key: 'renewal_bucket',
             label: 'Renewal State',
             render: (row) => (
-                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
                     row.renewal_bucket === 'risk'
                         ? 'bg-rose-50 text-rose-700 ring-rose-200'
                         : row.renewal_bucket === 'pending'
@@ -312,4 +312,3 @@ export default function Renewals() {
         </div>
     );
 }
-

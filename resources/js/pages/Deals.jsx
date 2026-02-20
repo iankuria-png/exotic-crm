@@ -23,9 +23,9 @@ export default function Deals() {
     const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
 
     const [dialog, setDialog] = useState({ type: null, deal: null });
-    const [activateReason, setActivateReason] = useState('Activated from Deals page');
-    const [reason, setReason] = useState('Deactivated from Deals page');
-    const [extendReason, setExtendReason] = useState('Extended from Deals page');
+    const [activateReason, setActivateReason] = useState('Activated from subscriptions page');
+    const [reason, setReason] = useState('Deactivated from subscriptions page');
+    const [extendReason, setExtendReason] = useState('Extended from subscriptions page');
     const [extendDays, setExtendDays] = useState('7');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
 
@@ -51,11 +51,11 @@ export default function Deals() {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
-            setActivateReason('Activated from Deals page');
-            toast.success('Deal activated successfully.');
+            setActivateReason('Activated from subscriptions page');
+            toast.success('Subscription activated successfully.');
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Deal activation failed.');
+            toast.error(error?.response?.data?.message || 'Subscription activation failed.');
         },
     });
 
@@ -68,11 +68,11 @@ export default function Deals() {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
-            setReason('Deactivated from Deals page');
-            toast.success('Deal deactivated.');
+            setReason('Deactivated from subscriptions page');
+            toast.success('Subscription deactivated.');
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Deal deactivation failed.');
+            toast.error(error?.response?.data?.message || 'Subscription deactivation failed.');
         },
     });
 
@@ -87,11 +87,11 @@ export default function Deals() {
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
             setExtendDays('7');
-            setExtendReason('Extended from Deals page');
-            toast.success('Deal extension saved.');
+            setExtendReason('Extended from subscriptions page');
+            toast.success('Subscription extension saved.');
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Deal extension failed.');
+            toast.error(error?.response?.data?.message || 'Subscription extension failed.');
         },
     });
 
@@ -100,10 +100,10 @@ export default function Deals() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             setDialog({ type: null, deal: null });
-            toast.success('Deal deleted.');
+            toast.success('Subscription deleted.');
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Deal deletion failed.');
+            toast.error(error?.response?.data?.message || 'Subscription deletion failed.');
         },
     });
 
@@ -115,7 +115,7 @@ export default function Deals() {
             const results = await Promise.allSettled(
                 targets.map((row) =>
                     api.post(`/crm/deals/${row.id}/activate`, {
-                        reason: 'Bulk activation from Deals page',
+                        reason: 'Bulk activation from subscriptions page',
                     }),
                 ),
             );
@@ -166,14 +166,14 @@ export default function Deals() {
         event.stopPropagation();
         setDialog({ type, deal });
         if (type === 'activate') {
-            setActivateReason('Activated from Deals page');
+            setActivateReason('Activated from subscriptions page');
         }
         if (type === 'extend') {
-            setExtendReason('Extended from Deals page');
+            setExtendReason('Extended from subscriptions page');
             setExtendDays('7');
         }
         if (type === 'deactivate') {
-            setReason('Deactivated from Deals page');
+            setReason('Deactivated from subscriptions page');
         }
     };
 
@@ -302,12 +302,12 @@ export default function Deals() {
     return (
         <div className="space-y-4">
             <PageHeader
-                title="Deals"
-                subtitle={data?.total ? `${data.total.toLocaleString()} deals in current market` : 'Sales deals and activation management'}
+                title="Subscriptions"
+                subtitle={data?.total ? `${data.total.toLocaleString()} subscriptions in current market` : 'Subscription activation and lifecycle management'}
             />
 
             <section className="grid gap-4 md:grid-cols-3">
-                <MetricCard label="Active Deals" value={summary.active.toLocaleString()} meta="full filtered dataset" tone="success" />
+                <MetricCard label="Active Subscriptions" value={summary.active.toLocaleString()} meta="full filtered dataset" tone="success" />
                 <MetricCard label="Pending Activation" value={summary.pending.toLocaleString()} meta="full filtered dataset" tone="warning" />
                 <MetricCard label="Pipeline Value" value={formatCurrency(summary.monthRevenue)} meta="full filtered dataset" tone="accent" />
             </section>
@@ -323,7 +323,7 @@ export default function Deals() {
                                 placeholder="Search by client name or phone..."
                                 className="crm-input pr-10"
                             />
-                            <button type="submit" aria-label="Run deal search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                            <button type="submit" aria-label="Run subscription search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
                                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                 </svg>
@@ -372,7 +372,7 @@ export default function Deals() {
                 onPageChange={setPage}
                 onRowClick={(row) => row.client && navigate(`/clients/${row.client.id}`)}
                 isLoading={isLoading}
-                emptyMessage="No deals found."
+                emptyMessage="No subscriptions found."
                 compact
                 selectable
                 bulkActions={bulkActions}
@@ -386,12 +386,12 @@ export default function Deals() {
                             <div>
                                 <h3 className="crm-panel-title">
                                     {dialog.type === 'activate'
-                                        ? 'Activate Deal'
+                                        ? 'Activate Subscription'
                                         : dialog.type === 'extend'
-                                            ? 'Extend Deal'
+                                            ? 'Extend Subscription'
                                             : dialog.type === 'deactivate'
-                                                ? 'Deactivate Deal'
-                                                : 'Delete Deal'}
+                                                ? 'Deactivate Subscription'
+                                                : 'Delete Subscription'}
                                 </h3>
                                 <p className="crm-panel-subtitle">
                                     {selectedDeal.client?.name || 'Unknown client'} • {selectedDeal.product?.name || selectedDeal.plan_type}
@@ -451,7 +451,7 @@ export default function Deals() {
 
                             {dialog.type === 'delete' ? (
                                 <p className="text-sm text-slate-600">
-                                    This deal will be permanently removed. This action cannot be undone.
+                                    This subscription will be permanently removed. This action cannot be undone.
                                 </p>
                             ) : null}
                         </div>
@@ -508,7 +508,7 @@ export default function Deals() {
                                     disabled={deleteMutation.isPending}
                                     className="crm-btn-danger disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                    {deleteMutation.isPending ? 'Deleting...' : 'Delete deal'}
+                                    {deleteMutation.isPending ? 'Deleting...' : 'Delete subscription'}
                                 </button>
                             ) : null}
                         </footer>

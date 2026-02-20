@@ -89,10 +89,10 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             setShowDealModal(false);
-            toast.success('Deal created for client.');
+            toast.success('Subscription created for client.');
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Deal creation failed.');
+            toast.error(error?.response?.data?.message || 'Subscription creation failed.');
         },
     });
 
@@ -101,10 +101,10 @@ export default function ClientDetail() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
-            toast.success('Deal activated.');
+            toast.success('Subscription activated.');
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Deal activation failed.');
+            toast.error(error?.response?.data?.message || 'Subscription activation failed.');
         },
     });
 
@@ -123,7 +123,7 @@ export default function ClientDetail() {
 
     const tabs = useMemo(() => [
         { key: 'overview', label: 'Overview' },
-        { key: 'deals', label: `Deals (${client?.deals?.length || 0})` },
+        { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
         { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
         { key: 'timeline', label: 'Timeline' },
         { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
@@ -172,9 +172,9 @@ export default function ClientDetail() {
                             <h2 className="crm-page-title">{client.name || 'Unnamed'}</h2>
                             <div className="mt-2 flex flex-wrap items-center gap-2">
                                 <StatusBadge status={client.profile_status} />
-                                {client.premium ? <span className="inline-flex items-center rounded-full bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
-                                {client.featured ? <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
-                                {client.verified ? <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
+                                {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
+                                {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
+                                {client.verified ? <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
                             </div>
                         </div>
                     </div>
@@ -192,7 +192,7 @@ export default function ClientDetail() {
                             onClick={() => setShowDealModal(true)}
                             className="crm-btn-primary"
                         >
-                            New deal
+                            New subscription
                         </button>
                     </div>
                 </div>
@@ -211,7 +211,7 @@ export default function ClientDetail() {
                 <ProfileInfoCard title="Subscription">
                     <dl className="space-y-2.5">
                         <DefinitionRow
-                            label="Active Deal"
+                            label="Active Subscription"
                             value={client.active_deal ? (client.active_deal.product?.name || client.active_deal.plan_type) : 'None'}
                         />
                         <DefinitionRow
@@ -236,7 +236,7 @@ export default function ClientDetail() {
 
                 <ProfileInfoCard title="Summary">
                     <dl className="space-y-2.5">
-                        <DefinitionRow label="Total Deals" value={client.deals?.length || 0} />
+                        <DefinitionRow label="Total Subscriptions" value={client.deals?.length || 0} />
                         <DefinitionRow label="Total Payments" value={client.payments?.length || 0} />
                         <DefinitionRow label="Notes" value={client.notes?.length || 0} />
                         <DefinitionRow label="Agent" value={client.assigned_agent?.name || 'Unassigned'} />
@@ -263,7 +263,7 @@ export default function ClientDetail() {
                     <header className="crm-panel-header">
                         <div>
                             <h3 className="crm-panel-title">Recent Activity</h3>
-                            <p className="crm-panel-subtitle">Most recent deals for this client. New deals remain pending until activated.</p>
+                            <p className="crm-panel-subtitle">Most recent subscriptions for this client. New subscriptions remain pending until activated.</p>
                         </div>
                     </header>
                     <div className="p-4">
@@ -280,7 +280,7 @@ export default function ClientDetail() {
                                 ))}
                             </div>
                         ) : (
-                            <p className="text-sm text-slate-500">No deals yet. Create one to get started.</p>
+                            <p className="text-sm text-slate-500">No subscriptions yet. Create one to get started.</p>
                         )}
                     </div>
                 </section>
@@ -314,7 +314,7 @@ export default function ClientDetail() {
                             </div>
                         </section>
                     )) : (
-                        <section className="crm-surface p-8 text-center text-sm text-slate-500">No deals yet.</section>
+                        <section className="crm-surface p-8 text-center text-sm text-slate-500">No subscriptions yet.</section>
                     )}
                 </div>
             ) : null}
@@ -368,7 +368,7 @@ export default function ClientDetail() {
                         <section key={note.id} className="crm-surface p-4">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex items-center gap-2">
-                                    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium capitalize text-slate-600 ring-1 ring-inset ring-slate-200">
+                                    <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-0.5 text-xs font-medium capitalize text-slate-600 ring-1 ring-inset ring-slate-200">
                                         {note.note_type}
                                     </span>
                                     <span className="text-xs text-slate-500">by {note.author?.name || 'Unknown'}</span>
@@ -458,7 +458,7 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
             <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
                 <header className="crm-panel-header">
                     <div>
-                        <h3 className="crm-panel-title">Create New Deal</h3>
+                        <h3 className="crm-panel-title">Create New Subscription</h3>
                         <p className="crm-panel-subtitle">{client.name}</p>
                     </div>
                 </header>
@@ -507,12 +507,12 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
                         </select>
                     </div>
 
-                    {error ? <p className="text-sm text-rose-700">Failed to create deal. {error.response?.data?.message || 'Please try again.'}</p> : null}
+                    {error ? <p className="text-sm text-rose-700">Failed to create subscription. {error.response?.data?.message || 'Please try again.'}</p> : null}
 
                     <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
                         <button type="button" onClick={onClose} className="crm-btn-secondary">Cancel</button>
                         <button type="submit" disabled={!form.product_id || isPending} className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50">
-                            {isPending ? 'Creating...' : 'Create deal'}
+                            {isPending ? 'Creating...' : 'Create subscription'}
                         </button>
                     </div>
                 </form>

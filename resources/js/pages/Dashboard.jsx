@@ -129,8 +129,11 @@ function PreviewFooter({ hiddenCount, noun, ctaLabel, onOpen }) {
 
 function MetricCard({ metric, isLoading }) {
     return (
-        <article className={`rounded-lg border border-slate-200 border-t-[3px] ${metric.accentBorder} bg-white px-4 py-4 shadow-sm`}>
-            <p className="text-sm font-medium text-slate-600">{metric.label}</p>
+        <article className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+            <p className="flex items-center gap-2 text-sm font-medium text-slate-600">
+                <span className={`h-2 w-2 rounded-full ${metric.accentDot}`} aria-hidden="true" />
+                {metric.label}
+            </p>
             <p className="mt-2 text-[1.95rem] leading-none font-semibold tracking-tight text-slate-900 sm:text-[2.05rem]">
                 {isLoading ? <span className="inline-block h-9 w-20 animate-pulse rounded bg-slate-100" /> : metric.value}
             </p>
@@ -142,13 +145,20 @@ function MetricCard({ metric, isLoading }) {
 export default function Dashboard() {
     const navigate = useNavigate();
     const [platformFilter, setPlatformFilter] = useState('');
+    const [searchInput, setSearchInput] = useState('');
+    const [search, setSearch] = useState('');
+    const [fromDate, setFromDate] = useState('');
+    const [toDate, setToDate] = useState('');
 
     const { data, isLoading } = useQuery({
-        queryKey: ['dashboard', platformFilter],
+        queryKey: ['dashboard', platformFilter, search, fromDate, toDate],
         queryFn: () =>
             api.get('/crm/dashboard', {
                 params: {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                    ...(search ? { search } : {}),
+                    ...(fromDate ? { from: fromDate } : {}),
+                    ...(toDate ? { to: toDate } : {}),
                 },
             }).then((response) => response.data),
         refetchInterval: DASHBOARD_REFRESH_MS,
@@ -167,7 +177,7 @@ export default function Dashboard() {
     const pendingLeads = asNumber(kpis.pending_leads);
     const totalLeads = asNumber(kpis.total_leads);
     const expiringSoon = asNumber(kpis.expiring_soon);
-    const recentPaymentsCount = asNumber(kpis.completed_payments_mtd ?? kpis.recent_payments);
+    const recentPaymentsCount = asNumber(kpis.completed_payments_window ?? kpis.completed_payments_mtd ?? kpis.recent_payments);
     const unmatchedPayments = asNumber(kpis.unmatched_payments);
 
     const matchQuality = recentPaymentsCount > 0
@@ -185,18 +195,18 @@ export default function Dashboard() {
     const metrics = [
         {
             key: 'revenue',
-            label: 'Revenue This Month',
+            label: 'Revenue In Window',
             value: formatKes(kpis.revenue_mtd),
-            hint: `${recentPaymentsCount} confirmed payments`,
-            accentBorder: 'border-t-teal-600',
+            hint: recentPaymentsCount > 0 ? `${recentPaymentsCount} confirmed payments` : 'No confirmed payments in selected range',
+            accentDot: 'bg-teal-600',
             hintClass: 'text-teal-700',
         },
         {
             key: 'clients',
             label: 'Active Clients',
             value: activeClients.toLocaleString(),
-            hint: `${Math.round(activeCoverage)}% of ${totalClients.toLocaleString()} total`,
-            accentBorder: 'border-t-slate-300',
+            hint: `${Math.round(activeCoverage)}% coverage of ${totalClients.toLocaleString()} records`,
+            accentDot: 'bg-slate-400',
             hintClass: 'text-slate-600',
         },
         {
@@ -204,15 +214,15 @@ export default function Dashboard() {
             label: 'Unmatched Payments',
             value: unmatchedPayments.toLocaleString(),
             hint: unmatchedPayments > 0 ? 'Needs review in queue' : 'No payment review backlog',
-            accentBorder: unmatchedPayments > 0 ? 'border-t-rose-500' : 'border-t-slate-300',
+            accentDot: unmatchedPayments > 0 ? 'bg-rose-500' : 'bg-slate-400',
             hintClass: unmatchedPayments > 0 ? 'text-rose-700' : 'text-slate-600',
         },
         {
             key: 'renewals',
-            label: 'Renewals At Risk',
+            label: 'Subscriptions At Risk',
             value: expiringSoon.toLocaleString(),
-            hint: expiringSoon > 0 ? 'Expiring within 7 days' : 'No urgent renewals',
-            accentBorder: expiringSoon > 0 ? 'border-t-amber-500' : 'border-t-slate-300',
+            hint: expiringSoon > 0 ? `${expiringSoon} require attention` : 'No urgent renewals',
+            accentDot: expiringSoon > 0 ? 'bg-amber-500' : 'bg-slate-400',
             hintClass: expiringSoon > 0 ? 'text-amber-700' : 'text-emerald-700',
         },
     ];
@@ -252,34 +262,97 @@ export default function Dashboard() {
                             onClick={() => navigate('/deals?status=active')}
                             className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                         >
-                            Open deals
+                            Open subscriptions
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => navigate('/leads')}
+                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                        >
+                            Open leads
                         </button>
                     </div>
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                    <label htmlFor="dashboard-market" className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market filter</label>
-                    <select
-                        id="dashboard-market"
-                        value={platformFilter}
-                        onChange={(event) => setPlatformFilter(event.target.value)}
-                        className="crm-select min-w-[200px]"
+                    <form
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            setSearch(searchInput.trim());
+                        }}
+                        className="min-w-[240px] flex-1"
                     >
-                        <option value="">All accessible markets</option>
-                        {platforms.map((platform) => (
-                            <option key={platform.platform_id} value={platform.platform_id}>
-                                {platform.platform_name}
-                            </option>
-                        ))}
-                    </select>
-                    {platformFilter ? (
+                        <div className="relative">
+                            <input
+                                type="text"
+                                value={searchInput}
+                                onChange={(event) => setSearchInput(event.target.value)}
+                                placeholder="Search by client, phone, or payment reference..."
+                                className="crm-input pr-10"
+                            />
+                            <button
+                                type="submit"
+                                aria-label="Run dashboard search"
+                                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600"
+                            >
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                            </button>
+                        </div>
+                    </form>
+
+                    <input
+                        type="date"
+                        value={fromDate}
+                        onChange={(event) => setFromDate(event.target.value)}
+                        className="crm-input w-auto min-w-[150px]"
+                        aria-label="From date"
+                    />
+                    <input
+                        type="date"
+                        value={toDate}
+                        onChange={(event) => setToDate(event.target.value)}
+                        className="crm-input w-auto min-w-[150px]"
+                        aria-label="To date"
+                    />
+
+                    <div className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
+                        <span className={`h-2 w-2 rounded-full ${platformFilter ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true" />
+                        <label htmlFor="dashboard-market" className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market</label>
+                        <select
+                            id="dashboard-market"
+                            value={platformFilter}
+                            onChange={(event) => setPlatformFilter(event.target.value)}
+                            className="border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
+                        >
+                            <option value="">All accessible markets</option>
+                            {platforms.map((platform) => (
+                                <option key={platform.platform_id} value={platform.platform_id}>
+                                    {platform.platform_name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {(platformFilter || search || fromDate || toDate) ? (
                         <button
                             type="button"
-                            onClick={() => setPlatformFilter('')}
+                            onClick={() => {
+                                setPlatformFilter('');
+                                setSearch('');
+                                setSearchInput('');
+                                setFromDate('');
+                                setToDate('');
+                            }}
                             className="crm-btn-secondary px-3 py-2"
                         >
-                            Clear filter
+                            Reset filters
                         </button>
+                    ) : null}
+
+                    {platformFilter ? (
+                        <p className="text-xs font-medium text-emerald-700">Active market filter applied</p>
                     ) : null}
                 </div>
             </section>
@@ -344,7 +417,7 @@ export default function Dashboard() {
 
                     <div className="grid gap-4 xl:grid-cols-2">
                         <SectionFrame
-                            title="Expiring Deals"
+                            title="Expiring Subscriptions"
                             subtitle="Earliest renewals first"
                             action={(
                                 <button
@@ -358,8 +431,8 @@ export default function Dashboard() {
                             footer={(
                                 <PreviewFooter
                                     hiddenCount={hiddenExpiringCount}
-                                    noun="expiring deals"
-                                    ctaLabel="Open deal list"
+                                    noun="expiring subscriptions"
+                                    ctaLabel="Open subscriptions"
                                     onOpen={() => navigate('/deals?status=active')}
                                 />
                             )}
@@ -387,21 +460,29 @@ export default function Dashboard() {
                                     ))}
                                 </div>
                             ) : (
-                                <EmptyState message="No deals expiring soon." />
+                                <EmptyState message="No subscriptions expiring soon." />
                             )}
                         </SectionFrame>
 
                         <SectionFrame
                             title="Upcoming Follow-ups"
-                            subtitle="Nearest follow-up actions"
+                            subtitle="Scheduled client callbacks due soon"
                             action={(
-                                <button
-                                    type="button"
-                                    onClick={() => navigate('/clients')}
-                                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                                >
-                                    Open clients
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <span
+                                        className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 text-xs font-semibold text-slate-500"
+                                        title="Follow-ups are notes with due dates created by agents. They help prevent missed callbacks."
+                                    >
+                                        ?
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => navigate('/clients')}
+                                        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                                    >
+                                        Open clients
+                                    </button>
+                                </div>
                             )}
                             footer={(
                                 <PreviewFooter
