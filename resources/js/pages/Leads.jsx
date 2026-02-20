@@ -9,6 +9,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 
 const STATUSES = ['new', 'contacted', 'qualified', 'converted', 'lost'];
+const CSV_ERROR_PREVIEW_LIMIT = 8;
 
 function nextLeadStage(currentStatus) {
     const currentIndex = STATUSES.indexOf(currentStatus);
@@ -40,6 +41,8 @@ export default function Leads() {
     const [showImportConfirm, setShowImportConfirm] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
+    const [showCsvConfirm, setShowCsvConfirm] = useState(false);
+    const [csvResult, setCsvResult] = useState(null);
     const [assignDialog, setAssignDialog] = useState({ lead: null, assigned_to: '', reason: 'Lead reassigned from leads page' });
 
     const [createForm, setCreateForm] = useState({
@@ -224,15 +227,28 @@ export default function Leads() {
                 },
             }).then((response) => response.data);
         },
-        onSuccess: (result) => {
+        onSuccess: (result, variables) => {
             queryClient.invalidateQueries({ queryKey: ['leads'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setShowCsvModal(false);
+            setShowCsvConfirm(false);
             setCsvForm({
                 platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
                 has_header: true,
                 file: null,
                 reason: 'CSV lead upload from leads page',
+            });
+
+            const marketName = platformOptions.find(
+                (platform) => Number(platform.platform_id) === Number(variables?.platform_id),
+            )?.platform_name || 'Selected market';
+            setCsvResult({
+                kind: 'leads',
+                uploadedAt: new Date().toISOString(),
+                marketName,
+                fileName: variables?.file?.name || 'Uploaded CSV',
+                totals: result?.totals || { rows: 0, created: 0, failed: 0 },
+                errors: result?.errors || [],
             });
 
             const created = Number(result?.totals?.created || 0);
@@ -244,6 +260,7 @@ export default function Leads() {
             toast.success(`CSV upload completed: ${created} leads created.`);
         },
         onError: (error) => {
+            setShowCsvConfirm(false);
             toast.error(error?.response?.data?.message || 'Lead CSV upload failed.');
         },
     });
@@ -257,6 +274,7 @@ export default function Leads() {
     const rows = data?.data || [];
     const owners = createOwnersData?.owners || [];
     const assignOwners = assignOwnersData?.owners || [];
+    const selectedCsvPlatformName = platformOptions.find((platform) => String(platform.platform_id) === String(csvForm.platform_id))?.platform_name || 'Selected market';
 
     const ownerOptions = useMemo(() => {
         const map = new Map();
@@ -385,7 +403,7 @@ export default function Leads() {
                             disabled={importMutation.isPending}
                             className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            {importMutation.isPending ? 'Syncing...' : 'Sync from WordPress'}
+                            {importMutation.isPending ? 'Syncing...' : 'Sync leads from WordPress'}
                         </button>
                         <button
                             type="button"
@@ -424,7 +442,7 @@ export default function Leads() {
                                 placeholder="Search leads by name, phone, or email..."
                                 className="crm-input pr-10"
                             />
-                            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                            <button type="submit" aria-label="Run lead search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
                                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                 </svg>
@@ -494,6 +512,60 @@ export default function Leads() {
                 </p>
             </section>
 
+            {csvResult ? (
+                <section className={`rounded-lg border px-4 py-3 ${
+                    Number(csvResult?.totals?.failed || 0) > 0
+                        ? 'border-amber-200 bg-amber-50/70'
+                        : 'border-emerald-200 bg-emerald-50/70'
+                }`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <p className="text-sm font-semibold text-slate-900">Lead CSV upload summary</p>
+                            <p className="text-xs text-slate-600">
+                                {csvResult.fileName} • {csvResult.marketName} • {new Date(csvResult.uploadedAt).toLocaleString()}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setCsvResult(null)}
+                            className="text-xs font-semibold text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-800"
+                        >
+                            Dismiss
+                        </button>
+                    </div>
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                        <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                            Rows: <span className="crm-mono font-semibold text-slate-900">{Number(csvResult?.totals?.rows || 0)}</span>
+                        </p>
+                        <p className="rounded-md border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-700">
+                            Created: <span className="crm-mono font-semibold">{Number(csvResult?.totals?.created || 0)}</span>
+                        </p>
+                        <p className="rounded-md border border-amber-200 bg-white px-3 py-2 text-xs text-amber-700">
+                            Failed: <span className="crm-mono font-semibold">{Number(csvResult?.totals?.failed || 0)}</span>
+                        </p>
+                    </div>
+
+                    {csvResult.errors?.length ? (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-white p-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.09em] text-amber-700">Row errors</p>
+                            <div className="mt-2 space-y-1.5">
+                                {csvResult.errors.slice(0, CSV_ERROR_PREVIEW_LIMIT).map((errorRow) => (
+                                    <p key={`${errorRow.row}-${errorRow.message}`} className="text-xs text-slate-700">
+                                        <span className="crm-mono font-semibold text-slate-900">Row {errorRow.row}:</span> {errorRow.message}
+                                    </p>
+                                ))}
+                            </div>
+                            {csvResult.errors.length > CSV_ERROR_PREVIEW_LIMIT ? (
+                                <p className="mt-2 text-xs text-slate-500">
+                                    +{csvResult.errors.length - CSV_ERROR_PREVIEW_LIMIT} additional row errors hidden.
+                                </p>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </section>
+            ) : null}
+
             <DataTable
                 columns={columns}
                 data={data?.data}
@@ -559,6 +631,31 @@ export default function Leads() {
                     onChange={(event) => setAssignDialog((current) => ({ ...current, reason: event.target.value }))}
                     className="crm-input"
                 />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={showCsvConfirm}
+                title="Confirm Leads CSV Upload"
+                message="This upload creates new lead records only. It does not update or delete existing leads."
+                confirmLabel={uploadCsvMutation.isPending ? 'Uploading...' : 'Start upload'}
+                onCancel={() => setShowCsvConfirm(false)}
+                onConfirm={() => {
+                    uploadCsvMutation.mutate({
+                        platform_id: Number(csvForm.platform_id),
+                        has_header: csvForm.has_header,
+                        file: csvForm.file,
+                        reason: csvForm.reason.trim(),
+                    });
+                }}
+                confirmDisabled={!csvForm.platform_id || !csvForm.file || !csvForm.reason.trim() || uploadCsvMutation.isPending}
+                isPending={uploadCsvMutation.isPending}
+            >
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <p><span className="font-semibold text-slate-900">Market:</span> {selectedCsvPlatformName}</p>
+                    <p className="mt-1"><span className="font-semibold text-slate-900">File:</span> {csvForm.file?.name || 'No file selected'}</p>
+                    <p className="mt-1"><span className="font-semibold text-slate-900">Header row:</span> {csvForm.has_header ? 'Included' : 'Not included'}</p>
+                    <p className="mt-2 text-slate-500">Limit: up to 500 rows per upload.</p>
+                </div>
             </ConfirmDialog>
 
             {showCreateModal ? (
@@ -687,7 +784,10 @@ export default function Leads() {
             ) : null}
 
             {showCsvModal ? (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowCsvModal(false)}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => {
+                    setShowCsvModal(false);
+                    setShowCsvConfirm(false);
+                }}>
                     <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
                         <header className="crm-panel-header">
                             <div>
@@ -752,21 +852,23 @@ export default function Leads() {
                         </div>
 
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
-                            <button type="button" className="crm-btn-secondary" onClick={() => setShowCsvModal(false)}>
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                onClick={() => {
+                                    setShowCsvModal(false);
+                                    setShowCsvConfirm(false);
+                                }}
+                            >
                                 Cancel
                             </button>
                             <button
                                 type="button"
                                 disabled={!csvForm.platform_id || !csvForm.file || !csvForm.reason.trim() || uploadCsvMutation.isPending}
-                                onClick={() => uploadCsvMutation.mutate({
-                                    platform_id: Number(csvForm.platform_id),
-                                    has_header: csvForm.has_header,
-                                    file: csvForm.file,
-                                    reason: csvForm.reason.trim(),
-                                })}
+                                onClick={() => setShowCsvConfirm(true)}
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                {uploadCsvMutation.isPending ? 'Uploading...' : 'Upload CSV'}
+                                Confirm upload
                             </button>
                         </footer>
                     </div>

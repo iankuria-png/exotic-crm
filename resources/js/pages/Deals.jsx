@@ -323,7 +323,7 @@ export default function Deals() {
                                 placeholder="Search by client name or phone..."
                                 className="crm-input pr-10"
                             />
-                            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                            <button type="submit" aria-label="Run deal search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
                                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                 </svg>
@@ -518,4 +518,3 @@ export default function Deals() {
         </div>
     );
 }
-

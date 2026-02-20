@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo } from 'react';
 
 function confirmButtonClass(tone) {
     if (tone === 'danger') {
@@ -24,22 +24,46 @@ export default function ConfirmDialog({
     isPending = false,
     children,
 }) {
+    const dialogId = useMemo(() => `confirm-dialog-${Math.random().toString(36).slice(2, 10)}`, []);
+    const titleId = `${dialogId}-title`;
+    const messageId = message ? `${dialogId}-message` : undefined;
+
+    useEffect(() => {
+        if (!open) {
+            return undefined;
+        }
+
+        const handleEscape = (event) => {
+            if (event.key !== 'Escape' || isPending) {
+                return;
+            }
+
+            event.preventDefault();
+            onCancel?.();
+        };
+
+        window.addEventListener('keydown', handleEscape);
+        return () => window.removeEventListener('keydown', handleEscape);
+    }, [isPending, onCancel, open]);
+
     if (!open) {
         return null;
     }
 
     return (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/45 p-4" onClick={onCancel}>
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/45 p-4" onClick={isPending ? undefined : onCancel}>
             <div
                 role="dialog"
                 aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={messageId}
                 className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
                 onClick={(event) => event.stopPropagation()}
             >
                 <header className="crm-panel-header">
                     <div>
-                        <h3 className="crm-panel-title">{title}</h3>
-                        {message ? <p className="crm-panel-subtitle">{message}</p> : null}
+                        <h3 id={titleId} className="crm-panel-title">{title}</h3>
+                        {message ? <p id={messageId} className="crm-panel-subtitle">{message}</p> : null}
                     </div>
                 </header>
 
@@ -50,7 +74,7 @@ export default function ConfirmDialog({
                 ) : null}
 
                 <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
-                    <button type="button" onClick={onCancel} className="crm-btn-secondary">
+                    <button type="button" onClick={onCancel} disabled={isPending} className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50">
                         {cancelLabel}
                     </button>
                     <button
@@ -66,4 +90,3 @@ export default function ConfirmDialog({
         </div>
     );
 }
-

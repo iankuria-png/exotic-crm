@@ -245,7 +245,7 @@ export default function Dashboard() {
                             onClick={() => navigate('/payments')}
                             className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
                         >
-                            Review queue
+                            Review payment queue
                         </button>
                         <button
                             type="button"

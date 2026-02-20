@@ -80,3 +80,37 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 - Dashboard additional date-range filters.
 - Coverage expansion for remaining medium-impact actions in Settings workspaces.
 
+---
+
+## Tranche 3 (Completed)
+
+### Plan
+- Improve UX safety and clarity for bulk intake actions.
+- Add explicit confirmation before CSV upload starts.
+- Surface row-level CSV failures directly in-page for self-service recovery.
+- Harden shared dialog and search controls for accessibility.
+
+### Progress
+- Frontend:
+  - Leads and Clients now require an explicit confirmation step before CSV upload.
+  - Confirmation copy now states operational impact clearly: create-only behavior, no update/delete side effects, market scope, and row limit.
+  - Added persistent CSV upload summary cards on Leads/Clients with:
+    - total rows
+    - created/failed counts
+    - row-level error preview (first 8 rows)
+  - Added `aria-label` on icon-only search buttons across Leads/Clients/Deals.
+  - Updated Dashboard CTA microcopy from `Review queue` to `Review payment queue`.
+- Shared components:
+  - `ConfirmDialog` now includes:
+    - `aria-labelledby` / `aria-describedby`
+    - Escape-key close behavior (disabled while pending)
+    - cancel/backdrop close lock during pending actions
+
+### Verification
+- `npm run build` -> pass.
+- `php artisan test --filter CrmStreamFourAuthorizationTest` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+
+### Decision Notes
+- Row-level CSV errors are shown inline for immediate operator recovery, while retaining toast notifications for quick action feedback.
+- Error previews are capped for scanability; detailed CSV export can be added in a later tranche.
