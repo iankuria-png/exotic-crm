@@ -6,6 +6,7 @@ import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
+import { useToast } from '../components/ToastProvider';
 
 function formatCurrency(amount, currency = 'KES') {
     return `${currency} ${Number(amount || 0).toLocaleString()}`;
@@ -14,6 +15,7 @@ function formatCurrency(amount, currency = 'KES') {
 export default function Deals() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const toast = useToast();
     const [searchParams] = useSearchParams();
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
@@ -21,11 +23,11 @@ export default function Deals() {
     const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
 
     const [dialog, setDialog] = useState({ type: null, deal: null });
+    const [activateReason, setActivateReason] = useState('Activated from Deals page');
     const [reason, setReason] = useState('Deactivated from Deals page');
     const [extendReason, setExtendReason] = useState('Extended from Deals page');
     const [extendDays, setExtendDays] = useState('7');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
-    const [bulkFeedback, setBulkFeedback] = useState(null);
 
     const { data, isLoading } = useQuery({
         queryKey: ['deals', page, search, statusFilter],
@@ -37,24 +39,40 @@ export default function Deals() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                 },
-            }).then((r) => r.data),
+            }).then((response) => response.data),
     });
 
     const activateMutation = useMutation({
-        mutationFn: ({ dealId, activateReason }) =>
+        mutationFn: ({ dealId, activationReason }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
-                reason: activateReason,
-            }).then((r) => r.data),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['deals'] }),
+                reason: activationReason,
+            }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setDialog({ type: null, deal: null });
+            setActivateReason('Activated from Deals page');
+            toast.success('Deal activated successfully.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Deal activation failed.');
+        },
     });
 
     const deactivateMutation = useMutation({
         mutationFn: ({ dealId, deactivateReason }) =>
-            api.post(`/crm/deals/${dealId}/deactivate`, { reason: deactivateReason }).then((r) => r.data),
+            api.post(`/crm/deals/${dealId}/deactivate`, {
+                reason: deactivateReason,
+            }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
             setReason('Deactivated from Deals page');
+            toast.success('Deal deactivated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Deal deactivation failed.');
         },
     });
 
@@ -63,20 +81,29 @@ export default function Deals() {
             api.post(`/crm/deals/${dealId}/extend`, {
                 additional_days: additionalDays,
                 reason: extensionReason,
-            }).then((r) => r.data),
+            }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
             setExtendDays('7');
             setExtendReason('Extended from Deals page');
+            toast.success('Deal extension saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Deal extension failed.');
         },
     });
 
     const deleteMutation = useMutation({
-        mutationFn: (dealId) => api.delete(`/crm/deals/${dealId}`).then((r) => r.data),
+        mutationFn: (dealId) => api.delete(`/crm/deals/${dealId}`).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             setDialog({ type: null, deal: null });
+            toast.success('Deal deleted.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Deal deletion failed.');
         },
     });
 
@@ -86,7 +113,11 @@ export default function Deals() {
             const skipped = rowsSelection.length - targets.length;
 
             const results = await Promise.allSettled(
-                targets.map((row) => api.post(`/crm/deals/${row.id}/activate`)),
+                targets.map((row) =>
+                    api.post(`/crm/deals/${row.id}/activate`, {
+                        reason: 'Bulk activation from Deals page',
+                    }),
+                ),
             );
 
             const success = results.filter((result) => result.status === 'fulfilled').length;
@@ -96,22 +127,32 @@ export default function Deals() {
         },
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setClearSelectionKey((value) => value + 1);
-            setBulkFeedback({
-                tone: result.failed > 0 ? 'warning' : 'success',
-                text: `Bulk activate processed ${result.success}/${result.total}${result.skipped ? ` (${result.skipped} skipped)` : ''}${result.failed ? ` (${result.failed} failed)` : ''}.`,
-            });
+            if (result.failed > 0) {
+                toast.warning(`Bulk activate completed with issues: ${result.success}/${result.total} succeeded.`);
+                return;
+            }
+            toast.success(`Bulk activate processed ${result.success}/${result.total}.`);
         },
     });
 
-    const handleSearch = (e) => {
-        e.preventDefault();
+    const handleSearch = (event) => {
+        event.preventDefault();
         setSearch(searchInput.trim());
         setPage(1);
     };
 
     const rows = data?.data || [];
     const summary = useMemo(() => {
+        if (data?.stats) {
+            return {
+                active: Number(data.stats.active || 0),
+                pending: Number(data.stats.pending || 0),
+                monthRevenue: Number(data.stats.pipeline_value || 0),
+            };
+        }
+
         const active = rows.filter((row) => row.status === 'active').length;
         const pending = rows.filter((row) => row.status === 'pending').length;
         const monthRevenue = rows
@@ -119,11 +160,14 @@ export default function Deals() {
             .reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
         return { active, pending, monthRevenue };
-    }, [rows]);
+    }, [data?.stats, rows]);
 
     const openDialog = (type, deal, event) => {
         event.stopPropagation();
         setDialog({ type, deal });
+        if (type === 'activate') {
+            setActivateReason('Activated from Deals page');
+        }
         if (type === 'extend') {
             setExtendReason('Extended from Deals page');
             setExtendDays('7');
@@ -194,22 +238,7 @@ export default function Deals() {
                 <div className="flex items-center gap-1.5">
                     {row.status === 'pending' ? (
                         <button
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                const activateReason = window.prompt(
-                                    'Reason for activation:',
-                                    'Activated from Deals page'
-                                );
-
-                                if (!activateReason || !activateReason.trim()) {
-                                    return;
-                                }
-
-                                activateMutation.mutate({
-                                    dealId: row.id,
-                                    activateReason: activateReason.trim(),
-                                });
-                            }}
+                            onClick={(event) => openDialog('activate', row, event)}
                             className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800"
                         >
                             Activate
@@ -231,14 +260,16 @@ export default function Deals() {
                                 Deactivate
                             </button>
                         </>
-                    ) : (
+                    ) : null}
+
+                    {!['pending', 'active'].includes(row.status) ? (
                         <button
                             onClick={(event) => openDialog('delete', row, event)}
                             className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
                         >
                             Delete
                         </button>
-                    )}
+                    ) : null}
                 </div>
             ),
         },
@@ -276,9 +307,9 @@ export default function Deals() {
             />
 
             <section className="grid gap-4 md:grid-cols-3">
-                <MetricCard label="Active Deals" value={summary.active.toLocaleString()} tone="success" />
-                <MetricCard label="Pending Activation" value={summary.pending.toLocaleString()} tone="warning" />
-                <MetricCard label="Pipeline Value" value={formatCurrency(summary.monthRevenue)} tone="accent" />
+                <MetricCard label="Active Deals" value={summary.active.toLocaleString()} meta="full filtered dataset" tone="success" />
+                <MetricCard label="Pending Activation" value={summary.pending.toLocaleString()} meta="full filtered dataset" tone="warning" />
+                <MetricCard label="Pipeline Value" value={formatCurrency(summary.monthRevenue)} meta="full filtered dataset" tone="accent" />
             </section>
 
             <section className="crm-filter-row">
@@ -288,7 +319,7 @@ export default function Deals() {
                             <input
                                 type="text"
                                 value={searchInput}
-                                onChange={(e) => setSearchInput(e.target.value)}
+                                onChange={(event) => setSearchInput(event.target.value)}
                                 placeholder="Search by client name or phone..."
                                 className="crm-input pr-10"
                             />
@@ -302,13 +333,13 @@ export default function Deals() {
 
                     <select
                         value={statusFilter}
-                        onChange={(e) => {
-                            setStatusFilter(e.target.value);
+                        onChange={(event) => {
+                            setStatusFilter(event.target.value);
                             setPage(1);
                         }}
                         className="crm-select"
                     >
-                        <option value="">All Statuses</option>
+                        <option value="">All statuses</option>
                         <option value="pending">Pending</option>
                         <option value="awaiting_payment">Awaiting payment</option>
                         <option value="paid">Paid</option>
@@ -332,11 +363,6 @@ export default function Deals() {
                         </button>
                     ) : null}
                 </div>
-                {bulkFeedback ? (
-                    <p className={`mt-2 text-xs font-medium ${bulkFeedback.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                        {bulkFeedback.text}
-                    </p>
-                ) : null}
             </section>
 
             <DataTable
@@ -355,11 +381,17 @@ export default function Deals() {
 
             {selectedDeal ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setDialog({ type: null, deal: null })}>
-                    <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+                    <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
                         <header className="crm-panel-header">
                             <div>
                                 <h3 className="crm-panel-title">
-                                    {dialog.type === 'extend' ? 'Extend Deal' : dialog.type === 'deactivate' ? 'Deactivate Deal' : 'Delete Deal'}
+                                    {dialog.type === 'activate'
+                                        ? 'Activate Deal'
+                                        : dialog.type === 'extend'
+                                            ? 'Extend Deal'
+                                            : dialog.type === 'deactivate'
+                                                ? 'Deactivate Deal'
+                                                : 'Delete Deal'}
                                 </h3>
                                 <p className="crm-panel-subtitle">
                                     {selectedDeal.client?.name || 'Unknown client'} • {selectedDeal.product?.name || selectedDeal.plan_type}
@@ -368,6 +400,19 @@ export default function Deals() {
                         </header>
 
                         <div className="space-y-4 p-4">
+                            {dialog.type === 'activate' ? (
+                                <>
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="activate-reason">Reason</label>
+                                    <textarea
+                                        id="activate-reason"
+                                        rows={3}
+                                        value={activateReason}
+                                        onChange={(event) => setActivateReason(event.target.value)}
+                                        className="crm-input"
+                                    />
+                                </>
+                            ) : null}
+
                             {dialog.type === 'extend' ? (
                                 <>
                                     <label className="block text-sm font-medium text-slate-700" htmlFor="extend-days">Additional days</label>
@@ -376,7 +421,7 @@ export default function Deals() {
                                         type="number"
                                         min={1}
                                         value={extendDays}
-                                        onChange={(e) => setExtendDays(e.target.value)}
+                                        onChange={(event) => setExtendDays(event.target.value)}
                                         className="crm-input"
                                     />
 
@@ -385,7 +430,7 @@ export default function Deals() {
                                         id="extend-reason"
                                         rows={3}
                                         value={extendReason}
-                                        onChange={(e) => setExtendReason(e.target.value)}
+                                        onChange={(event) => setExtendReason(event.target.value)}
                                         className="crm-input"
                                     />
                                 </>
@@ -398,7 +443,7 @@ export default function Deals() {
                                         id="deactivate-reason"
                                         rows={3}
                                         value={reason}
-                                        onChange={(e) => setReason(e.target.value)}
+                                        onChange={(event) => setReason(event.target.value)}
                                         className="crm-input"
                                     />
                                 </>
@@ -416,6 +461,20 @@ export default function Deals() {
                                 Cancel
                             </button>
 
+                            {dialog.type === 'activate' ? (
+                                <button
+                                    type="button"
+                                    onClick={() => activateMutation.mutate({
+                                        dealId: selectedDeal.id,
+                                        activationReason: activateReason.trim(),
+                                    })}
+                                    disabled={!activateReason.trim() || activateMutation.isPending}
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {activateMutation.isPending ? 'Activating...' : 'Confirm activation'}
+                                </button>
+                            ) : null}
+
                             {dialog.type === 'extend' ? (
                                 <button
                                     type="button"
@@ -424,12 +483,7 @@ export default function Deals() {
                                         additionalDays: Number(extendDays),
                                         extensionReason: extendReason,
                                     })}
-                                    disabled={
-                                        !Number.isInteger(Number(extendDays)) ||
-                                        Number(extendDays) < 1 ||
-                                        !extendReason.trim() ||
-                                        extendMutation.isPending
-                                    }
+                                    disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || !extendReason.trim() || extendMutation.isPending}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {extendMutation.isPending ? 'Extending...' : 'Confirm extension'}
@@ -464,3 +518,4 @@ export default function Deals() {
         </div>
     );
 }
+

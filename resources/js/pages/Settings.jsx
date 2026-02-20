@@ -6,6 +6,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import { useAuth } from '../hooks/useAuth';
+import { useToast } from '../components/ToastProvider';
 
 const baseTabs = [
     { id: 'integrations', label: 'Integrations' },
@@ -562,13 +563,56 @@ function roleClasses(role) {
 }
 
 function RolesWorkspace() {
+    const queryClient = useQueryClient();
+    const toast = useToast();
+    const [selectedUser, setSelectedUser] = useState(null);
+    const [editor, setEditor] = useState(null);
+
     const { data, isLoading } = useQuery({
         queryKey: ['settings-roles'],
         queryFn: () => api.get('/crm/settings/roles').then((response) => response.data),
     });
 
+    const updateRoleMutation = useMutation({
+        mutationFn: ({ userId, payload }) => api.patch(`/crm/settings/roles/${userId}`, payload).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['settings-roles'] });
+            toast.success('Role permissions updated.');
+            setSelectedUser(null);
+            setEditor(null);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Role update failed.');
+        },
+    });
+
     const users = data?.users || [];
     const summary = data?.summary || {};
+    const availableMarkets = data?.available_markets || [];
+
+    const openEditor = (user) => {
+        setSelectedUser(user);
+        setEditor({
+            role: user.role || 'sales',
+            status: user.status || 'active',
+            assigned_market_ids: Array.isArray(user.assigned_market_ids) ? user.assigned_market_ids.map((id) => Number(id)) : [],
+            reason: 'Role update from settings',
+        });
+    };
+
+    const toggleMarket = (marketId) => {
+        setEditor((current) => {
+            if (!current) return current;
+
+            const exists = current.assigned_market_ids.includes(marketId);
+            return {
+                ...current,
+                assigned_market_ids: exists
+                    ? current.assigned_market_ids.filter((id) => id !== marketId)
+                    : [...current.assigned_market_ids, marketId],
+            };
+        });
+    };
 
     return (
         <div className="space-y-4">
@@ -600,6 +644,7 @@ function RolesWorkspace() {
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Role</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Assigned Markets</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -634,6 +679,15 @@ function RolesWorkspace() {
                                                 <p className="text-sm text-slate-700">{marketCount}</p>
                                                 <p className="truncate text-xs text-slate-500">{marketLabel}</p>
                                             </td>
+                                            <td className="px-4 py-2.5">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openEditor(user)}
+                                                    className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </td>
                                         </tr>
                                     );
                                 })}
@@ -642,6 +696,112 @@ function RolesWorkspace() {
                     )}
                 </div>
             </section>
+
+            {selectedUser && editor ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => {
+                    setSelectedUser(null);
+                    setEditor(null);
+                }}>
+                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Edit Role & Permissions</h3>
+                                <p className="crm-panel-subtitle">{selectedUser.name} • {selectedUser.email}</p>
+                            </div>
+                        </header>
+
+                        <div className="grid gap-3 p-4 md:grid-cols-2">
+                            <div>
+                                <label htmlFor="role-select" className="mb-1 block text-sm font-medium text-slate-700">Role</label>
+                                <select
+                                    id="role-select"
+                                    value={editor.role}
+                                    onChange={(event) => setEditor((current) => ({ ...current, role: event.target.value }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="admin">Admin</option>
+                                    <option value="sub_admin">Sub-admin</option>
+                                    <option value="sales">Sales</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label htmlFor="status-select" className="mb-1 block text-sm font-medium text-slate-700">Status</label>
+                                <select
+                                    id="status-select"
+                                    value={editor.status}
+                                    onChange={(event) => setEditor((current) => ({ ...current, status: event.target.value }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="active">Active</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <p className="mb-1 text-sm font-medium text-slate-700">Assigned markets</p>
+                                {availableMarkets.length === 0 ? (
+                                    <p className="text-sm text-slate-500">No markets available.</p>
+                                ) : (
+                                    <div className="grid max-h-56 gap-2 overflow-auto rounded-md border border-slate-200 p-2 sm:grid-cols-2">
+                                        {availableMarkets.map((market) => (
+                                            <label key={market.id} className="flex items-center gap-2 rounded-md px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editor.assigned_market_ids.includes(market.id)}
+                                                    onChange={() => toggleMarket(market.id)}
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                <span>{market.name} {market.country ? `(${market.country})` : ''}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label htmlFor="role-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                                <textarea
+                                    id="role-reason"
+                                    rows={3}
+                                    value={editor.reason}
+                                    onChange={(event) => setEditor((current) => ({ ...current, reason: event.target.value }))}
+                                    className="crm-input"
+                                />
+                            </div>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                onClick={() => {
+                                    setSelectedUser(null);
+                                    setEditor(null);
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => updateRoleMutation.mutate({
+                                    userId: selectedUser.id,
+                                    payload: {
+                                        role: editor.role,
+                                        status: editor.status,
+                                        assigned_market_ids: editor.assigned_market_ids,
+                                        reason: editor.reason,
+                                    },
+                                })}
+                                disabled={!editor.reason.trim() || updateRoleMutation.isPending}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {updateRoleMutation.isPending ? 'Saving...' : 'Save changes'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

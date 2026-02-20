@@ -42,6 +42,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Clients
     Route::get('/clients', [ClientController::class, 'index']);
+    Route::post('/clients', [ClientController::class, 'store']);
+    Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv']);
     Route::get('/clients/{client}', [ClientController::class, 'show']);
     Route::patch('/clients/{client}', [ClientController::class, 'update']);
     Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline']);
@@ -60,10 +62,13 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Leads
     Route::get('/leads', [LeadController::class, 'index']);
+    Route::post('/leads', [LeadController::class, 'store']);
+    Route::post('/leads/upload-csv', [LeadController::class, 'uploadCsv']);
     Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
     Route::post('/leads/import', [LeadController::class, 'import']);
     Route::get('/leads/{lead}', [LeadController::class, 'show']);
     Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
+    Route::patch('/leads/{lead}/assign', [LeadController::class, 'assign']);
 
     // Conversations
     Route::post('/conversations/clients/{client}/send', [ConversationController::class, 'send']);
@@ -86,12 +91,14 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
+    Route::get('/settings/owners', [SettingsController::class, 'owners']);
     Route::get('/settings/templates', [SettingsController::class, 'templates']);
     Route::post('/settings/templates', [SettingsController::class, 'storeTemplate'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/templates/{template}', [SettingsController::class, 'updateTemplate'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/templates/{template}', [SettingsController::class, 'destroyTemplate'])->middleware('role:admin,sub_admin');
     Route::get('/settings/webhook-logs', [SettingsController::class, 'webhookLogs']);
     Route::get('/settings/roles', [SettingsController::class, 'roles'])->middleware('role:admin');
+    Route::patch('/settings/roles/{user}', [SettingsController::class, 'updateRole'])->middleware('role:admin');
 });
 
 // ==================== ALL ROUTES ARE PUBLIC (No authentication required) ====================

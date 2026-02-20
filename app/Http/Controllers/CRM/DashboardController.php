@@ -21,7 +21,15 @@ class DashboardController extends Controller
 
     public function summary(Request $request)
     {
-        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+        $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this dashboard market.'
+        );
+
+        $platformIds = $selectedPlatformId
+            ? [(int) $selectedPlatformId]
+            : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         $expiringDealsQuery = Deal::expiringSoon(7)
             ->with(['client', 'product'])
@@ -31,13 +39,14 @@ class DashboardController extends Controller
         }
         $expiringDeals = $expiringDealsQuery->limit(10)->get();
 
-        $recentPaymentsQuery = Payment::where('status', 'completed')
+        $paymentReviewQueueQuery = Payment::where('status', 'completed')
+            ->whereNull('client_id')
             ->with(['platform', 'product'])
             ->orderBy('created_at', 'desc');
         if (is_array($platformIds)) {
-            $recentPaymentsQuery->whereIn('platform_id', $platformIds);
+            $paymentReviewQueueQuery->whereIn('platform_id', $platformIds);
         }
-        $recentPayments = $recentPaymentsQuery->limit(10)->get();
+        $paymentReviewQueue = $paymentReviewQueueQuery->limit(10)->get();
 
         $upcomingFollowUpsQuery = ClientNote::withPendingFollowUp()
             ->with(['client', 'author'])
@@ -70,6 +79,9 @@ class DashboardController extends Controller
         }
 
         return response()->json([
+            'filters' => [
+                'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+            ],
             'kpis' => [
                 'active_clients' => $activeClientsQuery->count(),
                 'total_clients' => $totalClientsQuery->count(),
@@ -77,12 +89,14 @@ class DashboardController extends Controller
                 'total_leads' => $totalLeadsQuery->count(),
                 'active_deals' => $activeDealsQuery->count(),
                 'expiring_soon' => $expiringSoonQuery->count(),
+                'completed_payments_mtd' => (clone $paymentsMtdQuery)->count(),
                 'recent_payments' => (clone $paymentsMtdQuery)->count(),
                 'revenue_mtd' => (float) (clone $paymentsMtdQuery)->sum('amount'),
                 'unmatched_payments' => $unmatchedPaymentsQuery->count(),
             ],
             'expiring_deals' => $expiringDeals,
-            'recent_payments' => $recentPayments,
+            'payment_review_queue' => $paymentReviewQueue,
+            'recent_payments' => $paymentReviewQueue,
             'upcoming_follow_ups' => $upcomingFollowUps,
         ]);
     }

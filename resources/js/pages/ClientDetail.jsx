@@ -4,6 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import Timeline from '../components/Timeline';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
 
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -38,9 +40,11 @@ export default function ClientDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const toast = useToast();
     const [activeTab, setActiveTab] = useState('overview');
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
+    const [showSyncConfirm, setShowSyncConfirm] = useState(false);
 
     const { data: client, isLoading } = useQuery({
         queryKey: ['client', id],
@@ -68,6 +72,10 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             setNoteForm({ note_type: 'internal', content: '', follow_up_at: '' });
+            toast.success('Note added.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to add note.');
         },
     });
 
@@ -81,14 +89,22 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             setShowDealModal(false);
+            toast.success('Deal created for client.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Deal creation failed.');
         },
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`).then((r) => r.data),
+        mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`, { reason: 'Activated from client profile' }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            toast.success('Deal activated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Deal activation failed.');
         },
     });
 
@@ -96,6 +112,12 @@ export default function ClientDetail() {
         mutationFn: () => api.post(`/crm/clients/${id}/sync`).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
+            toast.success('Client profile synced from WordPress.');
+            setShowSyncConfirm(false);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'WordPress sync failed.');
+            setShowSyncConfirm(false);
         },
     });
 
@@ -120,6 +142,8 @@ export default function ClientDetail() {
     }
 
     const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
+
+    const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
 
     return (
         <div className="space-y-4">
@@ -157,11 +181,12 @@ export default function ClientDetail() {
 
                     <div className="flex flex-wrap gap-2">
                         <button
-                            onClick={() => syncMutation.mutate()}
-                            disabled={syncMutation.isPending}
+                            onClick={() => setShowSyncConfirm(true)}
+                            disabled={!canSyncFromWp || syncMutation.isPending}
                             className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                            title={!canSyncFromWp ? 'Sync unavailable for manual CRM-only records' : undefined}
                         >
-                            {syncMutation.isPending ? 'Syncing...' : 'Sync from WP'}
+                            {syncMutation.isPending ? 'Syncing...' : 'Sync latest from WP'}
                         </button>
                         <button
                             onClick={() => setShowDealModal(true)}
@@ -196,6 +221,15 @@ export default function ClientDetail() {
                             ) : '—'}
                         />
                         <DefinitionRow label="WP Post ID" value={client.wp_post_id || '—'} mono />
+                        <DefinitionRow label="WP User ID" value={client.wp_user_id || '—'} mono />
+                        <DefinitionRow
+                            label="Profile URL"
+                            value={client.wp_profile_url ? (
+                                <a href={client.wp_profile_url} target="_blank" rel="noreferrer" className="text-teal-700 underline decoration-teal-200 underline-offset-2">
+                                    Open profile
+                                </a>
+                            ) : 'Not available'}
+                        />
                         <DefinitionRow label="Last Synced" value={formatDateTime(client.last_synced_at)} />
                     </dl>
                 </ProfileInfoCard>
@@ -229,7 +263,7 @@ export default function ClientDetail() {
                     <header className="crm-panel-header">
                         <div>
                             <h3 className="crm-panel-title">Recent Activity</h3>
-                            <p className="crm-panel-subtitle">Most recent deals for this client.</p>
+                            <p className="crm-panel-subtitle">Most recent deals for this client. New deals remain pending until activated.</p>
                         </div>
                     </header>
                     <div className="p-4">
@@ -238,8 +272,8 @@ export default function ClientDetail() {
                                 {client.deals.slice(0, 5).map((deal) => (
                                     <div key={deal.id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2.5">
                                         <div>
-                                            <p className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type} - {deal.duration}</p>
-                                            <p className="text-xs text-slate-500">{formatCurrency(deal.amount, deal.currency || 'KES')}</p>
+                                    <p className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type} - {deal.duration}</p>
+                                            <p className="text-xs text-slate-500">{formatCurrency(deal.amount, deal.currency || 'KES')} • Activation enables subscription access.</p>
                                         </div>
                                         <StatusBadge status={deal.status} />
                                     </div>
@@ -326,7 +360,6 @@ export default function ClientDetail() {
                                 >
                                     {addNoteMutation.isPending ? 'Saving...' : 'Add note'}
                                 </button>
-                                {addNoteMutation.isError ? <p className="text-sm text-rose-700">Failed to add note. Try again.</p> : null}
                             </div>
                         </div>
                     </section>
@@ -392,6 +425,17 @@ export default function ClientDetail() {
                     error={createDealMutation.error}
                 />
             ) : null}
+
+            <ConfirmDialog
+                open={showSyncConfirm}
+                title="Sync Client from WordPress"
+                message="This refreshes client profile fields from WordPress and may overwrite CRM-side contact data for synced fields."
+                confirmLabel="Sync now"
+                onCancel={() => setShowSyncConfirm(false)}
+                onConfirm={() => syncMutation.mutate()}
+                confirmDisabled={syncMutation.isPending}
+                isPending={syncMutation.isPending}
+            />
         </div>
     );
 }

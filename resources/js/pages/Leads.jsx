@@ -1,10 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
 
 const STATUSES = ['new', 'contacted', 'qualified', 'converted', 'lost'];
 
@@ -16,8 +18,17 @@ function nextLeadStage(currentStatus) {
     return STATUSES[currentIndex + 1];
 }
 
+function normalizePhone(phone) {
+    if (!phone) return '';
+    const cleaned = String(phone).replace(/[^\d+]/g, '').replace(/^\+/, '');
+    if (cleaned.startsWith('0')) return `254${cleaned.slice(1)}`;
+    return cleaned;
+}
+
 export default function Leads() {
     const queryClient = useQueryClient();
+    const toast = useToast();
+
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
@@ -25,8 +36,26 @@ export default function Leads() {
     const [ownerFilter, setOwnerFilter] = useState('');
     const [bulkTargetStatus, setBulkTargetStatus] = useState('contacted');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
-    const [bulkFeedback, setBulkFeedback] = useState(null);
-    const [importFeedback, setImportFeedback] = useState(null);
+
+    const [showImportConfirm, setShowImportConfirm] = useState(false);
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [showCsvModal, setShowCsvModal] = useState(false);
+    const [assignDialog, setAssignDialog] = useState({ lead: null, assigned_to: '', reason: 'Lead reassigned from leads page' });
+
+    const [createForm, setCreateForm] = useState({
+        platform_id: '',
+        name: '',
+        phone_normalized: '',
+        email: '',
+        source: 'outbound',
+        assigned_to: '',
+    });
+    const [csvForm, setCsvForm] = useState({
+        platform_id: '',
+        has_header: true,
+        file: null,
+        reason: 'CSV lead upload from leads page',
+    });
 
     const { data, isLoading } = useQuery({
         queryKey: ['leads', page, search, statusFilter, ownerFilter],
@@ -42,17 +71,82 @@ export default function Leads() {
             }).then((response) => response.data),
     });
 
-    const { data: pipeline } = useQuery({
-        queryKey: ['lead-pipeline'],
-        queryFn: () => api.get('/crm/leads/pipeline').then((response) => response.data),
+    const { data: integrationData } = useQuery({
+        queryKey: ['settings-integrations', 'lead-create'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+    });
+
+    const platformOptions = integrationData?.platforms || [];
+
+    useEffect(() => {
+        if (!showCreateModal) {
+            return;
+        }
+
+        if (!createForm.platform_id && platformOptions.length > 0) {
+            setCreateForm((current) => ({
+                ...current,
+                platform_id: String(platformOptions[0].platform_id),
+            }));
+        }
+    }, [showCreateModal, platformOptions, createForm.platform_id]);
+
+    useEffect(() => {
+        if (!showCsvModal) {
+            return;
+        }
+
+        if (!csvForm.platform_id && platformOptions.length > 0) {
+            setCsvForm((current) => ({
+                ...current,
+                platform_id: String(platformOptions[0].platform_id),
+            }));
+        }
+    }, [showCsvModal, platformOptions, csvForm.platform_id]);
+
+    const { data: createOwnersData, isLoading: createOwnersLoading } = useQuery({
+        queryKey: ['settings-owners', 'lead-create', createForm.platform_id],
+        queryFn: () =>
+            api.get('/crm/settings/owners', {
+                params: { platform_id: Number(createForm.platform_id) },
+            }).then((response) => response.data),
+        enabled: showCreateModal && !!createForm.platform_id,
+    });
+
+    const { data: assignOwnersData, isLoading: assignOwnersLoading } = useQuery({
+        queryKey: ['settings-owners', 'lead-assign', assignDialog.lead?.platform_id],
+        queryFn: () =>
+            api.get('/crm/settings/owners', {
+                params: { platform_id: Number(assignDialog.lead?.platform_id) },
+            }).then((response) => response.data),
+        enabled: !!assignDialog.lead?.platform_id,
     });
 
     const updateStatusMutation = useMutation({
         mutationFn: ({ leadId, status }) => api.patch(`/crm/leads/${leadId}/status`, { status }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            toast.success(`Lead moved to ${variables.status}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Lead status update failed.');
+        },
+    });
+
+    const assignLeadMutation = useMutation({
+        mutationFn: ({ leadId, assignedTo, reason }) =>
+            api.patch(`/crm/leads/${leadId}/assign`, {
+                assigned_to: assignedTo,
+                reason,
+            }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['leads'] });
-            queryClient.invalidateQueries({ queryKey: ['lead-pipeline'] });
-            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            toast.success('Lead assignment updated.');
+            setAssignDialog({ lead: null, assigned_to: '', reason: 'Lead reassigned from leads page' });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Lead assignment failed.');
         },
     });
 
@@ -72,13 +166,13 @@ export default function Leads() {
         },
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['leads'] });
-            queryClient.invalidateQueries({ queryKey: ['lead-pipeline'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setClearSelectionKey((value) => value + 1);
-            setBulkFeedback({
-                tone: result.failed > 0 ? 'warning' : 'success',
-                text: `Bulk stage update to ${result.targetStatus}: ${result.success}/${result.total}${result.skipped ? ` (${result.skipped} skipped)` : ''}${result.failed ? ` (${result.failed} failed)` : ''}.`,
-            });
+            if (result.failed > 0) {
+                toast.warning(`Bulk stage update completed with issues: ${result.success}/${result.total} succeeded.`);
+                return;
+            }
+            toast.success(`Bulk stage update complete: ${result.success}/${result.total} moved to ${result.targetStatus}.`);
         },
     });
 
@@ -86,18 +180,71 @@ export default function Leads() {
         mutationFn: () => api.post('/crm/leads/import', { dry_run: false }).then((response) => response.data),
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['leads'] });
-            queryClient.invalidateQueries({ queryKey: ['lead-pipeline'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-            setImportFeedback({
-                tone: result?.totals?.errors > 0 ? 'warning' : 'success',
-                text: `Lead import completed: ${result?.totals?.created ?? 0} created, ${result?.totals?.updated ?? 0} refreshed, ${result?.totals?.unassigned ?? 0} unassigned.`,
+            toast.success(`WordPress lead sync complete: ${result?.totals?.created ?? 0} created, ${result?.totals?.updated ?? 0} refreshed.`);
+            setShowImportConfirm(false);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Lead sync from WordPress failed.');
+        },
+    });
+
+    const createMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/leads', payload).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            toast.success('Lead created successfully.');
+            setShowCreateModal(false);
+            setCreateForm({
+                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                name: '',
+                phone_normalized: '',
+                email: '',
+                source: 'outbound',
+                assigned_to: '',
             });
         },
         onError: (error) => {
-            setImportFeedback({
-                tone: 'warning',
-                text: error?.response?.data?.message || 'Lead import failed.',
+            toast.error(error?.response?.data?.message || 'Lead creation failed.');
+        },
+    });
+
+    const uploadCsvMutation = useMutation({
+        mutationFn: (payload) => {
+            const formData = new FormData();
+            formData.append('platform_id', String(payload.platform_id));
+            formData.append('has_header', payload.has_header ? '1' : '0');
+            formData.append('reason', payload.reason);
+            formData.append('file', payload.file);
+
+            return api.post('/crm/leads/upload-csv', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            }).then((response) => response.data);
+        },
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setShowCsvModal(false);
+            setCsvForm({
+                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                has_header: true,
+                file: null,
+                reason: 'CSV lead upload from leads page',
             });
+
+            const created = Number(result?.totals?.created || 0);
+            const failed = Number(result?.totals?.failed || 0);
+            if (failed > 0) {
+                toast.warning(`CSV upload completed: ${created} created, ${failed} failed.`);
+                return;
+            }
+            toast.success(`CSV upload completed: ${created} leads created.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Lead CSV upload failed.');
         },
     });
 
@@ -108,6 +255,8 @@ export default function Leads() {
     };
 
     const rows = data?.data || [];
+    const owners = createOwnersData?.owners || [];
+    const assignOwners = assignOwnersData?.owners || [];
 
     const ownerOptions = useMemo(() => {
         const map = new Map();
@@ -118,6 +267,26 @@ export default function Leads() {
         });
         return Array.from(map.entries());
     }, [rows]);
+
+    const stats = useMemo(() => {
+        if (data?.stats) {
+            return {
+                new: Number(data.stats.new || 0),
+                contacted: Number(data.stats.contacted || 0),
+                qualified: Number(data.stats.qualified || 0),
+                converted: Number(data.stats.converted || 0),
+                lost: Number(data.stats.lost || 0),
+            };
+        }
+
+        return {
+            new: rows.filter((row) => row.status === 'new').length,
+            contacted: rows.filter((row) => row.status === 'contacted').length,
+            qualified: rows.filter((row) => row.status === 'qualified').length,
+            converted: rows.filter((row) => row.status === 'converted').length,
+            lost: rows.filter((row) => row.status === 'lost').length,
+        };
+    }, [data?.stats, rows]);
 
     const bulkActions = [
         {
@@ -164,23 +333,40 @@ export default function Leads() {
         },
         {
             key: 'actions',
-            label: 'Stage Action',
+            label: 'Actions',
             render: (row) => {
                 const nextStatus = nextLeadStage(row.status);
-                if (!nextStatus || row.status === 'lost') {
-                    return <span className="text-xs text-slate-400">—</span>;
-                }
 
                 return (
-                    <button
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            updateStatusMutation.mutate({ leadId: row.id, status: nextStatus });
-                        }}
-                        className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                    >
-                        Move to {nextStatus}
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                        {nextStatus && row.status !== 'lost' ? (
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    updateStatusMutation.mutate({ leadId: row.id, status: nextStatus });
+                                }}
+                                className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                            >
+                                Move to {nextStatus}
+                            </button>
+                        ) : null}
+
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                setAssignDialog({
+                                    lead: row,
+                                    assigned_to: row.assigned_to ? String(row.assigned_to) : '',
+                                    reason: 'Lead reassigned from leads page',
+                                });
+                            }}
+                            className="crm-btn-secondary px-2.5 py-1 text-xs"
+                        >
+                            Assign
+                        </button>
+                    </div>
                 );
             },
         },
@@ -192,23 +378,39 @@ export default function Leads() {
                 title="Leads"
                 subtitle={data?.total ? `${data.total.toLocaleString()} leads in pipeline` : 'Lead pipeline and conversion tracking'}
                 actions={(
-                    <button
-                        type="button"
-                        onClick={() => importMutation.mutate()}
-                        disabled={importMutation.isPending}
-                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {importMutation.isPending ? 'Importing...' : 'Import Leads'}
-                    </button>
+                    <>
+                        <button
+                            type="button"
+                            onClick={() => setShowImportConfirm(true)}
+                            disabled={importMutation.isPending}
+                            className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {importMutation.isPending ? 'Syncing...' : 'Sync from WordPress'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowCsvModal(true)}
+                            className="crm-btn-secondary"
+                        >
+                            Upload CSV
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowCreateModal(true)}
+                            className="crm-btn-primary"
+                        >
+                            Add lead
+                        </button>
+                    </>
                 )}
             />
 
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-                <MetricCard label="New" value={(pipeline?.new ?? 0).toLocaleString()} tone="accent" />
-                <MetricCard label="Contacted" value={(pipeline?.contacted ?? 0).toLocaleString()} />
-                <MetricCard label="Qualified" value={(pipeline?.qualified ?? 0).toLocaleString()} />
-                <MetricCard label="Converted" value={(pipeline?.converted ?? 0).toLocaleString()} tone="success" />
-                <MetricCard label="Lost" value={(pipeline?.lost ?? 0).toLocaleString()} tone="danger" />
+                <MetricCard label="New" value={stats.new.toLocaleString()} tone="accent" />
+                <MetricCard label="Contacted" value={stats.contacted.toLocaleString()} />
+                <MetricCard label="Qualified" value={stats.qualified.toLocaleString()} />
+                <MetricCard label="Converted" value={stats.converted.toLocaleString()} tone="success" />
+                <MetricCard label="Lost" value={stats.lost.toLocaleString()} tone="danger" />
             </section>
 
             <section className="crm-filter-row">
@@ -219,7 +421,7 @@ export default function Leads() {
                                 type="text"
                                 value={searchInput}
                                 onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search leads by name, phone, email..."
+                                placeholder="Search leads by name, phone, or email..."
                                 className="crm-input pr-10"
                             />
                             <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
@@ -238,7 +440,7 @@ export default function Leads() {
                         }}
                         className="crm-select"
                     >
-                        <option value="">All Statuses</option>
+                        <option value="">All statuses</option>
                         {STATUSES.map((status) => (
                             <option key={status} value={status} className="capitalize">
                                 {status}
@@ -254,7 +456,7 @@ export default function Leads() {
                         }}
                         className="crm-select"
                     >
-                        <option value="">All Owners</option>
+                        <option value="">All owners</option>
                         {ownerOptions.map(([ownerId, ownerName]) => (
                             <option key={ownerId} value={ownerId}>{ownerName}</option>
                         ))}
@@ -287,17 +489,9 @@ export default function Leads() {
                     ) : null}
                 </div>
 
-                {bulkFeedback ? (
-                    <p className={`mt-2 text-xs font-medium ${bulkFeedback.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                        {bulkFeedback.text}
-                    </p>
-                ) : null}
-
-                {importFeedback ? (
-                    <p className={`mt-1 text-xs font-medium ${importFeedback.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                        {importFeedback.text}
-                    </p>
-                ) : null}
+                <p className="mt-2 text-xs text-slate-500">
+                    “Sync from WordPress” imports registered profiles needing payment follow-up into this lead pipeline.
+                </p>
             </section>
 
             <DataTable
@@ -312,6 +506,272 @@ export default function Leads() {
                 bulkActions={bulkActions}
                 clearSelectionKey={clearSelectionKey}
             />
+
+            <ConfirmDialog
+                open={showImportConfirm}
+                title="Sync Leads from WordPress"
+                message="This will import or refresh lead records from WordPress for markets you can access."
+                confirmLabel={importMutation.isPending ? 'Syncing...' : 'Start sync'}
+                onCancel={() => setShowImportConfirm(false)}
+                onConfirm={() => importMutation.mutate()}
+                confirmDisabled={importMutation.isPending}
+                isPending={importMutation.isPending}
+            />
+
+            <ConfirmDialog
+                open={!!assignDialog.lead}
+                title="Assign Lead Owner"
+                message={assignDialog.lead ? `Assign ${assignDialog.lead.name || `Lead #${assignDialog.lead.id}`} to a sales owner.` : ''}
+                confirmLabel="Save assignment"
+                onCancel={() => setAssignDialog({ lead: null, assigned_to: '', reason: 'Lead reassigned from leads page' })}
+                onConfirm={() => {
+                    if (!assignDialog.lead?.id) return;
+                    assignLeadMutation.mutate({
+                        leadId: assignDialog.lead.id,
+                        assignedTo: assignDialog.assigned_to ? Number(assignDialog.assigned_to) : null,
+                        reason: assignDialog.reason.trim() || 'Lead reassigned from leads page',
+                    });
+                }}
+                confirmDisabled={!assignDialog.assigned_to || assignLeadMutation.isPending}
+                isPending={assignLeadMutation.isPending}
+            >
+                <label htmlFor="assign-owner" className="mb-1 block text-sm font-medium text-slate-700">Owner</label>
+                <select
+                    id="assign-owner"
+                    value={assignDialog.assigned_to}
+                    onChange={(event) => setAssignDialog((current) => ({ ...current, assigned_to: event.target.value }))}
+                    className="crm-select w-full"
+                    disabled={assignOwnersLoading}
+                >
+                    <option value="">{assignOwnersLoading ? 'Loading owners...' : 'Select owner'}</option>
+                    {assignOwners.map((owner) => (
+                        <option key={owner.id} value={owner.id}>
+                            {owner.name} ({owner.role})
+                        </option>
+                    ))}
+                </select>
+
+                <label htmlFor="assign-reason" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Reason</label>
+                <textarea
+                    id="assign-reason"
+                    rows={3}
+                    value={assignDialog.reason}
+                    onChange={(event) => setAssignDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                />
+            </ConfirmDialog>
+
+            {showCreateModal ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowCreateModal(false)}>
+                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Add Lead</h3>
+                                <p className="crm-panel-subtitle">Create a lead manually and assign it to a sales owner.</p>
+                            </div>
+                        </header>
+
+                        <div className="grid gap-3 p-4 md:grid-cols-2">
+                            <div className="md:col-span-2">
+                                <label htmlFor="lead-market" className="mb-1 block text-sm font-medium text-slate-700">Market</label>
+                                <select
+                                    id="lead-market"
+                                    value={createForm.platform_id}
+                                    onChange={(event) => setCreateForm((current) => ({ ...current, platform_id: event.target.value, assigned_to: '' }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="">Select market</option>
+                                    {platformOptions.map((platform) => (
+                                        <option key={platform.platform_id} value={platform.platform_id}>
+                                            {platform.platform_name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label htmlFor="lead-name" className="mb-1 block text-sm font-medium text-slate-700">Lead name</label>
+                                <input
+                                    id="lead-name"
+                                    type="text"
+                                    value={createForm.name}
+                                    onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Enter lead name"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="lead-phone" className="mb-1 block text-sm font-medium text-slate-700">Phone</label>
+                                <input
+                                    id="lead-phone"
+                                    type="text"
+                                    value={createForm.phone_normalized}
+                                    onChange={(event) => setCreateForm((current) => ({ ...current, phone_normalized: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="e.g. 254712345678"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="lead-email" className="mb-1 block text-sm font-medium text-slate-700">Email</label>
+                                <input
+                                    id="lead-email"
+                                    type="email"
+                                    value={createForm.email}
+                                    onChange={(event) => setCreateForm((current) => ({ ...current, email: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="name@example.com"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="lead-source" className="mb-1 block text-sm font-medium text-slate-700">Source</label>
+                                <select
+                                    id="lead-source"
+                                    value={createForm.source}
+                                    onChange={(event) => setCreateForm((current) => ({ ...current, source: event.target.value }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="outbound">Outbound</option>
+                                    <option value="referral">Referral</option>
+                                    <option value="registration">Registration</option>
+                                    <option value="import">Import</option>
+                                </select>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label htmlFor="lead-owner" className="mb-1 block text-sm font-medium text-slate-700">Owner</label>
+                                <select
+                                    id="lead-owner"
+                                    value={createForm.assigned_to}
+                                    onChange={(event) => setCreateForm((current) => ({ ...current, assigned_to: event.target.value }))}
+                                    className="crm-select w-full"
+                                    disabled={!createForm.platform_id || createOwnersLoading}
+                                >
+                                    <option value="">{createOwnersLoading ? 'Loading owners...' : 'Auto-assign owner'}</option>
+                                    {owners.map((owner) => (
+                                        <option key={owner.id} value={owner.id}>
+                                            {owner.name} ({owner.role})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button type="button" className="crm-btn-secondary" onClick={() => setShowCreateModal(false)}>
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!createForm.platform_id || !createForm.name.trim() || createMutation.isPending}
+                                onClick={() => {
+                                    createMutation.mutate({
+                                        platform_id: Number(createForm.platform_id),
+                                        name: createForm.name.trim(),
+                                        phone_normalized: normalizePhone(createForm.phone_normalized.trim()),
+                                        email: createForm.email.trim() || null,
+                                        source: createForm.source,
+                                        assigned_to: createForm.assigned_to ? Number(createForm.assigned_to) : null,
+                                        reason: 'Manual lead create from leads page',
+                                    });
+                                }}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {createMutation.isPending ? 'Creating...' : 'Create lead'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            {showCsvModal ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowCsvModal(false)}>
+                    <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Upload Leads CSV</h3>
+                                <p className="crm-panel-subtitle">Bulk-create lead records from CSV for one market at a time.</p>
+                            </div>
+                        </header>
+
+                        <div className="space-y-3 p-4">
+                            <div>
+                                <label htmlFor="leads-csv-market" className="mb-1 block text-sm font-medium text-slate-700">Market</label>
+                                <select
+                                    id="leads-csv-market"
+                                    value={csvForm.platform_id}
+                                    onChange={(event) => setCsvForm((current) => ({ ...current, platform_id: event.target.value }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="">Select market</option>
+                                    {platformOptions.map((platform) => (
+                                        <option key={platform.platform_id} value={platform.platform_id}>
+                                            {platform.platform_name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label htmlFor="leads-csv-file" className="mb-1 block text-sm font-medium text-slate-700">CSV file</label>
+                                <input
+                                    id="leads-csv-file"
+                                    type="file"
+                                    accept=".csv,text/csv,.txt"
+                                    onChange={(event) => setCsvForm((current) => ({ ...current, file: event.target.files?.[0] || null }))}
+                                    className="crm-input"
+                                />
+                            </div>
+
+                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={csvForm.has_header}
+                                    onChange={(event) => setCsvForm((current) => ({ ...current, has_header: event.target.checked }))}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                />
+                                CSV includes a header row
+                            </label>
+
+                            <div>
+                                <label htmlFor="leads-csv-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                                <textarea
+                                    id="leads-csv-reason"
+                                    rows={3}
+                                    value={csvForm.reason}
+                                    onChange={(event) => setCsvForm((current) => ({ ...current, reason: event.target.value }))}
+                                    className="crm-input"
+                                />
+                            </div>
+
+                            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                Expected columns: <span className="crm-mono">name, phone, email, source, status, assigned_to</span>.
+                            </p>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button type="button" className="crm-btn-secondary" onClick={() => setShowCsvModal(false)}>
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!csvForm.platform_id || !csvForm.file || !csvForm.reason.trim() || uploadCsvMutation.isPending}
+                                onClick={() => uploadCsvMutation.mutate({
+                                    platform_id: Number(csvForm.platform_id),
+                                    has_header: csvForm.has_header,
+                                    file: csvForm.file,
+                                    reason: csvForm.reason.trim(),
+                                })}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {uploadCsvMutation.isPending ? 'Uploading...' : 'Upload CSV'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

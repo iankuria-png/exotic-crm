@@ -8,6 +8,7 @@ use App\Models\Lead;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Services\AuditService;
+use App\Services\LeadAssignmentService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
 use App\Support\CrmAuditAction;
@@ -18,6 +19,7 @@ class LeadController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly LeadImportService $leadImportService,
+        private readonly LeadAssignmentService $leadAssignmentService,
         private readonly AuditService $auditService
     ) {
     }
@@ -54,10 +56,195 @@ class LeadController extends Controller
             $query->where('assigned_to', $request->assigned_to);
         }
 
+        $statsQuery = clone $query;
+        $stats = [
+            'total' => (clone $statsQuery)->count(),
+            'new' => (clone $statsQuery)->where('status', 'new')->count(),
+            'contacted' => (clone $statsQuery)->where('status', 'contacted')->count(),
+            'qualified' => (clone $statsQuery)->where('status', 'qualified')->count(),
+            'converted' => (clone $statsQuery)->where('status', 'converted')->count(),
+            'lost' => (clone $statsQuery)->where('status', 'lost')->count(),
+            'assigned' => (clone $statsQuery)->whereNotNull('assigned_to')->count(),
+            'unassigned' => (clone $statsQuery)->whereNull('assigned_to')->count(),
+        ];
+
         $leads = $query->orderBy('created_at', 'desc')
             ->paginate($request->get('per_page', 25));
 
-        return response()->json($leads);
+        $payload = $leads->toArray();
+        $payload['stats'] = $stats;
+
+        return response()->json($payload);
+    }
+
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|exists:platforms,id',
+            'name' => 'required|string|max:255',
+            'phone_normalized' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'source' => 'nullable|in:registration,referral,outbound,import',
+            'status' => 'nullable|in:new,contacted,qualified,converted,lost',
+            'assigned_to' => 'nullable|exists:users,id',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $lead = $this->createManualLead(
+                $request,
+                $validated,
+                $validated['reason'] ?? 'Manual lead create from CRM'
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        return response()->json($lead, 201);
+    }
+
+    public function uploadCsv(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|exists:platforms,id',
+            'file' => 'required|file|mimes:csv,txt|max:5120',
+            'has_header' => 'nullable|boolean',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this lead market.'
+        );
+
+        $rows = $this->parseCsvRows(
+            $validated['file']->getRealPath(),
+            (bool) ($validated['has_header'] ?? true)
+        );
+
+        if (count($rows) === 0) {
+            return response()->json([
+                'message' => 'CSV file has no data rows.',
+            ], 422);
+        }
+
+        if (count($rows) > 500) {
+            return response()->json([
+                'message' => 'CSV upload limit is 500 rows per upload.',
+            ], 422);
+        }
+
+        $totals = [
+            'rows' => count($rows),
+            'created' => 0,
+            'failed' => 0,
+        ];
+        $errors = [];
+
+        foreach ($rows as $index => $row) {
+            $rowNumber = $index + 2;
+
+            $payload = [
+                'platform_id' => $platformId,
+                'name' => trim((string) ($row['name'] ?? $row['lead_name'] ?? '')),
+                'phone_normalized' => $row['phone_normalized'] ?? $row['phone'] ?? null,
+                'email' => $row['email'] ?? null,
+                'source' => $row['source'] ?? 'outbound',
+                'status' => $row['status'] ?? 'new',
+                'assigned_to' => isset($row['assigned_to']) && trim((string) $row['assigned_to']) !== '' ? (int) $row['assigned_to'] : null,
+            ];
+
+            try {
+                $this->createManualLead(
+                    $request,
+                    $payload,
+                    ($validated['reason'] ?? 'CSV lead upload from CRM') . " (row {$rowNumber})"
+                );
+                $totals['created'] += 1;
+            } catch (\Throwable $exception) {
+                $totals['failed'] += 1;
+                $errors[] = [
+                    'row' => $rowNumber,
+                    'message' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'totals' => $totals,
+            'errors' => $errors,
+        ]);
+    }
+
+    public function assign(Request $request, Lead $lead)
+    {
+        $this->authorizeLeadAccess($request, $lead);
+
+        $validated = $request->validate([
+            'assigned_to' => 'nullable|exists:users,id',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $beforeState = [
+            'assigned_to' => $lead->assigned_to,
+        ];
+
+        $nextOwnerId = $validated['assigned_to'] ?? null;
+        $nextOwnerId = $this->leadAssignmentService->assignOwnerId(
+            (int) $lead->platform_id,
+            [
+                'wp_post_id' => $lead->wp_post_id,
+                'wp_user_id' => $lead->wp_user_id,
+                'phone_normalized' => $lead->phone_normalized,
+                'email' => $lead->email,
+                'name' => $lead->name,
+            ],
+            $nextOwnerId ? (int) $nextOwnerId : null
+        );
+
+        if (!$nextOwnerId) {
+            return response()->json([
+                'message' => 'No eligible active owner found for this market.',
+            ], 422);
+        }
+
+        $lead->update([
+            'assigned_to' => $nextOwnerId,
+        ]);
+
+        TimelineEvent::create([
+            'platform_id' => $lead->platform_id,
+            'entity_type' => 'lead',
+            'entity_id' => $lead->id,
+            'event_type' => 'lead_assigned',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'before_assigned_to' => $beforeState['assigned_to'],
+                'after_assigned_to' => $lead->assigned_to,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $lead->platform_id,
+            CrmAuditAction::LEAD_ASSIGN,
+            'lead',
+            (int) $lead->id,
+            $beforeState,
+            [
+                'assigned_to' => $lead->assigned_to,
+            ],
+            $validated['reason'] ?? 'Manual lead assignment from CRM'
+        );
+
+        $lead->load(['platform', 'assignedAgent', 'convertedClient']);
+
+        return response()->json($lead);
     }
 
     public function show(Request $request, Lead $lead)
@@ -312,5 +499,159 @@ class LeadController extends Controller
         }
 
         return null;
+    }
+
+    private function createManualLead(Request $request, array $payload, string $reason): Lead
+    {
+        $platformId = (int) ($payload['platform_id'] ?? 0);
+        if ($platformId <= 0) {
+            throw new \InvalidArgumentException('platform_id is required.');
+        }
+
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this lead market.'
+        );
+
+        $name = trim((string) ($payload['name'] ?? ''));
+        if ($name === '') {
+            throw new \InvalidArgumentException('name is required.');
+        }
+
+        $status = strtolower(trim((string) ($payload['status'] ?? 'new')));
+        if (!in_array($status, ['new', 'contacted', 'qualified', 'converted', 'lost'], true)) {
+            $status = 'new';
+        }
+
+        $source = strtolower(trim((string) ($payload['source'] ?? 'outbound')));
+        if (!in_array($source, ['registration', 'referral', 'outbound', 'import'], true)) {
+            $source = 'outbound';
+        }
+
+        $assignedTo = !empty($payload['assigned_to']) ? (int) $payload['assigned_to'] : null;
+        $assignedTo = $this->leadAssignmentService->assignOwnerId(
+            $platformId,
+            [
+                'phone_normalized' => $payload['phone_normalized'] ?? null,
+                'email' => $payload['email'] ?? null,
+                'name' => $name,
+            ],
+            $assignedTo
+        );
+
+        $lead = Lead::create([
+            'platform_id' => $platformId,
+            'name' => $name,
+            'phone_normalized' => $this->normalizePhone($payload['phone_normalized'] ?? null),
+            'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
+            'source' => $source,
+            'status' => $status,
+            'assigned_to' => $assignedTo,
+        ]);
+
+        TimelineEvent::create([
+            'platform_id' => $lead->platform_id,
+            'entity_type' => 'lead',
+            'entity_id' => $lead->id,
+            'event_type' => 'lead_created',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'source' => $lead->source,
+                'status' => $lead->status,
+                'assigned_to' => $lead->assigned_to,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $lead->platform_id,
+            CrmAuditAction::LEAD_CREATE,
+            'lead',
+            (int) $lead->id,
+            null,
+            [
+                'status' => $lead->status,
+                'source' => $lead->source,
+                'assigned_to' => $lead->assigned_to,
+            ],
+            $reason
+        );
+
+        $lead->load(['platform', 'assignedAgent']);
+
+        return $lead;
+    }
+
+    private function normalizePhone(?string $phone): ?string
+    {
+        if (!$phone) {
+            return null;
+        }
+
+        $normalized = preg_replace('/[^\d+]/', '', $phone);
+        if (!$normalized) {
+            return null;
+        }
+
+        $normalized = ltrim($normalized, '+');
+        if (str_starts_with($normalized, '0')) {
+            $normalized = '254' . substr($normalized, 1);
+        }
+
+        return $normalized ?: null;
+    }
+
+    private function parseCsvRows(string $path, bool $hasHeader): array
+    {
+        $handle = fopen($path, 'rb');
+        if (!$handle) {
+            throw new \RuntimeException('Unable to read uploaded CSV file.');
+        }
+
+        $rows = [];
+        $header = [];
+        $defaultColumns = ['name', 'phone', 'email', 'source', 'status', 'assigned_to'];
+
+        if ($hasHeader) {
+            $headerRow = fgetcsv($handle);
+            if (!is_array($headerRow) || empty($headerRow)) {
+                fclose($handle);
+                return [];
+            }
+
+            $header = array_map(function ($column) {
+                $normalized = strtolower(trim((string) $column));
+                $normalized = preg_replace('/[^a-z0-9_]+/', '_', $normalized) ?? '';
+                return trim($normalized, '_');
+            }, $headerRow);
+        }
+
+        while (($row = fgetcsv($handle)) !== false) {
+            if (count(array_filter($row, fn ($value) => trim((string) $value) !== '')) === 0) {
+                continue;
+            }
+
+            $columns = $hasHeader ? $header : array_slice($defaultColumns, 0, count($row));
+            if (empty($columns)) {
+                continue;
+            }
+
+            $normalizedRow = [];
+            foreach ($columns as $index => $columnName) {
+                if ($columnName === '') {
+                    continue;
+                }
+
+                $normalizedRow[$columnName] = $row[$index] ?? null;
+            }
+
+            $rows[] = $normalizedRow;
+        }
+
+        fclose($handle);
+
+        return $rows;
     }
 }

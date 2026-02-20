@@ -4,7 +4,11 @@ namespace App\Support;
 
 final class CrmAuditAction
 {
+    public const CLIENT_CREATE = 'client_create';
+    public const LEAD_CREATE = 'lead_create';
+    public const LEAD_ASSIGN = 'lead_assign';
     public const LEAD_STATUS_UPDATE = 'lead_status_update';
+    public const ROLE_UPDATE = 'role_update';
     public const DEAL_ACTIVATE = 'deal_activate';
     public const DEAL_DEACTIVATE = 'deal_deactivate';
     public const DEAL_EXTEND = 'deal_extend';

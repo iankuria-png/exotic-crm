@@ -7,13 +7,16 @@ use App\Models\AuditLog;
 use App\Models\Platform;
 use App\Models\Template;
 use App\Models\User;
+use App\Services\AuditService;
 use App\Services\MarketAuthorizationService;
+use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
 
 class SettingsController extends Controller
 {
     public function __construct(
-        private readonly MarketAuthorizationService $marketAuthorizationService
+        private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly AuditService $auditService
     ) {
     }
 
@@ -110,6 +113,35 @@ class SettingsController extends Controller
             $query->orderByDesc('updated_at')
                 ->paginate($request->integer('per_page', 25))
         );
+    }
+
+    public function owners(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this market.'
+        );
+
+        $owners = $this->marketAuthorizationService
+            ->eligibleOwnersForPlatform($platformId)
+            ->map(fn (User $owner) => [
+                'id' => (int) $owner->id,
+                'name' => $owner->name,
+                'email' => $owner->email,
+                'role' => $owner->role,
+            ])
+            ->values();
+
+        return response()->json([
+            'platform_id' => $platformId,
+            'owners' => $owners,
+        ]);
     }
 
     public function storeTemplate(Request $request)
@@ -264,6 +296,84 @@ class SettingsController extends Controller
         return response()->json([
             'summary' => $summary,
             'users' => $users,
+            'available_markets' => $platformMap->values()->map(fn (Platform $platform) => [
+                'id' => (int) $platform->id,
+                'name' => $platform->name,
+                'country' => $platform->country,
+            ])->values(),
+        ]);
+    }
+
+    public function updateRole(Request $request, User $user)
+    {
+        $validated = $request->validate([
+            'role' => 'required|in:admin,sub_admin,sales',
+            'status' => 'required|in:active,inactive',
+            'assigned_market_ids' => 'nullable|array',
+            'assigned_market_ids.*' => 'integer|exists:platforms,id',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $assignedMarketIds = collect($validated['assigned_market_ids'] ?? [])
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $beforeState = [
+            'role' => $user->role,
+            'status' => $user->status ?? 'active',
+            'assigned_market_ids' => $this->decodeMarketIds($user->assigned_market_ids),
+        ];
+
+        $user->update([
+            'role' => $validated['role'],
+            'status' => $validated['status'],
+            'assigned_market_ids' => $assignedMarketIds,
+        ]);
+
+        if (method_exists($user, 'platforms')) {
+            $user->platforms()->sync($assignedMarketIds);
+        }
+
+        $auditPlatformId = $this->resolveAuditPlatformId($assignedMarketIds);
+        if ($auditPlatformId) {
+            $this->auditService->fromRequest(
+                $request,
+                $auditPlatformId,
+                CrmAuditAction::ROLE_UPDATE,
+                'user',
+                (int) $user->id,
+                $beforeState,
+                [
+                    'role' => $user->role,
+                    'status' => $user->status ?? 'active',
+                    'assigned_market_ids' => $assignedMarketIds,
+                ],
+                $validated['reason'] ?? 'Role and permission update from CRM settings'
+            );
+        }
+
+        $user->refresh();
+        $user->load('platforms:id,name,country');
+
+        $assignedMarkets = $user->platforms
+            ->map(fn (Platform $platform) => [
+                'id' => (int) $platform->id,
+                'name' => $platform->name,
+                'country' => $platform->country,
+            ])
+            ->values();
+
+        return response()->json([
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'status' => $user->status ?? 'active',
+            'assigned_market_ids' => $assignedMarketIds,
+            'assigned_markets' => $assignedMarkets,
         ]);
     }
 
@@ -281,5 +391,15 @@ class SettingsController extends Controller
         }
 
         return [];
+    }
+
+    private function resolveAuditPlatformId(array $assignedMarketIds): ?int
+    {
+        if (!empty($assignedMarketIds)) {
+            return (int) $assignedMarketIds[0];
+        }
+
+        $fallback = Platform::query()->orderBy('id')->value('id');
+        return $fallback ? (int) $fallback : null;
     }
 }

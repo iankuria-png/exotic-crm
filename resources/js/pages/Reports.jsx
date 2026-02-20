@@ -1,8 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../services/api';
 import PageHeader from '../components/PageHeader';
 import MetricCard from '../components/MetricCard';
+import { useToast } from '../components/ToastProvider';
 
 function asNumber(value) {
     const parsed = Number(value);
@@ -16,6 +17,31 @@ function formatKes(value) {
 function percent(value, total) {
     if (!total) return 0;
     return Math.round((value / total) * 100);
+}
+
+function toCsvCell(value) {
+    const stringValue = String(value ?? '');
+    if (/[",\n]/.test(stringValue)) {
+        return `"${stringValue.replace(/"/g, '""')}"`;
+    }
+    return stringValue;
+}
+
+function toCsvRow(values) {
+    return values.map((value) => toCsvCell(value)).join(',');
+}
+
+function downloadCsv(filename, rows) {
+    const csvContent = rows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.setAttribute('download', filename);
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
 }
 
 function BarList({ rows, colorClass = 'bg-teal-600' }) {
@@ -54,9 +80,19 @@ function ReportPanel({ title, subtitle, children }) {
 }
 
 export default function Reports() {
+    const toast = useToast();
+    const [fromDate, setFromDate] = useState('');
+    const [toDate, setToDate] = useState('');
+
     const { data, isLoading } = useQuery({
-        queryKey: ['reports-summary'],
-        queryFn: () => api.get('/crm/reports/summary').then((response) => response.data),
+        queryKey: ['reports-summary', fromDate, toDate],
+        queryFn: () =>
+            api.get('/crm/reports/summary', {
+                params: {
+                    ...(fromDate ? { from: fromDate } : {}),
+                    ...(toDate ? { to: toDate } : {}),
+                },
+            }).then((response) => response.data),
     });
 
     const kpis = data?.kpis || {};
@@ -105,11 +141,78 @@ export default function Reports() {
         ? `${new Date(data.range.from).toLocaleDateString()} - ${new Date(data.range.to).toLocaleDateString()}`
         : 'Server-backed reporting window';
 
+    const exportCsv = () => {
+        if (!data) {
+            toast.warning('No report data to export yet.');
+            return;
+        }
+
+        if (fromDate && toDate && fromDate > toDate) {
+            toast.error('The "from" date cannot be later than the "to" date.');
+            return;
+        }
+
+        const rows = [];
+        rows.push(toCsvRow(['Section', 'Metric', 'Value']));
+        rows.push(toCsvRow(['KPI', 'Total Revenue', kpis.total_revenue ?? 0]));
+        rows.push(toCsvRow(['KPI', 'Revenue MTD', kpis.revenue_mtd ?? 0]));
+        rows.push(toCsvRow(['KPI', 'Active Clients', kpis.active_clients ?? 0]));
+        rows.push(toCsvRow(['KPI', 'Total Clients', kpis.total_clients ?? 0]));
+        rows.push(toCsvRow(['KPI', 'Conversion Rate', conversionRate]));
+        rows.push(toCsvRow(['KPI', 'Renewal Rate', renewalRate]));
+        rows.push(toCsvRow(['KPI', 'Range From', data?.range?.from || '']));
+        rows.push(toCsvRow(['KPI', 'Range To', data?.range?.to || '']));
+
+        (data.revenue_trend || []).forEach((row) => rows.push(toCsvRow(['Revenue Trend', row.label, row.value])));
+        (data.lead_sources || []).forEach((row) => rows.push(toCsvRow(['Lead Source', row.source, row.value])));
+        (data.package_revenue || []).forEach((row) => rows.push(toCsvRow(['Package Revenue', row.label, row.value])));
+        (data.owner_performance || []).forEach((row) => rows.push(toCsvRow(['Owner Performance', row.owner, `${row.deals} deals | ${row.revenue} revenue`])));
+
+        const filename = `crm-reports-${data?.range?.from || 'from'}-to-${data?.range?.to || 'to'}.csv`;
+        downloadCsv(filename, rows);
+        toast.success('Report export generated.');
+    };
+
     return (
         <div className="space-y-4">
             <PageHeader
                 title="Reports & Analytics"
                 subtitle={`Server-backed metrics for revenue, renewal health, lead funnel, and owner performance (${rangeLabel}).`}
+                actions={(
+                    <div className="flex flex-wrap items-center gap-2">
+                        <label className="text-xs font-medium text-slate-600" htmlFor="report-from">From</label>
+                        <input
+                            id="report-from"
+                            type="date"
+                            value={fromDate}
+                            onChange={(event) => setFromDate(event.target.value)}
+                            className="crm-input w-auto min-w-[150px]"
+                        />
+                        <label className="text-xs font-medium text-slate-600" htmlFor="report-to">To</label>
+                        <input
+                            id="report-to"
+                            type="date"
+                            value={toDate}
+                            onChange={(event) => setToDate(event.target.value)}
+                            className="crm-input w-auto min-w-[150px]"
+                        />
+                        {(fromDate || toDate) ? (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setFromDate('');
+                                    setToDate('');
+                                }}
+                                className="crm-btn-secondary px-3 py-2"
+                            >
+                                Reset
+                            </button>
+                        ) : null}
+                        <button type="button" onClick={exportCsv} className="crm-btn-primary">
+                            Export CSV
+                        </button>
+                    </div>
+                )}
             />
 
             <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

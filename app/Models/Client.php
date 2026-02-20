@@ -24,6 +24,11 @@ class Client extends Model
         'last_synced_at' => 'datetime',
     ];
 
+    protected $appends = [
+        'wp_profile_url',
+        'plan_label',
+    ];
+
     public function platform()
     {
         return $this->belongsTo(Platform::class);
@@ -78,5 +83,39 @@ class Client extends Model
     public function scopeForPlatform($query, $platformId)
     {
         return $query->where('platform_id', $platformId);
+    }
+
+    public function getWpProfileUrlAttribute(): ?string
+    {
+        $wpPostId = (int) ($this->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            return null;
+        }
+
+        $apiUrl = $this->platform?->wp_api_url;
+        if (!$apiUrl) {
+            return null;
+        }
+
+        $baseUrl = preg_replace('#/wp-json/.*$#', '', (string) $apiUrl);
+        $baseUrl = rtrim((string) $baseUrl, '/');
+        if ($baseUrl === '') {
+            return null;
+        }
+
+        return "{$baseUrl}/?p={$wpPostId}";
+    }
+
+    public function getPlanLabelAttribute(): string
+    {
+        if ($this->premium) {
+            return 'Premium';
+        }
+
+        if ($this->featured) {
+            return 'Featured';
+        }
+
+        return 'Basic';
     }
 }

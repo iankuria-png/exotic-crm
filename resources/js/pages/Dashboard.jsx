@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
@@ -141,12 +141,25 @@ function MetricCard({ metric, isLoading }) {
 
 export default function Dashboard() {
     const navigate = useNavigate();
+    const [platformFilter, setPlatformFilter] = useState('');
 
     const { data, isLoading } = useQuery({
-        queryKey: ['dashboard'],
-        queryFn: () => api.get('/crm/dashboard').then((response) => response.data),
+        queryKey: ['dashboard', platformFilter],
+        queryFn: () =>
+            api.get('/crm/dashboard', {
+                params: {
+                    ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                },
+            }).then((response) => response.data),
         refetchInterval: DASHBOARD_REFRESH_MS,
     });
+
+    const { data: integrationData } = useQuery({
+        queryKey: ['settings-integrations', 'dashboard-filter'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+    });
+
+    const platforms = integrationData?.platforms || [];
 
     const kpis = data?.kpis || {};
     const activeClients = asNumber(kpis.active_clients);
@@ -154,7 +167,7 @@ export default function Dashboard() {
     const pendingLeads = asNumber(kpis.pending_leads);
     const totalLeads = asNumber(kpis.total_leads);
     const expiringSoon = asNumber(kpis.expiring_soon);
-    const recentPaymentsCount = asNumber(kpis.recent_payments);
+    const recentPaymentsCount = asNumber(kpis.completed_payments_mtd ?? kpis.recent_payments);
     const unmatchedPayments = asNumber(kpis.unmatched_payments);
 
     const matchQuality = recentPaymentsCount > 0
@@ -204,7 +217,7 @@ export default function Dashboard() {
         },
     ];
 
-    const payments = data?.recent_payments || [];
+    const payments = data?.payment_review_queue || data?.recent_payments || [];
     const paymentPreview = payments.slice(0, LIST_PREVIEW_LIMIT);
     const hiddenPaymentCount = Math.max(0, payments.length - LIST_PREVIEW_LIMIT);
 
@@ -243,6 +256,32 @@ export default function Dashboard() {
                         </button>
                     </div>
                 </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <label htmlFor="dashboard-market" className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market filter</label>
+                    <select
+                        id="dashboard-market"
+                        value={platformFilter}
+                        onChange={(event) => setPlatformFilter(event.target.value)}
+                        className="crm-select min-w-[200px]"
+                    >
+                        <option value="">All accessible markets</option>
+                        {platforms.map((platform) => (
+                            <option key={platform.platform_id} value={platform.platform_id}>
+                                {platform.platform_name}
+                            </option>
+                        ))}
+                    </select>
+                    {platformFilter ? (
+                        <button
+                            type="button"
+                            onClick={() => setPlatformFilter('')}
+                            className="crm-btn-secondary px-3 py-2"
+                        >
+                            Clear filter
+                        </button>
+                    ) : null}
+                </div>
             </section>
 
             <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -254,8 +293,8 @@ export default function Dashboard() {
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
                     <SectionFrame
-                        title="Priority Payment Queue"
-                        subtitle="Showing newest six items. Open queue for full list."
+                        title="Payment Review Queue"
+                        subtitle="Unmatched completed payments that need manual client matching."
                         action={(
                             <button
                                 type="button"
@@ -299,7 +338,7 @@ export default function Dashboard() {
                                 ))}
                             </div>
                         ) : (
-                            <EmptyState message="No completed payments yet." />
+                            <EmptyState message="No unmatched completed payments in review queue." />
                         )}
                     </SectionFrame>
 

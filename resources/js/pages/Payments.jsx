@@ -5,6 +5,8 @@ import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
 
 function formatCurrency(amount, currency = 'KES') {
     return `${currency} ${Number(amount || 0).toLocaleString()}`;
@@ -55,6 +57,7 @@ function toneClasses(tone) {
 
 export default function Payments() {
     const queryClient = useQueryClient();
+    const toast = useToast();
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
@@ -65,7 +68,10 @@ export default function Payments() {
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
     const [selectedRows, setSelectedRows] = useState([]);
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
-    const [bulkFeedback, setBulkFeedback] = useState(null);
+    const [queueAutoMatchDialog, setQueueAutoMatchDialog] = useState({
+        open: false,
+        reason: 'Batch auto-match from payment queue',
+    });
 
     const { data, isLoading } = useQuery({
         queryKey: ['payments', page, search, statusFilter, matchFilter],
@@ -94,6 +100,10 @@ export default function Payments() {
             if (selectedPayment?.id) {
                 queryClient.invalidateQueries({ queryKey: ['payment-candidates', selectedPayment.id] });
             }
+            toast.success('Auto-match completed for payment.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Auto-match failed for payment.');
         },
     });
 
@@ -108,7 +118,10 @@ export default function Payments() {
             setSelectedPayment(null);
             setSelectedClientId('');
             setConfirmReason('Manual payment match from queue');
-            setBulkFeedback({ tone: 'success', text: 'Payment match confirmed.' });
+            toast.success('Payment match confirmed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Manual payment match failed.');
         },
     });
 
@@ -119,7 +132,11 @@ export default function Payments() {
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
-            setBulkFeedback({ tone: 'success', text: 'Queue auto-match completed.' });
+            setQueueAutoMatchDialog({ open: false, reason: 'Batch auto-match from payment queue' });
+            toast.success('Queue auto-match completed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Queue auto-match failed.');
         },
     });
 
@@ -138,10 +155,11 @@ export default function Payments() {
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             setClearSelectionKey((value) => value + 1);
-            setBulkFeedback({
-                tone: result.failed > 0 ? 'warning' : 'success',
-                text: `Auto-match processed ${result.success}/${result.total} selected payments${result.failed ? ` (${result.failed} failed)` : ''}.`,
-            });
+            if (result.failed > 0) {
+                toast.warning(`Auto-match processed ${result.success}/${result.total} selected payments (${result.failed} failed).`);
+                return;
+            }
+            toast.success(`Auto-match processed ${result.success}/${result.total} selected payments.`);
         },
     });
 
@@ -182,10 +200,11 @@ export default function Payments() {
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             setClearSelectionKey((value) => value + 1);
-            setBulkFeedback({
-                tone: result.failed > 0 ? 'warning' : 'success',
-                text: `Bulk confirm done: ${result.confirmed} direct, ${result.autoMatched} auto-match, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ''}.`,
-            });
+            if (result.failed > 0) {
+                toast.warning(`Bulk confirm completed with issues: ${result.confirmed} direct, ${result.autoMatched} auto-match, ${result.failed} failed.`);
+                return;
+            }
+            toast.success(`Bulk confirm done: ${result.confirmed} direct, ${result.autoMatched} auto-match, ${result.skipped} skipped.`);
         },
     });
 
@@ -198,12 +217,20 @@ export default function Payments() {
     const rows = data?.data || [];
 
     const summary = useMemo(() => {
+        if (data?.stats) {
+            return {
+                pending: Number(data.stats.pending || 0),
+                confirmed: Number(data.stats.confirmed || 0),
+                unmatched: Number((data.stats.unmatched_review ?? data.stats.unmatched) || 0),
+            };
+        }
+
         const pending = rows.filter((row) => row.status === 'initiated').length;
         const confirmed = rows.filter((row) => row.status === 'completed').length;
         const unmatched = rows.filter((row) => !row.client_id).length;
 
         return { pending, confirmed, unmatched };
-    }, [rows]);
+    }, [data?.stats, rows]);
 
     const modalCandidates = useMemo(() => {
         const candidates = candidatesData?.data || [];
@@ -348,18 +375,7 @@ export default function Payments() {
                 subtitle={data?.total ? `${data.total.toLocaleString()} payment records` : 'Incoming payments and match queue'}
                 actions={(
                     <button
-                        onClick={() => {
-                            const reason = window.prompt(
-                                'Reason for queue auto-match:',
-                                'Batch auto-match from payment queue'
-                            );
-
-                            if (!reason || !reason.trim()) {
-                                return;
-                            }
-
-                            batchMatchMutation.mutate(reason.trim());
-                        }}
+                        onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue' })}
                         disabled={batchMatchMutation.isPending}
                         className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -439,11 +455,7 @@ export default function Payments() {
 
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-slate-500">Bulk shortcut: press <span className="crm-mono">Ctrl/Cmd + Enter</span> to confirm selected rows.</p>
-                    {bulkFeedback ? (
-                        <span className={`text-xs font-medium ${bulkFeedback.tone === 'success' ? 'text-emerald-700' : bulkFeedback.tone === 'warning' ? 'text-amber-700' : 'text-slate-600'}`}>
-                            {bulkFeedback.text}
-                        </span>
-                    ) : null}
+                    <span className="text-xs text-slate-500">All destructive or high-impact actions require a reason and confirmation.</span>
                 </div>
             </section>
 
@@ -548,6 +560,26 @@ export default function Payments() {
                     </aside>
                 </div>
             ) : null}
+
+            <ConfirmDialog
+                open={queueAutoMatchDialog.open}
+                title="Auto-match Review Queue"
+                message="This runs auto-match on unmatched completed payments in your accessible markets."
+                confirmLabel="Run auto-match"
+                onCancel={() => setQueueAutoMatchDialog({ open: false, reason: 'Batch auto-match from payment queue' })}
+                onConfirm={() => batchMatchMutation.mutate(queueAutoMatchDialog.reason.trim())}
+                confirmDisabled={!queueAutoMatchDialog.reason.trim() || batchMatchMutation.isPending}
+                isPending={batchMatchMutation.isPending}
+            >
+                <label htmlFor="queue-auto-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                <textarea
+                    id="queue-auto-reason"
+                    rows={3}
+                    value={queueAutoMatchDialog.reason}
+                    onChange={(event) => setQueueAutoMatchDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                />
+            </ConfirmDialog>
         </div>
     );
 }

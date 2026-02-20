@@ -58,10 +58,24 @@ class PaymentQueueController extends Controller
             $query->where('match_confidence', $request->match_confidence);
         }
 
+        $statsQuery = clone $query;
+        $stats = [
+            'total' => (clone $statsQuery)->count(),
+            'pending' => (clone $statsQuery)->where('status', 'initiated')->count(),
+            'confirmed' => (clone $statsQuery)->where('status', 'completed')->count(),
+            'failed' => (clone $statsQuery)->where('status', 'failed')->count(),
+            'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
+            'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
+            'unmatched_review' => (clone $statsQuery)->where('status', 'completed')->whereNull('client_id')->count(),
+        ];
+
         $payments = $query->orderBy('created_at', 'desc')
             ->paginate($request->get('per_page', 25));
 
-        return response()->json($payments);
+        $payload = $payments->toArray();
+        $payload['stats'] = $stats;
+
+        return response()->json($payload);
     }
 
     public function candidates(Request $request, Payment $payment)

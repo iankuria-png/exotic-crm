@@ -56,10 +56,25 @@ class DealController extends Controller
             });
         }
 
-        return response()->json(
-            $query->orderBy('created_at', 'desc')
-                ->paginate($request->get('per_page', 25))
-        );
+        $statsQuery = clone $query;
+        $stats = [
+            'total' => (clone $statsQuery)->count(),
+            'active' => (clone $statsQuery)->where('status', 'active')->count(),
+            'pending' => (clone $statsQuery)->where('status', 'pending')->count(),
+            'awaiting_payment' => (clone $statsQuery)->where('status', 'awaiting_payment')->count(),
+            'cancelled' => (clone $statsQuery)->where('status', 'cancelled')->count(),
+            'pipeline_value' => (float) (clone $statsQuery)
+                ->whereIn('status', ['pending', 'awaiting_payment', 'paid', 'active'])
+                ->sum('amount'),
+        ];
+
+        $deals = $query->orderBy('created_at', 'desc')
+            ->paginate($request->get('per_page', 25));
+
+        $payload = $deals->toArray();
+        $payload['stats'] = $stats;
+
+        return response()->json($payload);
     }
 
     public function show(Request $request, Deal $deal)
