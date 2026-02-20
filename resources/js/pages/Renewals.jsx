@@ -6,32 +6,12 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 
-function daysUntil(dateValue) {
-    if (!dateValue) return null;
-    const date = new Date(dateValue);
-    if (Number.isNaN(date.getTime())) return null;
-    return Math.ceil((date.getTime() - Date.now()) / 86_400_000);
-}
-
-function renewalBucket(daysLeft) {
-    if (daysLeft === null) return 'unknown';
-    if (daysLeft < 0) return 'expired';
-    if (daysLeft <= 3) return 'risk';
-    if (daysLeft <= 14) return 'pending';
-    return 'stable';
-}
-
 function expiryTone(daysLeft) {
-    if (daysLeft === null) return 'text-slate-500';
+    if (daysLeft === null || daysLeft === undefined) return 'text-slate-500';
     if (daysLeft < 0) return 'text-rose-700';
     if (daysLeft <= 3) return 'text-rose-700';
     if (daysLeft <= 14) return 'text-amber-700';
     return 'text-emerald-700';
-}
-
-function buildReminderMessage(deal) {
-    const expiryDate = deal.expires_at ? new Date(deal.expires_at).toLocaleDateString() : 'soon';
-    return `Renewal reminder: your ${deal.product?.name || deal.plan_type} plan is due on ${expiryDate}. Reply to confirm extension.`;
 }
 
 function bucketLabel(bucket) {
@@ -52,46 +32,54 @@ export default function Renewals() {
     const [feedback, setFeedback] = useState(null);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['renewal-deals', page, search],
+        queryKey: ['renewals-overview', page, search, bucketFilter],
         queryFn: () =>
-            api.get('/crm/deals', {
+            api.get('/crm/renewals', {
                 params: {
                     page,
                     per_page: 50,
-                    status: 'active',
                     ...(search ? { search } : {}),
+                    ...(bucketFilter ? { bucket: bucketFilter } : {}),
                 },
             }).then((response) => response.data),
     });
 
+    const runCampaignsMutation = useMutation({
+        mutationFn: () => api.post('/crm/renewals/run', {}).then((response) => response.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
+            const totals = result?.totals || {};
+            setFeedback({
+                tone: totals.failed > 0 ? 'warning' : 'success',
+                text: `Campaign run complete: ${totals.sent || 0} sent, ${totals.failed || 0} failed, ${totals.skipped || 0} skipped.`,
+            });
+        },
+        onError: (error) => {
+            setFeedback({
+                tone: 'warning',
+                text: error?.response?.data?.message || 'Campaign run failed.',
+            });
+        },
+    });
+
     const remindMutation = useMutation({
-        mutationFn: ({ clientId, content, followUpAt }) =>
-            api.post(`/crm/clients/${clientId}/notes`, {
-                note_type: 'sms',
-                content,
-                follow_up_at: followUpAt || null,
+        mutationFn: ({ dealId }) =>
+            api.post('/crm/renewals/remind', {
+                deal_id: dealId,
             }).then((response) => response.data),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['renewal-deals'] });
+            queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
         },
     });
 
     const bulkRemindMutation = useMutation({
         mutationFn: async (rowsSelection) => {
             const results = await Promise.allSettled(
-                rowsSelection
-                    .filter((row) => row.client?.id)
-                    .map((row) => {
-                        const followUpDate = row.expires_at && new Date(row.expires_at) > new Date()
-                            ? row.expires_at
-                            : null;
-
-                        return api.post(`/crm/clients/${row.client.id}/notes`, {
-                            note_type: 'sms',
-                            content: buildReminderMessage(row),
-                            follow_up_at: followUpDate,
-                        });
+                rowsSelection.map((row) =>
+                    api.post('/crm/renewals/remind', {
+                        deal_id: row.id,
                     }),
+                ),
             );
 
             const success = results.filter((result) => result.status === 'fulfilled').length;
@@ -99,7 +87,7 @@ export default function Renewals() {
             return { total: rowsSelection.length, success, failed };
         },
         onSuccess: (result) => {
-            queryClient.invalidateQueries({ queryKey: ['renewal-deals'] });
+            queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
             setClearSelectionKey((value) => value + 1);
             setFeedback({
                 tone: result.failed > 0 ? 'warning' : 'success',
@@ -114,24 +102,19 @@ export default function Renewals() {
         setPage(1);
     };
 
-    const rows = useMemo(() => {
-        const source = data?.data || [];
-        return source.map((deal) => {
-            const daysLeft = daysUntil(deal.expires_at);
-            return {
-                ...deal,
-                days_left: daysLeft,
-                renewal_bucket: renewalBucket(daysLeft),
-            };
-        }).filter((deal) => !bucketFilter || deal.renewal_bucket === bucketFilter);
-    }, [data, bucketFilter]);
+    const rows = data?.targets?.data || [];
+    const summary = {
+        risk: data?.summary?.risk ?? 0,
+        pending: data?.summary?.pending ?? 0,
+        renewedThisMonth: data?.summary?.renewed_this_month ?? 0,
+    };
 
-    const summary = useMemo(() => {
-        const risk = rows.filter((row) => row.renewal_bucket === 'risk').length;
-        const pending = rows.filter((row) => row.renewal_bucket === 'pending').length;
-        const renewedThisMonth = rows.filter((row) => row.activated_at && new Date(row.activated_at) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1)).length;
-        return { risk, pending, renewedThisMonth };
-    }, [rows]);
+    const activeCampaigns = useMemo(
+        () => (data?.campaigns || []).filter((campaign) => !!campaign.enabled).length,
+        [data?.campaigns],
+    );
+
+    const lastRun = data?.recent_runs?.[0];
 
     const columns = [
         {
@@ -162,7 +145,7 @@ export default function Renewals() {
                     <p className={`text-sm font-semibold ${expiryTone(row.days_left)}`}>
                         {row.expires_at ? new Date(row.expires_at).toLocaleDateString() : 'Not set'}
                     </p>
-                    <p className="text-xs text-slate-500">{row.days_left === null ? '--' : `${row.days_left} days`}</p>
+                    <p className="text-xs text-slate-500">{row.days_left === null || row.days_left === undefined ? '--' : `${row.days_left} days`}</p>
                 </div>
             ),
         },
@@ -191,31 +174,22 @@ export default function Renewals() {
         {
             key: 'actions',
             label: 'Actions',
-            render: (row) => {
-                const disableRemind = !row.client?.id || remindMutation.isPending;
-
-                return (
-                    <button
-                        type="button"
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            const followUpDate = row.expires_at && new Date(row.expires_at) > new Date() ? row.expires_at : null;
-                            remindMutation.mutate({
-                                clientId: row.client.id,
-                                content: buildReminderMessage(row),
-                                followUpAt: followUpDate,
-                            }, {
-                                onSuccess: () => setFeedback({ tone: 'success', text: `Reminder queued for ${row.client?.name || 'client'}.` }),
-                                onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${row.client?.name || 'client'}.` }),
-                            });
-                        }}
-                        disabled={disableRemind}
-                        className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        Remind
-                    </button>
-                );
-            },
+            render: (row) => (
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        remindMutation.mutate({ dealId: row.id }, {
+                            onSuccess: () => setFeedback({ tone: 'success', text: `Reminder sent for ${row.client?.name || 'client'}.` }),
+                            onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${row.client?.name || 'client'}.` }),
+                        });
+                    }}
+                    disabled={remindMutation.isPending}
+                    className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    Remind
+                </button>
+            ),
         },
     ];
 
@@ -235,14 +209,37 @@ export default function Renewals() {
         <div className="space-y-4">
             <PageHeader
                 title="Renewals"
-                subtitle={data?.total ? `${data.total.toLocaleString()} active subscriptions tracked` : 'Manage upcoming expiries and reminder workflows.'}
+                subtitle={data?.targets?.total ? `${data.targets.total.toLocaleString()} renewal targets in scope` : 'Manage upcoming expiries and SMS campaign runs.'}
+                actions={(
+                    <button
+                        type="button"
+                        onClick={() => runCampaignsMutation.mutate()}
+                        disabled={runCampaignsMutation.isPending}
+                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {runCampaignsMutation.isPending ? 'Running...' : 'Run Campaigns'}
+                    </button>
+                )}
             />
 
-            <section className="grid gap-4 md:grid-cols-3">
+            <section className="grid gap-4 md:grid-cols-4">
                 <MetricCard label="At Risk (0-3 days)" value={summary.risk.toLocaleString()} meta="urgent outreach" tone="danger" />
                 <MetricCard label="Pending (4-14 days)" value={summary.pending.toLocaleString()} meta="scheduled reminders" tone="warning" />
                 <MetricCard label="Renewed This Month" value={summary.renewedThisMonth.toLocaleString()} meta="already extended" tone="success" />
+                <MetricCard label="Active Campaigns" value={activeCampaigns.toLocaleString()} meta="enabled automation rules" tone="accent" />
             </section>
+
+            {lastRun ? (
+                <section className="crm-surface p-4">
+                    <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Most Recent Renewal Run</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {new Date(lastRun.run_at).toLocaleString()} • {lastRun.status}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                        Targeted: {lastRun.total_targeted} • Sent: {lastRun.sent_count} • Failed: {lastRun.failed_count} • Skipped: {lastRun.skipped_count}
+                    </p>
+                </section>
+            ) : null}
 
             <section className="crm-filter-row">
                 <div className="flex flex-wrap items-center gap-3">
@@ -264,7 +261,10 @@ export default function Renewals() {
 
                     <select
                         value={bucketFilter}
-                        onChange={(event) => setBucketFilter(event.target.value)}
+                        onChange={(event) => {
+                            setBucketFilter(event.target.value);
+                            setPage(1);
+                        }}
                         className="crm-select"
                     >
                         <option value="">All states</option>
@@ -300,7 +300,7 @@ export default function Renewals() {
             <DataTable
                 columns={columns}
                 data={rows}
-                pagination={data}
+                pagination={data?.targets}
                 onPageChange={setPage}
                 isLoading={isLoading}
                 emptyMessage="No renewals match current filters."
@@ -312,3 +312,4 @@ export default function Renewals() {
         </div>
     );
 }
+

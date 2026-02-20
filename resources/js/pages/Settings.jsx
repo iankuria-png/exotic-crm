@@ -1,81 +1,148 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import { useAuth } from '../hooks/useAuth';
 
-const tabs = [
+const baseTabs = [
     { id: 'integrations', label: 'Integrations' },
-    { id: 'templates', label: 'WhatsApp Templates' },
+    { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
 ];
 
-function IntegrationCard({ name, description, status, credentialLabel, callbackUrl }) {
-    const isConnected = status === 'connected';
+function statusChip(status) {
+    if (status === 'connected') return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    if (status === 'configured_disabled') return 'bg-amber-50 text-amber-700 ring-amber-200';
+    if (status === 'deferred') return 'bg-slate-100 text-slate-700 ring-slate-300';
+    return 'bg-rose-50 text-rose-700 ring-rose-200';
+}
+
+function IntegrationsWorkspace() {
+    const { data, isLoading } = useQuery({
+        queryKey: ['settings-integrations'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+    });
+
+    const services = data?.services || {};
+    const serviceRows = [
+        {
+            key: 'sms',
+            label: 'SMS Gateway',
+            status: services.sms_gateway?.status || 'pending',
+            detail: services.sms_gateway?.gateway_url || 'Gateway URL not configured',
+        },
+        {
+            key: 'kopokopo',
+            label: 'KopoKopo',
+            status: services.kopokopo?.status || 'pending',
+            detail: services.kopokopo?.base_url || 'Base URL not configured',
+        },
+        {
+            key: 'sendgrid',
+            label: 'SendGrid',
+            status: services.sendgrid?.status || 'deferred',
+            detail: services.sendgrid?.note || 'Deferred',
+        },
+    ];
+
+    const platformRows = data?.platforms || [];
 
     return (
-        <section className="crm-surface overflow-hidden">
-            <header className="crm-panel-header">
-                <div className="flex items-start gap-3">
-                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-100" aria-hidden="true">
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 10h18M7 15h1m4 0h5M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
-                        </svg>
-                    </span>
+        <div className="space-y-4">
+            <section className="grid gap-4 md:grid-cols-3">
+                <MetricCard
+                    label="Connected Services"
+                    value={serviceRows.filter((item) => item.status === 'connected').length.toLocaleString()}
+                    meta="runtime integration health"
+                    tone="success"
+                />
+                <MetricCard
+                    label="Markets Configured"
+                    value={platformRows.length.toLocaleString()}
+                    meta="platform runtime profiles"
+                    tone="accent"
+                />
+                <MetricCard
+                    label="WP Sync Ready"
+                    value={platformRows.filter((item) => item.wp_sync?.status === 'connected').length.toLocaleString()}
+                    meta="markets with credentials"
+                    tone="default"
+                />
+            </section>
+
+            <section className="crm-surface overflow-hidden">
+                <header className="crm-panel-header">
                     <div>
-                        <h3 className="crm-panel-title">{name}</h3>
-                        <p className="crm-panel-subtitle">{description}</p>
+                        <h3 className="crm-panel-title">Service Integrations</h3>
+                        <p className="crm-panel-subtitle">Live status for SMS, payment, and deferred email channels.</p>
                     </div>
+                </header>
+                <div className="divide-y divide-slate-100">
+                    {isLoading ? (
+                        <p className="p-4 text-sm text-slate-500">Loading service health...</p>
+                    ) : serviceRows.map((service) => (
+                        <div key={service.key} className="flex flex-wrap items-center justify-between gap-3 p-4">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-900">{service.label}</p>
+                                <p className="text-xs text-slate-500">{service.detail}</p>
+                            </div>
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(service.status)}`}>
+                                {service.status.replaceAll('_', ' ')}
+                            </span>
+                        </div>
+                    ))}
                 </div>
-                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${isConnected ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-amber-200'}`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                    {isConnected ? 'Connected' : 'Pending'}
-                </span>
-            </header>
+            </section>
 
-            <div className="grid gap-4 p-4 lg:grid-cols-2">
-                <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">{credentialLabel}</label>
-                    <div className="crm-input flex items-center justify-between">
-                        <span className="crm-mono text-xs tracking-wider text-slate-500">••••••••••••••••••••••</span>
-                        <button type="button" className="rounded p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Reveal credential">
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                            </svg>
-                        </button>
+            <section className="crm-surface overflow-hidden">
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Market Sync Health</h3>
+                        <p className="crm-panel-subtitle">WordPress sync connectivity by market platform.</p>
                     </div>
+                </header>
+                <div className="max-h-[420px] overflow-auto">
+                    {isLoading ? (
+                        <p className="p-4 text-sm text-slate-500">Loading markets...</p>
+                    ) : platformRows.length === 0 ? (
+                        <p className="p-4 text-sm text-slate-500">No market platforms found.</p>
+                    ) : (
+                        <table className="min-w-full divide-y divide-slate-200">
+                            <thead className="bg-slate-50">
+                                <tr>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Market</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Country</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">WP API</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Currency</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {platformRows.map((platform) => (
+                                    <tr key={platform.platform_id}>
+                                        <td className="px-4 py-2.5 text-sm font-semibold text-slate-900">{platform.platform_name}</td>
+                                        <td className="px-4 py-2.5 text-sm text-slate-600">{platform.country || '—'}</td>
+                                        <td className="px-4 py-2.5">
+                                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(platform.wp_sync?.status)}`}>
+                                                {(platform.wp_sync?.status || 'pending').replaceAll('_', ' ')}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-2.5 text-sm text-slate-600">{platform.currency || 'KES'}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
                 </div>
-
-                <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Callback URL</label>
-                    <div className="crm-input flex items-center justify-between gap-2">
-                        <span className="truncate text-sm text-slate-700">{callbackUrl}</span>
-                        <button type="button" className="rounded p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Copy callback URL">
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 16h8a2 2 0 002-2V6a2 2 0 00-2-2H8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M6 8H5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1" />
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 p-4">
-                <label className="inline-flex items-center gap-2 text-sm text-slate-600">
-                    <input type="checkbox" defaultChecked className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
-                    Enable live webhook processing
-                </label>
-                <button type="button" className="crm-btn-secondary">Test connection</button>
-            </footer>
-        </section>
+            </section>
+        </div>
     );
 }
 
-function TemplatesWorkspace() {
+function TemplatesWorkspace({ canManageTemplates }) {
     const queryClient = useQueryClient();
     const [page, setPage] = useState(1);
     const [searchInput, setSearchInput] = useState('');
@@ -160,24 +227,28 @@ function TemplatesWorkspace() {
             key: 'actions',
             label: 'Actions',
             render: (row) => (
-                <button
-                    type="button"
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedTemplate(row);
-                        setEditorForm({
-                            title: row.title || '',
-                            category: row.category || 'follow_up',
-                            channel: row.channel || 'sms',
-                            subject: row.subject || '',
-                            body: row.body || '',
-                            status: row.status || 'draft',
-                        });
-                    }}
-                    className="crm-btn-secondary px-3 py-1.5 text-xs"
-                >
-                    Edit
-                </button>
+                canManageTemplates ? (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedTemplate(row);
+                            setEditorForm({
+                                title: row.title || '',
+                                category: row.category || 'follow_up',
+                                channel: row.channel || 'sms',
+                                subject: row.subject || '',
+                                body: row.body || '',
+                                status: row.status || 'draft',
+                            });
+                        }}
+                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                    >
+                        Edit
+                    </button>
+                ) : (
+                    <span className="text-xs text-slate-400">Read only</span>
+                )
             ),
         },
     ];
@@ -256,6 +327,9 @@ function TemplatesWorkspace() {
                 pagination={data}
                 onPageChange={setPage}
                 onRowClick={(row) => {
+                    if (!canManageTemplates) {
+                        return;
+                    }
                     setSelectedTemplate(row);
                     setEditorForm({
                         title: row.title || '',
@@ -530,18 +604,11 @@ function RolesWorkspace() {
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                                 {users.map((user) => {
-                                    const marketIds = Array.isArray(user.assigned_market_ids)
-                                        ? user.assigned_market_ids
-                                        : (() => {
-                                            if (typeof user.assigned_market_ids !== 'string') return [];
-                                            try {
-                                                const parsed = JSON.parse(user.assigned_market_ids);
-                                                return Array.isArray(parsed) ? parsed : [];
-                                            } catch {
-                                                return [];
-                                            }
-                                        })();
-                                    const marketCount = marketIds.length;
+                                    const assignedMarkets = Array.isArray(user.assigned_markets) ? user.assigned_markets : [];
+                                    const marketCount = assignedMarkets.length;
+                                    const marketLabel = marketCount > 0
+                                        ? assignedMarkets.map((market) => market.name).join(', ')
+                                        : 'None';
 
                                     return (
                                         <tr key={user.id}>
@@ -563,7 +630,10 @@ function RolesWorkspace() {
                                                     {user.status}
                                                 </span>
                                             </td>
-                                            <td className="px-4 py-2.5 text-sm text-slate-600">{marketCount}</td>
+                                            <td className="px-4 py-2.5">
+                                                <p className="text-sm text-slate-700">{marketCount}</p>
+                                                <p className="truncate text-xs text-slate-500">{marketLabel}</p>
+                                            </td>
                                         </tr>
                                     );
                                 })}
@@ -577,7 +647,20 @@ function RolesWorkspace() {
 }
 
 export default function Settings() {
+    const { user } = useAuth();
     const [activeTab, setActiveTab] = useState('integrations');
+    const canManageTemplates = ['admin', 'sub_admin'].includes(user?.role || '');
+    const canViewRoles = (user?.role || '') === 'admin';
+
+    const tabs = useMemo(() => {
+        return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
+    }, [canViewRoles]);
+
+    useEffect(() => {
+        if (!tabs.find((tab) => tab.id === activeTab)) {
+            setActiveTab(tabs[0]?.id || 'integrations');
+        }
+    }, [activeTab, tabs]);
 
     return (
         <div className="space-y-4">
@@ -598,28 +681,11 @@ export default function Settings() {
                 </div>
             </section>
 
-            {activeTab === 'integrations' ? (
-                <div className="space-y-4">
-                    <IntegrationCard
-                        name="M-Pesa Daraja API"
-                        description="Kenya payment integration for STK push and C2B callbacks."
-                        status="connected"
-                        credentialLabel="Consumer Key"
-                        callbackUrl="https://api.exotic.online/webhooks/mpesa"
-                    />
-                    <IntegrationCard
-                        name="Airtel Money API"
-                        description="Tanzania payment integration and callback verification."
-                        status="connected"
-                        credentialLabel="API Key"
-                        callbackUrl="https://api.exotic.online/webhooks/airtel"
-                    />
-                </div>
-            ) : null}
+            {activeTab === 'integrations' ? <IntegrationsWorkspace /> : null}
 
-            {activeTab === 'templates' ? <TemplatesWorkspace /> : null}
+            {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
-            {activeTab === 'roles' ? <RolesWorkspace /> : null}
+            {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
         </div>
     );
 }

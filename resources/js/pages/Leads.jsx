@@ -26,6 +26,7 @@ export default function Leads() {
     const [bulkTargetStatus, setBulkTargetStatus] = useState('contacted');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [bulkFeedback, setBulkFeedback] = useState(null);
+    const [importFeedback, setImportFeedback] = useState(null);
 
     const { data, isLoading } = useQuery({
         queryKey: ['leads', page, search, statusFilter, ownerFilter],
@@ -77,6 +78,25 @@ export default function Leads() {
             setBulkFeedback({
                 tone: result.failed > 0 ? 'warning' : 'success',
                 text: `Bulk stage update to ${result.targetStatus}: ${result.success}/${result.total}${result.skipped ? ` (${result.skipped} skipped)` : ''}${result.failed ? ` (${result.failed} failed)` : ''}.`,
+            });
+        },
+    });
+
+    const importMutation = useMutation({
+        mutationFn: () => api.post('/crm/leads/import', { dry_run: false }).then((response) => response.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['lead-pipeline'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setImportFeedback({
+                tone: result?.totals?.errors > 0 ? 'warning' : 'success',
+                text: `Lead import completed: ${result?.totals?.created ?? 0} created, ${result?.totals?.updated ?? 0} refreshed, ${result?.totals?.unassigned ?? 0} unassigned.`,
+            });
+        },
+        onError: (error) => {
+            setImportFeedback({
+                tone: 'warning',
+                text: error?.response?.data?.message || 'Lead import failed.',
             });
         },
     });
@@ -171,6 +191,16 @@ export default function Leads() {
             <PageHeader
                 title="Leads"
                 subtitle={data?.total ? `${data.total.toLocaleString()} leads in pipeline` : 'Lead pipeline and conversion tracking'}
+                actions={(
+                    <button
+                        type="button"
+                        onClick={() => importMutation.mutate()}
+                        disabled={importMutation.isPending}
+                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {importMutation.isPending ? 'Importing...' : 'Import Leads'}
+                    </button>
+                )}
             />
 
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -260,6 +290,12 @@ export default function Leads() {
                 {bulkFeedback ? (
                     <p className={`mt-2 text-xs font-medium ${bulkFeedback.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
                         {bulkFeedback.text}
+                    </p>
+                ) : null}
+
+                {importFeedback ? (
+                    <p className={`mt-1 text-xs font-medium ${importFeedback.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {importFeedback.text}
                     </p>
                 ) : null}
             </section>

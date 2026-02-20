@@ -22,6 +22,7 @@ export default function Deals() {
 
     const [dialog, setDialog] = useState({ type: null, deal: null });
     const [reason, setReason] = useState('Deactivated from Deals page');
+    const [extendReason, setExtendReason] = useState('Extended from Deals page');
     const [extendDays, setExtendDays] = useState('7');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [bulkFeedback, setBulkFeedback] = useState(null);
@@ -40,7 +41,10 @@ export default function Deals() {
     });
 
     const activateMutation = useMutation({
-        mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`).then((r) => r.data),
+        mutationFn: ({ dealId, activateReason }) =>
+            api.post(`/crm/deals/${dealId}/activate`, {
+                reason: activateReason,
+            }).then((r) => r.data),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['deals'] }),
     });
 
@@ -55,12 +59,16 @@ export default function Deals() {
     });
 
     const extendMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays }) =>
-            api.post(`/crm/deals/${dealId}/extend`, { additional_days: additionalDays }).then((r) => r.data),
+        mutationFn: ({ dealId, additionalDays, extensionReason }) =>
+            api.post(`/crm/deals/${dealId}/extend`, {
+                additional_days: additionalDays,
+                reason: extensionReason,
+            }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             setDialog({ type: null, deal: null });
             setExtendDays('7');
+            setExtendReason('Extended from Deals page');
         },
     });
 
@@ -116,6 +124,13 @@ export default function Deals() {
     const openDialog = (type, deal, event) => {
         event.stopPropagation();
         setDialog({ type, deal });
+        if (type === 'extend') {
+            setExtendReason('Extended from Deals page');
+            setExtendDays('7');
+        }
+        if (type === 'deactivate') {
+            setReason('Deactivated from Deals page');
+        }
     };
 
     const columns = [
@@ -181,7 +196,19 @@ export default function Deals() {
                         <button
                             onClick={(event) => {
                                 event.stopPropagation();
-                                activateMutation.mutate(row.id);
+                                const activateReason = window.prompt(
+                                    'Reason for activation:',
+                                    'Activated from Deals page'
+                                );
+
+                                if (!activateReason || !activateReason.trim()) {
+                                    return;
+                                }
+
+                                activateMutation.mutate({
+                                    dealId: row.id,
+                                    activateReason: activateReason.trim(),
+                                });
                             }}
                             className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800"
                         >
@@ -352,6 +379,15 @@ export default function Deals() {
                                         onChange={(e) => setExtendDays(e.target.value)}
                                         className="crm-input"
                                     />
+
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="extend-reason">Reason</label>
+                                    <textarea
+                                        id="extend-reason"
+                                        rows={3}
+                                        value={extendReason}
+                                        onChange={(e) => setExtendReason(e.target.value)}
+                                        className="crm-input"
+                                    />
                                 </>
                             ) : null}
 
@@ -383,8 +419,17 @@ export default function Deals() {
                             {dialog.type === 'extend' ? (
                                 <button
                                     type="button"
-                                    onClick={() => extendMutation.mutate({ dealId: selectedDeal.id, additionalDays: Number(extendDays) })}
-                                    disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || extendMutation.isPending}
+                                    onClick={() => extendMutation.mutate({
+                                        dealId: selectedDeal.id,
+                                        additionalDays: Number(extendDays),
+                                        extensionReason: extendReason,
+                                    })}
+                                    disabled={
+                                        !Number.isInteger(Number(extendDays)) ||
+                                        Number(extendDays) < 1 ||
+                                        !extendReason.trim() ||
+                                        extendMutation.isPending
+                                    }
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {extendMutation.isPending ? 'Extending...' : 'Confirm extension'}

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Payment;
 use App\Models\Client;
 use App\Models\Product;
+use Illuminate\Database\Eloquent\Builder;
 
 class PaymentMatchingService
 {
@@ -89,6 +90,25 @@ class PaymentMatchingService
             $query->where('platform_id', $platformId);
         }
 
+        return $this->runBatchMatch($query);
+    }
+
+    public function batchMatchForPlatforms(array $platformIds): array
+    {
+        if (empty($platformIds)) {
+            return ['matched' => 0, 'unmatched' => 0, 'low_confidence' => 0];
+        }
+
+        $query = Payment::query()
+            ->whereNull('client_id')
+            ->where('status', 'completed')
+            ->whereIn('platform_id', array_values(array_unique(array_map('intval', $platformIds))));
+
+        return $this->runBatchMatch($query);
+    }
+
+    private function runBatchMatch(Builder $query): array
+    {
         $payments = $query->get();
         $results = ['matched' => 0, 'unmatched' => 0, 'low_confidence' => 0];
 

@@ -115,18 +115,25 @@ export default function Conversations() {
 
     const sendMessageMutation = useMutation({
         mutationFn: () =>
-            api.post(`/crm/clients/${selectedClientId}/notes`, {
-                note_type: 'sms',
-                content: draftMessage.trim(),
+            api.post(`/crm/conversations/clients/${selectedClientId}/send`, {
+                template_id: selectedTemplateId || null,
+                message: draftMessage.trim(),
                 follow_up_at: followUpAt || null,
             }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['conversation-client', selectedClientId] });
             queryClient.invalidateQueries({ queryKey: ['conversation-dashboard'] });
             setDraftMessage('');
             setFollowUpAt('');
             setSelectedTemplateId('');
-            setComposerFeedback({ tone: 'success', text: 'Message logged and queued for follow-up.' });
+            const deliveryStatus = result?.delivery?.status || 'unknown';
+            const tone = result?.delivery?.success ? 'success' : 'danger';
+            setComposerFeedback({
+                tone,
+                text: result?.delivery?.success
+                    ? `SMS sent (${deliveryStatus}) and logged to timeline.`
+                    : `SMS failed (${deliveryStatus}). Message was still logged.`,
+            });
         },
         onError: () => {
             setComposerFeedback({ tone: 'danger', text: 'Failed to send message. Please retry.' });
@@ -320,7 +327,7 @@ export default function Conversations() {
                                         <p className={`text-xs font-medium ${
                                             composerFeedback?.tone === 'success' ? 'text-emerald-700' : composerFeedback?.tone === 'danger' ? 'text-rose-700' : 'text-slate-500'
                                         }`}>
-                                            {composerFeedback?.text || 'Messages are logged as CRM notes and available on client timeline.'}
+                                            {composerFeedback?.text || 'Messages are sent through the SMS gateway and logged on the client timeline.'}
                                         </p>
                                         <button
                                             type="button"

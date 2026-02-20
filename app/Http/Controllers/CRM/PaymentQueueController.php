@@ -6,13 +6,29 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Payment;
 use App\Models\Client;
+use App\Services\AuditService;
 use App\Services\PaymentMatchingService;
+use App\Services\MarketAuthorizationService;
+use App\Support\CrmAuditAction;
 
 class PaymentQueueController extends Controller
 {
+    public function __construct(
+        private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly AuditService $auditService
+    ) {
+    }
+
     public function index(Request $request)
     {
+        $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this payment market.'
+        );
+
         $query = Payment::with(['platform', 'product', 'client']);
+        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
         if ($request->filled('status')) {
             $query->where('status', $request->status);
@@ -48,8 +64,10 @@ class PaymentQueueController extends Controller
         return response()->json($payments);
     }
 
-    public function candidates(Payment $payment)
+    public function candidates(Request $request, Payment $payment)
     {
+        $this->authorizePaymentAccess($request, $payment);
+
         if (!$payment->platform_id) {
             return response()->json(['data' => []]);
         }
@@ -75,34 +93,143 @@ class PaymentQueueController extends Controller
         ]);
     }
 
-    public function autoMatch(Payment $payment)
+    public function autoMatch(Request $request, Payment $payment)
     {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $beforeState = [
+            'client_id' => $payment->client_id,
+            'match_confidence' => $payment->match_confidence,
+            'confirmed_by' => $payment->confirmed_by,
+        ];
+
         $service = new PaymentMatchingService();
         $result = $service->matchPayment($payment);
+        $freshPayment = $payment->fresh(['platform', 'product', 'client']);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_MATCH_AUTO,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'client_id' => $freshPayment?->client_id,
+                'match_confidence' => $freshPayment?->match_confidence,
+                'matched' => (bool) ($result['matched'] ?? false),
+                'confidence' => $result['confidence'] ?? null,
+            ],
+            'Auto-match from payment queue'
+        );
 
         return response()->json([
             'result' => $result,
-            'payment' => $payment->fresh(['platform', 'product', 'client']),
+            'payment' => $freshPayment,
         ]);
     }
 
     public function confirmMatch(Request $request, Payment $payment)
     {
+        $this->authorizePaymentAccess($request, $payment);
+
         $validated = $request->validate([
             'client_id' => 'required|exists:clients,id',
+            'reason' => 'required|string|max:500',
         ]);
 
+        $client = Client::findOrFail((int) $validated['client_id']);
+        if ((int) $client->platform_id !== (int) $payment->platform_id) {
+            return response()->json([
+                'message' => 'Selected client does not belong to the payment market.',
+            ], 422);
+        }
+
         $service = new PaymentMatchingService();
+        $beforeState = [
+            'client_id' => $payment->client_id,
+            'match_confidence' => $payment->match_confidence,
+            'confirmed_by' => $payment->confirmed_by,
+            'confirmed_at' => optional($payment->confirmed_at)->toDateTimeString(),
+        ];
+
         $payment = $service->confirmMatch($payment, $validated['client_id'], $request->user()->id);
         $payment->load(['platform', 'product']);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_MATCH_CONFIRM,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'client_id' => $payment->client_id,
+                'match_confidence' => $payment->match_confidence,
+                'confirmed_by' => $payment->confirmed_by,
+                'confirmed_at' => optional($payment->confirmed_at)->toDateTimeString(),
+            ],
+            (string) $validated['reason']
+        );
 
         return response()->json($payment);
     }
 
     public function batchMatch(Request $request)
     {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|exists:platforms,id',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $platformId = !empty($validated['platform_id']) ? (int) $validated['platform_id'] : null;
+        if ($platformId) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                $platformId,
+                'You do not have access to this market.'
+            );
+        }
+
         $service = new PaymentMatchingService();
-        $results = $service->batchMatch($request->input('platform_id'));
+
+        $accessiblePlatformIds = null;
+
+        if ($platformId !== null) {
+            $results = $service->batchMatch($platformId);
+        } else {
+            $accessiblePlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+            if (is_array($accessiblePlatformIds)) {
+                if (empty($accessiblePlatformIds)) {
+                    return response()->json([
+                        'message' => 'No accessible markets available for batch matching.',
+                    ], 422);
+                }
+
+                $results = $service->batchMatchForPlatforms($accessiblePlatformIds);
+            } else {
+                $results = $service->batchMatch();
+            }
+        }
+
+        $auditPlatformId = $platformId
+            ?? (is_array($accessiblePlatformIds) && !empty($accessiblePlatformIds) ? (int) $accessiblePlatformIds[0] : null);
+
+        if ($auditPlatformId !== null) {
+            $this->auditService->fromRequest(
+                $request,
+                $auditPlatformId,
+                CrmAuditAction::PAYMENT_MATCH_BATCH,
+                'user',
+                (int) $request->user()->id,
+                [
+                    'requested_platform_id' => $platformId,
+                    'scoped_platform_ids' => is_array($accessiblePlatformIds) ? $accessiblePlatformIds : null,
+                ],
+                $results,
+                (string) $validated['reason']
+            );
+        }
 
         return response()->json($results);
     }
@@ -121,5 +248,12 @@ class PaymentQueueController extends Controller
         }
 
         return $phone ?: null;
+    }
+
+    private function authorizePaymentAccess(Request $request, Payment $payment): void
+    {
+        if ($payment->platform_id && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $payment->platform_id)) {
+            abort(403, 'You do not have access to this payment market.');
+        }
     }
 }

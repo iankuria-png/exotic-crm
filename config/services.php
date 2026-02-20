@@ -57,6 +57,18 @@ return [
         'base_url' => env('DJANGO_API_BASE', 'https://polytech.co.ke/payment_service/api/payments'),
     ],
 
+    'sms' => [
+        'enabled' => filter_var(env('SMS_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'gateway_url' => env('SMS_GATEWAY_URL'),
+        'org_code' => env('SMS_ORG_CODE', '76'),
+        'default_prefix' => env('SMS_DEFAULT_PREFIX', '254'),
+    ],
+
+    'sendgrid' => [
+        'api_key' => env('SENDGRID_API_KEY'),
+        'from' => env('SENDGRID_FROM', env('MAIL_FROM_ADDRESS')),
+    ],
+
 
 
 ];

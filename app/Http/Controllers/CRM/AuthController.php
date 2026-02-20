@@ -22,6 +22,10 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
+        if (($user->status ?? 'active') !== 'active') {
+            return response()->json(['message' => 'Account is inactive. Contact your administrator.'], 403);
+        }
+
         $token = $user->createToken('crm-session')->plainTextToken;
 
         return response()->json([
@@ -31,6 +35,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role,
+                'status' => $user->status ?? 'active',
             ],
         ]);
     }
@@ -45,6 +50,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role,
+                'status' => $user->status ?? 'active',
             ],
         ]);
     }

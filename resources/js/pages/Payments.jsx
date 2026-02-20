@@ -62,6 +62,7 @@ export default function Payments() {
     const [matchFilter, setMatchFilter] = useState('');
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
+    const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
     const [selectedRows, setSelectedRows] = useState([]);
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [bulkFeedback, setBulkFeedback] = useState(null);
@@ -97,18 +98,25 @@ export default function Payments() {
     });
 
     const confirmMatchMutation = useMutation({
-        mutationFn: ({ paymentId, clientId }) =>
-            api.post(`/crm/payments/${paymentId}/confirm-match`, { client_id: clientId }).then((response) => response.data),
+        mutationFn: ({ paymentId, clientId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/confirm-match`, {
+                client_id: clientId,
+                reason,
+            }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             setSelectedPayment(null);
             setSelectedClientId('');
+            setConfirmReason('Manual payment match from queue');
             setBulkFeedback({ tone: 'success', text: 'Payment match confirmed.' });
         },
     });
 
     const batchMatchMutation = useMutation({
-        mutationFn: () => api.post('/crm/payments/batch-match').then((response) => response.data),
+        mutationFn: (reason) =>
+            api.post('/crm/payments/batch-match', {
+                reason,
+            }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             setBulkFeedback({ tone: 'success', text: 'Queue auto-match completed.' });
@@ -155,7 +163,10 @@ export default function Payments() {
                     const candidates = candidateResponse.data?.data || [];
 
                     if (candidates.length === 1) {
-                        await api.post(`/crm/payments/${row.id}/confirm-match`, { client_id: candidates[0].id });
+                        await api.post(`/crm/payments/${row.id}/confirm-match`, {
+                            client_id: candidates[0].id,
+                            reason: 'Bulk confirm from payment queue',
+                        });
                         confirmed += 1;
                     } else {
                         await api.post(`/crm/payments/${row.id}/auto-match`);
@@ -233,6 +244,7 @@ export default function Payments() {
                 if (!rowsSelection.length) return;
                 setSelectedPayment(rowsSelection[0]);
                 setSelectedClientId('');
+                setConfirmReason('Manual payment match from queue');
             },
         },
     ];
@@ -318,6 +330,7 @@ export default function Payments() {
                             event.stopPropagation();
                             setSelectedPayment(row);
                             setSelectedClientId('');
+                            setConfirmReason('Manual payment match from queue');
                         }}
                         className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                     >
@@ -335,7 +348,18 @@ export default function Payments() {
                 subtitle={data?.total ? `${data.total.toLocaleString()} payment records` : 'Incoming payments and match queue'}
                 actions={(
                     <button
-                        onClick={() => batchMatchMutation.mutate()}
+                        onClick={() => {
+                            const reason = window.prompt(
+                                'Reason for queue auto-match:',
+                                'Batch auto-match from payment queue'
+                            );
+
+                            if (!reason || !reason.trim()) {
+                                return;
+                            }
+
+                            batchMatchMutation.mutate(reason.trim());
+                        }}
                         disabled={batchMatchMutation.isPending}
                         className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -487,6 +511,19 @@ export default function Payments() {
                                     })}
                                 </div>
                             )}
+
+                            <div className="mt-4">
+                                <label htmlFor="confirm-reason" className="mb-1 block text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">
+                                    Reason
+                                </label>
+                                <textarea
+                                    id="confirm-reason"
+                                    rows={3}
+                                    value={confirmReason}
+                                    onChange={(event) => setConfirmReason(event.target.value)}
+                                    className="crm-input"
+                                />
+                            </div>
                         </div>
 
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
@@ -495,8 +532,14 @@ export default function Payments() {
                             </button>
                             <button
                                 type="button"
-                                disabled={!selectedClientId || confirmMatchMutation.isPending}
-                                onClick={() => confirmMatchMutation.mutate({ paymentId: selectedPayment.id, clientId: Number(selectedClientId) })}
+                                disabled={!selectedClientId || !confirmReason.trim() || confirmMatchMutation.isPending}
+                                onClick={() =>
+                                    confirmMatchMutation.mutate({
+                                        paymentId: selectedPayment.id,
+                                        clientId: Number(selectedClientId),
+                                        reason: confirmReason.trim(),
+                                    })
+                                }
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 {confirmMatchMutation.isPending ? 'Saving...' : 'Confirm match'}

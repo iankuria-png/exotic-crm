@@ -8,12 +8,26 @@ use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\TimelineEvent;
 use App\Models\Platform;
+use App\Models\User;
+use App\Services\MarketAuthorizationService;
 
 class ClientController extends Controller
 {
+    public function __construct(
+        private readonly MarketAuthorizationService $marketAuthorizationService
+    ) {
+    }
+
     public function index(Request $request)
     {
+        $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this client market.'
+        );
+
         $query = Client::with(['platform', 'assignedAgent']);
+        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
         if ($request->filled('search')) {
             $search = $request->search;
@@ -52,8 +66,10 @@ class ClientController extends Controller
         return response()->json($clients);
     }
 
-    public function show(Client $client)
+    public function show(Request $request, Client $client)
     {
+        $this->authorizeClientAccess($request, $client);
+
         $client->load([
             'platform',
             'assignedAgent',
@@ -68,6 +84,8 @@ class ClientController extends Controller
 
     public function update(Request $request, Client $client)
     {
+        $this->authorizeClientAccess($request, $client);
+
         $validated = $request->validate([
             'assigned_to' => 'nullable|exists:users,id',
             'city' => 'nullable|string|max:100',
@@ -81,6 +99,15 @@ class ClientController extends Controller
             'email' => $client->email,
             'phone_normalized' => $client->phone_normalized,
         ];
+
+        if (array_key_exists('assigned_to', $validated) && $validated['assigned_to']) {
+            $assignee = User::query()->find((int) $validated['assigned_to']);
+            if (!$assignee || !$assignee->isActive() || !$this->marketAuthorizationService->userCanAccessPlatform($assignee, (int) $client->platform_id)) {
+                return response()->json([
+                    'message' => 'Assigned owner is not eligible for this market.',
+                ], 422);
+            }
+        }
 
         $client->update($validated);
 
@@ -109,6 +136,8 @@ class ClientController extends Controller
 
     public function timeline(Client $client, Request $request)
     {
+        $this->authorizeClientAccess($request, $client);
+
         $events = TimelineEvent::forEntity('client', $client->id)
             ->with('actor')
             ->orderBy('created_at', 'desc')
@@ -119,6 +148,8 @@ class ClientController extends Controller
 
     public function storeNote(Request $request, Client $client)
     {
+        $this->authorizeClientAccess($request, $client);
+
         $validated = $request->validate([
             'note_type' => 'required|in:call,email,sms,internal,system',
             'content' => 'required|string|max:5000',
@@ -154,6 +185,8 @@ class ClientController extends Controller
 
     public function syncOne(Request $request, Client $client)
     {
+        $this->authorizeClientAccess($request, $client);
+
         try {
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $syncService = new \App\Services\ClientSyncService($platform);
@@ -173,6 +206,13 @@ class ClientController extends Controller
             return response()->json([
                 'message' => 'Sync failed: ' . $e->getMessage(),
             ], 500);
+        }
+    }
+
+    private function authorizeClientAccess(Request $request, Client $client): void
+    {
+        if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
+            abort(403, 'You do not have access to this client market.');
         }
     }
 }

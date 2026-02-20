@@ -38,6 +38,20 @@ class Kernel extends ConsoleKernel
         ->everyFiveMinutes()
         ->onOneServer()
         ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
+
+        // Sprint 3: import lead candidates from WP profiles flagged needs_payment=1
+        $schedule->command('crm:import-leads')
+            ->name('crm_import_leads')
+            ->dailyAt('00:35')
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_import_leads.log'));
+
+        // Sprint 3: execute renewal campaigns for day -7/-3/0/+3 SMS reminders
+        $schedule->command('crm:run-renewals')
+            ->name('crm_run_renewals')
+            ->hourly()
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_run_renewals.log'));
     }
 
     /**

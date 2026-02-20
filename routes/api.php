@@ -17,6 +17,9 @@ use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\SettingsController;
+use App\Http\Controllers\CRM\ConversationController;
+use App\Http\Controllers\CRM\RenewalController;
+use App\Http\Controllers\CRM\ReportController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -58,8 +61,21 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Leads
     Route::get('/leads', [LeadController::class, 'index']);
     Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
+    Route::post('/leads/import', [LeadController::class, 'import']);
     Route::get('/leads/{lead}', [LeadController::class, 'show']);
     Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
+
+    // Conversations
+    Route::post('/conversations/clients/{client}/send', [ConversationController::class, 'send']);
+
+    // Renewals
+    Route::get('/renewals', [RenewalController::class, 'overview']);
+    Route::get('/renewals/runs', [RenewalController::class, 'runs']);
+    Route::post('/renewals/run', [RenewalController::class, 'run']);
+    Route::post('/renewals/remind', [RenewalController::class, 'remind']);
+
+    // Reports
+    Route::get('/reports/summary', [ReportController::class, 'summary']);
 
     // Payments
     Route::get('/payments', [PaymentQueueController::class, 'index']);
@@ -69,10 +85,13 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
 
     // Settings
+    Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
     Route::get('/settings/templates', [SettingsController::class, 'templates']);
-    Route::patch('/settings/templates/{template}', [SettingsController::class, 'updateTemplate']);
+    Route::post('/settings/templates', [SettingsController::class, 'storeTemplate'])->middleware('role:admin,sub_admin');
+    Route::patch('/settings/templates/{template}', [SettingsController::class, 'updateTemplate'])->middleware('role:admin,sub_admin');
+    Route::delete('/settings/templates/{template}', [SettingsController::class, 'destroyTemplate'])->middleware('role:admin,sub_admin');
     Route::get('/settings/webhook-logs', [SettingsController::class, 'webhookLogs']);
-    Route::get('/settings/roles', [SettingsController::class, 'roles']);
+    Route::get('/settings/roles', [SettingsController::class, 'roles'])->middleware('role:admin');
 });
 
 // ==================== ALL ROUTES ARE PUBLIC (No authentication required) ====================

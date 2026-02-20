@@ -10,6 +10,12 @@ class Platform extends Model
     protected $fillable = [
         'name', 'domain', 'country', 'is_active',
         'db_host', 'db_name', 'db_user', 'db_pass', 'db_prefix', 'product_id',
+        'wp_api_url', 'wp_api_user', 'wp_api_password',
+        'phone_prefix', 'timezone', 'currency_code',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
     ];
     
     public function getConnectionConfig()
