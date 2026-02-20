@@ -7,10 +7,14 @@ use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\Client;
+use App\Models\Deal;
 use App\Models\Activation;
 use App\Models\SmsLog;
+use App\Models\TimelineEvent;
 use App\Models\WordpressPost;
 use App\Services\DynamicDatabaseService;
+use App\Services\PaymentMatchingService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -280,45 +284,13 @@ class PaymentController extends Controller
     
     private function processWebhookEvent($eventType, $resource)
     {
-      // Kopokopo wraps the payload in a 'data' attribute
-        $payload = $data['data'] ?? $data;
-        
-        // The actual event data is in attributes.event
-        $event = $payload['attributes']['event'] ?? null;
-        
-        if (!$event) {
-            Log::error('Invalid Kopokopo webhook structure', ['payload' => $payload]);
-            return false;
-        }
-    
-        $eventType = $event['type'] ?? null;
-        $resource = $event['resource'] ?? null;
-    
-        Log::info('Processing Kopokopo webhook', [
+        // Legacy helper kept for backward compatibility.
+        // Current callback flow uses updatePaymentStatus() directly.
+        Log::warning('Deprecated processWebhookEvent() call ignored', [
             'event_type' => $eventType,
-            'resource' => $resource
         ]);
-    
-        switch ($eventType) {
-            case 'buygoods_transaction_received':
-            case 'customer_created':
-                return $this->handleSuccessfulPayment($resource);
-                
-            case 'buygoods_transaction_reversed':
-            case 'settlement_transfer_completed':
-                return $this->handleReversedPayment($resource);
-                
-            case 'b2b_transaction_received':
-                Log::info('B2B transaction received', ['resource' => $resource]);
-                return true; // Handle if needed
-                
-            default:
-                Log::warning('Unhandled webhook event type', [
-                    'event_type' => $eventType,
-                    'resource' => $resource
-                ]);
-                return true; // Return true to acknowledge receipt
-        }
+
+        return true;
     } 
 
     /**
@@ -359,6 +331,82 @@ class PaymentController extends Controller
                     'activated_count' => $activatedCount,
                     'success' => $activatedCount > 0
                 ]);
+
+                // Sprint 2: record CRM sales artifacts after successful activation.
+                $client = $this->resolveClientForSuccessfulPayment($payment);
+
+                if ($client) {
+                    $deal = Deal::where('payment_id', $payment->id)->first();
+                    $isNewDeal = false;
+
+                    if (!$deal) {
+                        $payment->loadMissing('product', 'platform');
+                        $expiresAt = $payment->end_date
+                            ? Carbon::parse($payment->end_date)
+                            : $this->calculateSubscriptionEndDate($payment->duration, now());
+
+                        $deal = Deal::create([
+                            'platform_id' => $payment->platform_id,
+                            'client_id' => $client->id,
+                            'payment_id' => $payment->id,
+                            'product_id' => $payment->product_id,
+                            'plan_type' => $this->inferPlanTypeFromProduct($payment->product),
+                            'amount' => $payment->amount,
+                            'currency' => $payment->currency ?: ($payment->platform->currency_code ?? 'KES'),
+                            'duration' => in_array($payment->duration, ['weekly', 'biweekly', 'monthly']) ? $payment->duration : 'manual',
+                            'status' => 'active',
+                            'activated_at' => $payment->start_date ? Carbon::parse($payment->start_date) : now(),
+                            'expires_at' => $expiresAt,
+                            'assigned_to' => $client->assigned_to,
+                        ]);
+                        $isNewDeal = true;
+                    }
+
+                    $payment->forceFill([
+                        'client_id' => $client->id,
+                        'deal_id' => $deal->id,
+                        'match_confidence' => 'auto_high',
+                        'confirmed_at' => now(),
+                    ])->save();
+
+                    if ($isNewDeal) {
+                        TimelineEvent::create([
+                            'platform_id' => $client->platform_id,
+                            'entity_type' => 'client',
+                            'entity_id' => $client->id,
+                            'event_type' => 'payment_received',
+                            'actor_id' => null,
+                            'content' => [
+                                'payment_id' => $payment->id,
+                                'deal_id' => $deal->id,
+                                'amount' => $payment->amount,
+                                'currency' => $payment->currency ?: 'KES',
+                                'transaction_reference' => $payment->transaction_reference,
+                            ],
+                            'created_at' => now(),
+                        ]);
+
+                        TimelineEvent::create([
+                            'platform_id' => $client->platform_id,
+                            'entity_type' => 'deal',
+                            'entity_id' => $deal->id,
+                            'event_type' => 'deal_activated',
+                            'actor_id' => null,
+                            'content' => [
+                                'payment_id' => $payment->id,
+                                'activated_at' => optional($deal->activated_at)->toDateTimeString(),
+                                'expires_at' => optional($deal->expires_at)->toDateTimeString(),
+                            ],
+                            'created_at' => now(),
+                        ]);
+                    }
+                } else {
+                    Log::warning('Successful payment could not be linked to a CRM client', [
+                        'payment_id' => $payment->id,
+                        'platform_id' => $payment->platform_id,
+                        'user_id' => $payment->user_id,
+                    ]);
+                }
     
                 // Generate and send success message (without icon)
                 $message = $this->generateSuccessMessage($payment, $payment->transaction_reference);
@@ -379,6 +427,60 @@ class PaymentController extends Controller
             // Re-throw to ensure the outer transaction knows it failed
             throw $e;
         }
+    }
+
+    private function resolveClientForSuccessfulPayment(Payment $payment): ?Client
+    {
+        if ($payment->client_id) {
+            return Client::find($payment->client_id);
+        }
+
+        if ($payment->platform_id && $payment->user_id) {
+            $client = Client::where('platform_id', $payment->platform_id)
+                ->where('wp_user_id', $payment->user_id)
+                ->orderByDesc('id')
+                ->first();
+            if ($client) {
+                return $client;
+            }
+        }
+
+        if ($payment->platform_id && $payment->escort_post_id) {
+            $client = Client::where('platform_id', $payment->platform_id)
+                ->where('wp_post_id', $payment->escort_post_id)
+                ->first();
+            if ($client) {
+                return $client;
+            }
+        }
+
+        if ($payment->platform_id && $payment->phone) {
+            $match = app(PaymentMatchingService::class)->matchPayment($payment);
+            if (!empty($match['matched']) && !empty($match['client_id'])) {
+                return Client::find($match['client_id']);
+            }
+        }
+
+        return null;
+    }
+
+    private function inferPlanTypeFromProduct(?Product $product): string
+    {
+        if (!$product) {
+            return 'basic';
+        }
+
+        $name = strtolower($product->name);
+
+        if (str_contains($name, 'vip')) {
+            return 'vip';
+        }
+
+        if (str_contains($name, 'premium')) {
+            return 'premium';
+        }
+
+        return 'basic';
     }
     
     private function handleReversedPayment(array $resource, ?array $metadata, array $rawData)

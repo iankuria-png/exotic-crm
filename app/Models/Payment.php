@@ -13,6 +13,11 @@ class Payment extends Model
         'product_id',
         'platform_id',
         'escort_post_id',
+        'deal_id',
+        'client_id',
+        'match_confidence',
+        'confirmed_by',
+        'confirmed_at',
         'phone',
         'amount',
         'currency',
@@ -27,6 +32,7 @@ class Payment extends Model
 
     protected $casts = [
         'raw_payload' => 'array',
+        'confirmed_at' => 'datetime',
     ];
     
     public function product()
@@ -51,5 +57,19 @@ class Payment extends Model
     {
         return $this->belongsTo(Platform::class);
     }
-}
 
+    public function client()
+    {
+        return $this->belongsTo(Client::class);
+    }
+
+    public function deal()
+    {
+        return $this->belongsTo(Deal::class);
+    }
+
+    public function confirmedBy()
+    {
+        return $this->belongsTo(User::class, 'confirmed_by');
+    }
+}

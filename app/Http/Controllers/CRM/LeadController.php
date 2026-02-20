@@ -29,6 +29,10 @@ class LeadController extends Controller
             $query->where('platform_id', $request->platform_id);
         }
 
+        if ($request->filled('assigned_to')) {
+            $query->where('assigned_to', $request->assigned_to);
+        }
+
         $leads = $query->orderBy('created_at', 'desc')
             ->paginate($request->get('per_page', 25));
 

@@ -15,6 +15,8 @@ use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\PaymentQueueController;
+use App\Http\Controllers\CRM\DealController;
+use App\Http\Controllers\CRM\SettingsController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -33,10 +35,25 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Dashboard
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
+    Route::get('/products', [CrmDashboardController::class, 'products']);
 
     // Clients
     Route::get('/clients', [ClientController::class, 'index']);
     Route::get('/clients/{client}', [ClientController::class, 'show']);
+    Route::patch('/clients/{client}', [ClientController::class, 'update']);
+    Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline']);
+    Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote']);
+    Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne']);
+
+    // Deals
+    Route::get('/deals', [DealController::class, 'index']);
+    Route::post('/deals', [DealController::class, 'store']);
+    Route::get('/deals/{deal}', [DealController::class, 'show']);
+    Route::patch('/deals/{deal}', [DealController::class, 'update']);
+    Route::delete('/deals/{deal}', [DealController::class, 'destroy']);
+    Route::post('/deals/{deal}/activate', [DealController::class, 'activate']);
+    Route::post('/deals/{deal}/deactivate', [DealController::class, 'deactivate']);
+    Route::post('/deals/{deal}/extend', [DealController::class, 'extend']);
 
     // Leads
     Route::get('/leads', [LeadController::class, 'index']);
@@ -46,6 +63,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Payments
     Route::get('/payments', [PaymentQueueController::class, 'index']);
+    Route::get('/payments/{payment}/candidates', [PaymentQueueController::class, 'candidates']);
+    Route::post('/payments/{payment}/auto-match', [PaymentQueueController::class, 'autoMatch']);
+    Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);
+    Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
+
+    // Settings
+    Route::get('/settings/templates', [SettingsController::class, 'templates']);
+    Route::patch('/settings/templates/{template}', [SettingsController::class, 'updateTemplate']);
+    Route::get('/settings/webhook-logs', [SettingsController::class, 'webhookLogs']);
+    Route::get('/settings/roles', [SettingsController::class, 'roles']);
 });
 
 // ==================== ALL ROUTES ARE PUBLIC (No authentication required) ====================

@@ -26,16 +26,16 @@ export default function MainLayout() {
             {/* Main content */}
             <div className="flex flex-1 flex-col overflow-hidden">
                 {/* Top bar */}
-                <header className="flex h-14 items-center gap-4 border-b border-gray-200 bg-white px-4 lg:px-6">
+                <header className="flex h-14 items-center gap-4 border-b border-slate-200 bg-white px-4 lg:px-6">
                     <button
                         onClick={() => setSidebarOpen(true)}
-                        className="text-gray-500 lg:hidden"
+                        className="text-slate-500 lg:hidden"
                     >
                         <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                         </svg>
                     </button>
-                    <h1 className="text-lg font-semibold text-gray-800">Exotic Sales CRM</h1>
+                    <h1 className="text-[1.45rem] leading-none font-semibold tracking-tight text-slate-800">Exotic Sales CRM</h1>
                 </header>
 
                 {/* Page content */}

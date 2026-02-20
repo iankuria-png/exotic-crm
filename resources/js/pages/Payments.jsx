@@ -1,17 +1,510 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import api from '../services/api';
+import DataTable from '../components/DataTable';
+import StatusBadge from '../components/StatusBadge';
+import MetricCard from '../components/MetricCard';
+import PageHeader from '../components/PageHeader';
+
+function formatCurrency(amount, currency = 'KES') {
+    return `${currency} ${Number(amount || 0).toLocaleString()}`;
+}
+
+function normalizePhone(phone) {
+    if (!phone) return '';
+    const cleaned = String(phone).replace(/[^\d+]/g, '').replace(/^\+/, '');
+    if (cleaned.startsWith('0')) return `254${cleaned.slice(1)}`;
+    return cleaned;
+}
+
+function candidateScore(payment, candidate) {
+    let score = 45;
+    const paymentPhone = normalizePhone(payment?.phone);
+    const candidatePhone = normalizePhone(candidate?.phone_normalized);
+
+    if (paymentPhone && candidatePhone && paymentPhone === candidatePhone) {
+        score = 85;
+    }
+
+    if (candidate?.profile_status === 'publish') {
+        score += 8;
+    }
+
+    if (candidate?.verified) {
+        score += 7;
+    }
+
+    return Math.min(99, score);
+}
+
+function scoreTone(score) {
+    if (score >= 85) return 'high';
+    if (score >= 65) return 'medium';
+    return 'low';
+}
+
+function toneClasses(tone) {
+    if (tone === 'high') {
+        return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    }
+    if (tone === 'medium') {
+        return 'bg-amber-50 text-amber-700 ring-amber-200';
+    }
+    return 'bg-slate-100 text-slate-600 ring-slate-200';
+}
 
 export default function Payments() {
-    return (
-        <div>
-            <h2 className="text-2xl font-bold text-gray-900">Payments</h2>
-            <p className="mt-1 text-sm text-gray-500">Payment history and matching queue</p>
+    const queryClient = useQueryClient();
+    const [page, setPage] = useState(1);
+    const [search, setSearch] = useState('');
+    const [searchInput, setSearchInput] = useState('');
+    const [statusFilter, setStatusFilter] = useState('');
+    const [matchFilter, setMatchFilter] = useState('');
+    const [selectedPayment, setSelectedPayment] = useState(null);
+    const [selectedClientId, setSelectedClientId] = useState('');
+    const [selectedRows, setSelectedRows] = useState([]);
+    const [clearSelectionKey, setClearSelectionKey] = useState(0);
+    const [bulkFeedback, setBulkFeedback] = useState(null);
 
-            {/* Payments table placeholder */}
-            <div className="mt-6 rounded-xl bg-white shadow-sm border border-gray-200 overflow-hidden">
-                <div className="p-6 text-center text-sm text-gray-500">
-                    Payment records from the Ads API will be displayed here.
+    const { data, isLoading } = useQuery({
+        queryKey: ['payments', page, search, statusFilter, matchFilter],
+        queryFn: () =>
+            api.get('/crm/payments', {
+                params: {
+                    page,
+                    per_page: 25,
+                    ...(search && { search }),
+                    ...(statusFilter && { status: statusFilter }),
+                    ...(matchFilter && { matched: matchFilter }),
+                },
+            }).then((response) => response.data),
+    });
+
+    const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
+        queryKey: ['payment-candidates', selectedPayment?.id],
+        queryFn: () => api.get(`/crm/payments/${selectedPayment.id}/candidates`).then((response) => response.data),
+        enabled: !!selectedPayment?.id,
+    });
+
+    const autoMatchMutation = useMutation({
+        mutationFn: (paymentId) => api.post(`/crm/payments/${paymentId}/auto-match`).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            if (selectedPayment?.id) {
+                queryClient.invalidateQueries({ queryKey: ['payment-candidates', selectedPayment.id] });
+            }
+        },
+    });
+
+    const confirmMatchMutation = useMutation({
+        mutationFn: ({ paymentId, clientId }) =>
+            api.post(`/crm/payments/${paymentId}/confirm-match`, { client_id: clientId }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setSelectedPayment(null);
+            setSelectedClientId('');
+            setBulkFeedback({ tone: 'success', text: 'Payment match confirmed.' });
+        },
+    });
+
+    const batchMatchMutation = useMutation({
+        mutationFn: () => api.post('/crm/payments/batch-match').then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setBulkFeedback({ tone: 'success', text: 'Queue auto-match completed.' });
+        },
+    });
+
+    const bulkAutoMatchMutation = useMutation({
+        mutationFn: async (rows) => {
+            const targets = rows.filter((row) => row.status !== 'failed');
+            const results = await Promise.allSettled(
+                targets.map((row) => api.post(`/crm/payments/${row.id}/auto-match`)),
+            );
+
+            const success = results.filter((result) => result.status === 'fulfilled').length;
+            const failed = results.length - success;
+
+            return { success, failed, total: targets.length };
+        },
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setClearSelectionKey((value) => value + 1);
+            setBulkFeedback({
+                tone: result.failed > 0 ? 'warning' : 'success',
+                text: `Auto-match processed ${result.success}/${result.total} selected payments${result.failed ? ` (${result.failed} failed)` : ''}.`,
+            });
+        },
+    });
+
+    const bulkConfirmMutation = useMutation({
+        mutationFn: async (rows) => {
+            let confirmed = 0;
+            let autoMatched = 0;
+            let skipped = 0;
+            let failed = 0;
+
+            for (const row of rows) {
+                try {
+                    if (row.client_id) {
+                        skipped += 1;
+                        continue;
+                    }
+
+                    const candidateResponse = await api.get(`/crm/payments/${row.id}/candidates`);
+                    const candidates = candidateResponse.data?.data || [];
+
+                    if (candidates.length === 1) {
+                        await api.post(`/crm/payments/${row.id}/confirm-match`, { client_id: candidates[0].id });
+                        confirmed += 1;
+                    } else {
+                        await api.post(`/crm/payments/${row.id}/auto-match`);
+                        autoMatched += 1;
+                    }
+                } catch (error) {
+                    failed += 1;
+                }
+            }
+
+            return { confirmed, autoMatched, skipped, failed, total: rows.length };
+        },
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setClearSelectionKey((value) => value + 1);
+            setBulkFeedback({
+                tone: result.failed > 0 ? 'warning' : 'success',
+                text: `Bulk confirm done: ${result.confirmed} direct, ${result.autoMatched} auto-match, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ''}.`,
+            });
+        },
+    });
+
+    const handleSearch = (event) => {
+        event.preventDefault();
+        setSearch(searchInput.trim());
+        setPage(1);
+    };
+
+    const rows = data?.data || [];
+
+    const summary = useMemo(() => {
+        const pending = rows.filter((row) => row.status === 'initiated').length;
+        const confirmed = rows.filter((row) => row.status === 'completed').length;
+        const unmatched = rows.filter((row) => !row.client_id).length;
+
+        return { pending, confirmed, unmatched };
+    }, [rows]);
+
+    const modalCandidates = useMemo(() => {
+        const candidates = candidatesData?.data || [];
+        return candidates
+            .map((candidate) => {
+                const score = candidateScore(selectedPayment, candidate);
+                return {
+                    ...candidate,
+                    score,
+                    tone: scoreTone(score),
+                };
+            })
+            .sort((left, right) => right.score - left.score);
+    }, [candidatesData, selectedPayment]);
+
+    const bulkActions = [
+        {
+            key: 'bulk-confirm',
+            label: 'Confirm selected',
+            loadingLabel: 'Confirming...',
+            variant: 'primary',
+            onClick: async (rowsSelection) => {
+                await bulkConfirmMutation.mutateAsync(rowsSelection);
+            },
+        },
+        {
+            key: 'bulk-auto',
+            label: 'Auto-match selected',
+            loadingLabel: 'Auto-matching...',
+            onClick: async (rowsSelection) => {
+                await bulkAutoMatchMutation.mutateAsync(rowsSelection);
+            },
+        },
+        {
+            key: 'bulk-open-first',
+            label: 'Open first selected',
+            onClick: (rowsSelection) => {
+                if (!rowsSelection.length) return;
+                setSelectedPayment(rowsSelection[0]);
+                setSelectedClientId('');
+            },
+        },
+    ];
+
+    useEffect(() => {
+        const listener = (event) => {
+            const isConfirmShortcut = (event.ctrlKey || event.metaKey) && event.key === 'Enter';
+            if (!isConfirmShortcut || selectedRows.length === 0) {
+                return;
+            }
+
+            event.preventDefault();
+            if (!bulkConfirmMutation.isPending) {
+                bulkConfirmMutation.mutate(selectedRows);
+            }
+        };
+
+        window.addEventListener('keydown', listener);
+        return () => window.removeEventListener('keydown', listener);
+    }, [selectedRows, bulkConfirmMutation]);
+
+    const columns = [
+        {
+            key: 'phone',
+            label: 'Phone',
+            render: (row) => <span className="crm-mono text-xs text-slate-600">{row.phone || '—'}</span>,
+        },
+        {
+            key: 'amount',
+            label: 'Amount',
+            render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, row.currency || 'KES')}</span>,
+        },
+        {
+            key: 'product',
+            label: 'Product',
+            render: (row) => <span className="text-sm text-slate-700">{row.product?.name || '—'}</span>,
+        },
+        {
+            key: 'status',
+            label: 'Status',
+            render: (row) => <StatusBadge status={row.status} />,
+        },
+        {
+            key: 'match_confidence',
+            label: 'Match',
+            render: (row) => row.match_confidence ? <StatusBadge status={row.match_confidence} /> : <span className="text-xs text-slate-400">—</span>,
+        },
+        {
+            key: 'client',
+            label: 'Matched Client',
+            render: (row) => (
+                row.client
+                    ? <span className="text-xs text-slate-700">{row.client.name || `Client #${row.client.id}`}</span>
+                    : <span className="text-xs text-slate-400">Unmatched</span>
+            ),
+        },
+        {
+            key: 'transaction_reference',
+            label: 'Reference',
+            render: (row) => <span className="crm-mono text-xs text-slate-500">{row.transaction_reference || '—'}</span>,
+        },
+        {
+            key: 'created_at',
+            label: 'Date',
+            render: (row) => <span className="text-xs text-slate-500">{new Date(row.created_at).toLocaleDateString()}</span>,
+        },
+        {
+            key: 'actions',
+            label: 'Actions',
+            render: (row) => (
+                <div className="flex items-center gap-1.5">
+                    <button
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            autoMatchMutation.mutate(row.id);
+                        }}
+                        className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                    >
+                        Auto
+                    </button>
+                    <button
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedPayment(row);
+                            setSelectedClientId('');
+                        }}
+                        className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                    >
+                        Manual
+                    </button>
                 </div>
-            </div>
+            ),
+        },
+    ];
+
+    return (
+        <div className="space-y-4">
+            <PageHeader
+                title="Payments"
+                subtitle={data?.total ? `${data.total.toLocaleString()} payment records` : 'Incoming payments and match queue'}
+                actions={(
+                    <button
+                        onClick={() => batchMatchMutation.mutate()}
+                        disabled={batchMatchMutation.isPending}
+                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {batchMatchMutation.isPending ? 'Matching...' : 'Auto-match queue'}
+                    </button>
+                )}
+            />
+
+            <section className="grid gap-4 md:grid-cols-3">
+                <MetricCard label="Pending" value={summary.pending.toLocaleString()} meta="initiated" tone="warning" />
+                <MetricCard label="Confirmed" value={summary.confirmed.toLocaleString()} meta="completed" tone="success" />
+                <MetricCard label="Unmatched" value={summary.unmatched.toLocaleString()} meta="needs review" tone="danger" />
+            </section>
+
+            <section className="crm-filter-row">
+                <div className="flex flex-wrap items-center gap-3">
+                    <form onSubmit={handleSearch} className="min-w-[240px] flex-1">
+                        <div className="relative">
+                            <input
+                                type="text"
+                                value={searchInput}
+                                onChange={(event) => setSearchInput(event.target.value)}
+                                placeholder="Search by phone or reference..."
+                                className="crm-input pr-10"
+                            />
+                            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                            </button>
+                        </div>
+                    </form>
+
+                    <select
+                        value={statusFilter}
+                        onChange={(event) => {
+                            setStatusFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All Statuses</option>
+                        <option value="completed">Completed</option>
+                        <option value="initiated">Initiated</option>
+                        <option value="failed">Failed</option>
+                    </select>
+
+                    <select
+                        value={matchFilter}
+                        onChange={(event) => {
+                            setMatchFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All Matches</option>
+                        <option value="matched">Matched</option>
+                        <option value="unmatched">Unmatched</option>
+                    </select>
+
+                    {(search || statusFilter || matchFilter) ? (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setSearch('');
+                                setSearchInput('');
+                                setStatusFilter('');
+                                setMatchFilter('');
+                                setPage(1);
+                            }}
+                            className="crm-btn-secondary px-3 py-2"
+                        >
+                            Reset
+                        </button>
+                    ) : null}
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-slate-500">Bulk shortcut: press <span className="crm-mono">Ctrl/Cmd + Enter</span> to confirm selected rows.</p>
+                    {bulkFeedback ? (
+                        <span className={`text-xs font-medium ${bulkFeedback.tone === 'success' ? 'text-emerald-700' : bulkFeedback.tone === 'warning' ? 'text-amber-700' : 'text-slate-600'}`}>
+                            {bulkFeedback.text}
+                        </span>
+                    ) : null}
+                </div>
+            </section>
+
+            <DataTable
+                columns={columns}
+                data={data?.data}
+                pagination={data}
+                onPageChange={setPage}
+                isLoading={isLoading}
+                emptyMessage="No payments found."
+                compact
+                selectable
+                bulkActions={bulkActions}
+                onSelectionChange={setSelectedRows}
+                clearSelectionKey={clearSelectionKey}
+            />
+
+            {selectedPayment ? (
+                <div className="fixed inset-0 z-50 flex bg-slate-900/45" onClick={() => setSelectedPayment(null)}>
+                    <aside
+                        className="ml-auto h-full w-full max-w-md border-l border-slate-200 bg-white shadow-xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="crm-panel-header sticky top-0 bg-white">
+                            <div>
+                                <h3 className="crm-panel-title">Manual Match</h3>
+                                <p className="crm-panel-subtitle">
+                                    Payment #{selectedPayment.id} • {selectedPayment.phone || 'No phone'} • {formatCurrency(selectedPayment.amount, selectedPayment.currency || 'KES')}
+                                </p>
+                            </div>
+                        </header>
+
+                        <div className="h-[calc(100%-132px)] overflow-y-auto p-4">
+                            {candidatesLoading ? (
+                                <p className="text-sm text-slate-500">Loading candidate clients...</p>
+                            ) : modalCandidates.length === 0 ? (
+                                <p className="text-sm text-slate-500">No phone-based candidates found for this payment.</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {modalCandidates.map((client) => {
+                                        const tone = toneClasses(client.tone);
+
+                                        return (
+                                            <label
+                                                key={client.id}
+                                                className={`flex cursor-pointer items-start justify-between gap-3 rounded-md border px-3 py-2.5 text-sm transition ${selectedClientId === String(client.id) ? 'border-teal-600 bg-teal-50/60' : 'border-slate-200 hover:bg-slate-50'}`}
+                                            >
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="block truncate font-semibold text-slate-900">{client.name || `Client #${client.id}`}</span>
+                                                    <span className="mt-0.5 block truncate text-xs text-slate-500">{client.phone_normalized || 'No phone'} • {client.profile_status}</span>
+                                                    <span className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${tone}`}>
+                                                        Match score {client.score}%
+                                                    </span>
+                                                </span>
+                                                <input
+                                                    type="radio"
+                                                    name="client"
+                                                    value={client.id}
+                                                    checked={selectedClientId === String(client.id)}
+                                                    onChange={(event) => setSelectedClientId(event.target.value)}
+                                                    className="mt-1 h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button type="button" onClick={() => setSelectedPayment(null)} className="crm-btn-secondary">
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!selectedClientId || confirmMatchMutation.isPending}
+                                onClick={() => confirmMatchMutation.mutate({ paymentId: selectedPayment.id, clientId: Number(selectedClientId) })}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {confirmMatchMutation.isPending ? 'Saving...' : 'Confirm match'}
+                            </button>
+                        </footer>
+                    </aside>
+                </div>
+            ) : null}
         </div>
     );
 }
