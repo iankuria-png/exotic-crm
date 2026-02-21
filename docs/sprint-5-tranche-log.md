@@ -608,3 +608,68 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 ### Decision Notes
 - Incident translation is intentionally backend-driven to keep log semantics consistent across current and future UI surfaces.
 - Technical payload remained fully accessible but is hidden by default to reduce non-engineer cognitive load during triage.
+
+---
+
+## Tranche 13 (Completed)
+
+### Plan
+- Execute `CRM-518` from the reconciliation backlog as a guarded MVP:
+  - add scraper source + run data model
+  - enforce compliance guardrails (robots + terms acknowledgement)
+  - support manual run with dry-run preview before import
+  - persist dedupe-safe lead imports with audit traceability
+  - expose full operator controls in Settings with confirmation/toast UX
+
+### Progress
+- Backend:
+  - Added scraper persistence schema:
+    - `database/migrations/2026_02_21_000017_create_scraper_sources_table.php`
+    - `database/migrations/2026_02_21_000018_create_scraper_runs_table.php`
+    - `database/migrations/2026_02_21_000019_add_source_url_to_leads_table.php`
+  - Added scraper domain models:
+    - `app/Models/ScraperSource.php`
+    - `app/Models/ScraperRun.php`
+  - Implemented scraper orchestration service:
+    - `app/Services/ScraperSourceService.php`
+    - fetch + parser profiles (`contact_cards`, `profile_links`)
+    - robots policy evaluation and compliance blocking
+    - dedupe modes (`phone_or_email`, `phone_only`, `email_only`, `source_url`)
+    - dry-run preview and import lead creation with timeline events
+  - Extended Settings integrations API and audit mappings:
+    - `POST /api/crm/settings/integrations/scraper-sources`
+    - `PATCH /api/crm/settings/integrations/scraper-sources/{scraperSource}`
+    - `POST /api/crm/settings/integrations/scraper-sources/{scraperSource}/run`
+  - Added scraper audit actions:
+    - `SCRAPER_SOURCE_CREATE`
+    - `SCRAPER_SOURCE_UPDATE`
+    - `SCRAPER_RUN`
+- Frontend:
+  - Added `Scraper Configuration` workspace to Settings Integrations:
+    - source list + status overview
+    - add-source modal with compliance fields
+    - source editor (profile/schedule/dedupe/parser rules)
+    - run controls (dry-run/import, max candidates, reason)
+    - run confirmation modal + success/error toast feedback
+    - recent run history with operator-friendly summaries
+- Tests:
+  - Added scraper feature coverage:
+    - `test_sub_admin_can_create_update_and_dry_run_scraper_source_in_scope`
+    - `test_scraper_run_blocks_without_compliance_and_dedupes_on_import`
+
+### Verification
+- `php artisan migrate --force` -> pass.
+- `php artisan test --filter='sub_admin_can_create_update_and_dry_run_scraper_source_in_scope|scraper_run_blocks_without_compliance_and_dedupes_on_import'` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5j-2026-02-21/settings-crm-prefix-empty-outlet.png`
+  - `output/playwright/sprint5j-2026-02-21/settings-scraper-workspace.png`
+  - `output/playwright/sprint5j-2026-02-21/settings-scraper-add-source-modal.png`
+  - `output/playwright/sprint5j-2026-02-21/settings-scraper-source-created.png`
+  - `output/playwright/sprint5j-2026-02-21/settings-scraper-run-confirmation-modal.png`
+  - `output/playwright/sprint5j-2026-02-21/settings-scraper-run-success.png`
+
+### Decision Notes
+- Settings route base is `/settings`; navigating to `/crm/settings` renders shell-only outlet in this build.
+- Scraper operations are admin/sub-admin scoped and confirmation-gated to reduce accidental high-impact runs.
+- Manual run is synchronous in this tranche (safe MVP); queue/scheduler automation can be layered in a later tranche.

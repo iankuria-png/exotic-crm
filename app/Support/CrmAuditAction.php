@@ -17,6 +17,9 @@ final class CrmAuditAction
     public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';
     public const INTEGRATION_CONNECTION_TEST = 'integration_connection_test';
     public const INTEGRATION_SYNC_RUN = 'integration_sync_run';
+    public const SCRAPER_SOURCE_CREATE = 'scraper_source_create';
+    public const SCRAPER_SOURCE_UPDATE = 'scraper_source_update';
+    public const SCRAPER_RUN = 'scraper_run';
     public const DEAL_ACTIVATE = 'deal_activate';
     public const DEAL_DEACTIVATE = 'deal_deactivate';
     public const DEAL_EXTEND = 'deal_extend';

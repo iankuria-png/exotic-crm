@@ -121,6 +121,84 @@ function buildSmsProviderForm(smsProvider) {
     };
 }
 
+function defaultScraperRules() {
+    return {
+        row_selector: '',
+        name_selector: '',
+        phone_selector: '',
+        email_selector: '',
+        link_selector: '',
+    };
+}
+
+function defaultScraperForm(platformId = '') {
+    return {
+        platform_id: platformId ? String(platformId) : '',
+        name: '',
+        source_url: '',
+        parser_profile: 'contact_cards',
+        fetch_schedule: 'manual_only',
+        dedupe_mode: 'phone_or_email',
+        parser_rules: defaultScraperRules(),
+        is_active: true,
+        compliance_ack_robots: false,
+        compliance_ack_tos: false,
+        compliance_notes: '',
+        reason: 'Created scraper source from settings',
+    };
+}
+
+function buildScraperEditor(source) {
+    if (!source) {
+        return null;
+    }
+
+    return {
+        id: source.id,
+        platform_id: source.platform_id ? String(source.platform_id) : '',
+        name: source.name || '',
+        source_url: source.source_url || '',
+        parser_profile: source.parser_profile || 'contact_cards',
+        fetch_schedule: source.fetch_schedule || 'manual_only',
+        dedupe_mode: source.dedupe_mode || 'phone_or_email',
+        parser_rules: {
+            ...defaultScraperRules(),
+            ...(source.parser_rules || {}),
+        },
+        is_active: Boolean(source.is_active),
+        compliance_ack_robots: Boolean(source.compliance_ack_robots),
+        compliance_ack_tos: Boolean(source.compliance_ack_tos),
+        compliance_notes: source.compliance_notes || '',
+        reason: 'Updated scraper source from settings',
+    };
+}
+
+function scraperStatusLabel(status) {
+    if (!status) return 'never run';
+    return String(status).replaceAll('_', ' ');
+}
+
+function scraperProfileLabel(profile) {
+    if (profile === 'profile_links') return 'Profile links';
+    if (profile === 'contact_cards') return 'Contact cards';
+    return profile?.replaceAll('_', ' ') || 'Unknown';
+}
+
+function scraperScheduleLabel(schedule) {
+    if (schedule === 'manual_only') return 'Manual only';
+    if (schedule === 'daily') return 'Daily';
+    if (schedule === 'weekly') return 'Weekly';
+    return schedule?.replaceAll('_', ' ') || 'Unknown';
+}
+
+function dedupeModeLabel(mode) {
+    if (mode === 'phone_or_email') return 'Phone or email';
+    if (mode === 'phone_only') return 'Phone only';
+    if (mode === 'email_only') return 'Email only';
+    if (mode === 'source_url') return 'Source URL';
+    return mode?.replaceAll('_', ' ') || 'Unknown';
+}
+
 function IntegrationsWorkspace({ canCreateMarkets }) {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -147,6 +225,17 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     });
     const [smsTestConfirmOpen, setSmsTestConfirmOpen] = useState(false);
     const [latestSmsTestResult, setLatestSmsTestResult] = useState(null);
+    const [selectedScraperSourceId, setSelectedScraperSourceId] = useState(null);
+    const [scraperEditor, setScraperEditor] = useState(null);
+    const [scraperCreateOpen, setScraperCreateOpen] = useState(false);
+    const [scraperCreateForm, setScraperCreateForm] = useState(defaultScraperForm());
+    const [scraperRunConfirmOpen, setScraperRunConfirmOpen] = useState(false);
+    const [scraperRunForm, setScraperRunForm] = useState({
+        dry_run: true,
+        max_candidates: 50,
+        reason: 'Dry-run scraper execution from settings',
+    });
+    const [latestScraperRunResult, setLatestScraperRunResult] = useState(null);
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
@@ -179,6 +268,12 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
 
     const platformRows = data?.platforms || [];
     const selectedPlatform = platformRows.find((platform) => platform.platform_id === selectedPlatformId) || null;
+    const scraperSources = data?.scraper?.sources || [];
+    const scraperRuns = data?.scraper?.recent_runs || [];
+    const scraperProfiles = data?.scraper?.parser_profiles || ['contact_cards', 'profile_links'];
+    const scraperSchedules = data?.scraper?.fetch_schedules || ['manual_only', 'daily', 'weekly'];
+    const scraperDedupeModes = data?.scraper?.dedupe_modes || ['phone_or_email', 'phone_only', 'email_only', 'source_url'];
+    const selectedScraperSource = scraperSources.find((source) => source.id === selectedScraperSourceId) || null;
 
     useEffect(() => {
         if (!platformRows.length) {
@@ -200,6 +295,41 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
         setEditor(buildPlatformEditor(selectedPlatform));
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
     }, [selectedPlatformId]);
+
+    useEffect(() => {
+        if (!scraperSources.length) {
+            setSelectedScraperSourceId(null);
+            setScraperEditor(null);
+            setLatestScraperRunResult(null);
+            return;
+        }
+
+        if (!selectedScraperSourceId || !scraperSources.some((source) => source.id === selectedScraperSourceId)) {
+            setSelectedScraperSourceId(scraperSources[0].id);
+        }
+    }, [scraperSources, selectedScraperSourceId]);
+
+    useEffect(() => {
+        if (!selectedScraperSource) {
+            return;
+        }
+
+        setScraperEditor(buildScraperEditor(selectedScraperSource));
+        setLatestScraperRunResult(selectedScraperSource.last_run_summary || null);
+    }, [selectedScraperSourceId, selectedScraperSource]);
+
+    useEffect(() => {
+        if (!scraperCreateOpen) {
+            return;
+        }
+
+        if (!scraperCreateForm.platform_id && platformRows.length > 0) {
+            setScraperCreateForm((current) => ({
+                ...current,
+                platform_id: String(platformRows[0].platform_id),
+            }));
+        }
+    }, [scraperCreateOpen, scraperCreateForm.platform_id, platformRows]);
 
     useEffect(() => {
         const smsState = buildSmsProviderForm(smsProviderConfig);
@@ -255,6 +385,57 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Manual sync failed.');
+        },
+    });
+
+    const createScraperSourceMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/integrations/scraper-sources', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            const sourceId = Number(response?.source?.id || 0);
+            if (sourceId > 0) {
+                setSelectedScraperSourceId(sourceId);
+            }
+            setScraperCreateOpen(false);
+            setScraperCreateForm(defaultScraperForm(platformRows[0]?.platform_id));
+            toast.success('Scraper source created.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to create scraper source.');
+        },
+    });
+
+    const updateScraperSourceMutation = useMutation({
+        mutationFn: ({ sourceId, payload }) => api.patch(`/crm/settings/integrations/scraper-sources/${sourceId}`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setScraperEditor(buildScraperEditor(response?.source || null));
+            toast.success('Scraper source updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update scraper source.');
+        },
+    });
+
+    const runScraperSourceMutation = useMutation({
+        mutationFn: ({ sourceId, payload }) => api.post(`/crm/settings/integrations/scraper-sources/${sourceId}/run`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setLatestScraperRunResult(response?.result || null);
+            setScraperRunConfirmOpen(false);
+            const status = response?.result?.status;
+            if (status === 'partial') {
+                toast.warning('Scraper run completed with warnings.');
+                return;
+            }
+            toast.success(status === 'success' ? 'Scraper run completed.' : 'Scraper run finished.');
+        },
+        onError: (error) => {
+            const payload = error?.response?.data?.result;
+            if (payload) {
+                setLatestScraperRunResult(payload);
+            }
+            toast.error(error?.response?.data?.message || payload?.message || 'Scraper run failed.');
         },
     });
 
@@ -340,6 +521,10 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     ];
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
+    const activeScraperSources = scraperSources.filter((source) => source.is_active).length;
+    const scraperBlockedOrFailed = scraperSources.filter((source) => ['blocked', 'error'].includes(source.last_run_status)).length;
+    const selectedScraperRules = scraperEditor?.parser_rules || defaultScraperRules();
+    const selectedScraperCompliant = Boolean(scraperEditor?.compliance_ack_robots) && Boolean(scraperEditor?.compliance_ack_tos);
 
     return (
         <div className="space-y-4">
@@ -898,6 +1083,373 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                 </div>
             </section>
 
+            <section className="crm-surface overflow-hidden">
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Scraper Configuration</h3>
+                        <p className="crm-panel-subtitle">Configure compliant scrape sources, preview with dry-run, then import leads into the pipeline.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setScraperCreateOpen(true)}
+                        className="crm-btn-primary px-3 py-2"
+                    >
+                        Add scraper source
+                    </button>
+                </header>
+
+                <div className="grid gap-4 p-4 xl:grid-cols-12">
+                    <div className="space-y-3 xl:col-span-4">
+                        <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Configured</p>
+                                <p className="mt-1 text-lg font-semibold text-slate-900">{scraperSources.length}</p>
+                            </div>
+                            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-700">Active</p>
+                                <p className="mt-1 text-lg font-semibold text-emerald-800">{activeScraperSources}</p>
+                            </div>
+                            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-700">Needs review</p>
+                                <p className="mt-1 text-lg font-semibold text-amber-800">{scraperBlockedOrFailed}</p>
+                            </div>
+                        </div>
+
+                        <section className="rounded-lg border border-slate-200 bg-white">
+                            <div className="border-b border-slate-100 px-3 py-2">
+                                <p className="text-sm font-semibold text-slate-900">Sources</p>
+                                <p className="text-xs text-slate-500">Select a source to edit parser and compliance settings.</p>
+                            </div>
+                            <div className="max-h-72 space-y-2 overflow-auto p-2">
+                                {scraperSources.length === 0 ? (
+                                    <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                                        No scraper sources yet. Add a source to start dry-run validation.
+                                    </p>
+                                ) : scraperSources.map((source) => (
+                                    <button
+                                        key={source.id}
+                                        type="button"
+                                        onClick={() => setSelectedScraperSourceId(source.id)}
+                                        className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                                            selectedScraperSourceId === source.id
+                                                ? 'border-teal-300 bg-teal-50'
+                                                : 'border-slate-200 bg-white hover:border-slate-300'
+                                        }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div>
+                                                <p className="text-sm font-semibold text-slate-900">{source.name}</p>
+                                                <p className="text-[11px] text-slate-500">{source.platform_name}</p>
+                                            </div>
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${statusChip(source.last_run_status || 'unknown')}`}>
+                                                {scraperStatusLabel(source.last_run_status)}
+                                            </span>
+                                        </div>
+                                        <p className="mt-1 truncate text-[11px] text-slate-500">{source.source_url}</p>
+                                    </button>
+                                ))}
+                            </div>
+                        </section>
+
+                        <section className="rounded-lg border border-slate-200 bg-white">
+                            <div className="border-b border-slate-100 px-3 py-2">
+                                <p className="text-sm font-semibold text-slate-900">Recent runs</p>
+                            </div>
+                            <div className="max-h-48 space-y-2 overflow-auto p-2">
+                                {scraperRuns.length === 0 ? (
+                                    <p className="text-xs text-slate-500">No scraper runs yet.</p>
+                                ) : scraperRuns.map((run) => (
+                                    <div key={run.id} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
+                                        <p className="text-xs font-semibold text-slate-800">{run.source_name || `Source #${run.scraper_source_id}`}</p>
+                                        <p className="text-[11px] text-slate-500">
+                                            {run.mode.replace('_', ' ')} • {run.status} • {run.discovered_count} discovered • {run.created_count} created
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </section>
+                    </div>
+
+                    <div className="space-y-3 xl:col-span-8">
+                        {!selectedScraperSource || !scraperEditor ? (
+                            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                                Select a scraper source to manage parser, compliance, and run controls.
+                            </div>
+                        ) : (
+                            <>
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Source Profile</h4>
+                                    <p className="mt-1 text-xs text-slate-500">Define extraction profile, schedule, dedupe strategy, and compliance guardrails.</p>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <input
+                                            value={scraperEditor.name}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, name: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Source name"
+                                        />
+                                        <select
+                                            value={scraperEditor.platform_id}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, platform_id: event.target.value }))}
+                                            className="crm-select"
+                                            disabled
+                                        >
+                                            {platformRows.map((platform) => (
+                                                <option key={platform.platform_id} value={platform.platform_id}>{platform.platform_name}</option>
+                                            ))}
+                                        </select>
+                                        <input
+                                            value={scraperEditor.source_url}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, source_url: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="https://example.com/listings"
+                                        />
+                                        <select
+                                            value={scraperEditor.parser_profile}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, parser_profile: event.target.value }))}
+                                            className="crm-select"
+                                        >
+                                            {scraperProfiles.map((profile) => (
+                                                <option key={profile} value={profile}>{scraperProfileLabel(profile)}</option>
+                                            ))}
+                                        </select>
+                                        <select
+                                            value={scraperEditor.fetch_schedule}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, fetch_schedule: event.target.value }))}
+                                            className="crm-select"
+                                        >
+                                            {scraperSchedules.map((schedule) => (
+                                                <option key={schedule} value={schedule}>{scraperScheduleLabel(schedule)}</option>
+                                            ))}
+                                        </select>
+                                        <select
+                                            value={scraperEditor.dedupe_mode}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, dedupe_mode: event.target.value }))}
+                                            className="crm-select md:col-span-2"
+                                        >
+                                            {scraperDedupeModes.map((mode) => (
+                                                <option key={mode} value={mode}>{dedupeModeLabel(mode)}</option>
+                                            ))}
+                                        </select>
+                                        <input
+                                            value={selectedScraperRules.row_selector}
+                                            onChange={(event) => setScraperEditor((current) => ({
+                                                ...current,
+                                                parser_rules: { ...current.parser_rules, row_selector: event.target.value },
+                                            }))}
+                                            className="crm-input"
+                                            placeholder="Row selector (optional)"
+                                        />
+                                        <input
+                                            value={selectedScraperRules.link_selector}
+                                            onChange={(event) => setScraperEditor((current) => ({
+                                                ...current,
+                                                parser_rules: { ...current.parser_rules, link_selector: event.target.value },
+                                            }))}
+                                            className="crm-input"
+                                            placeholder="Link selector (optional)"
+                                        />
+                                        <input
+                                            value={selectedScraperRules.name_selector}
+                                            onChange={(event) => setScraperEditor((current) => ({
+                                                ...current,
+                                                parser_rules: { ...current.parser_rules, name_selector: event.target.value },
+                                            }))}
+                                            className="crm-input"
+                                            placeholder="Name selector (optional)"
+                                        />
+                                        <input
+                                            value={selectedScraperRules.phone_selector}
+                                            onChange={(event) => setScraperEditor((current) => ({
+                                                ...current,
+                                                parser_rules: { ...current.parser_rules, phone_selector: event.target.value },
+                                            }))}
+                                            className="crm-input"
+                                            placeholder="Phone selector (optional)"
+                                        />
+                                        <input
+                                            value={selectedScraperRules.email_selector}
+                                            onChange={(event) => setScraperEditor((current) => ({
+                                                ...current,
+                                                parser_rules: { ...current.parser_rules, email_selector: event.target.value },
+                                            }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="Email selector (optional)"
+                                        />
+
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(scraperEditor.is_active)}
+                                                onChange={(event) => setScraperEditor((current) => ({ ...current, is_active: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Source is active
+                                        </label>
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(scraperEditor.compliance_ack_robots)}
+                                                onChange={(event) => setScraperEditor((current) => ({ ...current, compliance_ack_robots: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Robots policy reviewed
+                                        </label>
+                                        <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(scraperEditor.compliance_ack_tos)}
+                                                onChange={(event) => setScraperEditor((current) => ({ ...current, compliance_ack_tos: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Terms and source usage reviewed
+                                        </label>
+                                        <textarea
+                                            rows={2}
+                                            value={scraperEditor.compliance_notes}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, compliance_notes: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="Compliance notes (optional)"
+                                        />
+                                        <textarea
+                                            rows={2}
+                                            value={scraperEditor.reason}
+                                            onChange={(event) => setScraperEditor((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="Reason for profile update"
+                                        />
+                                    </div>
+                                    <div className="mt-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => updateScraperSourceMutation.mutate({
+                                                sourceId: selectedScraperSource.id,
+                                                payload: {
+                                                    name: scraperEditor.name,
+                                                    source_url: scraperEditor.source_url,
+                                                    parser_profile: scraperEditor.parser_profile,
+                                                    fetch_schedule: scraperEditor.fetch_schedule,
+                                                    dedupe_mode: scraperEditor.dedupe_mode,
+                                                    parser_rules: scraperEditor.parser_rules,
+                                                    is_active: scraperEditor.is_active,
+                                                    compliance_ack_robots: scraperEditor.compliance_ack_robots,
+                                                    compliance_ack_tos: scraperEditor.compliance_ack_tos,
+                                                    compliance_notes: scraperEditor.compliance_notes,
+                                                    reason: scraperEditor.reason,
+                                                },
+                                            })}
+                                            disabled={
+                                                updateScraperSourceMutation.isPending
+                                                || !scraperEditor.name.trim()
+                                                || !scraperEditor.source_url.trim()
+                                                || !scraperEditor.reason.trim()
+                                            }
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {updateScraperSourceMutation.isPending ? 'Saving...' : 'Save scraper source'}
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Manual Run</h4>
+                                    <p className="mt-1 text-xs text-slate-500">Run a controlled scrape now. Dry-run previews candidates without creating leads.</p>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(scraperRunForm.dry_run)}
+                                                onChange={(event) => setScraperRunForm((current) => ({
+                                                    ...current,
+                                                    dry_run: event.target.checked,
+                                                    reason: event.target.checked
+                                                        ? 'Dry-run scraper execution from settings'
+                                                        : 'Scraper import run from settings',
+                                                }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Dry run preview
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="250"
+                                            value={scraperRunForm.max_candidates}
+                                            onChange={(event) => setScraperRunForm((current) => ({ ...current, max_candidates: Number(event.target.value || 50) }))}
+                                            className="crm-input"
+                                            placeholder="Max candidates"
+                                        />
+                                        <textarea
+                                            rows={2}
+                                            value={scraperRunForm.reason}
+                                            onChange={(event) => setScraperRunForm((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="Reason for scraper run"
+                                        />
+                                    </div>
+
+                                    {!selectedScraperCompliant ? (
+                                        <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                                            Robots and terms acknowledgements are required before runs can proceed.
+                                        </p>
+                                    ) : null}
+
+                                    <div className="mt-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => setScraperRunConfirmOpen(true)}
+                                            disabled={runScraperSourceMutation.isPending || !scraperRunForm.reason.trim() || !selectedScraperSource}
+                                            className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {runScraperSourceMutation.isPending ? 'Running...' : 'Run scraper now'}
+                                        </button>
+                                    </div>
+
+                                    {latestScraperRunResult ? (
+                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                                            <p className="font-semibold text-slate-800">Latest run summary</p>
+                                            <p className="mt-1">
+                                                Status: <span className="font-semibold">{scraperStatusLabel(latestScraperRunResult.status)}</span> •
+                                                Discovered: <span className="font-semibold">{latestScraperRunResult.discovered || 0}</span> •
+                                                Created: <span className="font-semibold">{latestScraperRunResult.created || 0}</span> •
+                                                Duplicates: <span className="font-semibold">{latestScraperRunResult.duplicates || 0}</span>
+                                            </p>
+                                            {latestScraperRunResult.message ? (
+                                                <p className="mt-1 text-slate-600">{latestScraperRunResult.message}</p>
+                                            ) : null}
+                                            {Array.isArray(latestScraperRunResult.errors) && latestScraperRunResult.errors.length > 0 ? (
+                                                <div className="mt-2 rounded-md border border-amber-200 bg-white p-2">
+                                                    <p className="font-semibold text-amber-800">Errors</p>
+                                                    <ul className="mt-1 space-y-1">
+                                                        {latestScraperRunResult.errors.slice(0, 3).map((error) => (
+                                                            <li key={error} className="text-slate-700">{error}</li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            ) : null}
+                                            {Array.isArray(latestScraperRunResult.preview) && latestScraperRunResult.preview.length > 0 ? (
+                                                <div className="mt-2 rounded-md border border-slate-200 bg-white p-2">
+                                                    <p className="font-semibold text-slate-800">Candidate preview</p>
+                                                    <div className="mt-1 space-y-1">
+                                                        {latestScraperRunResult.preview.slice(0, 4).map((row, index) => (
+                                                            <p key={`${row.source_url || row.name || 'row'}-${index}`} className="text-slate-700">
+                                                                <span className="font-semibold text-slate-900">{row.name || 'Unnamed'}</span>
+                                                                {row.phone_normalized ? ` • ${row.phone_normalized}` : ''}
+                                                                {row.email ? ` • ${row.email}` : ''}
+                                                                {row.result ? ` • ${row.result}` : ''}
+                                                            </p>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                </section>
+                            </>
+                        )}
+                    </div>
+                </div>
+            </section>
+
             {createOpen ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setCreateOpen(false)}>
                     <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
@@ -940,6 +1492,159 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                 </div>
             ) : null}
 
+            {scraperCreateOpen ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setScraperCreateOpen(false)}>
+                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Add Scraper Source</h3>
+                                <p className="crm-panel-subtitle">Create a source profile, confirm compliance, then validate with dry-run.</p>
+                            </div>
+                        </header>
+                        <div className="grid gap-3 p-4 md:grid-cols-2">
+                            <select
+                                value={scraperCreateForm.platform_id}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, platform_id: event.target.value }))}
+                                className="crm-select"
+                            >
+                                <option value="">Select market</option>
+                                {platformRows.map((platform) => (
+                                    <option key={platform.platform_id} value={platform.platform_id}>{platform.platform_name}</option>
+                                ))}
+                            </select>
+                            <input
+                                value={scraperCreateForm.name}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, name: event.target.value }))}
+                                className="crm-input"
+                                placeholder="Source name"
+                            />
+                            <input
+                                value={scraperCreateForm.source_url}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, source_url: event.target.value }))}
+                                className="crm-input md:col-span-2"
+                                placeholder="https://example.com/listings"
+                            />
+                            <select
+                                value={scraperCreateForm.parser_profile}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, parser_profile: event.target.value }))}
+                                className="crm-select"
+                            >
+                                {scraperProfiles.map((profile) => (
+                                    <option key={profile} value={profile}>{scraperProfileLabel(profile)}</option>
+                                ))}
+                            </select>
+                            <select
+                                value={scraperCreateForm.fetch_schedule}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, fetch_schedule: event.target.value }))}
+                                className="crm-select"
+                            >
+                                {scraperSchedules.map((schedule) => (
+                                    <option key={schedule} value={schedule}>{scraperScheduleLabel(schedule)}</option>
+                                ))}
+                            </select>
+                            <select
+                                value={scraperCreateForm.dedupe_mode}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, dedupe_mode: event.target.value }))}
+                                className="crm-select md:col-span-2"
+                            >
+                                {scraperDedupeModes.map((mode) => (
+                                    <option key={mode} value={mode}>{dedupeModeLabel(mode)}</option>
+                                ))}
+                            </select>
+                            <input
+                                value={scraperCreateForm.parser_rules.row_selector}
+                                onChange={(event) => setScraperCreateForm((current) => ({
+                                    ...current,
+                                    parser_rules: { ...current.parser_rules, row_selector: event.target.value },
+                                }))}
+                                className="crm-input"
+                                placeholder="Row selector (optional)"
+                            />
+                            <input
+                                value={scraperCreateForm.parser_rules.link_selector}
+                                onChange={(event) => setScraperCreateForm((current) => ({
+                                    ...current,
+                                    parser_rules: { ...current.parser_rules, link_selector: event.target.value },
+                                }))}
+                                className="crm-input"
+                                placeholder="Link selector (optional)"
+                            />
+                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(scraperCreateForm.is_active)}
+                                    onChange={(event) => setScraperCreateForm((current) => ({ ...current, is_active: event.target.checked }))}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                />
+                                Source is active
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(scraperCreateForm.compliance_ack_robots)}
+                                    onChange={(event) => setScraperCreateForm((current) => ({ ...current, compliance_ack_robots: event.target.checked }))}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                />
+                                Robots policy reviewed
+                            </label>
+                            <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(scraperCreateForm.compliance_ack_tos)}
+                                    onChange={(event) => setScraperCreateForm((current) => ({ ...current, compliance_ack_tos: event.target.checked }))}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                />
+                                Terms and source usage reviewed
+                            </label>
+                            <textarea
+                                rows={2}
+                                value={scraperCreateForm.compliance_notes}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, compliance_notes: event.target.value }))}
+                                className="crm-input md:col-span-2"
+                                placeholder="Compliance notes (optional)"
+                            />
+                            <textarea
+                                rows={2}
+                                value={scraperCreateForm.reason}
+                                onChange={(event) => setScraperCreateForm((current) => ({ ...current, reason: event.target.value }))}
+                                className="crm-input md:col-span-2"
+                                placeholder="Reason"
+                            />
+                        </div>
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button type="button" onClick={() => setScraperCreateOpen(false)} className="crm-btn-secondary">Cancel</button>
+                            <button
+                                type="button"
+                                onClick={() => createScraperSourceMutation.mutate({
+                                    platform_id: Number(scraperCreateForm.platform_id),
+                                    name: scraperCreateForm.name,
+                                    source_url: scraperCreateForm.source_url,
+                                    parser_profile: scraperCreateForm.parser_profile,
+                                    fetch_schedule: scraperCreateForm.fetch_schedule,
+                                    dedupe_mode: scraperCreateForm.dedupe_mode,
+                                    parser_rules: scraperCreateForm.parser_rules,
+                                    is_active: scraperCreateForm.is_active,
+                                    compliance_ack_robots: scraperCreateForm.compliance_ack_robots,
+                                    compliance_ack_tos: scraperCreateForm.compliance_ack_tos,
+                                    compliance_notes: scraperCreateForm.compliance_notes,
+                                    reason: scraperCreateForm.reason,
+                                })}
+                                disabled={
+                                    createScraperSourceMutation.isPending
+                                    || !scraperCreateForm.platform_id
+                                    || !scraperCreateForm.name.trim()
+                                    || !scraperCreateForm.source_url.trim()
+                                    || !scraperCreateForm.reason.trim()
+                                }
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {createScraperSourceMutation.isPending ? 'Creating...' : 'Create source'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
             <ConfirmDialog
                 open={smsTestConfirmOpen}
                 title="Send Test SMS?"
@@ -963,6 +1668,36 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                     <p><span className="font-semibold text-slate-800">Fallback:</span> {smsProviderLabel(smsProviderForm.fallback_provider)}</p>
                     <p><span className="font-semibold text-slate-800">Phone:</span> {smsTestForm.phone}</p>
                     <p className="line-clamp-2"><span className="font-semibold text-slate-800">Message:</span> {smsTestForm.message}</p>
+                </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={scraperRunConfirmOpen}
+                title="Run Scraper Now?"
+                message="This will fetch the source URL, evaluate compliance/robots guardrails, and execute dedupe logic before optional lead creation."
+                confirmLabel={scraperRunForm.dry_run ? 'Run dry-run' : 'Run import'}
+                cancelLabel="Cancel"
+                tone="warning"
+                onCancel={() => setScraperRunConfirmOpen(false)}
+                onConfirm={() => {
+                    if (!selectedScraperSource) return;
+                    runScraperSourceMutation.mutate({
+                        sourceId: selectedScraperSource.id,
+                        payload: {
+                            dry_run: scraperRunForm.dry_run,
+                            max_candidates: Number(scraperRunForm.max_candidates || 50),
+                            reason: scraperRunForm.reason.trim(),
+                        },
+                    });
+                }}
+                confirmDisabled={!selectedScraperSource || !scraperRunForm.reason.trim()}
+                isPending={runScraperSourceMutation.isPending}
+            >
+                <div className="space-y-1 text-sm text-slate-600">
+                    <p><span className="font-semibold text-slate-800">Source:</span> {selectedScraperSource?.name}</p>
+                    <p><span className="font-semibold text-slate-800">Profile:</span> {scraperProfileLabel(selectedScraperSource?.parser_profile)}</p>
+                    <p><span className="font-semibold text-slate-800">Mode:</span> {scraperRunForm.dry_run ? 'Dry-run preview' : 'Import into leads'}</p>
+                    <p><span className="font-semibold text-slate-800">Max candidates:</span> {scraperRunForm.max_candidates}</p>
                 </div>
             </ConfirmDialog>
 

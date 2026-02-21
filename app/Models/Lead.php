@@ -11,7 +11,7 @@ class Lead extends Model
 
     protected $fillable = [
         'platform_id', 'wp_user_id', 'wp_post_id',
-        'name', 'phone_normalized', 'email',
+        'name', 'phone_normalized', 'email', 'source_url',
         'source', 'status', 'assigned_to',
         'first_contact_at', 'last_contact_at',
         'response_time_seconds', 'converted_client_id',

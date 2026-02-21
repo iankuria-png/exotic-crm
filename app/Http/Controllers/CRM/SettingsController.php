@@ -5,6 +5,8 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Platform;
+use App\Models\ScraperRun;
+use App\Models\ScraperSource;
 use App\Models\Template;
 use App\Models\User;
 use App\Services\AuditService;
@@ -12,6 +14,7 @@ use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
+use App\Services\ScraperSourceService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
@@ -25,7 +28,8 @@ class SettingsController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
         private readonly LeadImportService $leadImportService,
-        private readonly NotificationService $notificationService
+        private readonly NotificationService $notificationService,
+        private readonly ScraperSourceService $scraperSourceService
     ) {
     }
 
@@ -55,6 +59,31 @@ class SettingsController extends Controller
             ? (($smsProvider['enabled'] ?? false) ? 'connected' : 'configured_disabled')
             : 'pending';
 
+        $scraperSourcesQuery = ScraperSource::query()
+            ->with('platform:id,name,country')
+            ->orderByDesc('updated_at');
+
+        $scraperRunsQuery = ScraperRun::query()
+            ->with([
+                'source:id,name',
+                'platform:id,name,country',
+                'initiatedBy:id,name,email',
+            ])
+            ->orderByDesc('id');
+
+        if (is_array($allowedPlatformIds)) {
+            $scraperSourcesQuery->whereIn('platform_id', $allowedPlatformIds);
+            $scraperRunsQuery->whereIn('platform_id', $allowedPlatformIds);
+        }
+
+        $scraperSources = $scraperSourcesQuery->get()
+            ->map(fn (ScraperSource $source) => $this->serializeScraperSource($source))
+            ->values();
+
+        $scraperRuns = $scraperRunsQuery->limit(15)->get()
+            ->map(fn (ScraperRun $run) => $this->serializeScraperRun($run))
+            ->values();
+
         return response()->json([
             'services' => [
                 'sms_gateway' => [
@@ -78,6 +107,13 @@ class SettingsController extends Controller
                 ],
             ],
             'platforms' => $platformStatuses,
+            'scraper' => [
+                'sources' => $scraperSources,
+                'recent_runs' => $scraperRuns,
+                'parser_profiles' => ScraperSourceService::PARSER_PROFILES,
+                'fetch_schedules' => ScraperSourceService::FETCH_SCHEDULES,
+                'dedupe_modes' => ScraperSourceService::DEDUPE_MODES,
+            ],
             'last_checked_at' => now()->toDateTimeString(),
         ]);
     }
@@ -475,6 +511,207 @@ class SettingsController extends Controller
         }
     }
 
+    public function storeScraperSource(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can create scraper sources.'
+        );
+
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'name' => 'required|string|max:255',
+            'source_url' => 'required|url|max:500',
+            'parser_profile' => ['required', Rule::in(ScraperSourceService::PARSER_PROFILES)],
+            'fetch_schedule' => ['required', Rule::in(ScraperSourceService::FETCH_SCHEDULES)],
+            'dedupe_mode' => ['required', Rule::in(ScraperSourceService::DEDUPE_MODES)],
+            'is_active' => 'nullable|boolean',
+            'compliance_ack_robots' => 'nullable|boolean',
+            'compliance_ack_tos' => 'nullable|boolean',
+            'compliance_notes' => 'nullable|string|max:500',
+            'parser_rules' => 'nullable|array',
+            'parser_rules.row_selector' => 'nullable|string|max:255',
+            'parser_rules.name_selector' => 'nullable|string|max:255',
+            'parser_rules.phone_selector' => 'nullable|string|max:255',
+            'parser_rules.email_selector' => 'nullable|string|max:255',
+            'parser_rules.link_selector' => 'nullable|string|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this market.'
+        );
+
+        $sourceUrl = trim((string) $validated['source_url']);
+        if (ScraperSource::query()->where('platform_id', $platformId)->where('source_url', $sourceUrl)->exists()) {
+            return response()->json([
+                'message' => 'This source URL is already configured for the selected market.',
+            ], 422);
+        }
+
+        $source = ScraperSource::query()->create([
+            'platform_id' => $platformId,
+            'name' => trim((string) $validated['name']),
+            'source_url' => $sourceUrl,
+            'parser_profile' => (string) $validated['parser_profile'],
+            'fetch_schedule' => (string) $validated['fetch_schedule'],
+            'dedupe_mode' => (string) $validated['dedupe_mode'],
+            'is_active' => array_key_exists('is_active', $validated) ? (bool) $validated['is_active'] : true,
+            'compliance_ack_robots' => (bool) ($validated['compliance_ack_robots'] ?? false),
+            'compliance_ack_tos' => (bool) ($validated['compliance_ack_tos'] ?? false),
+            'compliance_notes' => !empty($validated['compliance_notes']) ? trim((string) $validated['compliance_notes']) : null,
+            'parser_rules' => $this->normalizeParserRules($validated['parser_rules'] ?? []),
+            'created_by' => (int) $request->user()->id,
+            'updated_by' => (int) $request->user()->id,
+        ]);
+        $source->load('platform:id,name,country');
+
+        $this->auditService->fromRequest(
+            $request,
+            $platformId,
+            CrmAuditAction::SCRAPER_SOURCE_CREATE,
+            'scraper_source',
+            (int) $source->id,
+            null,
+            $this->scraperSourceAuditState($source),
+            $validated['reason'] ?? 'Created scraper source from settings'
+        );
+
+        return response()->json([
+            'source' => $this->serializeScraperSource($source),
+        ], 201);
+    }
+
+    public function updateScraperSource(Request $request, ScraperSource $scraperSource)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can update scraper sources.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $scraperSource->platform_id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'source_url' => ['sometimes', 'url', 'max:500', Rule::unique('scraper_sources', 'source_url')->ignore($scraperSource->id)->where(function ($query) use ($scraperSource) {
+                return $query->where('platform_id', (int) $scraperSource->platform_id);
+            })],
+            'parser_profile' => ['sometimes', Rule::in(ScraperSourceService::PARSER_PROFILES)],
+            'fetch_schedule' => ['sometimes', Rule::in(ScraperSourceService::FETCH_SCHEDULES)],
+            'dedupe_mode' => ['sometimes', Rule::in(ScraperSourceService::DEDUPE_MODES)],
+            'is_active' => 'sometimes|boolean',
+            'compliance_ack_robots' => 'sometimes|boolean',
+            'compliance_ack_tos' => 'sometimes|boolean',
+            'compliance_notes' => 'sometimes|nullable|string|max:500',
+            'parser_rules' => 'sometimes|array',
+            'parser_rules.row_selector' => 'nullable|string|max:255',
+            'parser_rules.name_selector' => 'nullable|string|max:255',
+            'parser_rules.phone_selector' => 'nullable|string|max:255',
+            'parser_rules.email_selector' => 'nullable|string|max:255',
+            'parser_rules.link_selector' => 'nullable|string|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $before = $this->scraperSourceAuditState($scraperSource);
+
+        $nextPayload = [];
+        foreach (['name', 'source_url', 'parser_profile', 'fetch_schedule', 'dedupe_mode', 'is_active', 'compliance_ack_robots', 'compliance_ack_tos', 'compliance_notes'] as $key) {
+            if (array_key_exists($key, $validated)) {
+                $nextPayload[$key] = $validated[$key];
+            }
+        }
+        if (array_key_exists('parser_rules', $validated)) {
+            $nextPayload['parser_rules'] = $this->normalizeParserRules($validated['parser_rules'] ?? []);
+        }
+        $nextPayload['updated_by'] = (int) $request->user()->id;
+
+        $scraperSource->fill($nextPayload)->save();
+        $scraperSource->refresh();
+        $scraperSource->load('platform:id,name,country');
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $scraperSource->platform_id,
+            CrmAuditAction::SCRAPER_SOURCE_UPDATE,
+            'scraper_source',
+            (int) $scraperSource->id,
+            $before,
+            $this->scraperSourceAuditState($scraperSource),
+            $validated['reason'] ?? 'Updated scraper source from settings'
+        );
+
+        return response()->json([
+            'source' => $this->serializeScraperSource($scraperSource),
+        ]);
+    }
+
+    public function runScraperSource(Request $request, ScraperSource $scraperSource)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can run scraper sources.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $scraperSource->platform_id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'dry_run' => 'nullable|boolean',
+            'max_candidates' => 'nullable|integer|min:1|max:250',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $dryRun = (bool) ($validated['dry_run'] ?? true);
+        $maxCandidates = (int) ($validated['max_candidates'] ?? 50);
+
+        $result = $this->scraperSourceService->runSource(
+            $scraperSource,
+            $request->user(),
+            $dryRun,
+            $maxCandidates
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $scraperSource->platform_id,
+            CrmAuditAction::SCRAPER_RUN,
+            'scraper_source',
+            (int) $scraperSource->id,
+            null,
+            [
+                'status' => $result['status'] ?? 'error',
+                'dry_run' => $dryRun,
+                'discovered' => (int) ($result['discovered'] ?? 0),
+                'created' => (int) ($result['created'] ?? 0),
+                'duplicates' => (int) ($result['duplicates'] ?? 0),
+                'skipped' => (int) ($result['skipped'] ?? 0),
+                'error_count' => count($result['errors'] ?? []),
+            ],
+            $validated['reason'] ?? ($dryRun ? 'Dry-run scraper execution from settings' : 'Scraper import run from settings')
+        );
+
+        $scraperSource->refresh();
+        $scraperSource->load('platform:id,name,country');
+
+        $statusCode = in_array(($result['status'] ?? ''), ['blocked', 'error'], true) ? 422 : 200;
+
+        return response()->json([
+            'source' => $this->serializeScraperSource($scraperSource),
+            'result' => $result,
+        ], $statusCode);
+    }
+
     public function templates(Request $request)
     {
         $query = Template::query()->with('platform');
@@ -654,6 +891,9 @@ class SettingsController extends Controller
             CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
             CrmAuditAction::INTEGRATION_CONNECTION_TEST,
             CrmAuditAction::INTEGRATION_SYNC_RUN,
+            CrmAuditAction::SCRAPER_SOURCE_CREATE,
+            CrmAuditAction::SCRAPER_SOURCE_UPDATE,
+            CrmAuditAction::SCRAPER_RUN,
             CrmAuditAction::LEAD_SCRAPE_INTAKE,
             CrmAuditAction::LEAD_STATUS_UPDATE,
             CrmAuditAction::LEAD_ASSIGN,
@@ -920,6 +1160,93 @@ class SettingsController extends Controller
         ]);
     }
 
+    private function serializeScraperSource(ScraperSource $source): array
+    {
+        return [
+            'id' => (int) $source->id,
+            'platform_id' => (int) $source->platform_id,
+            'platform_name' => $source->platform?->name,
+            'platform_country' => $source->platform?->country,
+            'name' => $source->name,
+            'source_url' => $source->source_url,
+            'parser_profile' => $source->parser_profile,
+            'parser_rules' => is_array($source->parser_rules) ? $source->parser_rules : [],
+            'fetch_schedule' => $source->fetch_schedule,
+            'dedupe_mode' => $source->dedupe_mode,
+            'is_active' => (bool) $source->is_active,
+            'compliance_ack_robots' => (bool) $source->compliance_ack_robots,
+            'compliance_ack_tos' => (bool) $source->compliance_ack_tos,
+            'compliance_notes' => $source->compliance_notes,
+            'last_run_at' => optional($source->last_run_at)->toDateTimeString(),
+            'last_run_status' => $source->last_run_status,
+            'last_run_summary' => is_array($source->last_run_summary) ? $source->last_run_summary : null,
+            'updated_at' => optional($source->updated_at)->toDateTimeString(),
+        ];
+    }
+
+    private function serializeScraperRun(ScraperRun $run): array
+    {
+        return [
+            'id' => (int) $run->id,
+            'scraper_source_id' => (int) $run->scraper_source_id,
+            'source_name' => $run->source?->name,
+            'platform_id' => (int) $run->platform_id,
+            'platform_name' => $run->platform?->name,
+            'mode' => $run->mode,
+            'status' => $run->status,
+            'reason' => $run->reason,
+            'discovered_count' => (int) $run->discovered_count,
+            'created_count' => (int) $run->created_count,
+            'duplicate_count' => (int) $run->duplicate_count,
+            'skipped_count' => (int) $run->skipped_count,
+            'error_count' => (int) $run->error_count,
+            'preview' => is_array($run->preview) ? $run->preview : [],
+            'result' => is_array($run->result) ? $run->result : null,
+            'started_at' => optional($run->started_at)->toDateTimeString(),
+            'completed_at' => optional($run->completed_at)->toDateTimeString(),
+            'initiated_by' => $run->initiatedBy ? [
+                'id' => (int) $run->initiatedBy->id,
+                'name' => $run->initiatedBy->name,
+                'email' => $run->initiatedBy->email,
+            ] : null,
+        ];
+    }
+
+    private function normalizeParserRules(array $rules): array
+    {
+        $normalized = [];
+        foreach (['row_selector', 'name_selector', 'phone_selector', 'email_selector', 'link_selector'] as $key) {
+            if (!array_key_exists($key, $rules)) {
+                continue;
+            }
+
+            $value = trim((string) $rules[$key]);
+            if ($value !== '') {
+                $normalized[$key] = mb_substr($value, 0, 255);
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function scraperSourceAuditState(ScraperSource $source): array
+    {
+        return [
+            'platform_id' => (int) $source->platform_id,
+            'name' => $source->name,
+            'source_url' => $source->source_url,
+            'parser_profile' => $source->parser_profile,
+            'fetch_schedule' => $source->fetch_schedule,
+            'dedupe_mode' => $source->dedupe_mode,
+            'is_active' => (bool) $source->is_active,
+            'compliance_ack_robots' => (bool) $source->compliance_ack_robots,
+            'compliance_ack_tos' => (bool) $source->compliance_ack_tos,
+            'compliance_notes' => $source->compliance_notes,
+            'parser_rules' => is_array($source->parser_rules) ? $source->parser_rules : [],
+            'last_run_status' => $source->last_run_status,
+        ];
+    }
+
     private function serializePlatformIntegration(Platform $platform): array
     {
         $hasWpCredentials = $this->platformHasWpCredentials($platform);
@@ -1080,6 +1407,24 @@ class SettingsController extends Controller
                 'error', 'failed' => 'Open integration workspace, fix connection issues, and rerun sync.',
                 default => 'Inspect sync details and rerun if records were not imported as expected.',
             };
+        } elseif ($action === CrmAuditAction::SCRAPER_RUN) {
+            $status = (string) ($after['status'] ?? 'unknown');
+            $discovered = (int) ($after['discovered'] ?? 0);
+            $created = (int) ($after['created'] ?? 0);
+            $summary = sprintf('Scraper run finished with status: %s (%d discovered, %d created).', $status, $discovered, $created);
+            $severity = match ($status) {
+                'success' => 'low',
+                'partial' => 'medium',
+                'blocked', 'error', 'failed' => 'high',
+                default => 'medium',
+            };
+            $suggestedAction = match ($status) {
+                'success' => 'No immediate action required.',
+                'partial' => 'Review run warnings and rerun after parser adjustments.',
+                'blocked' => 'Confirm robots/terms acknowledgement and resolve policy blockers before rerun.',
+                'error', 'failed' => 'Inspect scrape source configuration and retry with dry-run.',
+                default => 'Inspect run output before retrying.',
+            };
         } elseif (in_array($action, [CrmAuditAction::PAYMENT_MATCH_BATCH, 'payment_match_confirmed'], true)) {
             $matched = (int) ($after['matched'] ?? 0);
             $unmatched = (int) ($after['unmatched'] ?? 0);
@@ -1185,6 +1530,27 @@ class SettingsController extends Controller
                 'severity' => 'medium',
                 'summary' => 'Manual sync execution completed.',
                 'suggested_action' => 'Inspect sync totals and errors before proceeding.',
+            ],
+            CrmAuditAction::SCRAPER_SOURCE_CREATE => [
+                'title' => 'Scraper source created',
+                'category' => 'integrations',
+                'severity' => 'low',
+                'summary' => 'A new scraper source profile was created.',
+                'suggested_action' => 'Run a dry-run scrape to validate parser and dedupe rules.',
+            ],
+            CrmAuditAction::SCRAPER_SOURCE_UPDATE => [
+                'title' => 'Scraper source updated',
+                'category' => 'integrations',
+                'severity' => 'medium',
+                'summary' => 'Scraper source settings were updated.',
+                'suggested_action' => 'Run a dry-run to confirm extraction quality before live import.',
+            ],
+            CrmAuditAction::SCRAPER_RUN => [
+                'title' => 'Scraper run executed',
+                'category' => 'leads',
+                'severity' => 'medium',
+                'summary' => 'Scraper pipeline run completed.',
+                'suggested_action' => 'Review run summary and resolve blocked/failed states before retrying.',
             ],
             CrmAuditAction::DEAL_ACTIVATE => [
                 'title' => 'Subscription activated',

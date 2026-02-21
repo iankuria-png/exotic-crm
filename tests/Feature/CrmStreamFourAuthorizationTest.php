@@ -11,6 +11,8 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\RenewalCampaign;
+use App\Models\ScraperRun;
+use App\Models\ScraperSource;
 use App\Models\Template;
 use App\Models\TimelineEvent;
 use App\Models\User;
@@ -1021,6 +1023,146 @@ CSV;
         ]);
 
         $outOfScopeResponse->assertStatus(403);
+    }
+
+    public function test_sub_admin_can_create_update_and_dry_run_scraper_source_in_scope(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $subAdmin = $this->createUser('sub_admin', [$platform->id]);
+
+        Sanctum::actingAs($subAdmin);
+
+        $createResponse = $this->postJson('/api/crm/settings/integrations/scraper-sources', [
+            'platform_id' => $platform->id,
+            'name' => 'Kenya lead board',
+            'source_url' => 'https://leads-source.test/listings',
+            'parser_profile' => 'contact_cards',
+            'fetch_schedule' => 'manual_only',
+            'dedupe_mode' => 'phone_or_email',
+            'compliance_ack_robots' => true,
+            'compliance_ack_tos' => true,
+            'reason' => 'Create source for dry-run validation',
+        ]);
+
+        $createResponse->assertCreated()
+            ->assertJsonPath('source.platform_id', $platform->id)
+            ->assertJsonPath('source.name', 'Kenya lead board');
+
+        $sourceId = (int) $createResponse->json('source.id');
+
+        $updateResponse = $this->patchJson("/api/crm/settings/integrations/scraper-sources/{$sourceId}", [
+            'parser_rules' => [
+                'row_selector' => 'article',
+                'name_selector' => 'h2',
+                'phone_selector' => 'a[href^="tel:"]',
+                'email_selector' => 'a[href^="mailto:"]',
+            ],
+            'reason' => 'Tune parser selectors',
+        ]);
+
+        $updateResponse->assertOk()
+            ->assertJsonPath('source.parser_rules.row_selector', 'article');
+
+        Http::fake([
+            'https://leads-source.test/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200, ['content-type' => 'text/plain']),
+            'https://leads-source.test/listings' => Http::response(
+                '<html><body><article><h2>Nancy One</h2><a href="tel:+254712300111">Call</a><a href="mailto:nancy@example.test">Email</a></article></body></html>',
+                200,
+                ['content-type' => 'text/html; charset=utf-8']
+            ),
+        ]);
+
+        $runResponse = $this->postJson("/api/crm/settings/integrations/scraper-sources/{$sourceId}/run", [
+            'dry_run' => true,
+            'max_candidates' => 20,
+            'reason' => 'Dry-run from automated test',
+        ]);
+
+        $runResponse->assertOk()
+            ->assertJsonPath('result.status', 'success')
+            ->assertJsonPath('result.dry_run', true)
+            ->assertJsonPath('result.discovered', 1)
+            ->assertJsonPath('result.created', 0);
+
+        $this->assertDatabaseHas('scraper_runs', [
+            'scraper_source_id' => $sourceId,
+            'mode' => 'dry_run',
+            'status' => 'success',
+        ]);
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'entity_type' => 'scraper_source',
+            'entity_id' => $sourceId,
+            'action' => 'scraper_run',
+        ]);
+    }
+
+    public function test_scraper_run_blocks_without_compliance_and_dedupes_on_import(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $subAdmin = $this->createUser('sub_admin', [$platform->id]);
+
+        $source = ScraperSource::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Compliance gated source',
+            'source_url' => 'https://scraper-feed.test/list',
+            'parser_profile' => 'contact_cards',
+            'fetch_schedule' => 'manual_only',
+            'dedupe_mode' => 'phone_or_email',
+            'is_active' => true,
+            'compliance_ack_robots' => false,
+            'compliance_ack_tos' => false,
+            'created_by' => $subAdmin->id,
+            'updated_by' => $subAdmin->id,
+        ]);
+
+        Sanctum::actingAs($subAdmin);
+
+        $blockedResponse = $this->postJson("/api/crm/settings/integrations/scraper-sources/{$source->id}/run", [
+            'dry_run' => false,
+            'reason' => 'Attempt import without compliance',
+        ]);
+
+        $blockedResponse->assertStatus(422)
+            ->assertJsonPath('result.status', 'blocked');
+
+        $source->update([
+            'compliance_ack_robots' => true,
+            'compliance_ack_tos' => true,
+        ]);
+
+        Http::fake([
+            'https://scraper-feed.test/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200, ['content-type' => 'text/plain']),
+            'https://scraper-feed.test/list' => Http::response(
+                '<html><body><article><h2>Amber Prime</h2><a href="tel:0712555444">Phone</a><a href="mailto:amber@example.test">Mail</a></article></body></html>',
+                200,
+                ['content-type' => 'text/html']
+            ),
+        ]);
+
+        $firstImport = $this->postJson("/api/crm/settings/integrations/scraper-sources/{$source->id}/run", [
+            'dry_run' => false,
+            'max_candidates' => 25,
+            'reason' => 'Initial import run',
+        ]);
+
+        $firstImport->assertOk()
+            ->assertJsonPath('result.status', 'success')
+            ->assertJsonPath('result.created', 1);
+
+        $secondImport = $this->postJson("/api/crm/settings/integrations/scraper-sources/{$source->id}/run", [
+            'dry_run' => false,
+            'max_candidates' => 25,
+            'reason' => 'Repeat import for dedupe check',
+        ]);
+
+        $secondImport->assertOk()
+            ->assertJsonPath('result.status', 'success')
+            ->assertJsonPath('result.created', 0)
+            ->assertJsonPath('result.duplicates', 2);
+
+        $this->assertSame(1, Lead::query()->where('platform_id', $platform->id)->count());
+        $this->assertGreaterThanOrEqual(3, ScraperRun::query()->where('scraper_source_id', $source->id)->count());
     }
 
     private function createUser(string $role = 'sales', array $assignedMarketIds = []): User
