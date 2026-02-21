@@ -11,6 +11,7 @@ use App\Services\AuditService;
 use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
+use App\Services\NotificationService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
@@ -23,7 +24,8 @@ class SettingsController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
-        private readonly LeadImportService $leadImportService
+        private readonly LeadImportService $leadImportService,
+        private readonly NotificationService $notificationService
     ) {
     }
 
@@ -41,17 +43,28 @@ class SettingsController extends Controller
             ->map(fn (Platform $platform) => $this->serializePlatformIntegration($platform))
             ->values();
 
-        $smsEnabled = (bool) config('services.sms.enabled', false);
-        $smsConfigured = (bool) config('services.sms.gateway_url') && (bool) config('services.sms.org_code');
+        $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
+        $activeProvider = (string) ($smsProvider['active_provider'] ?? 'legacy_gateway');
+        $activeConfigured = match ($activeProvider) {
+            'africastalking' => (bool) ($smsProvider['africastalking']['username'] ?? null)
+                && (bool) ($smsProvider['africastalking']['api_key_configured'] ?? false),
+            default => (bool) ($smsProvider['legacy_gateway']['gateway_url'] ?? null)
+                && (bool) ($smsProvider['legacy_gateway']['org_code'] ?? null),
+        };
+        $smsStatus = $activeConfigured
+            ? (($smsProvider['enabled'] ?? false) ? 'connected' : 'configured_disabled')
+            : 'pending';
 
         return response()->json([
             'services' => [
                 'sms_gateway' => [
-                    'status' => $smsConfigured ? ($smsEnabled ? 'connected' : 'configured_disabled') : 'pending',
-                    'enabled' => $smsEnabled,
-                    'gateway_url' => config('services.sms.gateway_url'),
-                    'org_code' => config('services.sms.org_code'),
+                    'status' => $smsStatus,
+                    'enabled' => (bool) ($smsProvider['enabled'] ?? false),
+                    'gateway_url' => $smsProvider['legacy_gateway']['gateway_url'] ?? null,
+                    'org_code' => $smsProvider['legacy_gateway']['org_code'] ?? null,
+                    'active_provider' => $activeProvider,
                 ],
+                'sms_provider' => $smsProvider,
                 'kopokopo' => [
                     'status' => config('services.kopokopo.client_id') && config('services.kopokopo.client_secret')
                         ? 'connected'
@@ -67,6 +80,101 @@ class SettingsController extends Controller
             'platforms' => $platformStatuses,
             'last_checked_at' => now()->toDateTimeString(),
         ]);
+    }
+
+    public function updateSmsProvider(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can update SMS provider settings.'
+        );
+
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+            'active_provider' => 'required|in:legacy_gateway,africastalking',
+            'fallback_provider' => 'nullable|in:none,legacy_gateway,africastalking',
+            'default_prefix' => ['nullable', 'string', 'max:5', 'regex:/^\d{1,5}$/'],
+            'legacy_gateway' => 'nullable|array',
+            'legacy_gateway.gateway_url' => 'nullable|url|max:255',
+            'legacy_gateway.org_code' => 'nullable|string|max:20',
+            'africastalking' => 'nullable|array',
+            'africastalking.endpoint' => 'nullable|url|max:255',
+            'africastalking.username' => 'nullable|string|max:100',
+            'africastalking.api_key' => 'nullable|string|max:255',
+            'africastalking.sender_id' => 'nullable|string|max:20',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (
+            !empty($validated['fallback_provider'])
+            && $validated['fallback_provider'] !== 'none'
+            && $validated['fallback_provider'] === $validated['active_provider']
+        ) {
+            return response()->json([
+                'message' => 'Fallback provider must be different from the active provider.',
+            ], 422);
+        }
+
+        $before = $this->notificationService->currentSmsConfig(masked: true);
+        $saved = $this->notificationService->saveSmsConfig($validated, (int) $request->user()->id);
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId([]) ?? 1,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'integration_setting',
+            1,
+            $before,
+            $saved,
+            $validated['reason'] ?? 'Updated SMS provider routing settings'
+        );
+
+        return response()->json([
+            'sms_provider' => $saved,
+        ]);
+    }
+
+    public function testSmsProvider(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can run SMS provider tests.'
+        );
+
+        $validated = $request->validate([
+            'phone' => 'required|string|max:20',
+            'message' => 'required|string|max:500',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $result = $this->notificationService->sendSms(
+            $validated['phone'],
+            $validated['message'],
+            [
+                'purpose' => 'settings_provider_test',
+            ]
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId([]) ?? 1,
+            CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+            'integration_setting',
+            1,
+            null,
+            [
+                'provider' => $result['provider'] ?? null,
+                'success' => (bool) ($result['success'] ?? false),
+                'status' => $result['status'] ?? null,
+            ],
+            $validated['reason'] ?? 'SMS provider test dispatch'
+        );
+
+        return response()->json([
+            'result' => $result,
+        ], ($result['success'] ?? false) ? 200 : 422);
     }
 
     public function storeIntegrationPlatform(Request $request)

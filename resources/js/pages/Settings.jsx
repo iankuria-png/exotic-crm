@@ -64,6 +64,63 @@ function defaultPlatformForm() {
     };
 }
 
+function smsProviderLabel(providerId) {
+    if (providerId === 'africastalking') return "Africa's Talking";
+    if (providerId === 'legacy_gateway') return 'Legacy Gateway';
+    return 'None';
+}
+
+function defaultSmsProviderForm() {
+    return {
+        enabled: false,
+        active_provider: 'legacy_gateway',
+        fallback_provider: 'none',
+        default_prefix: '254',
+        reason: 'Updated SMS provider routing settings',
+        legacy_gateway: {
+            gateway_url: '',
+            org_code: '76',
+        },
+        africastalking: {
+            endpoint: 'https://api.africastalking.com/version1/messaging',
+            username: '',
+            api_key: '',
+            sender_id: '',
+        },
+    };
+}
+
+function buildSmsProviderForm(smsProvider) {
+    const fallback = defaultSmsProviderForm();
+    if (!smsProvider) {
+        return {
+            form: fallback,
+            apiKeyConfigured: false,
+        };
+    }
+
+    return {
+        form: {
+            ...fallback,
+            enabled: Boolean(smsProvider.enabled),
+            active_provider: smsProvider.active_provider || 'legacy_gateway',
+            fallback_provider: smsProvider.fallback_provider || 'none',
+            default_prefix: smsProvider.default_prefix || '254',
+            legacy_gateway: {
+                gateway_url: smsProvider.legacy_gateway?.gateway_url || '',
+                org_code: smsProvider.legacy_gateway?.org_code || '76',
+            },
+            africastalking: {
+                endpoint: smsProvider.africastalking?.endpoint || fallback.africastalking.endpoint,
+                username: smsProvider.africastalking?.username || '',
+                api_key: '',
+                sender_id: smsProvider.africastalking?.sender_id || '',
+            },
+        },
+        apiKeyConfigured: Boolean(smsProvider.africastalking?.api_key_configured),
+    };
+}
+
 function IntegrationsWorkspace({ canCreateMarkets }) {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -81,6 +138,15 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     });
     const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
     const [latestSyncResult, setLatestSyncResult] = useState(null);
+    const [smsProviderForm, setSmsProviderForm] = useState(defaultSmsProviderForm());
+    const [smsProviderApiKeyConfigured, setSmsProviderApiKeyConfigured] = useState(false);
+    const [smsTestForm, setSmsTestForm] = useState({
+        phone: '',
+        message: 'This is a test message from ExoticCRM settings.',
+        reason: 'SMS provider test dispatch',
+    });
+    const [smsTestConfirmOpen, setSmsTestConfirmOpen] = useState(false);
+    const [latestSmsTestResult, setLatestSmsTestResult] = useState(null);
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
@@ -88,12 +154,14 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     });
 
     const services = data?.services || {};
+    const smsProviderConfig = services.sms_provider || null;
+    const activeProviderLabel = smsProviderLabel(smsProviderConfig?.active_provider || 'legacy_gateway');
     const serviceRows = [
         {
             key: 'sms',
-            label: 'SMS Gateway',
+            label: 'SMS Routing',
             status: services.sms_gateway?.status || 'pending',
-            detail: services.sms_gateway?.gateway_url || 'Gateway URL not configured',
+            detail: `Active: ${activeProviderLabel} • ${services.sms_gateway?.enabled ? 'Dispatch enabled' : 'Dispatch disabled'}`,
         },
         {
             key: 'kopokopo',
@@ -132,6 +200,12 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
         setEditor(buildPlatformEditor(selectedPlatform));
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
     }, [selectedPlatformId]);
+
+    useEffect(() => {
+        const smsState = buildSmsProviderForm(smsProviderConfig);
+        setSmsProviderForm(smsState.form);
+        setSmsProviderApiKeyConfigured(smsState.apiKeyConfigured);
+    }, [smsProviderConfig]);
 
     const createPlatformMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/settings/integrations/platforms', payload).then((response) => response.data),
@@ -184,9 +258,86 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
         },
     });
 
+    const saveSmsProviderMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/integrations/sms-provider', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            const smsState = buildSmsProviderForm(response?.sms_provider || null);
+            setSmsProviderForm(smsState.form);
+            setSmsProviderApiKeyConfigured(smsState.apiKeyConfigured);
+            toast.success('SMS provider settings saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to save SMS provider settings.');
+        },
+    });
+
+    const testSmsProviderMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/integrations/sms-provider/test', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestSmsTestResult(response?.result || null);
+            setSmsTestConfirmOpen(false);
+            toast.success('SMS test dispatch sent successfully.');
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestSmsTestResult(result);
+            }
+            const resultMessage = result?.provider_response || null;
+            toast.error(resultMessage || error?.response?.data?.message || 'SMS test dispatch failed.');
+        },
+    });
+
+    const updateSmsProviderField = (section, key, value) => {
+        setSmsProviderForm((current) => ({
+            ...current,
+            [section]: {
+                ...current[section],
+                [key]: value,
+            },
+        }));
+    };
+
+    const saveSmsProviderConfig = () => {
+        const payload = {
+            enabled: Boolean(smsProviderForm.enabled),
+            active_provider: smsProviderForm.active_provider,
+            fallback_provider: smsProviderForm.fallback_provider,
+            default_prefix: smsProviderForm.default_prefix.trim(),
+            legacy_gateway: {
+                gateway_url: smsProviderForm.legacy_gateway.gateway_url.trim(),
+                org_code: smsProviderForm.legacy_gateway.org_code.trim(),
+            },
+            africastalking: {
+                endpoint: smsProviderForm.africastalking.endpoint.trim(),
+                username: smsProviderForm.africastalking.username.trim(),
+                sender_id: smsProviderForm.africastalking.sender_id.trim(),
+            },
+            reason: smsProviderForm.reason.trim(),
+        };
+
+        const submittedApiKey = smsProviderForm.africastalking.api_key.trim();
+        if (submittedApiKey) {
+            payload.africastalking.api_key = submittedApiKey;
+        }
+
+        saveSmsProviderMutation.mutate(payload);
+    };
+
     const connectedServices = serviceRows.filter((item) => ['connected', 'healthy', 'success'].includes(item.status)).length;
     const wpReadyMarkets = platformRows.filter((item) => item.wp_sync?.credentials_ready).length;
     const syncErrors = platformRows.filter((item) => item.sync?.last_status === 'error').length;
+    const smsReady = smsProviderForm.active_provider === 'africastalking'
+        ? Boolean(smsProviderForm.africastalking.username.trim()) && (smsProviderApiKeyConfigured || Boolean(smsProviderForm.africastalking.api_key.trim()))
+        : Boolean(smsProviderForm.legacy_gateway.gateway_url.trim()) && Boolean(smsProviderForm.legacy_gateway.org_code.trim());
+    const fallbackInvalid = smsProviderForm.fallback_provider !== 'none'
+        && smsProviderForm.fallback_provider === smsProviderForm.active_provider;
+    const fallbackOptions = [
+        { value: 'none', label: 'No fallback' },
+        { value: 'legacy_gateway', label: 'Legacy Gateway' },
+        { value: 'africastalking', label: "Africa's Talking" },
+    ];
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
 
@@ -240,6 +391,232 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                             </span>
                         </div>
                     ))}
+                </div>
+            </section>
+
+            <section className="crm-surface overflow-hidden">
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">SMS Provider Routing</h3>
+                        <p className="crm-panel-subtitle">Choose an active SMS provider, set fallback behavior, and validate delivery from settings.</p>
+                    </div>
+                </header>
+
+                <div className="grid gap-4 p-4 xl:grid-cols-12">
+                    <div className="space-y-4 xl:col-span-7">
+                        <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <h4 className="text-sm font-semibold text-slate-900">Routing Controls</h4>
+                            <p className="mt-1 text-xs text-slate-500">These settings define which provider is used first and what happens if dispatch fails.</p>
+
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(smsProviderForm.enabled)}
+                                        onChange={(event) => setSmsProviderForm((current) => ({ ...current, enabled: event.target.checked }))}
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                    />
+                                    Enable SMS dispatch for operational events
+                                </label>
+
+                                <div>
+                                    <label htmlFor="sms-active-provider" className="mb-1 block text-sm font-medium text-slate-700">Active provider</label>
+                                    <select
+                                        id="sms-active-provider"
+                                        value={smsProviderForm.active_provider}
+                                        onChange={(event) => setSmsProviderForm((current) => ({ ...current, active_provider: event.target.value }))}
+                                        className="crm-select w-full"
+                                    >
+                                        <option value="legacy_gateway">Legacy Gateway</option>
+                                        <option value="africastalking">Africa&apos;s Talking</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label htmlFor="sms-fallback-provider" className="mb-1 block text-sm font-medium text-slate-700">Fallback provider</label>
+                                    <select
+                                        id="sms-fallback-provider"
+                                        value={smsProviderForm.fallback_provider}
+                                        onChange={(event) => setSmsProviderForm((current) => ({ ...current, fallback_provider: event.target.value }))}
+                                        className="crm-select w-full"
+                                    >
+                                        {fallbackOptions.map((option) => (
+                                            <option
+                                                key={option.value}
+                                                value={option.value}
+                                                disabled={option.value !== 'none' && option.value === smsProviderForm.active_provider}
+                                            >
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label htmlFor="sms-default-prefix" className="mb-1 block text-sm font-medium text-slate-700">Default phone prefix</label>
+                                    <input
+                                        id="sms-default-prefix"
+                                        value={smsProviderForm.default_prefix}
+                                        onChange={(event) => setSmsProviderForm((current) => ({ ...current, default_prefix: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="254"
+                                    />
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label htmlFor="sms-config-reason" className="mb-1 block text-sm font-medium text-slate-700">Change reason</label>
+                                    <textarea
+                                        id="sms-config-reason"
+                                        rows={2}
+                                        value={smsProviderForm.reason}
+                                        onChange={(event) => setSmsProviderForm((current) => ({ ...current, reason: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Reason for updating SMS routing"
+                                    />
+                                </div>
+                            </div>
+                        </section>
+
+                        <section className="rounded-lg border border-slate-200 bg-white p-3">
+                            <h4 className="text-sm font-semibold text-slate-900">Legacy Gateway</h4>
+                            <p className="mt-1 text-xs text-slate-500">Existing SMS connector used in current operations.</p>
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <input
+                                    value={smsProviderForm.legacy_gateway.gateway_url}
+                                    onChange={(event) => updateSmsProviderField('legacy_gateway', 'gateway_url', event.target.value)}
+                                    className="crm-input md:col-span-2"
+                                    placeholder="Gateway URL"
+                                />
+                                <input
+                                    value={smsProviderForm.legacy_gateway.org_code}
+                                    onChange={(event) => updateSmsProviderField('legacy_gateway', 'org_code', event.target.value)}
+                                    className="crm-input"
+                                    placeholder="Org code"
+                                />
+                            </div>
+                        </section>
+
+                        <section className="rounded-lg border border-slate-200 bg-white p-3">
+                            <h4 className="text-sm font-semibold text-slate-900">Africa&apos;s Talking</h4>
+                            <p className="mt-1 text-xs text-slate-500">Use this provider for managed delivery with API-key authentication.</p>
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <input
+                                    value={smsProviderForm.africastalking.endpoint}
+                                    onChange={(event) => updateSmsProviderField('africastalking', 'endpoint', event.target.value)}
+                                    className="crm-input md:col-span-2"
+                                    placeholder="API endpoint"
+                                />
+                                <input
+                                    value={smsProviderForm.africastalking.username}
+                                    onChange={(event) => updateSmsProviderField('africastalking', 'username', event.target.value)}
+                                    className="crm-input"
+                                    placeholder="Username"
+                                />
+                                <input
+                                    value={smsProviderForm.africastalking.sender_id}
+                                    onChange={(event) => updateSmsProviderField('africastalking', 'sender_id', event.target.value)}
+                                    className="crm-input"
+                                    placeholder="Sender ID (optional)"
+                                />
+                                <input
+                                    type="password"
+                                    value={smsProviderForm.africastalking.api_key}
+                                    onChange={(event) => updateSmsProviderField('africastalking', 'api_key', event.target.value)}
+                                    className="crm-input md:col-span-2"
+                                    placeholder="API key (leave blank to keep current key)"
+                                />
+                            </div>
+                            <p className={`mt-2 text-xs ${smsProviderApiKeyConfigured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                {smsProviderApiKeyConfigured
+                                    ? 'API key is already stored. Add a new value only when rotating credentials.'
+                                    : 'No API key is currently configured for Africa\'s Talking.'}
+                            </p>
+                        </section>
+
+                        {fallbackInvalid ? (
+                            <p className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                                Fallback provider must be different from the active provider.
+                            </p>
+                        ) : null}
+
+                        {smsProviderForm.enabled && !smsReady ? (
+                            <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                                Active provider credentials are incomplete. Complete required fields before saving or sending tests.
+                            </p>
+                        ) : null}
+
+                        <div className="flex justify-end">
+                            <button
+                                type="button"
+                                onClick={saveSmsProviderConfig}
+                                disabled={saveSmsProviderMutation.isPending || !smsProviderForm.reason.trim() || fallbackInvalid || !smsProviderForm.default_prefix.trim() || (smsProviderForm.enabled && !smsReady)}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {saveSmsProviderMutation.isPending ? 'Saving...' : 'Save SMS settings'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4 xl:col-span-5">
+                        <section className="rounded-lg border border-slate-200 bg-white p-3">
+                            <h4 className="text-sm font-semibold text-slate-900">Test Dispatch</h4>
+                            <p className="mt-1 text-xs text-slate-500">Send a controlled SMS to verify routing and provider response in real time.</p>
+                            <div className="mt-3 space-y-3">
+                                <input
+                                    value={smsTestForm.phone}
+                                    onChange={(event) => setSmsTestForm((current) => ({ ...current, phone: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Phone (example: +254712000000)"
+                                />
+                                <textarea
+                                    rows={4}
+                                    value={smsTestForm.message}
+                                    onChange={(event) => setSmsTestForm((current) => ({ ...current, message: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Test message content"
+                                />
+                                <input
+                                    value={smsTestForm.reason}
+                                    onChange={(event) => setSmsTestForm((current) => ({ ...current, reason: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Reason for test dispatch"
+                                />
+                            </div>
+                            <div className="mt-3 flex justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => setSmsTestConfirmOpen(true)}
+                                    disabled={testSmsProviderMutation.isPending || !smsReady || !smsProviderForm.enabled || !smsTestForm.phone.trim() || !smsTestForm.message.trim() || !smsTestForm.reason.trim()}
+                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {testSmsProviderMutation.isPending ? 'Sending...' : 'Send test SMS'}
+                                </button>
+                            </div>
+                            {!smsProviderForm.enabled ? (
+                                <p className="mt-2 text-xs text-amber-700">Enable SMS dispatch before sending a provider test message.</p>
+                            ) : null}
+                        </section>
+
+                        {latestSmsTestResult ? (
+                            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <h4 className="text-sm font-semibold text-slate-900">Latest SMS Test Result</h4>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(latestSmsTestResult.success ? 'success' : 'failed')}`}>
+                                        {latestSmsTestResult.success ? 'success' : 'failed'}
+                                    </span>
+                                </div>
+                                <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                    <p><span className="font-semibold text-slate-800">Provider:</span> {smsProviderLabel(latestSmsTestResult.provider)}</p>
+                                    <p><span className="font-semibold text-slate-800">Status:</span> {latestSmsTestResult.status || 'unknown'}</p>
+                                    <p><span className="font-semibold text-slate-800">Phone:</span> {latestSmsTestResult.phone || '--'}</p>
+                                    <p className="break-all"><span className="font-semibold text-slate-800">Response:</span> {latestSmsTestResult.provider_response || 'No provider response message.'}</p>
+                                    {latestSmsTestResult.fallback_attempted ? (
+                                        <p><span className="font-semibold text-slate-800">Fallback:</span> Attempted from {smsProviderLabel(latestSmsTestResult.fallback_from || smsProviderForm.active_provider)}</p>
+                                    ) : null}
+                                </div>
+                            </section>
+                        ) : null}
+                    </div>
                 </div>
             </section>
 
@@ -562,6 +939,32 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                     </div>
                 </div>
             ) : null}
+
+            <ConfirmDialog
+                open={smsTestConfirmOpen}
+                title="Send Test SMS?"
+                message="This sends a real SMS using the active provider and records the provider response for audit visibility."
+                confirmLabel="Send test"
+                cancelLabel="Cancel"
+                tone="warning"
+                onCancel={() => setSmsTestConfirmOpen(false)}
+                onConfirm={() => {
+                    testSmsProviderMutation.mutate({
+                        phone: smsTestForm.phone.trim(),
+                        message: smsTestForm.message.trim(),
+                        reason: smsTestForm.reason.trim(),
+                    });
+                }}
+                confirmDisabled={!smsTestForm.phone.trim() || !smsTestForm.message.trim() || !smsTestForm.reason.trim() || !smsProviderForm.enabled || !smsReady}
+                isPending={testSmsProviderMutation.isPending}
+            >
+                <div className="space-y-1 text-sm text-slate-600">
+                    <p><span className="font-semibold text-slate-800">Active provider:</span> {smsProviderLabel(smsProviderForm.active_provider)}</p>
+                    <p><span className="font-semibold text-slate-800">Fallback:</span> {smsProviderLabel(smsProviderForm.fallback_provider)}</p>
+                    <p><span className="font-semibold text-slate-800">Phone:</span> {smsTestForm.phone}</p>
+                    <p className="line-clamp-2"><span className="font-semibold text-slate-800">Message:</span> {smsTestForm.message}</p>
+                </div>
+            </ConfirmDialog>
 
             <ConfirmDialog
                 open={syncConfirmOpen}

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Deal;
+use App\Models\IntegrationSetting;
 use App\Models\Lead;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -737,6 +738,112 @@ CSV;
         $this->assertSame(1, $response->json('lead_funnel_totals.converted'));
         $this->assertSame(1, $response->json('lead_funnel_totals.lost'));
         $this->assertSame(7700.0, (float) $response->json('owner_performance_totals.revenue'));
+    }
+
+    public function test_admin_can_update_sms_provider_configuration(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson('/api/crm/settings/integrations/sms-provider', [
+            'enabled' => true,
+            'active_provider' => 'africastalking',
+            'fallback_provider' => 'legacy_gateway',
+            'default_prefix' => '254',
+            'legacy_gateway' => [
+                'gateway_url' => 'https://legacy-sms.test/send',
+                'org_code' => '76',
+            ],
+            'africastalking' => [
+                'endpoint' => 'https://api.africastalking.com/version1/messaging',
+                'username' => 'sandbox',
+                'api_key' => 'secret-key-123',
+                'sender_id' => 'EXOTIC',
+            ],
+            'reason' => 'Switch provider for redundancy test',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('sms_provider.enabled', true)
+            ->assertJsonPath('sms_provider.active_provider', 'africastalking')
+            ->assertJsonPath('sms_provider.fallback_provider', 'legacy_gateway')
+            ->assertJsonPath('sms_provider.africastalking.username', 'sandbox')
+            ->assertJsonPath('sms_provider.africastalking.api_key_configured', true);
+
+        $setting = IntegrationSetting::query()->where('key', 'sms_provider_config')->first();
+        $this->assertNotNull($setting);
+        $this->assertSame('africastalking', $setting->value['active_provider'] ?? null);
+        $this->assertSame('legacy_gateway', $setting->value['fallback_provider'] ?? null);
+        $this->assertSame('sandbox', $setting->value['africastalking']['username'] ?? null);
+        $this->assertSame('secret-key-123', $setting->value['africastalking']['api_key'] ?? null);
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'entity_type' => 'integration_setting',
+            'entity_id' => 1,
+            'action' => 'integration_platform_update',
+        ]);
+    }
+
+    public function test_admin_can_test_sms_provider_dispatch(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        IntegrationSetting::query()->create([
+            'key' => 'sms_provider_config',
+            'value' => [
+                'enabled' => true,
+                'active_provider' => 'legacy_gateway',
+                'fallback_provider' => 'none',
+                'default_prefix' => '254',
+                'legacy_gateway' => [
+                    'gateway_url' => 'https://legacy-sms.test/send',
+                    'org_code' => '76',
+                ],
+                'africastalking' => [
+                    'endpoint' => 'https://api.africastalking.com/version1/messaging',
+                    'username' => '',
+                    'api_key' => '',
+                    'sender_id' => '',
+                ],
+            ],
+            'updated_by' => $admin->id,
+        ]);
+
+        Http::fake([
+            'https://legacy-sms.test/send' => Http::response('OK', 200),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/settings/integrations/sms-provider/test', [
+            'phone' => '0712000001',
+            'message' => 'Testing provider dispatch',
+            'reason' => 'Validate test endpoint',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('result.success', true)
+            ->assertJsonPath('result.provider', 'legacy_gateway')
+            ->assertJsonPath('result.status', 'sent')
+            ->assertJsonPath('result.phone', '254712000001');
+
+        Http::assertSent(function ($request) {
+            return $request->url() === 'https://legacy-sms.test/send'
+                && ($request['Phonenumber'] ?? null) === '254712000001'
+                && ($request['OrgCode'] ?? null) === '76'
+                && ($request['Message'] ?? null) === 'Testing provider dispatch';
+        });
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'entity_type' => 'integration_setting',
+            'entity_id' => 1,
+            'action' => 'integration_connection_test',
+        ]);
     }
 
     public function test_admin_can_create_update_and_test_market_integration_profile(): void

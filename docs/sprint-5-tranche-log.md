@@ -490,3 +490,61 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 ### Decision Notes
 - User creation was constrained to admin-only to avoid role escalation risk while still removing engineering dependency for routine onboarding.
 - Market assignment is captured at creation time to prevent “user exists but cannot operate” onboarding gaps.
+
+---
+
+## Tranche 11 (Completed)
+
+### Plan
+- Execute `CRM-516` from the reconciliation backlog:
+  - implement multi-provider SMS routing with active/fallback strategy
+  - expose provider configuration and test dispatch controls in Settings
+  - preserve reasoned audit logging and admin-only controls
+
+### Progress
+- Backend:
+  - Added `integration_settings` store for dynamic integration configuration:
+    - `database/migrations/2026_02_21_000016_create_integration_settings_table.php`
+    - `app/Models/IntegrationSetting.php`
+  - Added SMS provider abstraction layer:
+    - `app/Services/Sms/SmsProviderInterface.php`
+    - `app/Services/Sms/LegacyGatewaySmsProvider.php`
+    - `app/Services/Sms/AfricasTalkingSmsProvider.php`
+  - Refactored `NotificationService` to support:
+    - active provider selection
+    - optional fallback provider attempts
+    - DB-backed provider config with environment fallback
+    - masked config reads and persisted config updates
+  - Extended settings integrations API:
+    - `PATCH /api/crm/settings/integrations/sms-provider` (admin)
+    - `POST /api/crm/settings/integrations/sms-provider/test` (admin)
+  - Added audit coverage for provider update + test dispatch actions.
+- Frontend:
+  - Upgraded Settings Integrations tab with a full `SMS Provider Routing` workspace:
+    - routing controls (enabled toggle, active provider, fallback provider, default prefix)
+    - provider credential forms for Legacy Gateway and Africa's Talking
+    - secure API-key handling messaging (stored key masked, rotate-on-input behavior)
+    - validation states for invalid fallback and incomplete active-provider credentials
+  - Added `Test Dispatch` panel with:
+    - phone/message/reason inputs
+    - confirmation modal before sending live test SMS
+    - latest test result summary (provider/status/response/fallback attempted)
+  - Preserved progressive disclosure and toast feedback patterns.
+- Tests:
+  - Added `test_admin_can_update_sms_provider_configuration`.
+  - Added `test_admin_can_test_sms_provider_dispatch`.
+  - Assertions cover persisted config values, provider dispatch behavior, and audit records.
+
+### Verification
+- `php artisan migrate --force` -> pass.
+- `php artisan test --filter "test_admin_can_update_sms_provider_configuration|test_admin_can_test_sms_provider_dispatch"` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5h-2026-02-21/settings-sms-provider-section.png`
+  - `output/playwright/sprint5h-2026-02-21/settings-sms-test-confirmation-modal.png`
+
+### Decision Notes
+- SMS provider configuration is runtime-managed in DB to remove deploy-time coupling for day-to-day provider switching.
+- Fallback routing is constrained to a different provider than active to avoid ambiguous failover behavior.
+- Test dispatch remains admin-only and confirmation-gated because it triggers real outbound communication.

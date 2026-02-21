@@ -59,9 +59,18 @@ return [
 
     'sms' => [
         'enabled' => filter_var(env('SMS_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'active_provider' => env('SMS_ACTIVE_PROVIDER', 'legacy_gateway'),
+        'fallback_provider' => env('SMS_FALLBACK_PROVIDER', 'none'),
         'gateway_url' => env('SMS_GATEWAY_URL'),
         'org_code' => env('SMS_ORG_CODE', '76'),
         'default_prefix' => env('SMS_DEFAULT_PREFIX', '254'),
+    ],
+
+    'africastalking' => [
+        'endpoint' => env('AFRICASTALKING_ENDPOINT', 'https://api.africastalking.com/version1/messaging'),
+        'username' => env('AFRICASTALKING_USERNAME'),
+        'api_key' => env('AFRICASTALKING_API_KEY'),
+        'sender_id' => env('AFRICASTALKING_SENDER_ID'),
     ],
 
     'sendgrid' => [
