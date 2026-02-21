@@ -383,3 +383,67 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 ### Decision Notes
 - Funnel and owner presentation was completed as a contract-first change (backend payload + UI) so reporting insights remain stable even as charts evolve.
 - Source normalization intentionally surfaces zero-count channels to remove ambiguity in manager reviews of lead-source coverage.
+
+---
+
+## Tranche 9 (Completed)
+
+### Plan
+- Execute `CRM-514` from the reconciliation backlog:
+  - transform integrations settings from read-only status cards to actionable market management workspace
+  - add backend endpoints for market profile CRUD, connection testing, and manual sync actions
+  - make sync health/snapshot state visible in settings
+  - preserve RBAC and auditability for all high-impact integration actions
+
+### Progress
+- Backend:
+  - Added platform integration health/sync metadata columns via migration:
+    - `sync_last_checked_at`
+    - `sync_last_synced_at`
+    - `sync_last_scope`
+    - `sync_last_status`
+    - `sync_last_error`
+    - `sync_last_result`
+  - Added audit constants for integration operations:
+    - `INTEGRATION_PLATFORM_CREATE`
+    - `INTEGRATION_PLATFORM_UPDATE`
+    - `INTEGRATION_CONNECTION_TEST`
+    - `INTEGRATION_SYNC_RUN`
+  - Extended `Platform` model fillable/casts for sync metadata fields.
+  - Upgraded `SettingsController` integrations contract to return richer market profile payload:
+    - domain/active/runtime defaults
+    - wp credential readiness + last check
+    - last sync state + result payload
+  - Added new settings integration endpoints:
+    - `POST /api/crm/settings/integrations/platforms` (admin)
+    - `PATCH /api/crm/settings/integrations/platforms/{platform}` (admin/sub_admin)
+    - `POST /api/crm/settings/integrations/platforms/{platform}/test-connection` (admin/sub_admin)
+    - `POST /api/crm/settings/integrations/platforms/{platform}/sync` (admin/sub_admin)
+  - Implemented manual sync orchestration:
+    - client sync via `ClientSyncService` (full/delta)
+    - lead sync via `LeadImportService` (supports dry-run)
+  - Added sync safety guard:
+    - dry-run is restricted to leads scope only.
+- Frontend:
+  - Rebuilt Integrations tab into a workspace with:
+    - market selector rail
+    - editable profile form (domain/country/currency/timezone/phone prefix/WP credentials/active state)
+    - connection health panel with reasoned test action
+    - manual sync controls (scope, mode, dry-run, per-page, reason)
+    - confirmation modal for sync execution
+    - add-market modal (admin-only control surface)
+  - Improved status badge semantics for integration/sync states (`healthy`, `partial`, `degraded`, etc.).
+
+### Verification
+- `php artisan migrate --force` -> pass.
+- `php artisan test --filter "test_admin_can_create_update_and_test_market_integration_profile|test_sub_admin_can_run_leads_sync_for_owned_market_and_blocked_for_out_of_scope_market"` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5f-2026-02-21/settings-integrations-overview.png`
+  - `output/playwright/sprint5f-2026-02-21/settings-add-market-modal.png`
+  - `output/playwright/sprint5f-2026-02-21/settings-sync-confirmation-modal.png`
+
+### Decision Notes
+- Integration management was implemented with platform-scoped RBAC and explicit audit trail to keep operational self-service safe.
+- Manual sync was split by scope/mode to avoid hidden side effects and to support dry-run lead intake checks before committing data.

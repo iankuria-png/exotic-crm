@@ -96,6 +96,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
+    Route::post('/settings/integrations/platforms', [SettingsController::class, 'storeIntegrationPlatform'])->middleware('role:admin');
+    Route::patch('/settings/integrations/platforms/{platform}', [SettingsController::class, 'updateIntegrationPlatform'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/test-connection', [SettingsController::class, 'testPlatformConnection'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
     Route::get('/settings/owners', [SettingsController::class, 'owners']);
     Route::get('/settings/templates', [SettingsController::class, 'templates']);
     Route::post('/settings/templates', [SettingsController::class, 'storeTemplate'])->middleware('role:admin,sub_admin');

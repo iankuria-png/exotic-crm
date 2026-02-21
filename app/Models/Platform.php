@@ -12,10 +12,16 @@ class Platform extends Model
         'db_host', 'db_name', 'db_user', 'db_pass', 'db_prefix', 'product_id',
         'wp_api_url', 'wp_api_user', 'wp_api_password',
         'phone_prefix', 'timezone', 'currency_code',
+        'sync_last_checked_at', 'sync_last_synced_at',
+        'sync_last_scope', 'sync_last_status',
+        'sync_last_error', 'sync_last_result',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'sync_last_checked_at' => 'datetime',
+        'sync_last_synced_at' => 'datetime',
+        'sync_last_result' => 'array',
     ];
     
     public function getConnectionConfig()

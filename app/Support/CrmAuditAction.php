@@ -12,6 +12,10 @@ final class CrmAuditAction
     public const LEAD_DELETE = 'lead_delete';
     public const LEAD_SCRAPE_INTAKE = 'lead_scrape_intake';
     public const ROLE_UPDATE = 'role_update';
+    public const INTEGRATION_PLATFORM_CREATE = 'integration_platform_create';
+    public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';
+    public const INTEGRATION_CONNECTION_TEST = 'integration_connection_test';
+    public const INTEGRATION_SYNC_RUN = 'integration_sync_run';
     public const DEAL_ACTIVATE = 'deal_activate';
     public const DEAL_DEACTIVATE = 'deal_deactivate';
     public const DEAL_EXTEND = 'deal_extend';

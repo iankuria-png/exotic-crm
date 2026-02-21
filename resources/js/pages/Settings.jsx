@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
+import ConfirmDialog from '../components/ConfirmDialog';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
@@ -16,13 +17,71 @@ const baseTabs = [
 ];
 
 function statusChip(status) {
-    if (status === 'connected') return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
-    if (status === 'configured_disabled') return 'bg-amber-50 text-amber-700 ring-amber-200';
-    if (status === 'deferred') return 'bg-slate-100 text-slate-700 ring-slate-300';
+    if (['connected', 'healthy', 'success'].includes(status)) return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    if (['configured_disabled', 'partial', 'degraded', 'pending'].includes(status)) return 'bg-amber-50 text-amber-700 ring-amber-200';
+    if (['deferred', 'unknown'].includes(status)) return 'bg-slate-100 text-slate-700 ring-slate-300';
     return 'bg-rose-50 text-rose-700 ring-rose-200';
 }
 
-function IntegrationsWorkspace() {
+function formatDateTime(value) {
+    if (!value) return 'Never';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Never';
+    return date.toLocaleString();
+}
+
+function buildPlatformEditor(platform) {
+    if (!platform) {
+        return null;
+    }
+
+    return {
+        name: platform.platform_name || '',
+        domain: platform.domain || '',
+        country: platform.country || '',
+        is_active: Boolean(platform.is_active),
+        wp_api_url: platform.wp_sync?.api_url || '',
+        wp_api_user: platform.wp_sync?.api_user || '',
+        wp_api_password: '',
+        currency_code: platform.currency || 'KES',
+        timezone: platform.timezone || 'Africa/Nairobi',
+        phone_prefix: platform.phone_prefix || '254',
+    };
+}
+
+function defaultPlatformForm() {
+    return {
+        name: '',
+        domain: '',
+        country: '',
+        is_active: true,
+        wp_api_url: '',
+        wp_api_user: '',
+        wp_api_password: '',
+        currency_code: 'KES',
+        timezone: 'Africa/Nairobi',
+        phone_prefix: '254',
+    };
+}
+
+function IntegrationsWorkspace({ canCreateMarkets }) {
+    const queryClient = useQueryClient();
+    const toast = useToast();
+    const [selectedPlatformId, setSelectedPlatformId] = useState(null);
+    const [editor, setEditor] = useState(null);
+    const [createOpen, setCreateOpen] = useState(false);
+    const [createForm, setCreateForm] = useState(defaultPlatformForm());
+    const [testReason, setTestReason] = useState('Connection health check from settings');
+    const [syncForm, setSyncForm] = useState({
+        scope: 'leads',
+        mode: 'delta',
+        dry_run: true,
+        per_page: 100,
+        reason: 'Manual sync run from integrations workspace',
+    });
+    const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
+    const [latestSyncResult, setLatestSyncResult] = useState(null);
+
     const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
@@ -51,13 +110,92 @@ function IntegrationsWorkspace() {
     ];
 
     const platformRows = data?.platforms || [];
+    const selectedPlatform = platformRows.find((platform) => platform.platform_id === selectedPlatformId) || null;
+
+    useEffect(() => {
+        if (!platformRows.length) {
+            setSelectedPlatformId(null);
+            setEditor(null);
+            return;
+        }
+
+        if (!selectedPlatformId || !platformRows.some((platform) => platform.platform_id === selectedPlatformId)) {
+            setSelectedPlatformId(platformRows[0].platform_id);
+        }
+    }, [platformRows, selectedPlatformId]);
+
+    useEffect(() => {
+        if (!selectedPlatform) {
+            return;
+        }
+
+        setEditor(buildPlatformEditor(selectedPlatform));
+        setLatestSyncResult(selectedPlatform.sync?.last_result || null);
+    }, [selectedPlatformId]);
+
+    const createPlatformMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/integrations/platforms', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setCreateOpen(false);
+            setCreateForm(defaultPlatformForm());
+            setSelectedPlatformId(response?.platform?.platform_id || null);
+            toast.success('Market integration profile created.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to create market profile.');
+        },
+    });
+
+    const updatePlatformMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setEditor(buildPlatformEditor(response?.platform));
+            toast.success('Market integration profile updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update market profile.');
+        },
+    });
+
+    const testConnectionMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/test-connection`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            toast.success('Connection test passed.');
+            setLatestSyncResult(response?.platform?.sync?.last_result || latestSyncResult);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Connection test failed.');
+        },
+    });
+
+    const runSyncMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/sync`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setLatestSyncResult(response?.result || null);
+            toast.success(response?.status === 'partial' ? 'Sync completed with warnings.' : 'Sync completed successfully.');
+            setSyncConfirmOpen(false);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Manual sync failed.');
+        },
+    });
+
+    const connectedServices = serviceRows.filter((item) => ['connected', 'healthy', 'success'].includes(item.status)).length;
+    const wpReadyMarkets = platformRows.filter((item) => item.wp_sync?.credentials_ready).length;
+    const syncErrors = platformRows.filter((item) => item.sync?.last_status === 'error').length;
+
+    const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
 
     return (
         <div className="space-y-4">
-            <section className="grid gap-4 md:grid-cols-3">
+            <section className="grid gap-4 md:grid-cols-4">
                 <MetricCard
                     label="Connected Services"
-                    value={serviceRows.filter((item) => item.status === 'connected').length.toLocaleString()}
+                    value={connectedServices.toLocaleString()}
                     meta="runtime integration health"
                     tone="success"
                 />
@@ -69,9 +207,15 @@ function IntegrationsWorkspace() {
                 />
                 <MetricCard
                     label="WP Sync Ready"
-                    value={platformRows.filter((item) => item.wp_sync?.status === 'connected').length.toLocaleString()}
+                    value={wpReadyMarkets.toLocaleString()}
                     meta="markets with credentials"
                     tone="default"
+                />
+                <MetricCard
+                    label="Sync Errors"
+                    value={syncErrors.toLocaleString()}
+                    meta="markets requiring intervention"
+                    tone={syncErrors > 0 ? 'danger' : 'success'}
                 />
             </section>
 
@@ -102,43 +246,353 @@ function IntegrationsWorkspace() {
             <section className="crm-surface overflow-hidden">
                 <header className="crm-panel-header">
                     <div>
-                        <h3 className="crm-panel-title">Market Sync Health</h3>
-                        <p className="crm-panel-subtitle">WordPress sync connectivity by market platform.</p>
+                        <h3 className="crm-panel-title">Market Integration Workspace</h3>
+                        <p className="crm-panel-subtitle">Configure credentials, test connectivity, and run manual sync per market.</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => queryClient.invalidateQueries({ queryKey: ['settings-integrations'] })}
+                            className="crm-btn-secondary px-3 py-2"
+                        >
+                            Refresh
+                        </button>
+                        {canCreateMarkets ? (
+                            <button type="button" onClick={() => setCreateOpen(true)} className="crm-btn-primary px-3 py-2">
+                                Add market
+                            </button>
+                        ) : null}
                     </div>
                 </header>
-                <div className="max-h-[420px] overflow-auto">
-                    {isLoading ? (
-                        <p className="p-4 text-sm text-slate-500">Loading markets...</p>
-                    ) : platformRows.length === 0 ? (
-                        <p className="p-4 text-sm text-slate-500">No market platforms found.</p>
-                    ) : (
-                        <table className="min-w-full divide-y divide-slate-200">
-                            <thead className="bg-slate-50">
-                                <tr>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Market</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Country</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">WP API</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Currency</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {platformRows.map((platform) => (
-                                    <tr key={platform.platform_id}>
-                                        <td className="px-4 py-2.5 text-sm font-semibold text-slate-900">{platform.platform_name}</td>
-                                        <td className="px-4 py-2.5 text-sm text-slate-600">{platform.country || '—'}</td>
-                                        <td className="px-4 py-2.5">
-                                            <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(platform.wp_sync?.status)}`}>
-                                                {(platform.wp_sync?.status || 'pending').replaceAll('_', ' ')}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-2.5 text-sm text-slate-600">{platform.currency || 'KES'}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
+
+                <div className="grid gap-4 p-4 xl:grid-cols-12">
+                    <div className="xl:col-span-5">
+                        {isLoading ? (
+                            <p className="text-sm text-slate-500">Loading market profiles...</p>
+                        ) : platformRows.length === 0 ? (
+                            <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-sm text-slate-500">No market profiles configured.</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {platformRows.map((platform) => {
+                                    const isSelected = platform.platform_id === selectedPlatformId;
+                                    return (
+                                        <button
+                                            key={platform.platform_id}
+                                            type="button"
+                                            onClick={() => setSelectedPlatformId(platform.platform_id)}
+                                            className={`w-full rounded-lg border px-3 py-3 text-left transition ${isSelected ? 'border-teal-300 bg-teal-50/40' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+                                        >
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-slate-900">{platform.platform_name}</p>
+                                                    <p className="text-xs text-slate-500">{platform.country || '—'} • {platform.domain || 'No domain'}</p>
+                                                </div>
+                                                <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(platform.wp_sync?.status || 'pending')}`}>
+                                                    {(platform.wp_sync?.status || 'pending').replaceAll('_', ' ')}
+                                                </span>
+                                            </div>
+                                            <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                                                <span>Last sync: {formatDateTime(platform.sync?.last_synced_at)}</span>
+                                                <span className="font-medium">{(platform.sync?.last_status || 'unknown').replaceAll('_', ' ')}</span>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="xl:col-span-7">
+                        {!selectedPlatform || !editor ? (
+                            <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-8 text-sm text-slate-500">
+                                Select a market to edit integration details.
+                            </p>
+                        ) : (
+                            <div className="space-y-4">
+                                <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Market Profile</h4>
+                                    <p className="mt-1 text-xs text-slate-500">Use this form to update credentials and runtime defaults.</p>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <input
+                                            value={editor.name}
+                                            onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Market name"
+                                        />
+                                        <input
+                                            value={editor.domain}
+                                            onChange={(event) => setEditor((current) => ({ ...current, domain: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Domain"
+                                        />
+                                        <input
+                                            value={editor.country}
+                                            onChange={(event) => setEditor((current) => ({ ...current, country: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Country"
+                                        />
+                                        <input
+                                            value={editor.phone_prefix}
+                                            onChange={(event) => setEditor((current) => ({ ...current, phone_prefix: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Phone prefix"
+                                        />
+                                        <input
+                                            value={editor.currency_code}
+                                            onChange={(event) => setEditor((current) => ({ ...current, currency_code: event.target.value.toUpperCase() }))}
+                                            className="crm-input"
+                                            placeholder="Currency code"
+                                        />
+                                        <input
+                                            value={editor.timezone}
+                                            onChange={(event) => setEditor((current) => ({ ...current, timezone: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Timezone"
+                                        />
+                                        <input
+                                            value={editor.wp_api_url}
+                                            onChange={(event) => setEditor((current) => ({ ...current, wp_api_url: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="WordPress Sync API URL"
+                                        />
+                                        <input
+                                            value={editor.wp_api_user}
+                                            onChange={(event) => setEditor((current) => ({ ...current, wp_api_user: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="WordPress API user"
+                                        />
+                                        <input
+                                            value={editor.wp_api_password}
+                                            onChange={(event) => setEditor((current) => ({ ...current, wp_api_password: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="WordPress API password (leave blank to keep)"
+                                            type="password"
+                                        />
+                                        <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={editor.is_active}
+                                                onChange={(event) => setEditor((current) => ({ ...current, is_active: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Market is active
+                                        </label>
+                                    </div>
+
+                                    <div className="mt-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const payload = {
+                                                    ...editor,
+                                                    reason: 'Integration profile update from settings workspace',
+                                                };
+
+                                                if (!payload.wp_api_password?.trim()) {
+                                                    delete payload.wp_api_password;
+                                                }
+
+                                                updatePlatformMutation.mutate({
+                                                    platformId: selectedPlatform.platform_id,
+                                                    payload,
+                                                });
+                                            }}
+                                            disabled={updatePlatformMutation.isPending || !editor.name.trim() || !editor.domain.trim() || !editor.country.trim()}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {updatePlatformMutation.isPending ? 'Saving...' : 'Save profile'}
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-slate-900">Connection Health</h4>
+                                            <p className="text-xs text-slate-500">Last checked: {formatDateTime(selectedPlatform.wp_sync?.last_checked_at)}</p>
+                                        </div>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(selectedPlatform.wp_sync?.status || 'pending')}`}>
+                                            {(selectedPlatform.wp_sync?.status || 'pending').replaceAll('_', ' ')}
+                                        </span>
+                                    </div>
+                                    {selectedPlatform.wp_sync?.last_error ? (
+                                        <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                                            {selectedPlatform.wp_sync.last_error}
+                                        </p>
+                                    ) : null}
+                                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                                        <input
+                                            value={testReason}
+                                            onChange={(event) => setTestReason(event.target.value)}
+                                            className="crm-input min-w-[260px] flex-1"
+                                            placeholder="Reason for connection test"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => testConnectionMutation.mutate({
+                                                platformId: selectedPlatform.platform_id,
+                                                payload: { reason: testReason },
+                                            })}
+                                            disabled={!selectedHasCredentials || testConnectionMutation.isPending || !testReason.trim()}
+                                            className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {testConnectionMutation.isPending ? 'Testing...' : 'Test connection'}
+                                        </button>
+                                    </div>
+                                    {!selectedHasCredentials ? (
+                                        <p className="mt-2 text-xs text-amber-700">Add WordPress credentials to enable connection tests.</p>
+                                    ) : null}
+                                </section>
+
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Manual Sync</h4>
+                                    <p className="text-xs text-slate-500">Run scoped sync jobs without leaving settings.</p>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <select
+                                            value={syncForm.scope}
+                                            onChange={(event) => setSyncForm((current) => ({ ...current, scope: event.target.value }))}
+                                            className="crm-select"
+                                        >
+                                            <option value="leads">Leads only</option>
+                                            <option value="clients">Clients only</option>
+                                            <option value="all">Clients + leads</option>
+                                        </select>
+                                        <select
+                                            value={syncForm.mode}
+                                            onChange={(event) => setSyncForm((current) => ({ ...current, mode: event.target.value }))}
+                                            className="crm-select"
+                                            disabled={syncForm.scope === 'leads'}
+                                        >
+                                            <option value="delta">Delta</option>
+                                            <option value="full">Full</option>
+                                        </select>
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={syncForm.dry_run}
+                                                onChange={(event) => setSyncForm((current) => ({ ...current, dry_run: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Dry run
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min="20"
+                                            max="200"
+                                            value={syncForm.per_page}
+                                            onChange={(event) => setSyncForm((current) => ({ ...current, per_page: Number(event.target.value || 100) }))}
+                                            className="crm-input"
+                                            placeholder="Per page"
+                                        />
+                                        <textarea
+                                            value={syncForm.reason}
+                                            onChange={(event) => setSyncForm((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            rows={2}
+                                            placeholder="Reason for manual sync"
+                                        />
+                                    </div>
+                                    <div className="mt-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSyncConfirmOpen(true)}
+                                            disabled={runSyncMutation.isPending || !selectedHasCredentials || !syncForm.reason.trim()}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {runSyncMutation.isPending ? 'Running...' : 'Run sync'}
+                                        </button>
+                                    </div>
+                                    {latestSyncResult ? (
+                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                                            <p className="font-semibold text-slate-800">Latest sync summary</p>
+                                            <p className="mt-1">Scope: {latestSyncResult.scope || selectedPlatform.sync?.last_scope || 'unknown'} • Dry run: {latestSyncResult.dry_run ? 'yes' : 'no'}</p>
+                                            {latestSyncResult.clients ? (
+                                                <p>Clients: {latestSyncResult.clients.created || 0} created, {latestSyncResult.clients.updated || 0} updated</p>
+                                            ) : null}
+                                            {latestSyncResult.leads ? (
+                                                <p>Leads: {latestSyncResult.leads.created || 0} created, {latestSyncResult.leads.updated || 0} updated, {latestSyncResult.leads.errors?.length || 0} errors</p>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                </section>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </section>
+
+            {createOpen ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setCreateOpen(false)}>
+                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Add Market Integration</h3>
+                                <p className="crm-panel-subtitle">Create a new market profile with WordPress sync credentials.</p>
+                            </div>
+                        </header>
+                        <div className="grid gap-3 p-4 md:grid-cols-2">
+                            <input value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} className="crm-input" placeholder="Market name" />
+                            <input value={createForm.domain} onChange={(event) => setCreateForm((current) => ({ ...current, domain: event.target.value }))} className="crm-input" placeholder="Domain" />
+                            <input value={createForm.country} onChange={(event) => setCreateForm((current) => ({ ...current, country: event.target.value }))} className="crm-input" placeholder="Country" />
+                            <input value={createForm.phone_prefix} onChange={(event) => setCreateForm((current) => ({ ...current, phone_prefix: event.target.value }))} className="crm-input" placeholder="Phone prefix" />
+                            <input value={createForm.currency_code} onChange={(event) => setCreateForm((current) => ({ ...current, currency_code: event.target.value.toUpperCase() }))} className="crm-input" placeholder="Currency code" />
+                            <input value={createForm.timezone} onChange={(event) => setCreateForm((current) => ({ ...current, timezone: event.target.value }))} className="crm-input" placeholder="Timezone" />
+                            <input value={createForm.wp_api_url} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_url: event.target.value }))} className="crm-input md:col-span-2" placeholder="WordPress Sync API URL" />
+                            <input value={createForm.wp_api_user} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_user: event.target.value }))} className="crm-input" placeholder="WordPress API user" />
+                            <input value={createForm.wp_api_password} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_password: event.target.value }))} className="crm-input" type="password" placeholder="WordPress API password" />
+                            <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                <input type="checkbox" checked={createForm.is_active} onChange={(event) => setCreateForm((current) => ({ ...current, is_active: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
+                                Market is active
+                            </label>
+                        </div>
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button type="button" onClick={() => setCreateOpen(false)} className="crm-btn-secondary">Cancel</button>
+                            <button
+                                type="button"
+                                onClick={() => createPlatformMutation.mutate({
+                                    ...createForm,
+                                    reason: 'Created from integrations workspace',
+                                })}
+                                disabled={createPlatformMutation.isPending || !createForm.name.trim() || !createForm.domain.trim() || !createForm.country.trim()}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {createPlatformMutation.isPending ? 'Creating...' : 'Create market'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            <ConfirmDialog
+                open={syncConfirmOpen}
+                title="Run Manual Sync?"
+                message="This operation pulls market records from WordPress using the selected scope and mode."
+                confirmLabel="Run sync"
+                cancelLabel="Cancel"
+                tone="warning"
+                onCancel={() => setSyncConfirmOpen(false)}
+                onConfirm={() => {
+                    if (!selectedPlatform) {
+                        return;
+                    }
+
+                    runSyncMutation.mutate({
+                        platformId: selectedPlatform.platform_id,
+                        payload: {
+                            ...syncForm,
+                        },
+                    });
+                }}
+                confirmDisabled={!syncForm.reason.trim()}
+                isPending={runSyncMutation.isPending}
+            >
+                <div className="space-y-1 text-sm text-slate-600">
+                    <p><span className="font-semibold text-slate-800">Market:</span> {selectedPlatform?.platform_name}</p>
+                    <p><span className="font-semibold text-slate-800">Scope:</span> {syncForm.scope}</p>
+                    <p><span className="font-semibold text-slate-800">Mode:</span> {syncForm.mode}</p>
+                    <p><span className="font-semibold text-slate-800">Dry run:</span> {syncForm.dry_run ? 'yes' : 'no'}</p>
+                </div>
+            </ConfirmDialog>
         </div>
     );
 }
@@ -811,6 +1265,7 @@ export default function Settings() {
     const [activeTab, setActiveTab] = useState('integrations');
     const canManageTemplates = ['admin', 'sub_admin'].includes(user?.role || '');
     const canViewRoles = (user?.role || '') === 'admin';
+    const canCreateMarkets = (user?.role || '') === 'admin';
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
@@ -841,7 +1296,7 @@ export default function Settings() {
                 </div>
             </section>
 
-            {activeTab === 'integrations' ? <IntegrationsWorkspace /> : null}
+            {activeTab === 'integrations' ? <IntegrationsWorkspace canCreateMarkets={canCreateMarkets} /> : null}
 
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}

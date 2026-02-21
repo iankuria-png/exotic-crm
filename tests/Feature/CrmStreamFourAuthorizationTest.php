@@ -14,6 +14,7 @@ use App\Models\TimelineEvent;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -691,6 +692,131 @@ CSV;
         $this->assertSame(1, $response->json('lead_funnel_totals.converted'));
         $this->assertSame(1, $response->json('lead_funnel_totals.lost'));
         $this->assertSame(7700.0, (float) $response->json('owner_performance_totals.revenue'));
+    }
+
+    public function test_admin_can_create_update_and_test_market_integration_profile(): void
+    {
+        $admin = $this->createUser('admin', []);
+
+        Sanctum::actingAs($admin);
+
+        $createResponse = $this->postJson('/api/crm/settings/integrations/platforms', [
+            'name' => 'Exotic Kenya',
+            'domain' => 'kenya-market.test',
+            'country' => 'Kenya',
+            'is_active' => true,
+            'wp_api_url' => 'https://kenya-api.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'sync-user',
+            'wp_api_password' => 'sync-pass',
+            'currency_code' => 'kes',
+            'timezone' => 'Africa/Nairobi',
+            'phone_prefix' => '254',
+            'reason' => 'Onboarding new market',
+        ]);
+
+        $createResponse->assertCreated()
+            ->assertJsonPath('platform.platform_name', 'Exotic Kenya')
+            ->assertJsonPath('platform.currency', 'KES')
+            ->assertJsonPath('platform.wp_sync.status', 'connected');
+
+        $platformId = (int) $createResponse->json('platform.platform_id');
+
+        $updateResponse = $this->patchJson("/api/crm/settings/integrations/platforms/{$platformId}", [
+            'country' => 'Kenya East',
+            'is_active' => false,
+            'reason' => 'Updated market profile details',
+        ]);
+
+        $updateResponse->assertOk()
+            ->assertJsonPath('platform.country', 'Kenya East')
+            ->assertJsonPath('platform.is_active', false);
+
+        Http::fake([
+            'https://kenya-api.test/wp-json/exotic-crm-sync/v1/stats*' => Http::response([
+                'profiles_total' => 123,
+                'active_profiles' => 77,
+            ], 200),
+        ]);
+
+        $testResponse = $this->postJson("/api/crm/settings/integrations/platforms/{$platformId}/test-connection", [
+            'reason' => 'Pre-sync health check',
+        ]);
+
+        $testResponse->assertOk()
+            ->assertJsonPath('status', 'healthy')
+            ->assertJsonPath('platform.platform_id', $platformId)
+            ->assertJsonPath('platform.sync.last_status', 'healthy');
+
+        $this->assertDatabaseHas('platforms', [
+            'id' => $platformId,
+            'sync_last_status' => 'healthy',
+            'country' => 'Kenya East',
+            'is_active' => 0,
+        ]);
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platformId,
+            'entity_type' => 'platform',
+            'entity_id' => $platformId,
+            'action' => 'integration_platform_create',
+        ]);
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platformId,
+            'entity_type' => 'platform',
+            'entity_id' => $platformId,
+            'action' => 'integration_connection_test',
+        ]);
+    }
+
+    public function test_sub_admin_can_run_leads_sync_for_owned_market_and_blocked_for_out_of_scope_market(): void
+    {
+        $platformA = $this->createPlatform('Kenya');
+        $platformB = $this->createPlatform('Uganda');
+        $subAdmin = $this->createUser('sub_admin', [$platformA->id]);
+
+        Http::fake([
+            $platformA->wp_api_url . '/clients*' => Http::response([
+                'data' => [[
+                    'wp_user_id' => 5501,
+                    'wp_post_id' => 8801,
+                    'name' => 'Imported Lead',
+                    'phone' => '0712999999',
+                    'email' => 'imported@example.test',
+                    'needs_payment' => true,
+                ]],
+                'pages' => 1,
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($subAdmin);
+
+        $syncResponse = $this->postJson("/api/crm/settings/integrations/platforms/{$platformA->id}/sync", [
+            'scope' => 'leads',
+            'dry_run' => true,
+            'per_page' => 50,
+            'reason' => 'Manual intake validation',
+        ]);
+
+        $syncResponse->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('result.scope', 'leads')
+            ->assertJsonPath('result.dry_run', true)
+            ->assertJsonPath('result.leads.eligible', 1);
+
+        $this->assertSame(0, Lead::query()->count());
+        $this->assertDatabaseHas('platforms', [
+            'id' => $platformA->id,
+            'sync_last_status' => 'success',
+            'sync_last_scope' => 'leads',
+        ]);
+
+        $outOfScopeResponse = $this->postJson("/api/crm/settings/integrations/platforms/{$platformB->id}/sync", [
+            'scope' => 'leads',
+            'dry_run' => true,
+        ]);
+
+        $outOfScopeResponse->assertStatus(403);
     }
 
     private function createUser(string $role = 'sales', array $assignedMarketIds = []): User

@@ -8,21 +8,26 @@ use App\Models\Platform;
 use App\Models\Template;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\ClientSyncService;
+use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
+use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class SettingsController extends Controller
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly LeadImportService $leadImportService
     ) {
     }
 
     public function integrations(Request $request)
     {
-        $platformQuery = Platform::query()->where('is_active', true)->orderBy('id');
+        $platformQuery = Platform::query()->orderBy('id');
         $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         if (is_array($allowedPlatformIds)) {
@@ -30,23 +35,9 @@ class SettingsController extends Controller
         }
 
         $platforms = $platformQuery->get();
-
-        $platformStatuses = $platforms->map(function (Platform $platform) {
-            $hasWpCredentials = !empty($platform->wp_api_url) && !empty($platform->wp_api_user) && !empty($platform->wp_api_password);
-
-            return [
-                'platform_id' => $platform->id,
-                'platform_name' => $platform->name,
-                'country' => $platform->country,
-                'wp_sync' => [
-                    'status' => $hasWpCredentials ? 'connected' : 'pending',
-                    'api_url' => $platform->wp_api_url,
-                    'api_user' => $platform->wp_api_user,
-                ],
-                'currency' => $platform->currency_code ?: 'KES',
-                'timezone' => $platform->timezone ?: 'Africa/Nairobi',
-            ];
-        });
+        $platformStatuses = $platforms
+            ->map(fn (Platform $platform) => $this->serializePlatformIntegration($platform))
+            ->values();
 
         $smsEnabled = (bool) config('services.sms.enabled', false);
         $smsConfigured = (bool) config('services.sms.gateway_url') && (bool) config('services.sms.org_code');
@@ -74,6 +65,304 @@ class SettingsController extends Controller
             'platforms' => $platformStatuses,
             'last_checked_at' => now()->toDateTimeString(),
         ]);
+    }
+
+    public function storeIntegrationPlatform(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can create markets.'
+        );
+
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'domain' => 'required|string|max:255|unique:platforms,domain',
+            'country' => 'required|string|max:255',
+            'is_active' => 'nullable|boolean',
+            'wp_api_url' => 'nullable|url|max:255',
+            'wp_api_user' => 'nullable|string|max:100',
+            'wp_api_password' => 'nullable|string|max:255',
+            'phone_prefix' => ['nullable', 'string', 'max:5', 'regex:/^\d{1,5}$/'],
+            'timezone' => 'nullable|string|max:50',
+            'currency_code' => 'nullable|string|size:3',
+            'db_host' => 'nullable|string|max:255',
+            'db_name' => 'nullable|string|max:255',
+            'db_user' => 'nullable|string|max:255',
+            'db_pass' => 'nullable|string|max:255',
+            'db_prefix' => 'nullable|string|max:32',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $platform = Platform::query()->create($this->platformWritePayload($validated));
+        $platform->refresh();
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_CREATE,
+            'platform',
+            (int) $platform->id,
+            null,
+            $this->platformAuditState($platform),
+            $validated['reason'] ?? 'Created market integration profile from CRM settings'
+        );
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform),
+        ], 201);
+    }
+
+    public function updateIntegrationPlatform(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can update market integrations.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'domain' => ['sometimes', 'string', 'max:255', Rule::unique('platforms', 'domain')->ignore($platform->id)],
+            'country' => 'sometimes|string|max:255',
+            'is_active' => 'sometimes|boolean',
+            'wp_api_url' => 'sometimes|nullable|url|max:255',
+            'wp_api_user' => 'sometimes|nullable|string|max:100',
+            'wp_api_password' => 'sometimes|nullable|string|max:255',
+            'phone_prefix' => ['sometimes', 'nullable', 'string', 'max:5', 'regex:/^\d{1,5}$/'],
+            'timezone' => 'sometimes|nullable|string|max:50',
+            'currency_code' => 'sometimes|nullable|string|size:3',
+            'db_host' => 'sometimes|nullable|string|max:255',
+            'db_name' => 'sometimes|nullable|string|max:255',
+            'db_user' => 'sometimes|nullable|string|max:255',
+            'db_pass' => 'sometimes|nullable|string|max:255',
+            'db_prefix' => 'sometimes|nullable|string|max:32',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $beforeState = $this->platformAuditState($platform);
+        $platform->fill($this->platformWritePayload($validated, true))->save();
+        $platform->refresh();
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'platform',
+            (int) $platform->id,
+            $beforeState,
+            $this->platformAuditState($platform),
+            $validated['reason'] ?? 'Updated market integration profile from CRM settings'
+        );
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform),
+        ]);
+    }
+
+    public function testPlatformConnection(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can test integrations.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (!$this->platformHasWpCredentials($platform)) {
+            return response()->json([
+                'message' => 'WordPress sync credentials are incomplete for this market.',
+            ], 422);
+        }
+
+        $beforeState = $this->platformAuditState($platform);
+
+        try {
+            $stats = (new WpSyncService($platform))->getStats();
+
+            $platform->forceFill([
+                'sync_last_checked_at' => now(),
+                'sync_last_status' => 'healthy',
+                'sync_last_error' => null,
+            ])->save();
+            $platform->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Integration connection test executed'
+            );
+
+            return response()->json([
+                'status' => 'healthy',
+                'checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
+                'platform' => $this->serializePlatformIntegration($platform),
+                'stats' => $stats,
+            ]);
+        } catch (\Throwable $exception) {
+            $platform->forceFill([
+                'sync_last_checked_at' => now(),
+                'sync_last_status' => 'error',
+                'sync_last_error' => mb_substr($exception->getMessage(), 0, 500),
+            ])->save();
+            $platform->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Integration connection test failed'
+            );
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Connection test failed. Check credentials and API reachability.',
+                'error' => $exception->getMessage(),
+                'platform' => $this->serializePlatformIntegration($platform),
+            ], 422);
+        }
+    }
+
+    public function runPlatformSync(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can run manual sync.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'scope' => 'required|in:clients,leads,all',
+            'mode' => 'nullable|in:full,delta',
+            'dry_run' => 'nullable|boolean',
+            'per_page' => 'nullable|integer|min:20|max:200',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (!$this->platformHasWpCredentials($platform)) {
+            return response()->json([
+                'message' => 'WordPress sync credentials are incomplete for this market.',
+            ], 422);
+        }
+
+        $scope = $validated['scope'];
+        $mode = $validated['mode'] ?? 'delta';
+        $dryRun = (bool) ($validated['dry_run'] ?? false);
+        $perPage = (int) ($validated['per_page'] ?? 100);
+
+        if ($dryRun && in_array($scope, ['clients', 'all'], true)) {
+            return response()->json([
+                'message' => 'Dry-run is currently supported for leads sync only. Use scope=leads or disable dry-run.',
+            ], 422);
+        }
+
+        $beforeState = $this->platformAuditState($platform);
+
+        try {
+            $result = [
+                'scope' => $scope,
+                'mode' => $mode,
+                'dry_run' => $dryRun,
+                'ran_at' => now()->toDateTimeString(),
+                'clients' => null,
+                'leads' => null,
+            ];
+
+            if (in_array($scope, ['clients', 'all'], true)) {
+                $clientSyncService = new ClientSyncService($platform);
+                $result['clients'] = $mode === 'full'
+                    ? $clientSyncService->fullSync($perPage)
+                    : $clientSyncService->deltaSync();
+            }
+
+            if (in_array($scope, ['leads', 'all'], true)) {
+                $result['leads'] = $this->leadImportService->importPlatform($platform, $dryRun, $perPage);
+            }
+
+            $syncStatus = 'success';
+            if (!empty($result['leads']['errors']) && count($result['leads']['errors']) > 0) {
+                $syncStatus = 'partial';
+            }
+
+            $platform->forceFill([
+                'sync_last_synced_at' => now(),
+                'sync_last_scope' => $scope,
+                'sync_last_status' => $syncStatus,
+                'sync_last_error' => $syncStatus === 'partial' ? mb_substr((string) $result['leads']['errors'][0], 0, 500) : null,
+                'sync_last_result' => $result,
+            ])->save();
+            $platform->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_SYNC_RUN,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Manual platform sync run'
+            );
+
+            return response()->json([
+                'status' => $syncStatus,
+                'result' => $result,
+                'platform' => $this->serializePlatformIntegration($platform),
+            ]);
+        } catch (\Throwable $exception) {
+            $platform->forceFill([
+                'sync_last_synced_at' => now(),
+                'sync_last_scope' => $scope,
+                'sync_last_status' => 'error',
+                'sync_last_error' => mb_substr($exception->getMessage(), 0, 500),
+            ])->save();
+            $platform->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_SYNC_RUN,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Manual platform sync failed'
+            );
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Manual sync failed for this market.',
+                'error' => $exception->getMessage(),
+                'platform' => $this->serializePlatformIntegration($platform),
+            ], 422);
+        }
     }
 
     public function templates(Request $request)
@@ -413,6 +702,97 @@ class SettingsController extends Controller
             'assigned_market_ids' => $assignedMarketIds,
             'assigned_markets' => $assignedMarkets,
         ]);
+    }
+
+    private function serializePlatformIntegration(Platform $platform): array
+    {
+        $hasWpCredentials = $this->platformHasWpCredentials($platform);
+        $lastStatus = (string) ($platform->sync_last_status ?? 'unknown');
+
+        $wpStatus = 'pending';
+        if ($hasWpCredentials) {
+            $wpStatus = in_array($lastStatus, ['error'], true) ? 'degraded' : 'connected';
+        }
+
+        return [
+            'platform_id' => (int) $platform->id,
+            'platform_name' => $platform->name,
+            'domain' => $platform->domain,
+            'country' => $platform->country,
+            'is_active' => (bool) $platform->is_active,
+            'currency' => $platform->currency_code ?: 'KES',
+            'timezone' => $platform->timezone ?: 'Africa/Nairobi',
+            'phone_prefix' => $platform->phone_prefix ?: '254',
+            'wp_sync' => [
+                'status' => $wpStatus,
+                'credentials_ready' => $hasWpCredentials,
+                'api_url' => $platform->wp_api_url,
+                'api_user' => $platform->wp_api_user,
+                'last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
+                'last_error' => $platform->sync_last_error,
+            ],
+            'sync' => [
+                'last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
+                'last_scope' => $platform->sync_last_scope,
+                'last_status' => $lastStatus,
+                'last_error' => $platform->sync_last_error,
+                'last_result' => $platform->sync_last_result,
+            ],
+        ];
+    }
+
+    private function platformWritePayload(array $validated, bool $isPatch = false): array
+    {
+        $payload = collect($validated)
+            ->except(['reason'])
+            ->map(function ($value, $key) {
+                if (in_array($key, ['currency_code'], true) && is_string($value) && $value !== '') {
+                    return strtoupper(trim($value));
+                }
+
+                return $value;
+            })
+            ->all();
+
+        if ($isPatch && array_key_exists('wp_api_password', $payload) && empty($payload['wp_api_password'])) {
+            unset($payload['wp_api_password']);
+        }
+
+        if (!$isPatch) {
+            $payload['is_active'] = array_key_exists('is_active', $payload) ? (bool) $payload['is_active'] : true;
+            $payload['phone_prefix'] = $payload['phone_prefix'] ?? '254';
+            $payload['timezone'] = $payload['timezone'] ?? 'Africa/Nairobi';
+            $payload['currency_code'] = $payload['currency_code'] ?? 'KES';
+        }
+
+        return $payload;
+    }
+
+    private function platformAuditState(Platform $platform): array
+    {
+        return [
+            'name' => $platform->name,
+            'domain' => $platform->domain,
+            'country' => $platform->country,
+            'is_active' => (bool) $platform->is_active,
+            'wp_api_url' => $platform->wp_api_url,
+            'wp_api_user' => $platform->wp_api_user,
+            'phone_prefix' => $platform->phone_prefix,
+            'timezone' => $platform->timezone,
+            'currency_code' => $platform->currency_code,
+            'sync_last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
+            'sync_last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
+            'sync_last_scope' => $platform->sync_last_scope,
+            'sync_last_status' => $platform->sync_last_status,
+            'sync_last_error' => $platform->sync_last_error,
+        ];
+    }
+
+    private function platformHasWpCredentials(Platform $platform): bool
+    {
+        return !empty($platform->wp_api_url)
+            && !empty($platform->wp_api_user)
+            && !empty($platform->wp_api_password);
     }
 
     private function decodeMarketIds($value): array
