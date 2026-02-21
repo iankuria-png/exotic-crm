@@ -639,21 +639,39 @@ class SettingsController extends Controller
 
     public function webhookLogs(Request $request)
     {
+        $allowedActions = [
+            CrmAuditAction::DEAL_ACTIVATE,
+            CrmAuditAction::DEAL_DEACTIVATE,
+            CrmAuditAction::DEAL_EXTEND,
+            CrmAuditAction::PAYMENT_MATCH_AUTO,
+            CrmAuditAction::PAYMENT_MATCH_CONFIRM,
+            CrmAuditAction::PAYMENT_MATCH_BATCH,
+            CrmAuditAction::RENEWAL_SMS_SENT,
+            CrmAuditAction::RENEWAL_SMS_FAILED,
+            CrmAuditAction::CONVERSATION_SMS_SENT,
+            CrmAuditAction::CONVERSATION_SMS_FAILED,
+            CrmAuditAction::INTEGRATION_PLATFORM_CREATE,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+            CrmAuditAction::INTEGRATION_SYNC_RUN,
+            CrmAuditAction::LEAD_SCRAPE_INTAKE,
+            CrmAuditAction::LEAD_STATUS_UPDATE,
+            CrmAuditAction::LEAD_ASSIGN,
+            CrmAuditAction::LEAD_ARCHIVE,
+            CrmAuditAction::LEAD_DELETE,
+            CrmAuditAction::ROLE_UPDATE,
+            CrmAuditAction::USER_CREATE,
+            // Legacy action names retained for backward compatibility.
+            'deal_activated',
+            'deal_deactivated',
+            'deal_extended',
+            'payment_auto_matched',
+            'payment_match_confirmed',
+        ];
+
         $query = AuditLog::query()
             ->with('actor:id,name,email')
-            ->whereIn('action', [
-                'deal_activate',
-                'deal_deactivate',
-                'deal_extend',
-                'deal_activated',
-                'deal_deactivated',
-                'deal_extended',
-                'payment_auto_matched',
-                'payment_match_confirmed',
-                'payment_match_auto',
-                'payment_match_confirm',
-                'payment_match_batch',
-            ]);
+            ->whereIn('action', $allowedActions);
 
         if ($request->filled('search')) {
             $search = $request->input('search');
@@ -669,10 +687,21 @@ class SettingsController extends Controller
             $query->whereIn('platform_id', $allowedPlatformIds);
         }
 
-        return response()->json(
-            $query->orderByDesc('created_at')
-                ->paginate($request->integer('per_page', 25))
-        );
+        $logs = $query->orderByDesc('created_at')
+            ->paginate($request->integer('per_page', 25));
+
+        $logs->getCollection()->transform(function (AuditLog $log) {
+            $incident = $this->buildWebhookIncident($log);
+            $payload = $log->toArray();
+            $payload['incident'] = $incident;
+            $payload['summary'] = $incident['summary'];
+            $payload['severity'] = $incident['severity'];
+            $payload['category'] = $incident['category'];
+            $payload['suggested_action'] = $incident['suggested_action'];
+            return $payload;
+        });
+
+        return response()->json($logs);
     }
 
     public function roles()
@@ -1006,6 +1035,256 @@ class SettingsController extends Controller
             'sales' => 'Sales',
             default => ucfirst(str_replace('_', ' ', $role)),
         };
+    }
+
+    private function buildWebhookIncident(AuditLog $log): array
+    {
+        $action = (string) $log->action;
+        $catalog = $this->webhookIncidentCatalog();
+        $meta = $catalog[$action] ?? [
+            'title' => ucwords(str_replace('_', ' ', $action)),
+            'category' => 'operations',
+            'severity' => 'medium',
+            'summary' => 'Operational event recorded.',
+            'suggested_action' => 'Inspect details if this event blocks workflow execution.',
+        ];
+
+        $after = is_array($log->after_state) ? $log->after_state : [];
+
+        $summary = (string) ($meta['summary'] ?? 'Operational event recorded.');
+        $severity = (string) ($meta['severity'] ?? 'medium');
+        $suggestedAction = (string) ($meta['suggested_action'] ?? 'Inspect details if this event blocks workflow execution.');
+
+        if ($action === CrmAuditAction::INTEGRATION_CONNECTION_TEST) {
+            $passed = (bool) ($after['success'] ?? false);
+            $summary = $passed
+                ? 'Connection test succeeded for the selected integration.'
+                : 'Connection test failed for the selected integration.';
+            $severity = $passed ? 'low' : 'high';
+            $suggestedAction = $passed
+                ? 'No immediate action required.'
+                : 'Review credentials and endpoint reachability, then re-run the connection test.';
+        } elseif ($action === CrmAuditAction::INTEGRATION_SYNC_RUN) {
+            $status = (string) ($after['status'] ?? 'unknown');
+            $scope = (string) ($after['scope'] ?? 'unknown');
+            $summary = sprintf('Manual %s sync finished with status: %s.', $scope, $status);
+            $severity = match ($status) {
+                'success' => 'low',
+                'partial' => 'medium',
+                'error', 'failed' => 'high',
+                default => 'medium',
+            };
+            $suggestedAction = match ($status) {
+                'success' => 'No immediate action required.',
+                'partial' => 'Review warning details and rerun sync for missing records if needed.',
+                'error', 'failed' => 'Open integration workspace, fix connection issues, and rerun sync.',
+                default => 'Inspect sync details and rerun if records were not imported as expected.',
+            };
+        } elseif (in_array($action, [CrmAuditAction::PAYMENT_MATCH_BATCH, 'payment_match_confirmed'], true)) {
+            $matched = (int) ($after['matched'] ?? 0);
+            $unmatched = (int) ($after['unmatched'] ?? 0);
+            if ($matched || $unmatched) {
+                $summary = sprintf('Batch payment match completed: %d matched, %d unmatched.', $matched, $unmatched);
+                $severity = $unmatched > 0 ? 'medium' : 'low';
+                $suggestedAction = $unmatched > 0
+                    ? 'Review unmatched payments in the queue and resolve manually.'
+                    : 'No immediate action required.';
+            }
+        } elseif (str_contains($action, '_failed') && !array_key_exists($action, $catalog)) {
+            $severity = 'high';
+            $summary = sprintf('%s failed and may require intervention.', ucwords(str_replace('_', ' ', $action)));
+            $suggestedAction = 'Open incident details, verify provider/integration status, and retry the operation.';
+        }
+
+        return [
+            'title' => (string) ($meta['title'] ?? ucwords(str_replace('_', ' ', $action))),
+            'category' => (string) ($meta['category'] ?? 'operations'),
+            'severity' => $severity,
+            'summary' => $summary,
+            'suggested_action' => $suggestedAction,
+            'reason' => $log->reason,
+        ];
+    }
+
+    private function webhookIncidentCatalog(): array
+    {
+        return [
+            CrmAuditAction::PAYMENT_MATCH_AUTO => [
+                'title' => 'Payment auto-match run',
+                'category' => 'payments',
+                'severity' => 'low',
+                'summary' => 'Payment was matched automatically.',
+                'suggested_action' => 'No immediate action required unless mismatch is reported.',
+            ],
+            CrmAuditAction::PAYMENT_MATCH_CONFIRM => [
+                'title' => 'Payment manually confirmed',
+                'category' => 'payments',
+                'severity' => 'low',
+                'summary' => 'Payment match was confirmed manually by an operator.',
+                'suggested_action' => 'No immediate action required.',
+            ],
+            CrmAuditAction::PAYMENT_MATCH_BATCH => [
+                'title' => 'Batch payment matching',
+                'category' => 'payments',
+                'severity' => 'medium',
+                'summary' => 'Batch matching job completed.',
+                'suggested_action' => 'Review unmatched queue items if any remain.',
+            ],
+            CrmAuditAction::RENEWAL_SMS_SENT => [
+                'title' => 'Renewal reminder sent',
+                'category' => 'renewals',
+                'severity' => 'low',
+                'summary' => 'Renewal reminder was sent successfully.',
+                'suggested_action' => 'No immediate action required.',
+            ],
+            CrmAuditAction::RENEWAL_SMS_FAILED => [
+                'title' => 'Renewal reminder failed',
+                'category' => 'renewals',
+                'severity' => 'high',
+                'summary' => 'Renewal reminder SMS could not be delivered.',
+                'suggested_action' => 'Check SMS provider health and resend from renewals workspace.',
+            ],
+            CrmAuditAction::CONVERSATION_SMS_SENT => [
+                'title' => 'Conversation SMS sent',
+                'category' => 'conversations',
+                'severity' => 'low',
+                'summary' => 'Outbound conversation SMS was delivered.',
+                'suggested_action' => 'No immediate action required.',
+            ],
+            CrmAuditAction::CONVERSATION_SMS_FAILED => [
+                'title' => 'Conversation SMS failed',
+                'category' => 'conversations',
+                'severity' => 'high',
+                'summary' => 'Outbound conversation SMS failed to send.',
+                'suggested_action' => 'Verify provider connectivity and retry from the conversation panel.',
+            ],
+            CrmAuditAction::INTEGRATION_PLATFORM_CREATE => [
+                'title' => 'Market integration created',
+                'category' => 'integrations',
+                'severity' => 'low',
+                'summary' => 'A new market integration profile was created.',
+                'suggested_action' => 'Run connection test before first sync.',
+            ],
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE => [
+                'title' => 'Integration settings updated',
+                'category' => 'integrations',
+                'severity' => 'medium',
+                'summary' => 'Integration routing or credentials were changed.',
+                'suggested_action' => 'Run a connection test to validate the new configuration.',
+            ],
+            CrmAuditAction::INTEGRATION_CONNECTION_TEST => [
+                'title' => 'Integration connection test',
+                'category' => 'integrations',
+                'severity' => 'medium',
+                'summary' => 'Connection health check completed.',
+                'suggested_action' => 'Review result and remediate if test failed.',
+            ],
+            CrmAuditAction::INTEGRATION_SYNC_RUN => [
+                'title' => 'Manual sync run',
+                'category' => 'integrations',
+                'severity' => 'medium',
+                'summary' => 'Manual sync execution completed.',
+                'suggested_action' => 'Inspect sync totals and errors before proceeding.',
+            ],
+            CrmAuditAction::DEAL_ACTIVATE => [
+                'title' => 'Subscription activated',
+                'category' => 'subscriptions',
+                'severity' => 'low',
+                'summary' => 'Subscription was activated.',
+                'suggested_action' => 'No immediate action required.',
+            ],
+            CrmAuditAction::DEAL_DEACTIVATE => [
+                'title' => 'Subscription deactivated',
+                'category' => 'subscriptions',
+                'severity' => 'medium',
+                'summary' => 'Subscription was deactivated.',
+                'suggested_action' => 'Confirm deactivation reason and communicate with the client if needed.',
+            ],
+            CrmAuditAction::DEAL_EXTEND => [
+                'title' => 'Subscription extended',
+                'category' => 'subscriptions',
+                'severity' => 'low',
+                'summary' => 'Subscription expiry date was extended.',
+                'suggested_action' => 'No immediate action required.',
+            ],
+            CrmAuditAction::LEAD_ASSIGN => [
+                'title' => 'Lead reassigned',
+                'category' => 'leads',
+                'severity' => 'low',
+                'summary' => 'Lead ownership changed.',
+                'suggested_action' => 'Ensure new owner follows up within SLA.',
+            ],
+            CrmAuditAction::LEAD_STATUS_UPDATE => [
+                'title' => 'Lead status updated',
+                'category' => 'leads',
+                'severity' => 'low',
+                'summary' => 'Lead pipeline stage changed.',
+                'suggested_action' => 'Review conversion movement in reports if needed.',
+            ],
+            CrmAuditAction::LEAD_ARCHIVE => [
+                'title' => 'Lead archived',
+                'category' => 'leads',
+                'severity' => 'medium',
+                'summary' => 'Lead was archived from active pipeline.',
+                'suggested_action' => 'Confirm archive reason to avoid accidental pipeline loss.',
+            ],
+            CrmAuditAction::LEAD_DELETE => [
+                'title' => 'Lead deleted',
+                'category' => 'leads',
+                'severity' => 'high',
+                'summary' => 'Lead record was permanently deleted.',
+                'suggested_action' => 'Verify deletion reason and recover from backups if this was accidental.',
+            ],
+            CrmAuditAction::ROLE_UPDATE => [
+                'title' => 'Role permissions changed',
+                'category' => 'access',
+                'severity' => 'medium',
+                'summary' => 'User role or market scope was updated.',
+                'suggested_action' => 'Confirm least-privilege policy is still enforced.',
+            ],
+            CrmAuditAction::USER_CREATE => [
+                'title' => 'User account created',
+                'category' => 'access',
+                'severity' => 'low',
+                'summary' => 'A new CRM user account was created.',
+                'suggested_action' => 'Validate role and assigned markets before onboarding handoff.',
+            ],
+            'payment_auto_matched' => [
+                'title' => 'Payment auto-match run',
+                'category' => 'payments',
+                'severity' => 'low',
+                'summary' => 'Payment was matched automatically.',
+                'suggested_action' => 'No immediate action required unless mismatch is reported.',
+            ],
+            'payment_match_confirmed' => [
+                'title' => 'Batch payment matching',
+                'category' => 'payments',
+                'severity' => 'medium',
+                'summary' => 'Batch matching job completed.',
+                'suggested_action' => 'Review unmatched queue items if any remain.',
+            ],
+            'deal_activated' => [
+                'title' => 'Subscription activated',
+                'category' => 'subscriptions',
+                'severity' => 'low',
+                'summary' => 'Subscription was activated.',
+                'suggested_action' => 'No immediate action required.',
+            ],
+            'deal_deactivated' => [
+                'title' => 'Subscription deactivated',
+                'category' => 'subscriptions',
+                'severity' => 'medium',
+                'summary' => 'Subscription was deactivated.',
+                'suggested_action' => 'Confirm deactivation reason and communicate with the client if needed.',
+            ],
+            'deal_extended' => [
+                'title' => 'Subscription extended',
+                'category' => 'subscriptions',
+                'severity' => 'low',
+                'summary' => 'Subscription expiry date was extended.',
+                'suggested_action' => 'No immediate action required.',
+            ],
+        ];
     }
 
     private function resolveAuditPlatformId(array $assignedMarketIds): ?int

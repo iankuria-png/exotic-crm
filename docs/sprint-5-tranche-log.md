@@ -548,3 +548,63 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 - SMS provider configuration is runtime-managed in DB to remove deploy-time coupling for day-to-day provider switching.
 - Fallback routing is constrained to a different provider than active to avoid ambiguous failover behavior.
 - Test dispatch remains admin-only and confirmation-gated because it triggers real outbound communication.
+
+---
+
+## Tranche 12 (Completed)
+
+### Plan
+- Execute `CRM-517` from the reconciliation backlog:
+  - convert raw webhook/audit events into operator-readable incidents
+  - introduce severity/category/recommended-action semantics
+  - keep technical payload available behind progressive disclosure
+
+### Progress
+- Backend:
+  - Expanded webhook log intake scope in `SettingsController::webhookLogs()` to include:
+    - payments/subscriptions actions
+    - renewals + conversation SMS actions
+    - integration actions (create/update/test/sync)
+    - lead and access-management operational events
+  - Added incident translation layer:
+    - `buildWebhookIncident()` generates title/category/severity/summary/recommended action
+    - action catalog + dynamic overrides for:
+      - integration connection tests
+      - sync run status (success/partial/error)
+      - batch payment match summaries
+      - fallback handling for unknown `_failed` actions
+  - Webhook logs API now returns enriched fields per event:
+    - `incident`
+    - `summary`
+    - `severity`
+    - `category`
+    - `suggested_action`
+- Frontend:
+  - Rebuilt `WebhookLogsWorkspace` into an incident-centric experience:
+    - metric cards for severity distribution + top category
+    - updated search microcopy for operator language
+    - incident table columns: incident, severity, category, owner/entity, recommended action, logged
+  - Reworked inspect modal for progressive disclosure:
+    - incident summary + recommended action + operator reason always visible
+    - technical payload hidden by default
+    - explicit `Show raw payload`/`Hide raw payload` toggle for JSON states
+  - Added consistent severity badges (`Needs action`, `Monitor`, `Healthy`) with clear visual semantics.
+- Tests:
+  - Added `test_webhook_logs_return_humanized_incident_fields_and_scope`.
+  - Test validates:
+    - scoped access by market
+    - presence/values of translated incident fields
+    - severity/category/recommended-action contract.
+
+### Verification
+- `php artisan test --filter test_webhook_logs_return_humanized_incident_fields_and_scope` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5i-2026-02-21/settings-webhook-logs-incident-table.png`
+  - `output/playwright/sprint5i-2026-02-21/settings-webhook-log-incident-detail.png`
+  - `output/playwright/sprint5i-2026-02-21/settings-webhook-log-raw-expanded.png`
+
+### Decision Notes
+- Incident translation is intentionally backend-driven to keep log semantics consistent across current and future UI surfaces.
+- Technical payload remained fully accessible but is hidden by default to reduce non-engineer cognitive load during triage.

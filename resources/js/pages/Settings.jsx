@@ -1276,11 +1276,29 @@ function TemplatesWorkspace({ canManageTemplates }) {
     );
 }
 
+function incidentSeverityClasses(severity) {
+    if (severity === 'high') return 'bg-rose-50 text-rose-700 ring-rose-200';
+    if (severity === 'medium') return 'bg-amber-50 text-amber-700 ring-amber-200';
+    return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+}
+
+function incidentSeverityLabel(severity) {
+    if (severity === 'high') return 'Needs action';
+    if (severity === 'medium') return 'Monitor';
+    return 'Healthy';
+}
+
+function incidentCategoryLabel(category) {
+    const normalized = String(category || 'operations');
+    return normalized.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function WebhookLogsWorkspace() {
     const [page, setPage] = useState(1);
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [selectedLog, setSelectedLog] = useState(null);
+    const [showRawPayload, setShowRawPayload] = useState(false);
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-webhook-logs', page, search],
@@ -1293,31 +1311,67 @@ function WebhookLogsWorkspace() {
         }).then((response) => response.data),
     });
 
+    const logs = data?.data || [];
+    const summary = useMemo(() => {
+        return logs.reduce((accumulator, log) => {
+            const severity = log?.incident?.severity || 'medium';
+            if (severity === 'high') accumulator.high += 1;
+            else if (severity === 'medium') accumulator.medium += 1;
+            else accumulator.low += 1;
+
+            const category = log?.incident?.category || 'operations';
+            accumulator.categories[category] = (accumulator.categories[category] || 0) + 1;
+            return accumulator;
+        }, { high: 0, medium: 0, low: 0, categories: {} });
+    }, [logs]);
+
+    const topCategory = Object.entries(summary.categories)
+        .sort((left, right) => right[1] - left[1])[0];
+
     const columns = [
         {
-            key: 'created_at',
-            label: 'Timestamp',
-            render: (row) => <span className="text-xs text-slate-600">{row.created_at ? new Date(row.created_at).toLocaleString() : '--'}</span>,
+            key: 'incident',
+            label: 'Incident',
+            render: (row) => (
+                <div className="max-w-[460px]">
+                    <p className="text-sm font-semibold text-slate-900">{row.incident?.title || row.action.replaceAll('_', ' ')}</p>
+                    <p className="truncate text-xs text-slate-500">{row.incident?.summary || row.summary || 'Operational event recorded.'}</p>
+                </div>
+            ),
         },
         {
-            key: 'action',
-            label: 'Action',
-            render: (row) => <span className="text-xs font-semibold uppercase tracking-wide text-slate-700">{row.action.replaceAll('_', ' ')}</span>,
+            key: 'severity',
+            label: 'Severity',
+            render: (row) => (
+                <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${incidentSeverityClasses(row.incident?.severity || 'medium')}`}>
+                    {incidentSeverityLabel(row.incident?.severity || 'medium')}
+                </span>
+            ),
         },
         {
-            key: 'entity',
-            label: 'Entity',
-            render: (row) => <span className="text-xs text-slate-600">{row.entity_type} #{row.entity_id}</span>,
+            key: 'category',
+            label: 'Category',
+            render: (row) => <span className="text-xs text-slate-700">{incidentCategoryLabel(row.incident?.category || row.category)}</span>,
         },
         {
             key: 'actor',
-            label: 'Actor',
-            render: (row) => <span className="text-xs text-slate-600">{row.actor?.name || 'System'}</span>,
+            label: 'Owner',
+            render: (row) => (
+                <div>
+                    <p className="text-xs font-medium text-slate-700">{row.actor?.name || 'System'}</p>
+                    <p className="text-[11px] text-slate-500">{row.entity_type} #{row.entity_id}</p>
+                </div>
+            ),
         },
         {
-            key: 'reason',
-            label: 'Reason',
-            render: (row) => <span className="truncate text-xs text-slate-500">{row.reason || '—'}</span>,
+            key: 'suggested_action',
+            label: 'Recommended Action',
+            render: (row) => <span className="truncate text-xs text-slate-600">{row.incident?.suggested_action || row.suggested_action || 'Inspect event details.'}</span>,
+        },
+        {
+            key: 'created_at',
+            label: 'Logged',
+            render: (row) => <span className="text-xs text-slate-600">{row.created_at ? new Date(row.created_at).toLocaleString() : '--'}</span>,
         },
         {
             key: 'actions',
@@ -1326,6 +1380,7 @@ function WebhookLogsWorkspace() {
                 <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={(event) => {
                     event.stopPropagation();
                     setSelectedLog(row);
+                    setShowRawPayload(false);
                 }}>
                     Inspect
                 </button>
@@ -1335,6 +1390,33 @@ function WebhookLogsWorkspace() {
 
     return (
         <div className="space-y-4">
+            <section className="grid gap-4 md:grid-cols-4">
+                <MetricCard
+                    label="Needs Action"
+                    value={(summary.high || 0).toLocaleString()}
+                    meta="high-severity incidents"
+                    tone={(summary.high || 0) > 0 ? 'danger' : 'success'}
+                />
+                <MetricCard
+                    label="Monitor"
+                    value={(summary.medium || 0).toLocaleString()}
+                    meta="medium-severity incidents"
+                    tone="warning"
+                />
+                <MetricCard
+                    label="Healthy Events"
+                    value={(summary.low || 0).toLocaleString()}
+                    meta="completed without intervention"
+                    tone="success"
+                />
+                <MetricCard
+                    label="Top Category"
+                    value={incidentCategoryLabel(topCategory?.[0] || 'operations')}
+                    meta={`${(topCategory?.[1] || 0).toLocaleString()} incidents in current page`}
+                    tone="default"
+                />
+            </section>
+
             <section className="crm-filter-row">
                 <div className="flex flex-wrap items-center gap-3">
                     <form
@@ -1349,7 +1431,7 @@ function WebhookLogsWorkspace() {
                             <input
                                 value={searchInput}
                                 onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search action, reason, or entity..."
+                                placeholder="Search incident, reason, action code, or entity..."
                                 className="crm-input pr-10"
                             />
                             <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
@@ -1369,17 +1451,21 @@ function WebhookLogsWorkspace() {
                         </button>
                     ) : null}
                 </div>
+                <p className="mt-2 text-xs text-slate-500">Incident summaries are human-readable. Open a row only when you need technical payload details.</p>
             </section>
 
             <DataTable
                 columns={columns}
-                data={data?.data}
+                data={logs}
                 pagination={data}
                 onPageChange={setPage}
-                onRowClick={(row) => setSelectedLog(row)}
+                onRowClick={(row) => {
+                    setSelectedLog(row);
+                    setShowRawPayload(false);
+                }}
                 isLoading={isLoading}
                 compact
-                emptyMessage="No webhook logs found."
+                emptyMessage="No incident logs found."
             />
 
             {selectedLog ? (
@@ -1387,20 +1473,62 @@ function WebhookLogsWorkspace() {
                     <div className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
                         <header className="crm-panel-header">
                             <div>
-                                <h3 className="crm-panel-title">Webhook Log Detail</h3>
-                                <p className="crm-panel-subtitle">{selectedLog.action.replaceAll('_', ' ')} • {selectedLog.created_at ? new Date(selectedLog.created_at).toLocaleString() : '--'}</p>
+                                <h3 className="crm-panel-title">{selectedLog.incident?.title || selectedLog.action.replaceAll('_', ' ')}</h3>
+                                <p className="crm-panel-subtitle">{selectedLog.created_at ? new Date(selectedLog.created_at).toLocaleString() : '--'} • Action code: {selectedLog.action}</p>
                             </div>
                         </header>
-                        <div className="grid gap-4 p-4 lg:grid-cols-2">
-                            <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                                <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Before State</h4>
-                                <pre className="crm-mono mt-2 max-h-64 overflow-auto text-xs text-slate-700">{JSON.stringify(selectedLog.before_state || {}, null, 2)}</pre>
+
+                        <div className="space-y-4 p-4">
+                            <section className="grid gap-3 sm:grid-cols-2">
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Severity</p>
+                                    <p className={`mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${incidentSeverityClasses(selectedLog.incident?.severity || 'medium')}`}>
+                                        {incidentSeverityLabel(selectedLog.incident?.severity || 'medium')}
+                                    </p>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Category</p>
+                                    <p className="mt-1 text-sm font-semibold text-slate-800">{incidentCategoryLabel(selectedLog.incident?.category || selectedLog.category)}</p>
+                                </div>
                             </section>
+
                             <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                                <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">After State</h4>
-                                <pre className="crm-mono mt-2 max-h-64 overflow-auto text-xs text-slate-700">{JSON.stringify(selectedLog.after_state || {}, null, 2)}</pre>
+                                <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Incident Summary</h4>
+                                <p className="mt-2 text-sm text-slate-700">{selectedLog.incident?.summary || selectedLog.summary || 'Operational event recorded.'}</p>
+                                <p className="mt-2 text-xs text-slate-600"><span className="font-semibold text-slate-700">Recommended action:</span> {selectedLog.incident?.suggested_action || selectedLog.suggested_action || 'Inspect this event if workflow appears blocked.'}</p>
+                                {selectedLog.reason ? (
+                                    <p className="mt-2 text-xs text-slate-600"><span className="font-semibold text-slate-700">Operator reason:</span> {selectedLog.reason}</p>
+                                ) : null}
+                            </section>
+
+                            <section className="rounded-md border border-slate-200 bg-white p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Technical Payload</h4>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowRawPayload((current) => !current)}
+                                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                    >
+                                        {showRawPayload ? 'Hide raw payload' : 'Show raw payload'}
+                                    </button>
+                                </div>
+                                {showRawPayload ? (
+                                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                                        <section className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                                            <h5 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Before State</h5>
+                                            <pre className="crm-mono mt-2 max-h-64 overflow-auto text-xs text-slate-700">{JSON.stringify(selectedLog.before_state || {}, null, 2)}</pre>
+                                        </section>
+                                        <section className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                                            <h5 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">After State</h5>
+                                            <pre className="crm-mono mt-2 max-h-64 overflow-auto text-xs text-slate-700">{JSON.stringify(selectedLog.after_state || {}, null, 2)}</pre>
+                                        </section>
+                                    </div>
+                                ) : (
+                                    <p className="mt-2 text-xs text-slate-500">Technical JSON payload is hidden by default to keep the incident view readable for operators.</p>
+                                )}
                             </section>
                         </div>
+
                         <footer className="flex justify-end border-t border-slate-100 p-4">
                             <button type="button" className="crm-btn-secondary" onClick={() => setSelectedLog(null)}>
                                 Close

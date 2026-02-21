@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\AuditLog;
 use App\Models\Deal;
 use App\Models\IntegrationSetting;
 use App\Models\Lead;
@@ -738,6 +739,57 @@ CSV;
         $this->assertSame(1, $response->json('lead_funnel_totals.converted'));
         $this->assertSame(1, $response->json('lead_funnel_totals.lost'));
         $this->assertSame(7700.0, (float) $response->json('owner_performance_totals.revenue'));
+    }
+
+    public function test_webhook_logs_return_humanized_incident_fields_and_scope(): void
+    {
+        $platformA = $this->createPlatform('Kenya');
+        $platformB = $this->createPlatform('Uganda');
+        $salesUser = $this->createUser('sales', [$platformA->id]);
+
+        AuditLog::query()->create([
+            'platform_id' => $platformA->id,
+            'actor_id' => $salesUser->id,
+            'action' => 'renewal_sms_failed',
+            'entity_type' => 'deal',
+            'entity_id' => 101,
+            'before_state' => null,
+            'after_state' => [
+                'status' => 'failed',
+            ],
+            'reason' => 'Provider timeout during renewal run',
+            'ip_address' => '127.0.0.1',
+            'created_at' => now()->subMinute(),
+        ]);
+
+        AuditLog::query()->create([
+            'platform_id' => $platformB->id,
+            'actor_id' => $salesUser->id,
+            'action' => 'renewal_sms_failed',
+            'entity_type' => 'deal',
+            'entity_id' => 202,
+            'before_state' => null,
+            'after_state' => [
+                'status' => 'failed',
+            ],
+            'reason' => 'Out-of-scope market event',
+            'ip_address' => '127.0.0.1',
+            'created_at' => now(),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/settings/webhook-logs');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.platform_id', $platformA->id)
+            ->assertJsonPath('data.0.action', 'renewal_sms_failed')
+            ->assertJsonPath('data.0.incident.title', 'Renewal reminder failed')
+            ->assertJsonPath('data.0.incident.category', 'renewals')
+            ->assertJsonPath('data.0.incident.severity', 'high');
+
+        $this->assertSame('Check SMS provider health and resend from renewals workspace.', $response->json('data.0.incident.suggested_action'));
+        $this->assertCount(1, $response->json('data'));
     }
 
     public function test_admin_can_update_sms_provider_configuration(): void
