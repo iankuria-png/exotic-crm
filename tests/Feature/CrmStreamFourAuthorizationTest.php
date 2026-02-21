@@ -636,6 +636,63 @@ CSV;
         );
     }
 
+    public function test_reports_summary_returns_funnel_stages_and_owner_totals_for_selected_range(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $ownerA = $this->createUser('sales', [$platform->id]);
+        $ownerB = $this->createUser('sales', [$platform->id]);
+
+        $this->createLead($platform, ['status' => 'new']);
+        $this->createLead($platform, ['status' => 'contacted']);
+        $this->createLead($platform, ['status' => 'qualified']);
+        $this->createLead($platform, ['status' => 'converted']);
+        $this->createLead($platform, ['status' => 'lost']);
+        $this->createLead($platform, ['status' => 'new', 'archived_at' => now()]);
+
+        $this->createDeal($platform, [
+            'assigned_to' => $ownerA->id,
+            'status' => 'active',
+            'amount' => 4000,
+        ]);
+        $this->createDeal($platform, [
+            'assigned_to' => $ownerA->id,
+            'status' => 'pending',
+            'amount' => 1500,
+        ]);
+        $this->createDeal($platform, [
+            'assigned_to' => $ownerB->id,
+            'status' => 'expired',
+            'amount' => 2200,
+        ]);
+        $this->createDeal($platform, [
+            'assigned_to' => $ownerB->id,
+            'status' => 'cancelled',
+            'amount' => 3000,
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/reports/summary?from=' . now()->subDays(7)->toDateString() . '&to=' . now()->toDateString());
+
+        $response->assertOk()
+            ->assertJsonPath('lead_funnel.new', 1)
+            ->assertJsonPath('lead_funnel.contacted', 1)
+            ->assertJsonPath('lead_funnel.qualified', 1)
+            ->assertJsonPath('lead_funnel.converted', 1)
+            ->assertJsonPath('lead_funnel.lost', 1)
+            ->assertJsonPath('lead_funnel_stages.0.key', 'new')
+            ->assertJsonPath('owner_performance_top_owner.owner', $ownerA->name)
+            ->assertJsonPath('owner_performance_totals.subscriptions', 3)
+            ->assertJsonPath('owner_performance_totals.active_subscriptions', 1);
+
+        $this->assertSame(5, $response->json('lead_funnel_totals.total'));
+        $this->assertSame(3, $response->json('lead_funnel_totals.workable'));
+        $this->assertSame(1, $response->json('lead_funnel_totals.converted'));
+        $this->assertSame(1, $response->json('lead_funnel_totals.lost'));
+        $this->assertSame(7700.0, (float) $response->json('owner_performance_totals.revenue'));
+    }
+
     private function createUser(string $role = 'sales', array $assignedMarketIds = []): User
     {
         return User::query()->create([

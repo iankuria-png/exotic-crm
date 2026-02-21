@@ -42,7 +42,9 @@ class ReportController extends Controller
             ->whereBetween('created_at', [$from, $to]);
 
         $clientsQuery = Client::query();
-        $leadsQuery = Lead::query();
+        $leadsQuery = Lead::query()
+            ->whereBetween('created_at', [$from, $to])
+            ->whereNull('archived_at');
         $dealsQuery = Deal::query()->whereBetween('created_at', [$from, $to]);
 
         if (is_array($platformIds)) {
@@ -52,16 +54,45 @@ class ReportController extends Controller
             $dealsQuery->whereIn('platform_id', $platformIds);
         }
 
-        $leadFunnel = [
-            'new' => (clone $leadsQuery)->where('status', 'new')->count(),
-            'contacted' => (clone $leadsQuery)->where('status', 'contacted')->count(),
-            'qualified' => (clone $leadsQuery)->where('status', 'qualified')->count(),
-            'converted' => (clone $leadsQuery)->where('status', 'converted')->count(),
-            'lost' => (clone $leadsQuery)->where('status', 'lost')->count(),
+        $funnelStageLabels = [
+            'new' => 'New',
+            'contacted' => 'Contacted',
+            'qualified' => 'Qualified',
+            'converted' => 'Converted',
+            'lost' => 'Lost',
         ];
+
+        $leadFunnel = [];
+        foreach (array_keys($funnelStageLabels) as $stage) {
+            $leadFunnel[$stage] = (clone $leadsQuery)->where('status', $stage)->count();
+        }
 
         $totalLeads = array_sum($leadFunnel);
         $conversionRate = $totalLeads > 0 ? round(($leadFunnel['converted'] / $totalLeads) * 100) : 0;
+        $leadFunnelStages = [];
+        $previousStageCount = null;
+
+        foreach ($funnelStageLabels as $stageKey => $label) {
+            $count = (int) ($leadFunnel[$stageKey] ?? 0);
+            $conversionFromPrevious = null;
+            $dropoffFromPrevious = null;
+
+            if ($previousStageCount !== null && $previousStageCount > 0) {
+                $conversionFromPrevious = round(($count / $previousStageCount) * 100, 1);
+                $dropoffFromPrevious = max(0, round(100 - $conversionFromPrevious, 1));
+            }
+
+            $leadFunnelStages[] = [
+                'key' => $stageKey,
+                'label' => $label,
+                'count' => $count,
+                'share_of_total' => $totalLeads > 0 ? round(($count / $totalLeads) * 100, 1) : 0,
+                'conversion_from_previous' => $conversionFromPrevious,
+                'dropoff_from_previous' => $dropoffFromPrevious,
+            ];
+
+            $previousStageCount = $count;
+        }
 
         $activeDeals = Deal::query()
             ->where('status', 'active')
@@ -95,14 +126,17 @@ class ReportController extends Controller
             'expiring_soon' => $expiringSoon,
         ];
 
+        $monthKeyExpression = DB::connection()->getDriverName() === 'sqlite'
+            ? "strftime('%Y-%m', created_at)"
+            : "DATE_FORMAT(created_at, '%Y-%m')";
+
         $revenueTrendRows = Payment::query()
-            ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') as month_key")
-            ->selectRaw("DATE_FORMAT(created_at, '%b %Y') as month_label")
+            ->selectRaw("{$monthKeyExpression} as month_key")
             ->selectRaw('SUM(amount) as total_revenue')
             ->where('status', 'completed')
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
-            ->groupBy('month_key', 'month_label')
+            ->groupBy('month_key')
             ->orderByDesc('month_key')
             ->limit(6)
             ->get()
@@ -110,7 +144,7 @@ class ReportController extends Controller
             ->values()
             ->map(fn ($row) => [
                 'month_key' => $row->month_key,
-                'label' => $row->month_label,
+                'label' => $this->formatMonthLabel($row->month_key),
                 'value' => (float) $row->total_revenue,
             ]);
 
@@ -146,6 +180,9 @@ class ReportController extends Controller
             ->selectRaw("COALESCE(users.name, 'Unassigned') as owner_name")
             ->selectRaw('COUNT(deals.id) as deals_count')
             ->selectRaw('SUM(deals.amount) as total_revenue')
+            ->selectRaw("SUM(CASE WHEN deals.status = 'active' THEN 1 ELSE 0 END) as active_subscriptions")
+            ->selectRaw("SUM(CASE WHEN deals.status IN ('pending', 'awaiting_payment', 'paid') THEN 1 ELSE 0 END) as pre_activation_subscriptions")
+            ->selectRaw("SUM(CASE WHEN deals.status = 'expired' THEN 1 ELSE 0 END) as expired_subscriptions")
             ->whereBetween('deals.created_at', [$from, $to])
             ->whereNotIn('deals.status', ['cancelled'])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('deals.platform_id', $platformIds))
@@ -157,7 +194,21 @@ class ReportController extends Controller
                 'owner' => $row->owner_name,
                 'deals' => (int) $row->deals_count,
                 'revenue' => (float) $row->total_revenue,
+                'active_subscriptions' => (int) $row->active_subscriptions,
+                'pre_activation_subscriptions' => (int) $row->pre_activation_subscriptions,
+                'expired_subscriptions' => (int) $row->expired_subscriptions,
+                'avg_revenue_per_subscription' => (int) $row->deals_count > 0
+                    ? round(((float) $row->total_revenue) / (int) $row->deals_count, 2)
+                    : 0,
             ]);
+
+        $ownerPerformanceTotals = [
+            'subscriptions' => (int) $ownerPerformance->sum('deals'),
+            'revenue' => (float) $ownerPerformance->sum('revenue'),
+            'active_subscriptions' => (int) $ownerPerformance->sum('active_subscriptions'),
+        ];
+
+        $topOwner = $ownerPerformance->first();
 
         $renewalRuns = RenewalRun::query()
             ->whereBetween('run_at', [$from, $to])
@@ -184,12 +235,40 @@ class ReportController extends Controller
             ],
             'kpis' => $kpis,
             'lead_funnel' => $leadFunnel,
+            'lead_funnel_stages' => $leadFunnelStages,
+            'lead_funnel_totals' => [
+                'total' => $totalLeads,
+                'workable' => (int) ($leadFunnel['new'] + $leadFunnel['contacted'] + $leadFunnel['qualified']),
+                'converted' => (int) $leadFunnel['converted'],
+                'lost' => (int) $leadFunnel['lost'],
+            ],
             'revenue_trend' => $revenueTrendRows,
             'lead_sources' => $leadSources,
             'package_revenue' => $packageRevenue,
             'owner_performance' => $ownerPerformance,
+            'owner_performance_totals' => $ownerPerformanceTotals,
+            'owner_performance_top_owner' => $topOwner
+                ? [
+                    'owner' => $topOwner['owner'],
+                    'deals' => $topOwner['deals'],
+                    'revenue' => $topOwner['revenue'],
+                    'active_subscriptions' => $topOwner['active_subscriptions'],
+                ]
+                : null,
             'renewal_health' => $renewalHealth,
         ]);
     }
-}
 
+    private function formatMonthLabel(?string $monthKey): string
+    {
+        if (empty($monthKey)) {
+            return 'Unknown month';
+        }
+
+        try {
+            return Carbon::createFromFormat('Y-m', $monthKey)->format('M Y');
+        } catch (\Throwable) {
+            return $monthKey;
+        }
+    }
+}

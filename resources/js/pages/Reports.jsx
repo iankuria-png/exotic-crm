@@ -44,7 +44,60 @@ function downloadCsv(filename, rows) {
     URL.revokeObjectURL(url);
 }
 
-function BarList({ rows, colorClass = 'bg-teal-600' }) {
+function startCase(value) {
+    return String(value || '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (match) => match.toUpperCase()) || 'Unknown';
+}
+
+function normalizeLeadSources(rows) {
+    const canonicalSources = [
+        ['website', 'Website'],
+        ['whatsapp', 'WhatsApp'],
+        ['referral', 'Referral'],
+        ['facebook', 'Facebook'],
+        ['import', 'Import'],
+        ['outbound', 'Outbound'],
+        ['manual', 'Manual'],
+        ['scraper', 'Scraper'],
+    ];
+    const sourceMap = new Map(
+        rows.map((row) => [String(row?.source || 'unknown').toLowerCase(), asNumber(row?.value)]),
+    );
+    const canonicalKeys = new Set(canonicalSources.map(([key]) => key));
+
+    const normalized = canonicalSources.map(([key, label]) => ({
+        key,
+        source: key,
+        label,
+        value: asNumber(sourceMap.get(key)),
+    }));
+
+    const extras = [...sourceMap.entries()]
+        .filter(([key]) => !canonicalKeys.has(key))
+        .sort((left, right) => right[1] - left[1])
+        .map(([key, value]) => ({
+            key,
+            source: key,
+            label: startCase(key),
+            value: asNumber(value),
+        }));
+
+    return [...normalized, ...extras];
+}
+
+function InsightEmptyState({ title, message }) {
+    return (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+            <p className="text-sm font-semibold text-slate-700">{title}</p>
+            <p className="mt-1 text-sm text-slate-500">{message}</p>
+        </div>
+    );
+}
+
+function BarList({ rows, colorClass = 'bg-teal-600', minimumPercent = 6 }) {
     const maxValue = rows.reduce((max, row) => Math.max(max, row.value), 0) || 1;
 
     return (
@@ -55,12 +108,99 @@ function BarList({ rows, colorClass = 'bg-teal-600' }) {
                     <div className="h-3 overflow-hidden rounded-full bg-slate-100">
                         <div
                             className={`h-full rounded-full ${colorClass}`}
-                            style={{ width: `${Math.max(6, Math.round((row.value / maxValue) * 100))}%` }}
+                            style={{
+                                width: `${row.value > 0
+                                    ? Math.max(minimumPercent, Math.round((row.value / maxValue) * 100))
+                                    : 0}%`,
+                            }}
                         />
                     </div>
                     <p className="text-right text-sm font-semibold text-slate-800">{row.formattedValue}</p>
                 </div>
             ))}
+        </div>
+    );
+}
+
+function FunnelFlow({ stages, totals }) {
+    const maxCount = stages.reduce((max, stage) => Math.max(max, asNumber(stage.count)), 0) || 1;
+
+    return (
+        <div className="space-y-3">
+            {stages.map((stage, index) => {
+                const count = asNumber(stage.count);
+                const width = count > 0 ? Math.max(8, Math.round((count / maxCount) * 100)) : 0;
+
+                return (
+                    <article key={stage.key || stage.label} className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-slate-800">{index + 1}. {stage.label}</p>
+                            <p className="crm-mono text-sm font-semibold text-slate-700">{count.toLocaleString()}</p>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                            <div className="h-full rounded-full bg-cyan-600" style={{ width: `${width}%` }} />
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                            <span>{asNumber(stage.share_of_total)}% of pipeline</span>
+                            {stage.conversion_from_previous === null
+                                ? <span>Entry stage</span>
+                                : <span>{asNumber(stage.conversion_from_previous)}% progressed from previous</span>}
+                        </div>
+                    </article>
+                );
+            })}
+            <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 sm:grid-cols-3">
+                <p><span className="font-semibold">Total:</span> {asNumber(totals?.total).toLocaleString()}</p>
+                <p><span className="font-semibold">Workable:</span> {asNumber(totals?.workable).toLocaleString()}</p>
+                <p><span className="font-semibold">Converted:</span> {asNumber(totals?.converted).toLocaleString()}</p>
+            </div>
+        </div>
+    );
+}
+
+function OwnerPerformanceTable({ rows, totals }) {
+    if (!rows.length) {
+        return <InsightEmptyState title="No owner performance data" message="No subscriptions were created in this reporting window." />;
+    }
+
+    const revenueTotal = asNumber(totals?.revenue);
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    <tr>
+                        <th className="px-3 py-2">Owner</th>
+                        <th className="px-3 py-2">Subscriptions</th>
+                        <th className="px-3 py-2">Pipeline Mix</th>
+                        <th className="px-3 py-2 text-right">Revenue</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                    {rows.map((row) => {
+                        const share = revenueTotal > 0 ? Math.round((asNumber(row.revenue) / revenueTotal) * 100) : 0;
+                        return (
+                            <tr key={row.owner}>
+                                <td className="px-3 py-3">
+                                    <p className="font-semibold text-slate-800">{row.owner}</p>
+                                    <p className="text-xs text-slate-500">{formatKes(row.avg_revenue_per_subscription)} avg / subscription</p>
+                                </td>
+                                <td className="px-3 py-3 text-slate-700">
+                                    <p className="font-semibold">{asNumber(row.deals).toLocaleString()}</p>
+                                    <p className="text-xs text-slate-500">{asNumber(row.active_subscriptions).toLocaleString()} active</p>
+                                </td>
+                                <td className="px-3 py-3">
+                                    <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                                        <div className="h-full rounded-full bg-indigo-600" style={{ width: `${share > 0 ? Math.max(4, share) : 0}%` }} />
+                                    </div>
+                                    <p className="mt-1 text-xs text-slate-500">{share}% revenue share</p>
+                                </td>
+                                <td className="px-3 py-3 text-right font-semibold text-slate-800">{formatKes(row.revenue)}</td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
         </div>
     );
 }
@@ -83,6 +223,8 @@ export default function Reports() {
     const toast = useToast();
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
+    const [isExporting, setIsExporting] = useState(false);
+    const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
     const { data, isLoading } = useQuery({
         queryKey: ['reports-summary', fromDate, toDate],
@@ -93,10 +235,16 @@ export default function Reports() {
                     ...(toDate ? { to: toDate } : {}),
                 },
             }).then((response) => response.data),
+        enabled: !isRangeInvalid,
     });
 
     const kpis = data?.kpis || {};
     const funnel = data?.lead_funnel || {};
+    const funnelStages = (data?.lead_funnel_stages || []).map((stage) => ({
+        ...stage,
+        count: asNumber(stage.count),
+    }));
+    const funnelTotals = data?.lead_funnel_totals || {};
 
     const conversionRate = kpis.conversion_rate ?? percent(asNumber(funnel.converted), Object.values(funnel).reduce((sum, value) => sum + asNumber(value), 0));
     const renewalRate = kpis.renewal_rate ?? 0;
@@ -111,9 +259,10 @@ export default function Reports() {
     );
 
     const leadSources = useMemo(() => {
-        const total = (data?.lead_sources || []).reduce((sum, row) => sum + asNumber(row.value), 0) || 1;
-        return (data?.lead_sources || []).map((row) => ({
-            label: row.source.charAt(0).toUpperCase() + row.source.slice(1),
+        const normalized = normalizeLeadSources(data?.lead_sources || []);
+        const total = normalized.reduce((sum, row) => sum + asNumber(row.value), 0) || 1;
+        return normalized.map((row) => ({
+            label: row.label,
             value: asNumber(row.value),
             formattedValue: `${row.value} (${percent(row.value, total)}%)`,
         }));
@@ -128,14 +277,9 @@ export default function Reports() {
         [data?.package_revenue],
     );
 
-    const ownerLeaderboard = useMemo(
-        () => (data?.owner_performance || []).map((row) => ({
-            label: row.owner,
-            value: asNumber(row.deals),
-            formattedValue: `${row.deals} subscriptions`,
-        })),
-        [data?.owner_performance],
-    );
+    const ownerRows = data?.owner_performance || [];
+    const ownerTotals = data?.owner_performance_totals || {};
+    const topOwner = data?.owner_performance_top_owner;
 
     const rangeLabel = data?.range
         ? `${new Date(data.range.from).toLocaleDateString()} - ${new Date(data.range.to).toLocaleDateString()}`
@@ -147,30 +291,38 @@ export default function Reports() {
             return;
         }
 
-        if (fromDate && toDate && fromDate > toDate) {
+        if (isRangeInvalid) {
             toast.error('The "from" date cannot be later than the "to" date.');
             return;
         }
 
-        const rows = [];
-        rows.push(toCsvRow(['Section', 'Metric', 'Value']));
-        rows.push(toCsvRow(['KPI', 'Total Revenue', kpis.total_revenue ?? 0]));
-        rows.push(toCsvRow(['KPI', 'Revenue MTD', kpis.revenue_mtd ?? 0]));
-        rows.push(toCsvRow(['KPI', 'Active Clients', kpis.active_clients ?? 0]));
-        rows.push(toCsvRow(['KPI', 'Total Clients', kpis.total_clients ?? 0]));
-        rows.push(toCsvRow(['KPI', 'Conversion Rate', conversionRate]));
-        rows.push(toCsvRow(['KPI', 'Renewal Rate', renewalRate]));
-        rows.push(toCsvRow(['KPI', 'Range From', data?.range?.from || '']));
-        rows.push(toCsvRow(['KPI', 'Range To', data?.range?.to || '']));
+        setIsExporting(true);
+        try {
+            const rows = [];
+            rows.push(toCsvRow(['Section', 'Metric', 'Value']));
+            rows.push(toCsvRow(['KPI', 'Total Revenue', kpis.total_revenue ?? 0]));
+            rows.push(toCsvRow(['KPI', 'Revenue MTD', kpis.revenue_mtd ?? 0]));
+            rows.push(toCsvRow(['KPI', 'Active Clients', kpis.active_clients ?? 0]));
+            rows.push(toCsvRow(['KPI', 'Total Clients', kpis.total_clients ?? 0]));
+            rows.push(toCsvRow(['KPI', 'Conversion Rate', conversionRate]));
+            rows.push(toCsvRow(['KPI', 'Renewal Rate', renewalRate]));
+            rows.push(toCsvRow(['KPI', 'Range From', data?.range?.from || '']));
+            rows.push(toCsvRow(['KPI', 'Range To', data?.range?.to || '']));
 
-        (data.revenue_trend || []).forEach((row) => rows.push(toCsvRow(['Revenue Trend', row.label, row.value])));
-        (data.lead_sources || []).forEach((row) => rows.push(toCsvRow(['Lead Source', row.source, row.value])));
-        (data.package_revenue || []).forEach((row) => rows.push(toCsvRow(['Package Revenue', row.label, row.value])));
-        (data.owner_performance || []).forEach((row) => rows.push(toCsvRow(['Owner Performance', row.owner, `${row.deals} subscriptions | ${row.revenue} revenue`])));
+            (data.revenue_trend || []).forEach((row) => rows.push(toCsvRow(['Revenue Trend', row.label, row.value])));
+            (data.lead_sources || []).forEach((row) => rows.push(toCsvRow(['Lead Source', row.source, row.value])));
+            (data.lead_funnel_stages || []).forEach((row) => rows.push(toCsvRow(['Lead Funnel', row.label, row.count])));
+            (data.package_revenue || []).forEach((row) => rows.push(toCsvRow(['Package Revenue', row.label, row.value])));
+            (data.owner_performance || []).forEach((row) => rows.push(
+                toCsvRow(['Owner Performance', row.owner, `${row.deals} subscriptions | ${row.active_subscriptions} active | ${row.revenue} revenue`]),
+            ));
 
-        const filename = `crm-reports-${data?.range?.from || 'from'}-to-${data?.range?.to || 'to'}.csv`;
-        downloadCsv(filename, rows);
-        toast.success('Report export generated.');
+            const filename = `crm-reports-${data?.range?.from || 'from'}-to-${data?.range?.to || 'to'}.csv`;
+            downloadCsv(filename, rows);
+            toast.success('Report export generated.');
+        } finally {
+            setIsExporting(false);
+        }
     };
 
     return (
@@ -179,7 +331,7 @@ export default function Reports() {
                 title="Reports & Analytics"
                 subtitle={`Server-backed metrics for revenue, renewal health, lead funnel, and owner performance (${rangeLabel}).`}
                 actions={(
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2">
                         <label className="text-xs font-medium text-slate-600" htmlFor="report-from">From</label>
                         <input
                             id="report-from"
@@ -208,12 +360,22 @@ export default function Reports() {
                                 Reset
                             </button>
                         ) : null}
-                        <button type="button" onClick={exportCsv} className="crm-btn-primary">
-                            Export CSV
+                        <button
+                            type="button"
+                            onClick={exportCsv}
+                            disabled={isExporting || isRangeInvalid}
+                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-70"
+                        >
+                            {isExporting ? 'Exporting...' : 'Export CSV'}
                         </button>
                     </div>
                 )}
             />
+            {isRangeInvalid ? (
+                <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    Select a valid reporting range: the start date must be earlier than or equal to the end date.
+                </p>
+            ) : null}
 
             <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
@@ -244,26 +406,46 @@ export default function Reports() {
 
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-6">
+                    <ReportPanel title="Sales Funnel" subtitle="Lead progression and drop-off through the pipeline">
+                        {isLoading ? <p className="text-sm text-slate-500">Loading funnel data...</p> : (
+                            funnelStages.length > 0
+                                ? <FunnelFlow stages={funnelStages} totals={funnelTotals} />
+                                : <InsightEmptyState title="No funnel activity" message="No leads were captured in this reporting window." />
+                        )}
+                    </ReportPanel>
+
                     <ReportPanel title="Revenue Trend" subtitle="Completed payments by month">
                         {isLoading ? <p className="text-sm text-slate-500">Loading revenue trend...</p> : (
                             revenueTrend.length > 0
                                 ? <BarList rows={revenueTrend} colorClass="bg-teal-600" />
-                                : <p className="text-sm text-slate-500">No completed payments found.</p>
+                                : <InsightEmptyState title="No payment trend available" message="No completed payments found for this range." />
                         )}
                     </ReportPanel>
 
                     <ReportPanel title="Lead Sources" subtitle="Pipeline origin by source">
-                        {leadSources.length > 0 ? <BarList rows={leadSources} colorClass="bg-cyan-600" /> : <p className="text-sm text-slate-500">No lead source data available.</p>}
+                        {leadSources.length > 0
+                            ? <BarList rows={leadSources} colorClass="bg-cyan-600" minimumPercent={0} />
+                            : <InsightEmptyState title="No lead source data" message="Lead source tracking has no records in this date window." />}
                     </ReportPanel>
                 </div>
 
                 <div className="space-y-4 xl:col-span-6">
                     <ReportPanel title="Revenue by Package" subtitle="Subscription value grouped by package">
-                        {packageRevenue.length > 0 ? <BarList rows={packageRevenue} colorClass="bg-emerald-600" /> : <p className="text-sm text-slate-500">No package revenue data.</p>}
+                        {packageRevenue.length > 0
+                            ? <BarList rows={packageRevenue} colorClass="bg-emerald-600" />
+                            : <InsightEmptyState title="No package revenue yet" message="No subscription revenue has posted in this date window." />}
                     </ReportPanel>
 
                     <ReportPanel title="Owner Performance" subtitle="Subscriptions handled by owner">
-                        {ownerLeaderboard.length > 0 ? <BarList rows={ownerLeaderboard} colorClass="bg-indigo-600" /> : <p className="text-sm text-slate-500">No ownership data found.</p>}
+                        <div className="space-y-3">
+                            {topOwner ? (
+                                <div className="rounded-lg border border-teal-100 bg-teal-50/70 px-3 py-2 text-sm text-teal-900">
+                                    <span className="font-semibold">Top owner:</span>{' '}
+                                    {topOwner.owner} ({asNumber(topOwner.deals)} subscriptions, {formatKes(topOwner.revenue)})
+                                </div>
+                            ) : null}
+                            <OwnerPerformanceTable rows={ownerRows} totals={ownerTotals} />
+                        </div>
                     </ReportPanel>
                 </div>
             </section>

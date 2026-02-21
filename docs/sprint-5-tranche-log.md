@@ -335,3 +335,51 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 ### Decision Notes
 - Pause/resume is implemented as an explicit state on subscriptions to keep campaign targeting deterministic and auditable.
 - Scrape lead in this tranche is a controlled intake path (URL-led lead creation with audit trace), while full crawler orchestration remains in advanced scope (`CRM-518`).
+
+---
+
+## Tranche 8 (Completed)
+
+### Plan
+- Execute `CRM-513` from the reconciliation backlog:
+  - add funnel visualization-ready report payload
+  - improve owner performance analytics for management use
+  - refine reports UX (export ergonomics + robust empty states)
+  - add feature coverage for the expanded reports contract
+
+### Progress
+- Backend:
+  - `ReportController` now returns structured funnel analytics:
+    - `lead_funnel_stages`
+    - `lead_funnel_totals`
+  - Funnel source data now excludes archived leads and respects the selected date range.
+  - Owner analytics expanded with:
+    - `active_subscriptions`
+    - `pre_activation_subscriptions`
+    - `expired_subscriptions`
+    - `avg_revenue_per_subscription`
+    - `owner_performance_totals`
+    - `owner_performance_top_owner`
+  - Revenue trend grouping made SQLite-safe for tests by using driver-aware month key expressions.
+- Frontend:
+  - Reports page redesigned into management-grade sections:
+    - `Sales Funnel` panel with per-stage progression/drop-off context
+    - upgraded `Owner Performance` table with revenue share and subscription mix
+    - refined export control container with range validation and exporting state
+    - richer empty-state components for trend/source/package/owner panels
+    - lead source normalization to keep canonical sources visible even when zero in the selected range
+- Tests:
+  - Added `test_reports_summary_returns_funnel_stages_and_owner_totals_for_selected_range` in `CrmStreamFourAuthorizationTest`.
+  - Test asserts funnel stages/totals, archived-lead exclusion effect, and owner totals/top-owner response contract.
+
+### Verification
+- `php artisan test --filter test_reports_summary_returns_funnel_stages_and_owner_totals_for_selected_range` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5e-2026-02-21/reports-default.png`
+  - `output/playwright/sprint5e-2026-02-21/reports-full.png`
+
+### Decision Notes
+- Funnel and owner presentation was completed as a contract-first change (backend payload + UI) so reporting insights remain stable even as charts evolve.
+- Source normalization intentionally surfaces zero-count channels to remove ambiguity in manager reviews of lead-source coverage.
