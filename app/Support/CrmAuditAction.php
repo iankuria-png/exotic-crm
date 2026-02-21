@@ -11,6 +11,7 @@ final class CrmAuditAction
     public const LEAD_ARCHIVE = 'lead_archive';
     public const LEAD_DELETE = 'lead_delete';
     public const LEAD_SCRAPE_INTAKE = 'lead_scrape_intake';
+    public const USER_CREATE = 'user_create';
     public const ROLE_UPDATE = 'role_update';
     public const INTEGRATION_PLATFORM_CREATE = 'integration_platform_create';
     public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';

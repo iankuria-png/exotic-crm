@@ -519,6 +519,51 @@ class CrmStreamFourAuthorizationTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_create_user_with_role_and_market_assignments(): void
+    {
+        $platformA = $this->createPlatform('Kenya');
+        $platformB = $this->createPlatform('Uganda');
+        $admin = $this->createUser('admin', []);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/settings/roles/users', [
+            'name' => 'New Sales Agent',
+            'email' => 'new.sales.agent@example.test',
+            'password' => 'StrongPass123!',
+            'role' => 'sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$platformA->id, $platformB->id],
+            'reason' => 'New regional hire',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('role', 'sales')
+            ->assertJsonPath('status', 'active');
+
+        $userId = (int) $response->json('id');
+
+        $this->assertDatabaseHas('users', [
+            'id' => $userId,
+            'email' => 'new.sales.agent@example.test',
+            'role' => 'sales',
+            'status' => 'active',
+        ]);
+        $this->assertDatabaseHas('user_platforms', [
+            'user_id' => $userId,
+            'platform_id' => $platformA->id,
+        ]);
+        $this->assertDatabaseHas('user_platforms', [
+            'user_id' => $userId,
+            'platform_id' => $platformB->id,
+        ]);
+        $this->assertDatabaseHas('audit_log', [
+            'entity_type' => 'user',
+            'entity_id' => $userId,
+            'action' => 'user_create',
+        ]);
+    }
+
     public function test_sales_user_can_upload_leads_csv_in_scope(): void
     {
         $platform = $this->createPlatform('Kenya');

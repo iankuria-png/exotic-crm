@@ -107,6 +107,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::delete('/settings/templates/{template}', [SettingsController::class, 'destroyTemplate'])->middleware('role:admin,sub_admin');
     Route::get('/settings/webhook-logs', [SettingsController::class, 'webhookLogs']);
     Route::get('/settings/roles', [SettingsController::class, 'roles'])->middleware('role:admin');
+    Route::post('/settings/roles/users', [SettingsController::class, 'storeUser'])->middleware('role:admin');
     Route::patch('/settings/roles/{user}', [SettingsController::class, 'updateRole'])->middleware('role:admin');
 });
 

@@ -1021,6 +1021,16 @@ function RolesWorkspace() {
     const toast = useToast();
     const [selectedUser, setSelectedUser] = useState(null);
     const [editor, setEditor] = useState(null);
+    const [createOpen, setCreateOpen] = useState(false);
+    const [createForm, setCreateForm] = useState({
+        name: '',
+        email: '',
+        password: '',
+        role: 'sales',
+        status: 'active',
+        assigned_market_ids: [],
+        reason: 'New team member onboarding',
+    });
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-roles'],
@@ -1037,6 +1047,27 @@ function RolesWorkspace() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Role update failed.');
+        },
+    });
+
+    const createUserMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/roles/users', payload).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['settings-roles'] });
+            toast.success('User created and assigned successfully.');
+            setCreateOpen(false);
+            setCreateForm({
+                name: '',
+                email: '',
+                password: '',
+                role: 'sales',
+                status: 'active',
+                assigned_market_ids: [],
+                reason: 'New team member onboarding',
+            });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'User creation failed.');
         },
     });
 
@@ -1068,6 +1099,18 @@ function RolesWorkspace() {
         });
     };
 
+    const toggleCreateMarket = (marketId) => {
+        setCreateForm((current) => {
+            const exists = current.assigned_market_ids.includes(marketId);
+            return {
+                ...current,
+                assigned_market_ids: exists
+                    ? current.assigned_market_ids.filter((id) => id !== marketId)
+                    : [...current.assigned_market_ids, marketId],
+            };
+        });
+    };
+
     return (
         <div className="space-y-4">
             <section className="grid gap-4 md:grid-cols-4">
@@ -1083,6 +1126,13 @@ function RolesWorkspace() {
                         <h3 className="crm-panel-title">Access Matrix</h3>
                         <p className="crm-panel-subtitle">Role ownership and assigned market footprint.</p>
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => setCreateOpen(true)}
+                        className="crm-btn-primary px-3 py-2"
+                    >
+                        Add user
+                    </button>
                 </header>
 
                 <div className="max-h-[520px] overflow-auto">
@@ -1251,6 +1301,109 @@ function RolesWorkspace() {
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 {updateRoleMutation.isPending ? 'Saving...' : 'Save changes'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            {createOpen ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setCreateOpen(false)}>
+                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Create User</h3>
+                                <p className="crm-panel-subtitle">Add a new team member and assign initial market access.</p>
+                            </div>
+                        </header>
+
+                        <div className="grid gap-3 p-4 md:grid-cols-2">
+                            <input
+                                value={createForm.name}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))}
+                                className="crm-input"
+                                placeholder="Full name"
+                            />
+                            <input
+                                type="email"
+                                value={createForm.email}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, email: event.target.value }))}
+                                className="crm-input"
+                                placeholder="Email address"
+                            />
+                            <input
+                                type="password"
+                                value={createForm.password}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
+                                className="crm-input"
+                                placeholder="Temporary password (optional)"
+                            />
+                            <select
+                                value={createForm.role}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value }))}
+                                className="crm-select"
+                            >
+                                <option value="admin">Admin</option>
+                                <option value="sub_admin">Sub-admin</option>
+                                <option value="sales">Sales</option>
+                            </select>
+                            <select
+                                value={createForm.status}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, status: event.target.value }))}
+                                className="crm-select"
+                            >
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                            <textarea
+                                rows={2}
+                                value={createForm.reason}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, reason: event.target.value }))}
+                                className="crm-input md:col-span-2"
+                                placeholder="Reason"
+                            />
+
+                            <div className="md:col-span-2">
+                                <p className="mb-1 text-sm font-medium text-slate-700">Assigned markets</p>
+                                {availableMarkets.length === 0 ? (
+                                    <p className="text-sm text-slate-500">No markets available.</p>
+                                ) : (
+                                    <div className="grid max-h-56 gap-2 overflow-auto rounded-md border border-slate-200 p-2 sm:grid-cols-2">
+                                        {availableMarkets.map((market) => (
+                                            <label key={market.id} className="flex items-center gap-2 rounded-md px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={createForm.assigned_market_ids.includes(market.id)}
+                                                    onChange={() => toggleCreateMarket(market.id)}
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                <span>{market.name} {market.country ? `(${market.country})` : ''}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button type="button" className="crm-btn-secondary" onClick={() => setCreateOpen(false)}>
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => createUserMutation.mutate({
+                                    name: createForm.name,
+                                    email: createForm.email,
+                                    role: createForm.role,
+                                    status: createForm.status,
+                                    assigned_market_ids: createForm.assigned_market_ids,
+                                    reason: createForm.reason,
+                                    ...(createForm.password.trim() ? { password: createForm.password } : {}),
+                                })}
+                                disabled={createUserMutation.isPending || !createForm.name.trim() || !createForm.email.trim() || !createForm.reason.trim()}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {createUserMutation.isPending ? 'Creating...' : 'Create user'}
                             </button>
                         </footer>
                     </div>

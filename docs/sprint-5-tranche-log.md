@@ -447,3 +447,46 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 ### Decision Notes
 - Integration management was implemented with platform-scoped RBAC and explicit audit trail to keep operational self-service safe.
 - Manual sync was split by scope/mode to avoid hidden side effects and to support dry-run lead intake checks before committing data.
+
+---
+
+## Tranche 10 (Completed)
+
+### Plan
+- Execute `CRM-515` from the reconciliation backlog:
+  - add in-app user creation flow for admins
+  - capture role/status/market assignment at creation time
+  - keep new-user onboarding aligned with role governance/audit rules
+
+### Progress
+- Backend:
+  - Added `POST /api/crm/settings/roles/users` (admin-only) in settings routes.
+  - Added `SettingsController::storeUser()` to create users with:
+    - name/email/password
+    - role and status
+    - assigned markets (`assigned_market_ids`)
+  - New users now sync market assignments into `user_platforms`.
+  - Added `USER_CREATE` audit action constant and audit logging for create-user events.
+- Frontend:
+  - Roles workspace now includes `Add user` CTA.
+  - Added create-user modal with:
+    - core identity fields
+    - role/status selectors
+    - assigned market multi-select
+    - mandatory reason text
+  - Integrated optimistic feedback via toasts and data refresh on success.
+- Tests:
+  - Added `test_admin_can_create_user_with_role_and_market_assignments` in `CrmStreamFourAuthorizationTest`.
+  - Test validates user record, market mapping rows, and audit log action (`user_create`).
+
+### Verification
+- `php artisan test --filter test_admin_can_create_user_with_role_and_market_assignments` -> pass.
+- `php artisan test --testsuite=Feature --stop-on-failure` -> pass.
+- `npm run build` -> pass.
+- Playwright evidence:
+  - `output/playwright/sprint5g-2026-02-21/settings-roles-overview.png`
+  - `output/playwright/sprint5g-2026-02-21/settings-create-user-modal.png`
+
+### Decision Notes
+- User creation was constrained to admin-only to avoid role escalation risk while still removing engineering dependency for routine onboarding.
+- Market assignment is captured at creation time to prevent “user exists but cannot operate” onboarding gaps.

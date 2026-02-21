@@ -14,6 +14,8 @@ use App\Services\MarketAuthorizationService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class SettingsController extends Controller
@@ -629,6 +631,83 @@ class SettingsController extends Controller
                 'country' => $platform->country,
             ])->values(),
         ]);
+    }
+
+    public function storeUser(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|max:255|unique:users,email',
+            'password' => 'nullable|string|min:8|max:120',
+            'role' => 'required|in:admin,sub_admin,sales',
+            'status' => 'required|in:active,inactive',
+            'assigned_market_ids' => 'nullable|array',
+            'assigned_market_ids.*' => 'integer|exists:platforms,id',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $assignedMarketIds = collect($validated['assigned_market_ids'] ?? [])
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $passwordHash = Hash::make($validated['password'] ?? Str::random(16));
+
+        $user = User::query()->create([
+            'name' => $validated['name'],
+            'email' => strtolower(trim((string) $validated['email'])),
+            'password' => $passwordHash,
+            'role' => $validated['role'],
+            'status' => $validated['status'],
+            'assigned_market_ids' => $assignedMarketIds,
+        ]);
+
+        if (method_exists($user, 'platforms')) {
+            $user->platforms()->sync($assignedMarketIds);
+        }
+
+        $auditPlatformId = $this->resolveAuditPlatformId($assignedMarketIds);
+        if ($auditPlatformId) {
+            $this->auditService->fromRequest(
+                $request,
+                $auditPlatformId,
+                CrmAuditAction::USER_CREATE,
+                'user',
+                (int) $user->id,
+                null,
+                [
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'role' => $user->role,
+                    'status' => $user->status ?? 'active',
+                    'assigned_market_ids' => $assignedMarketIds,
+                ],
+                $validated['reason'] ?? 'Created user from CRM role settings'
+            );
+        }
+
+        $user->refresh();
+        $user->load('platforms:id,name,country');
+
+        $assignedMarkets = $user->platforms
+            ->map(fn (Platform $platform) => [
+                'id' => (int) $platform->id,
+                'name' => $platform->name,
+                'country' => $platform->country,
+            ])
+            ->values();
+
+        return response()->json([
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'status' => $user->status ?? 'active',
+            'assigned_market_ids' => $assignedMarketIds,
+            'assigned_markets' => $assignedMarkets,
+        ], 201);
     }
 
     public function updateRole(Request $request, User $user)
