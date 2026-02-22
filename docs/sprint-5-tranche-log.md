@@ -673,3 +673,42 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 - Settings route base is `/settings`; navigating to `/crm/settings` renders shell-only outlet in this build.
 - Scraper operations are admin/sub-admin scoped and confirmation-gated to reduce accidental high-impact runs.
 - Manual run is synchronous in this tranche (safe MVP); queue/scheduler automation can be layered in a later tranche.
+
+---
+
+## Tranche 14 (In progress — 14a + 14b done)
+
+### Plan
+- Failed-payment recovery using **existing STK push path** (Django proxy): Retry STK, then Send payment link; minimal “base URL” follow-up; no new KopoKopo configuration in CRM.
+
+### Progress (14a — Retry STK)
+
+- **Backend:**
+  - Added `CrmAuditAction::PAYMENT_RETRY_STK`.
+  - Added `POST /api/crm/payments/{payment}/retry-stk` in `PaymentQueueController::retryStk()`.
+  - Retry reuses existing Django initiate flow: loads payment (status must be `failed` or `initiated`), normalizes phone, builds same payload as `initiate()` / `manualStkPush()` with **existing** payment id, calls `config('services.django.base_url')/initiate/`. Callback continues to update the same payment row.
+  - Market-scoped via `authorizePaymentAccess`; optional `reason` for audit; audit log on success and failure.
+- **Frontend:**
+  - Payments table: “Retry STK” action for rows with `status === 'failed'` or `status === 'initiated'`.
+  - Confirm dialog with optional reason; success toast and list refresh.
+
+### Progress (14b — Send payment link)
+
+- **Backend:**
+  - Added `CrmAuditAction::PAYMENT_SEND_LINK`.
+  - Added `config/services.php` `payment_link.path` (env `PAYMENT_LINK_PATH`, default `/pay`).
+  - Injected `NotificationService` into `PaymentQueueController`; added `sendPaymentLink(Request, Payment)`: channel `sms`, optional phone override; builds payment URL from platform (`wp_api_url` base or `domain`), appends path; sends SMS via `NotificationService::sendSms()`; audit on success/failure.
+  - Added `POST /api/crm/payments/{payment}/send-payment-link`.
+- **Frontend:**
+  - Payments table: “Send link” action for rows with `status === 'failed'` or `status === 'initiated'`.
+  - Confirm dialog: phone (optional, prefilled from payment), optional reason; confirm sends SMS with payment page link.
+
+### Verification (14a + 14b)
+- Run: `php artisan test --testsuite=Feature --stop-on-failure` (when vendor installed).
+- Run: `npm run build` (when node_modules installed).
+- Manual: Payments → failed/initiated row → Retry STK or Send link → confirm; link URL uses platform site + `PAYMENT_LINK_PATH`.
+
+### Decision Notes
+- Retry STK uses **existing Django proxy**; no new KopoKopo configuration in CRM.
+- Payment link URL: platform site base (from `wp_api_url` or `domain`) + `services.payment_link.path`; SMS only in 14b (email deferred).
+- Next: 14c base URL follow-up if needed, 14d final tranche log update.

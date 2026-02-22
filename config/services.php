@@ -57,6 +57,10 @@ return [
         'base_url' => env('DJANGO_API_BASE', 'https://polytech.co.ke/payment_service/api/payments'),
     ],
 
+    'payment_link' => [
+        'path' => env('PAYMENT_LINK_PATH', '/pay'),
+    ],
+
     'sms' => [
         'enabled' => filter_var(env('SMS_ENABLED', false), FILTER_VALIDATE_BOOL),
         'active_provider' => env('SMS_ACTIVE_PROVIDER', 'legacy_gateway'),

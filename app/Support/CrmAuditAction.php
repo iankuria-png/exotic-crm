@@ -32,4 +32,6 @@ final class CrmAuditAction
     public const PAYMENT_MATCH_AUTO = 'payment_match_auto';
     public const PAYMENT_MATCH_CONFIRM = 'payment_match_confirm';
     public const PAYMENT_MATCH_BATCH = 'payment_match_batch';
+    public const PAYMENT_RETRY_STK = 'payment_retry_stk';
+    public const PAYMENT_SEND_LINK = 'payment_send_link';
 }

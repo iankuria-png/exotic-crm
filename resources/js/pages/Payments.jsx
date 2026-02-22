@@ -74,6 +74,8 @@ export default function Payments() {
         open: false,
         reason: 'Batch auto-match from payment queue',
     });
+    const [retryStkDialog, setRetryStkDialog] = useState({ open: false, payment: null, reason: 'Retry STK from payment queue' });
+    const [sendLinkDialog, setSendLinkDialog] = useState({ open: false, payment: null, channel: 'sms', phone: '', reason: 'Send payment link from CRM' });
 
     const { data, isLoading } = useQuery({
         queryKey: ['payments', page, search, statusFilter, matchFilter],
@@ -144,6 +146,36 @@ export default function Payments() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Queue auto-match failed.');
+        },
+    });
+
+    const retryStkMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/retry-stk`, { reason: reason || undefined }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setRetryStkDialog({ open: false, payment: null, reason: 'Retry STK from payment queue' });
+            toast.success('STK push sent. Customer should complete the request on their phone.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Retry STK failed.');
+        },
+    });
+
+    const sendPaymentLinkMutation = useMutation({
+        mutationFn: ({ paymentId, channel, phone, reason }) =>
+            api.post(`/crm/payments/${paymentId}/send-payment-link`, {
+                channel,
+                ...(phone && { phone: phone.trim() }),
+                reason: reason || undefined,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setSendLinkDialog({ open: false, payment: null, channel: 'sms', phone: '', reason: 'Send payment link from CRM' });
+            toast.success('Payment link sent by SMS.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Send payment link failed.');
         },
     });
 
@@ -355,7 +387,35 @@ export default function Payments() {
             key: 'actions',
             label: 'Actions',
             render: (row) => (
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                    {(row.status === 'failed' || row.status === 'initiated') && (
+                        <>
+                            <button
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' });
+                                }}
+                                className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                            >
+                                Retry STK
+                            </button>
+                            <button
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSendLinkDialog({
+                                        open: true,
+                                        payment: row,
+                                        channel: 'sms',
+                                        phone: row.phone || '',
+                                        reason: 'Send payment link from CRM',
+                                    });
+                                }}
+                                className="rounded-md bg-slate-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                            >
+                                Send link
+                            </button>
+                        </>
+                    )}
                     <button
                         onClick={(event) => {
                             event.stopPropagation();
@@ -624,6 +684,83 @@ export default function Payments() {
                     onChange={(event) => setQueueAutoMatchDialog((current) => ({ ...current, reason: event.target.value }))}
                     className="crm-input"
                 />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={retryStkDialog.open && !!retryStkDialog.payment}
+                title="Retry STK push"
+                message={retryStkDialog.payment
+                    ? `Send another M-Pesa STK push for payment #${retryStkDialog.payment.id} (${formatCurrency(retryStkDialog.payment.amount, retryStkDialog.payment.currency || 'KES')} to ${retryStkDialog.payment.phone || 'customer'}).`
+                    : ''}
+                confirmLabel="Send STK"
+                onCancel={() => setRetryStkDialog({ open: false, payment: null, reason: 'Retry STK from payment queue' })}
+                onConfirm={() => {
+                    if (retryStkDialog.payment) {
+                        retryStkMutation.mutate({
+                            paymentId: retryStkDialog.payment.id,
+                            reason: retryStkDialog.reason.trim() || undefined,
+                        });
+                    }
+                }}
+                confirmDisabled={retryStkMutation.isPending}
+                isPending={retryStkMutation.isPending}
+            >
+                <label htmlFor="retry-stk-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason (optional)</label>
+                <textarea
+                    id="retry-stk-reason"
+                    rows={2}
+                    value={retryStkDialog.reason}
+                    onChange={(event) => setRetryStkDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                    placeholder="e.g. Retry STK from payment queue"
+                />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={sendLinkDialog.open && !!sendLinkDialog.payment}
+                title="Send payment link"
+                message={sendLinkDialog.payment
+                    ? `Send a payment page link by SMS for payment #${sendLinkDialog.payment.id} (${formatCurrency(sendLinkDialog.payment.amount, sendLinkDialog.payment.currency || 'KES')}).`
+                    : ''}
+                confirmLabel="Send SMS"
+                onCancel={() => setSendLinkDialog({ open: false, payment: null, channel: 'sms', phone: '', reason: 'Send payment link from CRM' })}
+                onConfirm={() => {
+                    if (sendLinkDialog.payment) {
+                        sendPaymentLinkMutation.mutate({
+                            paymentId: sendLinkDialog.payment.id,
+                            channel: sendLinkDialog.channel,
+                            phone: sendLinkDialog.phone.trim() || undefined,
+                            reason: sendLinkDialog.reason.trim() || undefined,
+                        });
+                    }
+                }}
+                confirmDisabled={sendPaymentLinkMutation.isPending}
+                isPending={sendPaymentLinkMutation.isPending}
+            >
+                <div className="space-y-3">
+                    <div>
+                        <label htmlFor="send-link-phone" className="mb-1 block text-sm font-medium text-slate-700">Phone number (optional)</label>
+                        <input
+                            id="send-link-phone"
+                            type="text"
+                            value={sendLinkDialog.phone}
+                            onChange={(event) => setSendLinkDialog((current) => ({ ...current, phone: event.target.value }))}
+                            className="crm-input"
+                            placeholder="Leave empty to use payment phone"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="send-link-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason (optional)</label>
+                        <input
+                            id="send-link-reason"
+                            type="text"
+                            value={sendLinkDialog.reason}
+                            onChange={(event) => setSendLinkDialog((current) => ({ ...current, reason: event.target.value }))}
+                            className="crm-input"
+                            placeholder="e.g. Send payment link from CRM"
+                        />
+                    </div>
+                </div>
             </ConfirmDialog>
         </div>
     );

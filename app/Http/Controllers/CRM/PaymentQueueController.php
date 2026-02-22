@@ -7,15 +7,19 @@ use Illuminate\Http\Request;
 use App\Models\Payment;
 use App\Models\Client;
 use App\Services\AuditService;
+use App\Services\NotificationService;
 use App\Services\PaymentMatchingService;
 use App\Services\MarketAuthorizationService;
 use App\Support\CrmAuditAction;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class PaymentQueueController extends Controller
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly NotificationService $notificationService
     ) {
     }
 
@@ -262,6 +266,260 @@ class PaymentQueueController extends Controller
         }
 
         return response()->json($results);
+    }
+
+    /**
+     * Retry STK push for a failed or initiated payment using the existing Django proxy.
+     * Reuses the same initiate flow; callback will update this payment row.
+     */
+    public function retryStk(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (!in_array($payment->status, ['failed', 'initiated'], true)) {
+            return response()->json([
+                'message' => 'Only failed or initiated payments can be retried.',
+            ], 422);
+        }
+
+        $payment->load(['product', 'platform', 'client']);
+        $product = $payment->product;
+        $platform = $payment->platform;
+
+        if (!$product || !$platform) {
+            return response()->json([
+                'message' => 'Payment is missing product or platform.',
+            ], 422);
+        }
+
+        $phone = $this->normalizePhone($payment->phone);
+        if (!$phone) {
+            return response()->json([
+                'message' => 'Payment has no valid phone number for STK push.',
+            ], 422);
+        }
+
+        $amount = (float) $payment->amount;
+        $duration = $payment->duration ?? 'monthly';
+        if ($amount <= 0) {
+            return response()->json([
+                'message' => 'Payment amount is invalid.',
+            ], 422);
+        }
+
+        $baseUrl = rtrim((string) config('services.django.base_url'), '/');
+        if ($baseUrl === '') {
+            Log::error('Retry STK: Django base URL not configured.');
+            return response()->json([
+                'message' => 'Payment service URL is not configured.',
+            ], 503);
+        }
+
+        $firstName = null;
+        $lastName = null;
+        $email = null;
+        if ($payment->client_id && $payment->relationLoaded('client') && $payment->client) {
+            $firstName = $payment->client->name ? explode(' ', $payment->client->name, 2)[0] ?? null : null;
+            $lastName = $payment->client->name ? (explode(' ', $payment->client->name, 2)[1] ?? null) : null;
+            $email = $payment->client->email;
+        }
+
+        $beforeStatus = $payment->status;
+        $payment->status = 'initiated';
+        $payment->save();
+
+        $payload = [
+            'organization_code' => '76',
+            'payment_id' => $payment->id,
+            'product_id' => $payment->product_id,
+            'platform_id' => $payment->platform_id,
+            'user_id' => $payment->user_id,
+            'phone' => $phone,
+            'amount' => $amount,
+            'duration' => $duration,
+            'first_name' => $firstName,
+            'last_name' => $lastName,
+            'email' => $email,
+        ];
+
+        $response = Http::timeout(30)->post("{$baseUrl}/initiate/", $payload);
+
+        if ($response->successful()) {
+            $data = $response->json();
+            if (isset($data['message']) && $data['message'] === 'Payment initiated') {
+                $payment->status = 'pending';
+                $payment->save();
+
+                $this->auditService->fromRequest(
+                    $request,
+                    (int) $payment->platform_id,
+                    CrmAuditAction::PAYMENT_RETRY_STK,
+                    'payment',
+                    (int) $payment->id,
+                    ['before_status' => $beforeStatus],
+                    ['after_status' => 'pending', 'django_response' => $data],
+                    (string) ($validated['reason'] ?? 'Retry STK from CRM')
+                );
+
+                return response()->json([
+                    'message' => 'STK push sent. Customer should complete the request on their phone.',
+                    'payment' => $payment->fresh(['platform', 'product']),
+                ]);
+            }
+
+            Log::warning('Retry STK: Django returned non-success message', ['data' => $data]);
+            $payment->status = 'failed';
+            $payment->save();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $payment->platform_id,
+                CrmAuditAction::PAYMENT_RETRY_STK,
+                'payment',
+                (int) $payment->id,
+                ['before_status' => $beforeStatus],
+                ['after_status' => 'failed', 'django_response' => $data],
+                (string) ($validated['reason'] ?? 'Retry STK from CRM')
+            );
+
+            return response()->json([
+                'message' => $data['error'] ?? $data['message'] ?? 'STK push could not be initiated.',
+            ], 400);
+        }
+
+        Log::error('Retry STK: Django HTTP error', [
+            'payment_id' => $payment->id,
+            'status' => $response->status(),
+            'body' => $response->body(),
+        ]);
+        $payment->status = 'failed';
+        $payment->save();
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_RETRY_STK,
+            'payment',
+            (int) $payment->id,
+            ['before_status' => $beforeStatus],
+            ['after_status' => 'failed', 'http_status' => $response->status()],
+            (string) ($validated['reason'] ?? 'Retry STK from CRM')
+        );
+
+        return response()->json([
+            'message' => 'Payment service unavailable. Please try again later.',
+        ], 502);
+    }
+
+    /**
+     * Send payment link via SMS (and optionally other channels later).
+     * Link is built from platform site URL + config path so customer can complete payment.
+     */
+    public function sendPaymentLink(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'channel' => 'required|in:sms',
+            'phone' => 'nullable|string|max:20',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (!in_array($payment->status, ['failed', 'initiated'], true)) {
+            return response()->json([
+                'message' => 'Payment link can only be sent for failed or initiated payments.',
+            ], 422);
+        }
+
+        $payment->load(['product', 'platform']);
+        $platform = $payment->platform;
+
+        if (!$platform) {
+            return response()->json([
+                'message' => 'Payment has no platform.',
+            ], 422);
+        }
+
+        $phone = $this->normalizePhone($validated['phone'] ?? $payment->phone);
+        if (!$phone) {
+            return response()->json([
+                'message' => 'No valid phone number to send the link to.',
+            ], 422);
+        }
+
+        $paymentUrl = $this->buildPaymentLinkUrl($platform);
+        if (!$paymentUrl) {
+            return response()->json([
+                'message' => 'Payment page URL could not be determined for this market.',
+            ], 422);
+        }
+
+        $amount = (float) $payment->amount;
+        $currency = $payment->currency ?? 'KES';
+        $message = sprintf(
+            'Complete your payment of %s %s here: %s',
+            $currency,
+            number_format($amount),
+            $paymentUrl
+        );
+
+        $result = $this->notificationService->sendSms($phone, $message, [
+            'purpose' => 'payment_link',
+            'payment_id' => $payment->id,
+            'platform_id' => $payment->platform_id,
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_SEND_LINK,
+            'payment',
+            (int) $payment->id,
+            ['channel' => $validated['channel'], 'phone' => $phone],
+            ['sms_success' => $result['success'] ?? false, 'sms_status' => $result['status'] ?? null],
+            (string) ($validated['reason'] ?? 'Send payment link from CRM')
+        );
+
+        if ($result['success'] !== true && ($result['status'] ?? '') !== 'disabled') {
+            return response()->json([
+                'message' => $result['provider_response'] ?? 'SMS could not be sent.',
+            ], 502);
+        }
+
+        return response()->json([
+            'message' => $result['status'] === 'disabled'
+                ? 'Payment link message prepared (SMS is disabled in settings).'
+                : 'Payment link sent by SMS.',
+            'payment' => $payment->fresh(['platform', 'product']),
+        ]);
+    }
+
+    private function buildPaymentLinkUrl($platform): ?string
+    {
+        $baseUrl = null;
+
+        if (!empty($platform->wp_api_url)) {
+            $baseUrl = preg_replace('#/wp-json/.*$#', '', (string) $platform->wp_api_url);
+            $baseUrl = rtrim((string) $baseUrl, '/');
+        }
+
+        if (!$baseUrl && !empty($platform->domain)) {
+            $domain = trim((string) $platform->domain);
+            $baseUrl = str_starts_with($domain, 'http') ? $domain : 'https://' . $domain;
+            $baseUrl = rtrim($baseUrl, '/');
+        }
+
+        if ($baseUrl === '' || $baseUrl === null) {
+            return null;
+        }
+
+        $path = config('services.payment_link.path', '/pay');
+
+        return $baseUrl . $path;
     }
 
     private function normalizePhone(?string $phone): ?string
