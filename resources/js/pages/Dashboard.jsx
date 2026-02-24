@@ -88,7 +88,7 @@ function EmptyState({ message }) {
     );
 }
 
-function MetricProgress({ label, helper, value, tone }) {
+function MetricProgress({ label, helper, value, tone, tooltip }) {
     const clamped = clampPercent(value);
     const fillMap = {
         accent: 'bg-teal-600',
@@ -99,7 +99,17 @@ function MetricProgress({ label, helper, value, tone }) {
     return (
         <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-slate-700">{label}</p>
+                <p className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                    {label}
+                    {tooltip ? (
+                        <span
+                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-200 text-[10px] font-semibold text-slate-400 cursor-help"
+                            title={tooltip}
+                        >
+                            ?
+                        </span>
+                    ) : null}
+                </p>
                 <p className="crm-mono text-xs font-semibold text-slate-500">{Math.round(clamped)}%</p>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-slate-100">
@@ -366,8 +376,8 @@ export default function Dashboard() {
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
                     <SectionFrame
-                        title="Payment Review Queue"
-                        subtitle="Unmatched completed payments that need manual client matching."
+                        title="Completed — Unlinked Payments"
+                        subtitle="Completed payments not yet matched to a client record."
                         action={(
                             <button
                                 type="button"
@@ -381,7 +391,7 @@ export default function Dashboard() {
                             <PreviewFooter
                                 hiddenCount={hiddenPaymentCount}
                                 noun="payments"
-                                ctaLabel="Open full queue"
+                                ctaLabel="Open payment matching"
                                 onOpen={() => navigate('/payments')}
                             />
                         )}
@@ -411,7 +421,7 @@ export default function Dashboard() {
                                 ))}
                             </div>
                         ) : (
-                            <EmptyState message="No unmatched completed payments in review queue." />
+                            <EmptyState message="All completed payments are linked to client records." />
                         )}
                     </SectionFrame>
 
@@ -530,18 +540,21 @@ export default function Dashboard() {
                                 helper={`${Math.round(matchQuality)}% matched this month`}
                                 value={matchQuality}
                                 tone="accent"
+                                tooltip="Percentage of completed payments in the selected window that are linked to a client."
                             />
                             <MetricProgress
                                 label="Lead backlog pressure"
                                 helper={`${pendingLeads.toLocaleString()} pending of ${totalLeads.toLocaleString()} leads`}
                                 value={leadBacklog}
                                 tone="warning"
+                                tooltip="Proportion of leads still in 'new' or 'contacted' status vs. total leads."
                             />
                             <MetricProgress
                                 label="Active client coverage"
                                 helper={`${activeClients.toLocaleString()} active profiles`}
                                 value={activeCoverage}
                                 tone="success"
+                                tooltip="Share of all client records that have an active (published) profile."
                             />
                         </div>
                     </SectionFrame>

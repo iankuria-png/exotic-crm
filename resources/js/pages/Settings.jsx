@@ -259,6 +259,14 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
             detail: services.kopokopo?.base_url || 'Base URL not configured',
         },
         {
+            key: 'payment_service',
+            label: 'Payment Service (Django)',
+            status: services.payment_service?.status || 'pending',
+            detail: services.payment_service?.base_url
+                ? `${services.payment_service.base_url} • Link path: ${services.payment_service.payment_link_path || '/pay'}`
+                : 'DJANGO_API_BASE not configured',
+        },
+        {
             key: 'sendgrid',
             label: 'SendGrid',
             status: services.sendgrid?.status || 'deferred',

@@ -81,6 +81,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/renewals/runs', [RenewalController::class, 'runs']);
     Route::post('/renewals/run', [RenewalController::class, 'run']);
     Route::post('/renewals/remind', [RenewalController::class, 'remind']);
+    Route::post('/renewals/bulk-remind', [RenewalController::class, 'bulkRemind']);
     Route::post('/renewals/pause', [RenewalController::class, 'pause']);
     Route::post('/renewals/resume', [RenewalController::class, 'resume']);
 
@@ -94,6 +95,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);
     Route::post('/payments/{payment}/retry-stk', [PaymentQueueController::class, 'retryStk']);
     Route::post('/payments/{payment}/send-payment-link', [PaymentQueueController::class, 'sendPaymentLink']);
+    Route::post('/payments/{payment}/create-subscription', [PaymentQueueController::class, 'createSubscription']);
     Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
 
     // Settings
@@ -197,7 +199,7 @@ Route::get('/debug-kopokopo', [PaymentController::class, 'debugKopokopo']);
 Route::post('/clear-pending-payments', [PaymentController::class, 'clearPendingPayments']);
 Route::any('/test-webhook', [PaymentController::class, 'testWebhook']);
 Route::post('/subscribe-webhooks', [PaymentController::class, 'subscribeToWebhooks']);
-Route::get('/webhook-info', function() {
+Route::get('/webhook-info', function () {
     return response()->json([
         'webhook_url' => url('/api/payment-callback'),
         'test_webhook_url' => url('/api/test-webhook'),
@@ -217,23 +219,23 @@ Route::get('/webhook-info', function() {
     ]);
 });
 
-Route::post('/simulate-webhook', function(Request $request) {
+Route::post('/simulate-webhook', function (Request $request) {
     if (!config('app.debug')) {
         return response()->json(['error' => 'Debug mode required'], 403);
     }
-    
+
     $paymentId = $request->input('payment_id');
     $eventType = $request->input('event_type', 'buygoods_transaction_received');
-    
+
     if (!$paymentId) {
         return response()->json(['error' => 'payment_id required'], 400);
     }
-    
+
     $payment = \App\Models\Payment::find($paymentId);
     if (!$payment) {
         return response()->json(['error' => 'Payment not found'], 404);
     }
-    
+
     // Simulate webhook payload
     $webhookPayload = [
         'event_type' => $eventType,
@@ -254,16 +256,16 @@ Route::post('/simulate-webhook', function(Request $request) {
         ],
         'timestamp' => now()->toISOString()
     ];
-    
+
     // Call the webhook handler directly
     $webhookRequest = Request::create('/api/payment-callback', 'POST', [], [], [], [
         'CONTENT_TYPE' => 'application/json',
         'HTTP_X_KOPOKOPO_SIGNATURE' => 'test_signature'
     ], json_encode($webhookPayload));
-    
+
     $controller = new \App\Http\Controllers\API\PaymentController();
     $response = $controller->handleCallback($webhookRequest);
-    
+
     return response()->json([
         'status' => 'success',
         'message' => 'Webhook simulated',

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\Deal;
 use App\Models\RenewalCampaign;
@@ -28,45 +29,75 @@ class RenewalService
 
     public function buildOverview(array $filters = [], int $perPage = 50, ?User $viewer = null): array
     {
-        $query = Deal::query()
-            ->with(['client.platform', 'product', 'assignedAgent'])
-            ->select('deals.*')
+        // 1. Build the unified query for Subscriptions (Deals + Virtual Deals from Clients)
+        // We include ALL private status clients to scale visibility to the full 4k+ records.
+        $query = Client::query()
+            ->with(['platform', 'assignedAgent', 'activeDeal.product'])
+            ->leftJoin('deals', function ($join) {
+                // Join to the latest active/expired deal if one exists
+                $join->on('clients.id', '=', 'deals.client_id')
+                    ->whereIn('deals.status', ['active', 'expired'])
+                    ->whereRaw('deals.id = (SELECT id FROM deals d2 WHERE d2.client_id = clients.id ORDER BY d2.created_at DESC LIMIT 1)');
+            })
+            ->select('clients.*', 'deals.id as deal_id', 'deals.status as deal_status', 'deals.expires_at as deal_expires_at', 'deals.product_id', 'deals.amount', 'deals.currency')
+            ->where(function ($q) {
+                $q->whereNotNull('deals.id')
+                    ->orWhereNotNull('clients.escort_expire')
+                    ->orWhere('clients.profile_status', 'private');
+            });
+
+        // Add telemetry counters (reminders)
+        $query->selectSub(function ($builder) {
+            $builder->from('timeline_events')
+                ->selectRaw('COUNT(*)')
+                ->where(function ($sub) {
+                    $sub->where(function ($sq) {
+                        $sq->where('entity_type', 'deal')->whereColumn('entity_id', 'deals.id');
+                    })->orWhere(function ($sq) {
+                        $sq->where('entity_type', 'client')->whereColumn('entity_id', 'clients.id');
+                    });
+                })
+                ->where('event_type', 'renewal_sms_sent');
+        }, 'reminders_sent_count')
             ->selectSub(function ($builder) {
                 $builder->from('timeline_events')
                     ->selectRaw('COUNT(*)')
-                    ->where('entity_type', 'deal')
-                    ->where('event_type', 'renewal_sms_sent')
-                    ->whereColumn('entity_id', 'deals.id');
-            }, 'reminders_sent_count')
-            ->selectSub(function ($builder) {
-                $builder->from('timeline_events')
-                    ->selectRaw('COUNT(*)')
-                    ->where('entity_type', 'deal')
-                    ->where('event_type', 'renewal_sms_failed')
-                    ->whereColumn('entity_id', 'deals.id');
+                    ->where(function ($sub) {
+                        $sub->where(function ($sq) {
+                            $sq->where('entity_type', 'deal')->whereColumn('entity_id', 'deals.id');
+                        })->orWhere(function ($sq) {
+                            $sq->where('entity_type', 'client')->whereColumn('entity_id', 'clients.id');
+                        });
+                    })
+                    ->where('event_type', 'renewal_sms_failed');
             }, 'reminders_failed_count')
             ->selectSub(function ($builder) {
                 $builder->from('timeline_events')
                     ->select('created_at')
-                    ->where('entity_type', 'deal')
+                    ->where(function ($sub) {
+                        $sub->where(function ($sq) {
+                            $sq->where('entity_type', 'deal')->whereColumn('entity_id', 'deals.id');
+                        })->orWhere(function ($sq) {
+                            $sq->where('entity_type', 'client')->whereColumn('entity_id', 'clients.id');
+                        });
+                    })
                     ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed'])
-                    ->whereColumn('entity_id', 'deals.id')
                     ->orderByDesc('created_at')
                     ->limit(1);
-            }, 'last_renewal_reminder_at')
-            ->whereIn('status', ['active', 'expired']);
+            }, 'last_renewal_reminder_at');
 
+        // Apply shared filters
         if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
-            $query->whereIn('platform_id', $filters['platform_ids']);
+            $query->whereIn('clients.platform_id', $filters['platform_ids']);
         } elseif (!empty($filters['platform_id'])) {
-            $query->where('platform_id', (int) $filters['platform_id']);
+            $query->where('clients.platform_id', (int) $filters['platform_id']);
         }
 
         if (!empty($filters['search'])) {
             $search = trim((string) $filters['search']);
-            $query->whereHas('client', function (Builder $builder) use ($search) {
-                $builder->where('name', 'like', "%{$search}%")
-                    ->orWhere('phone_normalized', 'like', "%{$search}%");
+            $query->where(function ($q) use ($search) {
+                $q->where('clients.name', 'like', "%{$search}%")
+                    ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
             });
         }
 
@@ -74,53 +105,141 @@ class RenewalService
             $this->applyBucketFilter($query, (string) $filters['bucket']);
         }
 
-        /** @var LengthAwarePaginator $targets */
+        /** @var \Illuminate\Pagination\LengthAwarePaginator $targets */
         $targets = $query
-            ->orderBy('expires_at')
+            ->orderByRaw('COALESCE(deals.expires_at, clients.escort_expire) DESC')
             ->paginate($perPage)
-            ->through(function (Deal $deal) {
-                $daysLeft = $this->daysUntil($deal->expires_at);
-                $remindersPaused = $this->isReminderPaused($deal);
-                $renewalBucket = $remindersPaused ? 'paused' : $this->bucketForDays($daysLeft);
+            ->through(function (Client $client) {
+                // If a real deal exists, we use it for primary data
+                $expiryValue = $client->deal_expires_at ?: $client->escort_expire;
+                $expiryDate = $expiryValue ? \Carbon\Carbon::parse($expiryValue) : null;
+                $daysLeft = $this->daysUntil($expiryDate);
 
-                return array_merge($deal->toArray(), [
+                // For virtual renewals (no deal), we consider them "active" if not expired
+                $status = $client->deal_status ?: ($daysLeft !== null && $daysLeft < 0 ? 'expired' : 'active');
+
+                // Paused status only really applies to deals for now
+                $remindersPaused = $client->activeDeal ? $this->isReminderPaused($client->activeDeal) : false;
+
+                $renewalBucket = $remindersPaused
+                    ? 'paused'
+                    : ($daysLeft !== null && $daysLeft < 0
+                        ? $this->bucketForDaysExpired($daysLeft)
+                        : $this->bucketForDays($daysLeft));
+
+                // Catch-all: If private but no date, it is 'lapsed'
+                if (!$expiryDate && $client->profile_status === 'private') {
+                    $renewalBucket = 'lapsed';
+                    $status = 'expired';
+                }
+
+                $originType = $client->deal_id ? 'modern' : 'legacy';
+                $paymentStatus = 'unlinked';
+
+                if ($client->deal_id) {
+                    $paymentExists = \App\Models\Payment::where('deal_id', $client->deal_id)
+                        ->whereIn('status', ['completed', 'success'])
+                        ->exists();
+                    $paymentStatus = $paymentExists ? 'verified' : 'unlinked';
+                }
+
+                $record = $client->toArray();
+                return array_merge($record, [
+                    'id' => $client->deal_id, // frontend expects deal ID or null
+                    'client_id' => $client->id,
+                    'client' => $record, // NESTED CLIENT to fix 'Unknown' rendering
+                    'is_virtual' => !$client->deal_id,
+                    'origin_type' => $originType,
+                    'payment_status' => $paymentStatus,
+                    'expires_at' => $expiryDate ? $expiryDate->toDateTimeString() : null,
+                    'status' => $status,
                     'days_left' => $daysLeft,
                     'renewal_bucket' => $renewalBucket,
-                    'reminders_sent_count' => (int) ($deal->reminders_sent_count ?? 0),
-                    'reminders_failed_count' => (int) ($deal->reminders_failed_count ?? 0),
-                    'last_renewal_reminder_at' => $deal->last_renewal_reminder_at,
+                    'reminders_sent_count' => (int) ($client->reminders_sent_count ?? 0),
+                    'reminders_failed_count' => (int) ($client->reminders_failed_count ?? 0),
+                    'last_renewal_reminder_at' => $client->last_renewal_reminder_at,
                     'reminders_paused' => $remindersPaused,
-                    'renewal_paused_until' => optional($deal->renewal_paused_until)->toDateTimeString(),
-                    'renewal_pause_reason' => $deal->renewal_pause_reason,
+                    'renewal_paused_until' => $client->activeDeal ? optional($client->activeDeal->renewal_paused_until)->toDateTimeString() : null,
+                    'renewal_pause_reason' => $client->activeDeal ? $client->activeDeal->renewal_pause_reason : null,
                 ]);
             });
 
-        $summaryBase = Deal::query()->where('status', 'active');
+        // 2. Build Summary Counts (Global Stats based on current filters)
+        $summaryBase = Client::query()
+            ->leftJoin('deals', function ($join) {
+                $join->on('clients.id', '=', 'deals.client_id')
+                    ->whereIn('deals.status', ['active', 'expired'])
+                    ->whereRaw('deals.id = (SELECT id FROM deals d2 WHERE d2.client_id = clients.id ORDER BY d2.created_at DESC LIMIT 1)');
+            })
+            ->where(function ($q) {
+                $q->whereNotNull('deals.id')
+                    ->orWhereNotNull('clients.escort_expire')
+                    ->orWhere('clients.profile_status', 'private');
+            });
+
+        // Apply shared filters to summary for "Global Stats"
         if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
-            $summaryBase->whereIn('platform_id', $filters['platform_ids']);
+            $summaryBase->whereIn('clients.platform_id', $filters['platform_ids']);
         } elseif (!empty($filters['platform_id'])) {
-            $summaryBase->where('platform_id', (int) $filters['platform_id']);
+            $summaryBase->where('clients.platform_id', (int) $filters['platform_id']);
         }
 
+        if (!empty($filters['search'])) {
+            $search = trim((string) $filters['search']);
+            $summaryBase->where(function ($q) use ($search) {
+                $q->where('clients.name', 'like', "%{$search}%")
+                    ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
+            });
+        }
+
+        $nowTs = now()->timestamp;
+        $dateExpr = 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire)';
+
         $summary = [
-            'active_deals' => (int) $summaryBase->count(),
-            'risk' => (int) (clone $summaryBase)
-                ->whereBetween('expires_at', [now(), now()->addDays(3)])
-                ->count(),
-            'pending' => (int) (clone $summaryBase)
-                ->whereBetween('expires_at', [now()->addDays(4), now()->addDays(14)])
-                ->count(),
-            'renewed_this_month' => (int) (clone $summaryBase)
-                ->whereNotNull('activated_at')
-                ->where('activated_at', '>=', now()->startOfMonth())
-                ->count(),
-            'paused_reminders' => (int) (clone $summaryBase)
-                ->where('renewal_reminders_paused', true)
-                ->where(function (Builder $builder) {
-                    $builder->whereNull('renewal_paused_until')
-                        ->orWhere('renewal_paused_until', '>=', now());
+            'active_deals' => (int) (clone $summaryBase)
+                ->where(function ($q) use ($nowTs, $dateExpr) {
+                    $q->where('deals.status', 'active')
+                        ->orWhere(function ($sq) use ($nowTs, $dateExpr) {
+                            $sq->whereNull('deals.id')->where(DB::raw($dateExpr), '>=', $nowTs);
+                        });
                 })
                 ->count(),
+            'modern_active_count' => (int) (clone $summaryBase)
+                ->where('deals.status', 'active')
+                ->whereNotNull('deals.id')
+                ->count(),
+            'risk' => (int) (clone $summaryBase)
+                ->whereBetween(DB::raw($dateExpr), [$nowTs, $nowTs + (3 * 86400)])
+                ->count(),
+            'pending' => (int) (clone $summaryBase)
+                ->whereBetween(DB::raw($dateExpr), [$nowTs + (4 * 86400), $nowTs + (14 * 86400)])
+                ->count(),
+            'renewed_this_month' => (int) Deal::query()
+                ->whereNotNull('activated_at')
+                ->where('activated_at', '>=', now()->startOfMonth())
+                ->when($filters['platform_id'] ?? null, fn($q) => $q->where('platform_id', $filters['platform_id']))
+                ->count(),
+            'paused_reminders' => (int) (clone $summaryBase)->where('deals.renewal_reminders_paused', true)->count(),
+            'expired_deals' => (int) (clone $summaryBase)
+                ->whereBetween(DB::raw($dateExpr), [$nowTs - (14 * 86400), $nowTs - 1])
+                ->count(),
+            'lapsed_deals' => (int) (clone $summaryBase)
+                ->where(function ($q) use ($nowTs, $dateExpr) {
+                    $q->where(DB::raw($dateExpr), '<', $nowTs - (14 * 86400))
+                        ->orWhere(function ($sq) {
+                            $sq->whereNull('deals.id')
+                                ->where('clients.profile_status', 'private')
+                                ->whereNull('clients.escort_expire');
+                        });
+                })
+                ->count(),
+            'pipeline_value' => (float) (clone $summaryBase)
+                ->whereIn('deals.status', ['pending', 'awaiting_payment', 'paid', 'active'])
+                ->sum('deals.amount'),
+            'verified_revenue' => (float) (clone $summaryBase)
+                ->where('deals.status', 'active')
+                ->whereNotNull('deals.payment_id')
+                ->sum('deals.amount'),
         ];
 
         $campaigns = RenewalCampaign::query()
@@ -132,7 +251,7 @@ class RenewalService
             ->with(['campaign.template:id,title', 'runner:id,name'])
             ->when(
                 $viewer && $viewer->role !== MarketAuthorizationService::ROLE_ADMIN,
-                fn (Builder $builder) => $builder->where('run_by', $viewer->id)
+                fn(Builder $builder) => $builder->where('run_by', $viewer->id)
             )
             ->orderByDesc('run_at')
             ->limit(10)
@@ -146,12 +265,95 @@ class RenewalService
         ];
     }
 
+    public function bulkRemind(array $selection, bool $selectAll = false, array $filters = [], ?int $templateId = null, ?int $actorId = null): array
+    {
+        $targets = [];
+
+        if ($selectAll) {
+            // Rebuild query with filters to get ALL matching targets
+            $query = Client::query()
+                ->leftJoin('deals', function ($join) {
+                    $join->on('clients.id', '=', 'deals.client_id')
+                        ->whereIn('deals.status', ['active', 'expired'])
+                        ->whereRaw('deals.id = (SELECT id FROM deals d2 WHERE d2.client_id = clients.id ORDER BY d2.created_at DESC LIMIT 1)');
+                })
+                ->select('clients.id as client_id', 'deals.id as deal_id', 'deals.expires_at as deal_expires_at', 'clients.escort_expire')
+                ->where(function ($q) {
+                    $q->whereNotNull('deals.id')
+                        ->orWhereNotNull('clients.escort_expire')
+                        ->orWhere('clients.profile_status', 'private');
+                });
+
+            if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
+                $query->whereIn('clients.platform_id', $filters['platform_ids']);
+            } elseif (!empty($filters['platform_id'])) {
+                $query->where('clients.platform_id', (int) $filters['platform_id']);
+            }
+
+            if (!empty($filters['search'])) {
+                $search = trim((string) $filters['search']);
+                $query->where(function ($q) use ($search) {
+                    $q->where('clients.name', 'like', "%{$search}%")
+                        ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
+                });
+            }
+
+            if (!empty($filters['bucket'])) {
+                $this->applyBucketFilter($query, (string) $filters['bucket']);
+            }
+
+            $targets = $query->get()->map(function ($row) {
+                return [
+                    'deal_id' => $row->deal_id,
+                    'client_id' => $row->client_id,
+                    'is_virtual' => !$row->deal_id,
+                    'expires_at' => $row->deal_expires_at ?: $row->escort_expire
+                ];
+            })->toArray();
+        } else {
+            $targets = $selection;
+        }
+
+        $sent = 0;
+        $failed = 0;
+
+        foreach ($targets as $target) {
+            try {
+                if (!empty($target['deal_id'])) {
+                    $deal = Deal::query()->with('client.platform')->findOrFail((int) $target['deal_id']);
+                } else {
+                    $client = Client::query()->with('platform')->findOrFail((int) $target['client_id']);
+                    $deal = new Deal();
+                    $deal->client_id = $client->id;
+                    $deal->platform_id = $client->platform_id;
+                    $deal->client = $client;
+                    $deal->expires_at = $target['expires_at'] ?? $client->escort_expire;
+                }
+
+                $res = $this->sendManualReminder($deal, $templateId, $actorId);
+                if (!empty($res['success'])) {
+                    $sent++;
+                } else {
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $failed++;
+            }
+        }
+
+        return [
+            'total' => count($targets),
+            'success' => $sent,
+            'failed' => $failed,
+        ];
+    }
+
     public function runCampaigns(?int $campaignId = null, ?int $actorId = null, ?array $platformIds = null): array
     {
         $campaigns = RenewalCampaign::query()
             ->with('template')
             ->where('enabled', true)
-            ->when($campaignId, fn (Builder $builder) => $builder->where('id', $campaignId))
+            ->when($campaignId, fn(Builder $builder) => $builder->where('id', $campaignId))
             ->orderBy('trigger_days')
             ->get();
 
@@ -256,8 +458,8 @@ class RenewalService
 
             TimelineEvent::create([
                 'platform_id' => $deal->platform_id,
-                'entity_type' => 'deal',
-                'entity_id' => $deal->id,
+                'entity_type' => $deal->id ? 'deal' : 'client',
+                'entity_id' => $deal->id ?: $deal->client_id,
                 'event_type' => $eventType,
                 'actor_id' => $actorId,
                 'content' => [
@@ -273,8 +475,8 @@ class RenewalService
                 'platform_id' => $deal->platform_id,
                 'actor_id' => $actorId,
                 'action' => $delivery['success'] ? CrmAuditAction::RENEWAL_SMS_SENT : CrmAuditAction::RENEWAL_SMS_FAILED,
-                'entity_type' => 'deal',
-                'entity_id' => $deal->id,
+                'entity_type' => $deal->id ? 'deal' : 'client',
+                'entity_id' => $deal->id ?: $deal->client_id,
                 'before_state' => null,
                 'after_state' => [
                     'template_id' => $template->id,
@@ -485,8 +687,8 @@ class RenewalService
                     'platform_id' => $deal->platform_id,
                     'actor_id' => $runnerId,
                     'action' => $delivery['success'] ? CrmAuditAction::RENEWAL_SMS_SENT : CrmAuditAction::RENEWAL_SMS_FAILED,
-                    'entity_type' => 'deal',
-                    'entity_id' => $deal->id,
+                    'entity_type' => $deal->id ? 'deal' : 'client',
+                    'entity_id' => $deal->id ?: $deal->client_id,
                     'after_state' => [
                         'campaign_id' => $campaign->id,
                         'run_id' => $run->id,
@@ -527,7 +729,8 @@ class RenewalService
     {
         $targetDate = now()->startOfDay()->addDays($campaign->trigger_days * -1);
 
-        return Deal::query()
+        // 1. Target real Deals
+        $deals = Deal::query()
             ->whereIn('status', ['active', 'expired'])
             ->whereDate('expires_at', $targetDate->toDateString())
             ->where(function (Builder $builder) {
@@ -540,41 +743,84 @@ class RenewalService
             })
             ->when(
                 is_array($platformIds),
-                fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds)
+                fn(Builder $builder) => $builder->whereIn('platform_id', $platformIds)
             )
-            ->when($campaign->product_id, fn (Builder $builder) => $builder->where('product_id', $campaign->product_id))
+            ->when($campaign->product_id, fn(Builder $builder) => $builder->where('product_id', $campaign->product_id))
             ->with(['client.platform', 'product'])
             ->get();
+
+        // 2. Target Virtual Renewals (Clients with escort_expire and no active/expired Deal)
+        // Note: Filters on product_id are ignored for virtual renewals as they have no linked product.
+        $virtuals = Client::query()
+            ->whereDate('escort_expire', $targetDate->toDateString())
+            ->whereNotExists(function ($query) {
+                $query->select(DB::raw(1))
+                    ->from('deals')
+                    ->whereColumn('deals.client_id', 'clients.id')
+                    ->whereIn('deals.status', ['active', 'expired']);
+            })
+            ->when(
+                is_array($platformIds),
+                fn(Builder $builder) => $builder->whereIn('platform_id', $platformIds)
+            )
+            ->with(['platform'])
+            ->get()
+            ->map(function ($client) {
+                // Return a Deal-like object (or the client itself with necessary fields)
+                $client->client = $client;
+                $client->client_id = $client->id;
+                $client->expires_at = $client->escort_expire;
+                $client->product = null;
+                // deal_id is null, signaling virtual
+                return $client;
+            });
+
+        return $deals->concat($virtuals);
     }
 
-    private function applyBucketFilter(Builder $query, string $bucket): void
+    private function applyBucketFilter(Builder|\Illuminate\Database\Query\Builder $query, string $bucket): void
     {
+        $nowTs = now()->timestamp;
+        $dateExpr = 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire)';
+
         if ($bucket === 'paused') {
-            $query->where('renewal_reminders_paused', true)
+            $query->where('deals.renewal_reminders_paused', true)
                 ->where(function (Builder $builder) {
-                    $builder->whereNull('renewal_paused_until')
-                        ->orWhere('renewal_paused_until', '>=', now());
+                    $builder->whereNull('deals.renewal_paused_until')
+                        ->orWhere('deals.renewal_paused_until', '>=', now());
                 });
             return;
         }
 
         if ($bucket === 'risk') {
-            $query->whereBetween('expires_at', [now(), now()->addDays(3)]);
+            $query->whereBetween(DB::raw($dateExpr), [$nowTs, $nowTs + (3 * 86400)]);
             return;
         }
 
         if ($bucket === 'pending') {
-            $query->whereBetween('expires_at', [now()->addDays(4), now()->addDays(14)]);
+            $query->whereBetween(DB::raw($dateExpr), [$nowTs + (4 * 86400), $nowTs + (14 * 86400)]);
             return;
         }
 
         if ($bucket === 'stable') {
-            $query->where('expires_at', '>', now()->addDays(14));
+            $query->where(DB::raw($dateExpr), '>', $nowTs + (14 * 86400));
             return;
         }
 
         if ($bucket === 'expired') {
-            $query->where('expires_at', '<', now());
+            $query->whereBetween(DB::raw($dateExpr), [$nowTs - (14 * 86400), $nowTs - 1]);
+            return;
+        }
+
+        if ($bucket === 'lapsed') {
+            $query->where(function ($q) use ($nowTs, $dateExpr) {
+                $q->where(DB::raw($dateExpr), '<', $nowTs - (14 * 86400))
+                    ->orWhere(function ($sq) {
+                        $sq->whereNull('deals.id')
+                            ->where('clients.profile_status', 'private')
+                            ->whereNull('clients.escort_expire');
+                    });
+            });
         }
     }
 
@@ -589,12 +835,12 @@ class RenewalService
             ->exists();
     }
 
-    private function writeRenewalTimeline(Deal $deal, RenewalCampaign $campaign, RenewalRun $run, bool $success, ?string $response): void
+    private function writeRenewalTimeline($deal, RenewalCampaign $campaign, RenewalRun $run, bool $success, ?string $response): void
     {
         TimelineEvent::create([
             'platform_id' => $deal->platform_id,
-            'entity_type' => 'deal',
-            'entity_id' => $deal->id,
+            'entity_type' => $deal->id ? 'deal' : 'client',
+            'entity_id' => $deal->id ?: $deal->client_id,
             'event_type' => $success ? 'renewal_sms_sent' : 'renewal_sms_failed',
             'actor_id' => null,
             'content' => [
@@ -682,6 +928,19 @@ class RenewalService
         }
 
         return 'stable';
+    }
+
+    private function bucketForDaysExpired(?int $daysLeft): string
+    {
+        if ($daysLeft === null) {
+            return 'unknown';
+        }
+
+        if ($daysLeft < -14) {
+            return 'lapsed';
+        }
+
+        return 'expired';
     }
 
     private function isReminderPaused(Deal $deal): bool

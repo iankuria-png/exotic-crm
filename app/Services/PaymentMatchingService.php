@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Payment;
 use App\Models\Client;
+use App\Models\Deal;
 use App\Models\Product;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -75,6 +76,21 @@ class PaymentMatchingService
             'confirmed_at' => now(),
         ]);
 
+        $payment = $payment->fresh();
+
+        // Automatically create deal if payment is completed
+        if ($payment->status === 'completed' && !$payment->deal_id) {
+            try {
+                $this->createDealFromPayment($payment, $confirmedBy);
+            } catch (\Exception $e) {
+                // Log but don't block match confirmation
+                \Illuminate\Support\Facades\Log::error('Auto-deal creation failed after manual match', [
+                    'payment_id' => $payment->id,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
         return $payment->fresh();
     }
 
@@ -107,7 +123,7 @@ class PaymentMatchingService
         return $this->runBatchMatch($query);
     }
 
-    private function runBatchMatch(Builder $query): array
+    private function runBatchMatch(\Illuminate\Database\Eloquent\Builder $query): array
     {
         $payments = $query->get();
         $results = ['matched' => 0, 'unmatched' => 0, 'low_confidence' => 0];
@@ -128,7 +144,8 @@ class PaymentMatchingService
 
     private function normalizePhone(?string $phone): ?string
     {
-        if (!$phone) return null;
+        if (!$phone)
+            return null;
         $phone = preg_replace('/[^\d+]/', '', $phone);
         $phone = ltrim($phone, '+');
         if (str_starts_with($phone, '0')) {
@@ -141,12 +158,80 @@ class PaymentMatchingService
     {
         if ($productId) {
             $product = Product::find($productId);
-            if ($product) return $product;
+            if ($product)
+                return $product;
         }
 
         return Product::where('monthly_price', $amount)
             ->orWhere('biweekly_price', $amount)
             ->orWhere('weekly_price', $amount)
             ->first();
+    }
+
+    /**
+     * Create and activate a deal from a completed, matched payment.
+     */
+    public function createDealFromPayment(Payment $payment, int $actorId): Deal
+    {
+        if ($payment->status !== 'completed') {
+            throw new \InvalidArgumentException('Payment must be completed to create a subscription.');
+        }
+        if (!$payment->client_id) {
+            throw new \InvalidArgumentException('Payment must be matched to a client first.');
+        }
+        if ($payment->deal_id) {
+            throw new \InvalidArgumentException('Payment is already linked to a subscription.');
+        }
+
+        $product = $payment->product_id ? Product::find($payment->product_id) : null;
+        if (!$product) {
+            $product = $this->matchProductByAmount((float) $payment->amount, null);
+        }
+
+        // Determine duration from product pricing tier match
+        $duration = 'monthly';
+        if ($product) {
+            $amount = (float) $payment->amount;
+            if ($product->weekly_price && abs($product->weekly_price - $amount) < 0.01) {
+                $duration = 'weekly';
+            } elseif ($product->biweekly_price && abs($product->biweekly_price - $amount) < 0.01) {
+                $duration = 'biweekly';
+            }
+        }
+
+        $durationDays = match ($duration) {
+            'weekly' => 7,
+            'biweekly' => 14,
+            'monthly' => 30,
+            default => 30,
+        };
+
+        $planType = 'basic';
+        if ($product) {
+            $nameLower = strtolower($product->name);
+            if (str_contains($nameLower, 'vip'))
+                $planType = 'vip';
+            elseif (str_contains($nameLower, 'premium'))
+                $planType = 'premium';
+        }
+
+        $deal = Deal::create([
+            'platform_id' => (int) $payment->platform_id,
+            'client_id' => (int) $payment->client_id,
+            'payment_id' => (int) $payment->id,
+            'product_id' => $product?->id,
+            'plan_type' => $planType,
+            'amount' => (float) $payment->amount,
+            'currency' => $payment->currency ?? 'KES',
+            'duration' => $duration,
+            'status' => 'active',
+            'activated_at' => now(),
+            'expires_at' => now()->addDays($durationDays),
+            'assigned_to' => $actorId,
+        ]);
+
+        $payment->update(['deal_id' => $deal->id]);
+
+        return $deal;
     }
 }

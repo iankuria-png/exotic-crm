@@ -76,6 +76,7 @@ export default function Payments() {
     });
     const [retryStkDialog, setRetryStkDialog] = useState({ open: false, payment: null, reason: 'Retry STK from payment queue' });
     const [sendLinkDialog, setSendLinkDialog] = useState({ open: false, payment: null, channel: 'sms', phone: '', reason: 'Send payment link from CRM' });
+    const [createSubDialog, setCreateSubDialog] = useState({ open: false, payment: null, reason: 'Create subscription from matched payment' });
 
     const { data, isLoading } = useQuery({
         queryKey: ['payments', page, search, statusFilter, matchFilter],
@@ -176,6 +177,19 @@ export default function Payments() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Send payment link failed.');
+        },
+    });
+
+    const createSubscriptionMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/create-subscription`, { reason: reason || undefined }).then((response) => response.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' });
+            toast.success(`Subscription created (Deal #${result.deal?.id}). Expires ${new Date(result.deal?.expires_at).toLocaleDateString()}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Create subscription failed.');
         },
     });
 
@@ -434,6 +448,17 @@ export default function Payments() {
                     >
                         Match manually
                     </button>
+                    {row.status === 'completed' && row.client_id && !row.deal_id && (
+                        <button
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
+                            }}
+                            className="rounded-md border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                        >
+                            Create Sub
+                        </button>
+                    )}
                 </div>
             ),
         },
@@ -458,7 +483,7 @@ export default function Payments() {
             <section className="grid gap-4 md:grid-cols-3">
                 <MetricCard label="Pending" value={summary.pending.toLocaleString()} meta="initiated" tone="warning" />
                 <MetricCard label="Confirmed" value={summary.confirmed.toLocaleString()} meta="completed" tone="success" />
-                <MetricCard label="Unmatched" value={summary.unmatched.toLocaleString()} meta="needs review" tone="danger" />
+                <MetricCard label="Unmatched" value={summary.unmatched.toLocaleString()} meta="completed, no client linked" tone="danger" />
             </section>
 
             <section className="crm-filter-row">
@@ -761,6 +786,36 @@ export default function Payments() {
                         />
                     </div>
                 </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={createSubDialog.open && !!createSubDialog.payment}
+                title="Create subscription"
+                message={createSubDialog.payment
+                    ? `Activate a subscription for payment #${createSubDialog.payment.id} (${formatCurrency(createSubDialog.payment.amount, createSubDialog.payment.currency || 'KES')}) matched to ${createSubDialog.payment.client?.name || 'client'}.`
+                    : ''}
+                confirmLabel="Create subscription"
+                onCancel={() => setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' })}
+                onConfirm={() => {
+                    if (createSubDialog.payment) {
+                        createSubscriptionMutation.mutate({
+                            paymentId: createSubDialog.payment.id,
+                            reason: createSubDialog.reason.trim() || undefined,
+                        });
+                    }
+                }}
+                confirmDisabled={createSubscriptionMutation.isPending}
+                isPending={createSubscriptionMutation.isPending}
+            >
+                <label htmlFor="create-sub-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason (optional)</label>
+                <textarea
+                    id="create-sub-reason"
+                    rows={2}
+                    value={createSubDialog.reason}
+                    onChange={(event) => setCreateSubDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                    placeholder="e.g. Create subscription from matched payment"
+                />
             </ConfirmDialog>
         </div>
     );

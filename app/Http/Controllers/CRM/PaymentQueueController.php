@@ -46,7 +46,7 @@ class PaymentQueueController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
-                  ->orWhere('transaction_reference', 'like', "%{$search}%");
+                    ->orWhere('transaction_reference', 'like', "%{$search}%");
             });
         }
 
@@ -206,7 +206,65 @@ class PaymentQueueController extends Controller
             (string) $validated['reason']
         );
 
-        return response()->json($payment);
+        $canCreateSubscription = $payment->status === 'completed'
+            && $payment->client_id
+            && !$payment->deal_id;
+
+        return response()->json([
+            'payment' => $payment,
+            'can_create_subscription' => $canCreateSubscription,
+        ]);
+    }
+
+    public function createSubscription(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if ($payment->status !== 'completed') {
+            return response()->json(['message' => 'Only completed payments can create subscriptions.'], 422);
+        }
+        if (!$payment->client_id) {
+            return response()->json(['message' => 'Payment must be matched to a client first.'], 422);
+        }
+        if ($payment->deal_id) {
+            return response()->json(['message' => 'Payment is already linked to a subscription.'], 422);
+        }
+
+        $service = new PaymentMatchingService();
+        $beforeState = [
+            'deal_id' => $payment->deal_id,
+            'client_id' => $payment->client_id,
+            'status' => $payment->status,
+        ];
+
+        $deal = $service->createDealFromPayment($payment, (int) $request->user()->id);
+        $payment->refresh();
+        $payment->load(['platform', 'product', 'client']);
+        $deal->load(['client', 'product', 'platform']);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_CREATE_SUBSCRIPTION,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'deal_id' => $deal->id,
+                'deal_status' => $deal->status,
+                'expires_at' => optional($deal->expires_at)->toDateTimeString(),
+            ],
+            $validated['reason'] ?? 'Subscription created from matched payment'
+        );
+
+        return response()->json([
+            'payment' => $payment,
+            'deal' => $deal,
+        ], 201);
     }
 
     public function batchMatch(Request $request)

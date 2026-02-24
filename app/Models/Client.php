@@ -10,17 +10,33 @@ class Client extends Model
     use HasFactory;
 
     protected $fillable = [
-        'platform_id', 'wp_post_id', 'wp_user_id', 'client_type',
-        'name', 'phone_normalized', 'email', 'city',
-        'profile_status', 'premium', 'premium_expire', 'featured',
-        'featured_expire', 'escort_expire', 'verified',
-        'main_image_url', 'assigned_to', 'last_synced_at',
+        'platform_id',
+        'wp_post_id',
+        'wp_user_id',
+        'client_type',
+        'name',
+        'phone_normalized',
+        'email',
+        'city',
+        'profile_status',
+        'premium',
+        'premium_expire',
+        'featured',
+        'featured_expire',
+        'escort_expire',
+        'verified',
+        'main_image_url',
+        'assigned_to',
+        'last_synced_at',
     ];
 
     protected $casts = [
         'premium' => 'boolean',
         'featured' => 'boolean',
         'verified' => 'boolean',
+        'premium_expire' => 'datetime',
+        'featured_expire' => 'datetime',
+        'escort_expire' => 'datetime',
         'last_synced_at' => 'datetime',
     ];
 

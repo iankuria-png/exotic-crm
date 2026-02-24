@@ -29,8 +29,10 @@ export default function Deals() {
     const [extendDays, setExtendDays] = useState('7');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
 
+    const [bucket, setBucket] = useState('all');
+
     const { data, isLoading } = useQuery({
-        queryKey: ['deals', page, search, statusFilter],
+        queryKey: ['deals', page, search, statusFilter, bucket],
         queryFn: () =>
             api.get('/crm/deals', {
                 params: {
@@ -38,6 +40,7 @@ export default function Deals() {
                     per_page: 25,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
+                    bucket,
                 },
             }).then((response) => response.data),
     });
@@ -143,24 +146,22 @@ export default function Deals() {
         setPage(1);
     };
 
-    const rows = data?.data || [];
+    const rows = data?.targets?.data || [];
     const summary = useMemo(() => {
-        if (data?.stats) {
+        if (data?.summary) {
             return {
-                active: Number(data.stats.active || 0),
-                pending: Number(data.stats.pending || 0),
-                monthRevenue: Number(data.stats.pipeline_value || 0),
+                active: Number(data.summary.active_deals || 0),
+                modernActive: Number(data.summary.modern_active_count || 0),
+                legacyActive: Number((data.summary.active_deals || 0) - (data.summary.modern_active_count || 0)),
+                pending: Number(data.summary.pending || 0),
+                risk: Number(data.summary.risk || 0),
+                monthRevenue: Number(data.summary.pipeline_value || 0),
+                verifiedRevenue: Number(data.summary.verified_revenue || 0),
             };
         }
 
-        const active = rows.filter((row) => row.status === 'active').length;
-        const pending = rows.filter((row) => row.status === 'pending').length;
-        const monthRevenue = rows
-            .filter((row) => ['active', 'paid', 'pending'].includes(row.status))
-            .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-
-        return { active, pending, monthRevenue };
-    }, [data?.stats, rows]);
+        return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, monthRevenue: 0, verifiedRevenue: 0 };
+    }, [data?.summary]);
 
     const openDialog = (type, deal, event) => {
         event.stopPropagation();
@@ -183,7 +184,14 @@ export default function Deals() {
             label: 'Client',
             render: (row) => (
                 <div>
-                    <p className="text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</p>
+                    <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</p>
+                        {row.origin_type === 'modern' ? (
+                            <span className="inline-flex items-center rounded-sm bg-blue-50 px-1 text-[10px] font-bold uppercase tracking-wider text-blue-600 ring-1 ring-inset ring-blue-600/20">Modern</span>
+                        ) : (
+                            <span className="inline-flex items-center rounded-sm bg-slate-50 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 ring-1 ring-inset ring-slate-600/10">Legacy</span>
+                        )}
+                    </div>
                     <p className="crm-mono text-xs text-slate-500">{row.client?.phone_normalized || ''}</p>
                 </div>
             ),
@@ -211,7 +219,19 @@ export default function Deals() {
         {
             key: 'status',
             label: 'Status',
-            render: (row) => <StatusBadge status={row.status} />,
+            render: (row) => (
+                <div className="flex flex-col items-start gap-1">
+                    <StatusBadge status={row.status} />
+                    {row.payment_status === 'verified' && (
+                        <span className="flex items-center gap-0.5 text-[10px] font-medium text-teal-600">
+                            <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                            </svg>
+                            Verified
+                        </span>
+                    )}
+                </div>
+            ),
         },
         {
             key: 'expires_at',
@@ -303,13 +323,14 @@ export default function Deals() {
         <div className="space-y-4">
             <PageHeader
                 title="Subscriptions"
-                subtitle={data?.total ? `${data.total.toLocaleString()} subscriptions in current market` : 'Subscription activation and lifecycle management'}
+                subtitle={data?.targets?.total ? `${summary.active.toLocaleString()} active records out of ${data.targets.total.toLocaleString()} total targets in scope` : 'Subscription activation and lifecycle management'}
             />
 
-            <section className="grid gap-4 md:grid-cols-3">
-                <MetricCard label="Active Subscriptions" value={summary.active.toLocaleString()} meta="full filtered dataset" tone="success" />
-                <MetricCard label="Pending Activation" value={summary.pending.toLocaleString()} meta="full filtered dataset" tone="warning" />
-                <MetricCard label="Pipeline Value" value={formatCurrency(summary.monthRevenue)} meta="full filtered dataset" tone="accent" />
+            <section className="grid gap-4 md:grid-cols-4">
+                <MetricCard label="Active Warehouse" value={`${summary.active.toLocaleString()} / ${data?.targets?.total?.toLocaleString() || 0}`} meta={`${summary.modernActive} Modern + ${summary.legacyActive} Legacy`} tone="success" />
+                <MetricCard label="Immediate Risk" value={summary.risk.toLocaleString()} meta="Expiries in next 72 hours" tone="warning" />
+                <MetricCard label="Renewal Pipeline" value={summary.pending.toLocaleString()} meta="Expiries in 4-14 days" tone="accent" />
+                <MetricCard label="Forecasted Revenue" value={formatCurrency(summary.monthRevenue)} meta="Verified + Pending Sum" tone="slate" />
             </section>
 
             <section className="crm-filter-row">
@@ -332,6 +353,22 @@ export default function Deals() {
                     </form>
 
                     <select
+                        value={bucket}
+                        onChange={(event) => {
+                            setBucket(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="all">Unified View (Non-Lapsed)</option>
+                        <option value="active">Active Only</option>
+                        <option value="risk">At Risk (0-3d)</option>
+                        <option value="pending">Upcoming (4-14d)</option>
+                        <option value="expired">Recently Expired</option>
+                        <option value="lapsed">Lapsed (Legacy)</option>
+                    </select>
+
+                    <select
                         value={statusFilter}
                         onChange={(event) => {
                             setStatusFilter(event.target.value);
@@ -339,7 +376,7 @@ export default function Deals() {
                         }}
                         className="crm-select"
                     >
-                        <option value="">All statuses</option>
+                        <option value="">Legacy Status Filter</option>
                         <option value="pending">Pending</option>
                         <option value="awaiting_payment">Awaiting payment</option>
                         <option value="paid">Paid</option>
@@ -367,8 +404,8 @@ export default function Deals() {
 
             <DataTable
                 columns={columns}
-                data={data?.data}
-                pagination={data}
+                data={data?.targets?.data}
+                pagination={data?.targets}
                 onPageChange={setPage}
                 onRowClick={(row) => row.client && navigate(`/clients/${row.client.id}`)}
                 isLoading={isLoading}

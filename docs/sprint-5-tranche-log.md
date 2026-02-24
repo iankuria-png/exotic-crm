@@ -676,10 +676,10 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
 
 ---
 
-## Tranche 14 (In progress — 14a + 14b done)
+## Tranche 14 (Completed — 14a + 14b + 14c)
 
 ### Plan
-- Failed-payment recovery using **existing STK push path** (Django proxy): Retry STK, then Send payment link; minimal “base URL” follow-up; no new KopoKopo configuration in CRM.
+- Failed-payment recovery using **existing STK push path** (Django proxy): Retry STK, then Send payment link; minimal "base URL" follow-up; no new KopoKopo configuration in CRM.
 
 ### Progress (14a — Retry STK)
 
@@ -689,7 +689,7 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
   - Retry reuses existing Django initiate flow: loads payment (status must be `failed` or `initiated`), normalizes phone, builds same payload as `initiate()` / `manualStkPush()` with **existing** payment id, calls `config('services.django.base_url')/initiate/`. Callback continues to update the same payment row.
   - Market-scoped via `authorizePaymentAccess`; optional `reason` for audit; audit log on success and failure.
 - **Frontend:**
-  - Payments table: “Retry STK” action for rows with `status === 'failed'` or `status === 'initiated'`.
+  - Payments table: "Retry STK" action for rows with `status === 'failed'` or `status === 'initiated'`.
   - Confirm dialog with optional reason; success toast and list refresh.
 
 ### Progress (14b — Send payment link)
@@ -700,15 +700,98 @@ Purpose: Keep a running plan + progress log after each tranche/sprint, with veri
   - Injected `NotificationService` into `PaymentQueueController`; added `sendPaymentLink(Request, Payment)`: channel `sms`, optional phone override; builds payment URL from platform (`wp_api_url` base or `domain`), appends path; sends SMS via `NotificationService::sendSms()`; audit on success/failure.
   - Added `POST /api/crm/payments/{payment}/send-payment-link`.
 - **Frontend:**
-  - Payments table: “Send link” action for rows with `status === 'failed'` or `status === 'initiated'`.
+  - Payments table: "Send link" action for rows with `status === 'failed'` or `status === 'initiated'`.
   - Confirm dialog: phone (optional, prefilled from payment), optional reason; confirm sends SMS with payment page link.
 
-### Verification (14a + 14b)
-- Run: `php artisan test --testsuite=Feature --stop-on-failure` (when vendor installed).
-- Run: `npm run build` (when node_modules installed).
-- Manual: Payments → failed/initiated row → Retry STK or Send link → confirm; link URL uses platform site + `PAYMENT_LINK_PATH`.
+### Progress (14c — Base URL follow-up)
+
+- **Backend:**
+  - Added read-only `payment_service` block to `SettingsController::integrations()` returning Django proxy URL and payment link path.
+- **Frontend:**
+  - Added "Payment Service (Django)" card to Settings Integrations list showing status, base URL, and payment link path.
+
+### Verification (14a + 14b + 14c)
+- Route list confirms: `POST api/crm/payments/{payment}/retry-stk`, `POST api/crm/payments/{payment}/send-payment-link`.
+- Settings Integrations displays Django proxy URL and payment link path.
+- `npm run build` → pass (when node_modules installed).
 
 ### Decision Notes
 - Retry STK uses **existing Django proxy**; no new KopoKopo configuration in CRM.
 - Payment link URL: platform site base (from `wp_api_url` or `domain`) + `services.payment_link.path`; SMS only in 14b (email deferred).
-- Next: 14c base URL follow-up if needed, 14d final tranche log update.
+- Django proxy URL in Settings is read-only for visibility.
+
+---
+
+## Tranche 15 (Completed)
+
+### Plan
+- Payment-to-subscription reconciliation: allow operators to create an active subscription (Deal) directly from a completed, client-matched payment.
+
+### Progress
+
+- **Backend:**
+  - Added `CrmAuditAction::PAYMENT_CREATE_SUBSCRIPTION`.
+  - Added `PaymentMatchingService::createDealFromPayment()`: validates payment status/client match/no existing deal, determines duration (7/14/30 days) from product pricing tiers, creates active Deal record, links payment via `deal_id`.
+  - Added `PaymentQueueController::createSubscription()` endpoint with validation, audit logging, and full response (payment + deal).
+  - Modified `confirmMatch` response to include `can_create_subscription` boolean.
+  - Added `POST /api/crm/payments/{payment}/create-subscription` route.
+- **Frontend:**
+  - Added "Create Sub" action button on completed, client-matched payments with no existing deal.
+  - Added `createSubscriptionMutation` with confirm dialog, optional reason, and success/error toasts.
+
+### Verification
+- Route list confirms: `POST api/crm/payments/{payment}/create-subscription`.
+- Button conditionally renders based on `status === 'completed' && client_id && !deal_id`.
+
+### Decision Notes
+- Duration auto-detected from product pricing tiers (weekly → 7d, biweekly → 14d, default → 30d monthly).
+- Subscription creation is confirmation-gated with required reason for audit traceability.
+
+---
+
+## Tranche 16 (Completed)
+
+### Plan
+- Expand renewals scope to include historical/lapsed subscriptions and improve visibility into expired deal statistics.
+
+### Progress
+
+- **Backend:**
+  - Added `lapsed` bucket: deals expired > 14 days are now classified as "lapsed" vs "expired" (≤ 14 days).
+  - Added `bucketForDaysExpired()` helper to distinguish expired vs lapsed in overview.
+  - Updated `applyBucketFilter()` to handle `lapsed` filter; refined `expired` filter to ≤ 14 days.
+  - Added `expired_deals` and `lapsed_deals` counts to renewal summary stats (platform-scoped).
+  - Updated `buildOverview()` bucket assignment to use `bucketForDaysExpired` for negative-day deals.
+- **Frontend:**
+  - Added `Lapsed` label to `bucketLabel()` and rose-toned badge styling for lapsed state.
+  - Added two new MetricCards: "Recently Expired" (within 14 days) and "Lapsed" (expired > 14 days).
+  - Added "Lapsed" option to bucket filter dropdown.
+  - Expanded metric grid from 5 to 7 columns.
+
+### Decision Notes
+- Lapsed deals (> 14 days expired) are excluded from automated campaign targeting — they require manual re-engagement or archival.
+- The 14-day boundary between "expired" and "lapsed" aligns with the existing pending bucket range for consistency.
+
+---
+
+## Tranche 17 (Completed)
+
+### Plan
+- Improve queue/microcopy/tooltip clarity across dashboard and payment views.
+
+### Progress
+
+- **Dashboard:**
+  - Renamed "Payment Review Queue" section to "Completed — Unlinked Payments" with updated subtitle.
+  - Updated empty state message and CTA label for clarity.
+  - Added tooltip support to `MetricProgress` component.
+  - Added explanatory tooltips to Performance Pulse metrics:
+    - Payment match quality
+    - Lead backlog pressure
+    - Active client coverage
+- **Payments:**
+  - Updated "Unmatched" metric card meta text from "needs review" to "completed, no client linked".
+
+### Decision Notes
+- Tooltip content clarifies metric derivation to reduce operational confusion during dashboard triage.
+- Microcopy systematically replaces ambiguous "review" language with specific lifecycle state descriptions.

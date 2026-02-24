@@ -44,16 +44,16 @@ class SettingsController extends Controller
 
         $platforms = $platformQuery->get();
         $platformStatuses = $platforms
-            ->map(fn (Platform $platform) => $this->serializePlatformIntegration($platform))
+            ->map(fn(Platform $platform) => $this->serializePlatformIntegration($platform))
             ->values();
 
         $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
         $activeProvider = (string) ($smsProvider['active_provider'] ?? 'legacy_gateway');
         $activeConfigured = match ($activeProvider) {
             'africastalking' => (bool) ($smsProvider['africastalking']['username'] ?? null)
-                && (bool) ($smsProvider['africastalking']['api_key_configured'] ?? false),
+            && (bool) ($smsProvider['africastalking']['api_key_configured'] ?? false),
             default => (bool) ($smsProvider['legacy_gateway']['gateway_url'] ?? null)
-                && (bool) ($smsProvider['legacy_gateway']['org_code'] ?? null),
+            && (bool) ($smsProvider['legacy_gateway']['org_code'] ?? null),
         };
         $smsStatus = $activeConfigured
             ? (($smsProvider['enabled'] ?? false) ? 'connected' : 'configured_disabled')
@@ -77,11 +77,11 @@ class SettingsController extends Controller
         }
 
         $scraperSources = $scraperSourcesQuery->get()
-            ->map(fn (ScraperSource $source) => $this->serializeScraperSource($source))
+            ->map(fn(ScraperSource $source) => $this->serializeScraperSource($source))
             ->values();
 
         $scraperRuns = $scraperRunsQuery->limit(15)->get()
-            ->map(fn (ScraperRun $run) => $this->serializeScraperRun($run))
+            ->map(fn(ScraperRun $run) => $this->serializeScraperRun($run))
             ->values();
 
         return response()->json([
@@ -100,6 +100,12 @@ class SettingsController extends Controller
                         : 'pending',
                     'base_url' => config('services.kopokopo.base_url'),
                     'till_number' => config('services.kopokopo.till_number'),
+                ],
+                'payment_service' => [
+                    'status' => config('services.django.base_url') ? 'connected' : 'pending',
+                    'base_url' => config('services.django.base_url'),
+                    'payment_link_path' => config('services.payment_link.path'),
+                    'note' => 'STK push (including retry) and payment initiation use this Django proxy URL.',
                 ],
                 'sendgrid' => [
                     'status' => 'deferred',
@@ -601,9 +607,14 @@ class SettingsController extends Controller
 
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
-            'source_url' => ['sometimes', 'url', 'max:500', Rule::unique('scraper_sources', 'source_url')->ignore($scraperSource->id)->where(function ($query) use ($scraperSource) {
-                return $query->where('platform_id', (int) $scraperSource->platform_id);
-            })],
+            'source_url' => [
+                'sometimes',
+                'url',
+                'max:500',
+                Rule::unique('scraper_sources', 'source_url')->ignore($scraperSource->id)->where(function ($query) use ($scraperSource) {
+                    return $query->where('platform_id', (int) $scraperSource->platform_id);
+                })
+            ],
             'parser_profile' => ['sometimes', Rule::in(ScraperSourceService::PARSER_PROFILES)],
             'fetch_schedule' => ['sometimes', Rule::in(ScraperSourceService::FETCH_SCHEDULES)],
             'dedupe_mode' => ['sometimes', Rule::in(ScraperSourceService::DEDUPE_MODES)],
@@ -776,11 +787,13 @@ class SettingsController extends Controller
                 $accessibleIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($owner);
 
                 if ($accessibleIds === null) {
-                    $assignedMarkets = [[
-                        'id' => null,
-                        'name' => 'All markets',
-                        'country' => 'Global',
-                    ]];
+                    $assignedMarkets = [
+                        [
+                            'id' => null,
+                            'name' => 'All markets',
+                            'country' => 'Global',
+                        ]
+                    ];
                 } else {
                     $assignedMarkets = collect($accessibleIds)
                         ->map(function ($marketId) use ($platformMap) {
@@ -962,7 +975,7 @@ class SettingsController extends Controller
                 $assignedMarketIds = $this->decodeMarketIds($user->assigned_market_ids);
 
                 if (empty($assignedMarketIds) && $user->relationLoaded('platforms')) {
-                    $assignedMarketIds = $user->platforms->pluck('id')->map(fn ($id) => (int) $id)->all();
+                    $assignedMarketIds = $user->platforms->pluck('id')->map(fn($id) => (int) $id)->all();
                 }
 
                 $marketDetails = collect($assignedMarketIds)
@@ -1002,7 +1015,7 @@ class SettingsController extends Controller
         return response()->json([
             'summary' => $summary,
             'users' => $users,
-            'available_markets' => $platformMap->values()->map(fn (Platform $platform) => [
+            'available_markets' => $platformMap->values()->map(fn(Platform $platform) => [
                 'id' => (int) $platform->id,
                 'name' => $platform->name,
                 'country' => $platform->country,
@@ -1024,8 +1037,8 @@ class SettingsController extends Controller
         ]);
 
         $assignedMarketIds = collect($validated['assigned_market_ids'] ?? [])
-            ->map(fn ($id) => (int) $id)
-            ->filter(fn ($id) => $id > 0)
+            ->map(fn($id) => (int) $id)
+            ->filter(fn($id) => $id > 0)
             ->unique()
             ->values()
             ->all();
@@ -1069,7 +1082,7 @@ class SettingsController extends Controller
         $user->load('platforms:id,name,country');
 
         $assignedMarkets = $user->platforms
-            ->map(fn (Platform $platform) => [
+            ->map(fn(Platform $platform) => [
                 'id' => (int) $platform->id,
                 'name' => $platform->name,
                 'country' => $platform->country,
@@ -1098,8 +1111,8 @@ class SettingsController extends Controller
         ]);
 
         $assignedMarketIds = collect($validated['assigned_market_ids'] ?? [])
-            ->map(fn ($id) => (int) $id)
-            ->filter(fn ($id) => $id > 0)
+            ->map(fn($id) => (int) $id)
+            ->filter(fn($id) => $id > 0)
             ->unique()
             ->values()
             ->all();
@@ -1142,7 +1155,7 @@ class SettingsController extends Controller
         $user->load('platforms:id,name,country');
 
         $assignedMarkets = $user->platforms
-            ->map(fn (Platform $platform) => [
+            ->map(fn(Platform $platform) => [
                 'id' => (int) $platform->id,
                 'name' => $platform->name,
                 'country' => $platform->country,

@@ -20,6 +20,7 @@ function bucketLabel(bucket) {
     if (bucket === 'pending') return 'Pending';
     if (bucket === 'stable') return 'Stable';
     if (bucket === 'expired') return 'Expired';
+    if (bucket === 'lapsed') return 'Lapsed';
     if (bucket === 'paused') return 'Paused';
     return 'Unknown';
 }
@@ -31,9 +32,12 @@ export default function Renewals() {
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [bucketFilter, setBucketFilter] = useState('');
+    const [activeDeal, setActiveDeal] = useState(null);
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [feedback, setFeedback] = useState(null);
-    const [activeDeal, setActiveDeal] = useState(null);
+    const [perPage, setPerPage] = useState(50);
+    const [isGlobalSelected, setIsGlobalSelected] = useState(false);
+    const [selectedRows, setSelectedRows] = useState([]);
     const [renewDialog, setRenewDialog] = useState({
         open: false,
         deal: null,
@@ -53,12 +57,12 @@ export default function Renewals() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['renewals-overview', page, search, bucketFilter],
+        queryKey: ['renewals-overview', page, search, bucketFilter, perPage],
         queryFn: () =>
             api.get('/crm/renewals', {
                 params: {
                     page,
-                    per_page: 50,
+                    per_page: perPage,
                     ...(search ? { search } : {}),
                     ...(bucketFilter ? { bucket: bucketFilter } : {}),
                 },
@@ -84,9 +88,11 @@ export default function Renewals() {
     });
 
     const remindMutation = useMutation({
-        mutationFn: ({ dealId }) =>
+        mutationFn: ({ dealId, clientId, templateId }) =>
             api.post('/crm/renewals/remind', {
                 deal_id: dealId,
+                client_id: clientId,
+                template_id: templateId,
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
@@ -122,9 +128,10 @@ export default function Renewals() {
     });
 
     const pauseRemindersMutation = useMutation({
-        mutationFn: ({ dealId, pauseUntil, reason }) =>
+        mutationFn: ({ dealId, clientId, pauseUntil, reason }) =>
             api.post('/crm/renewals/pause', {
                 deal_id: dealId,
+                client_id: clientId,
                 pause_until: pauseUntil || null,
                 reason,
             }).then((response) => response.data),
@@ -176,27 +183,34 @@ export default function Renewals() {
     });
 
     const bulkRemindMutation = useMutation({
-        mutationFn: async (rowsSelection) => {
-            const results = await Promise.allSettled(
-                rowsSelection.map((row) =>
-                    api.post('/crm/renewals/remind', {
-                        deal_id: row.id,
-                    }),
-                ),
-            );
-
-            const success = results.filter((result) => result.status === 'fulfilled').length;
-            const failed = results.length - success;
-            return { total: rowsSelection.length, success, failed };
+        mutationFn: async ({ selection, selectAll }) => {
+            const response = await api.post('/crm/renewals/bulk-remind', {
+                selection: selectAll ? [] : selection.map(row => ({
+                    deal_id: row.id,
+                    client_id: row.client_id,
+                    expires_at: row.expires_at
+                })),
+                select_all: selectAll,
+                search,
+                bucket: bucketFilter
+            });
+            return response.data;
         },
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
             setClearSelectionKey((value) => value + 1);
+            setIsGlobalSelected(false);
             setFeedback({
                 tone: result.failed > 0 ? 'warning' : 'success',
-                text: `Reminder batch sent: ${result.success}/${result.total}${result.failed ? ` (${result.failed} failed)` : ''}.`,
+                text: `Reminder batch complete: ${result.success}/${result.total}${result.failed ? ` (${result.failed} failed)` : ''}.`,
             });
         },
+        onError: (error) => {
+            setFeedback({
+                tone: 'warning',
+                text: error?.response?.data?.message || 'Bulk reminder failed.',
+            });
+        }
     });
 
     const handleSearch = (event) => {
@@ -207,11 +221,16 @@ export default function Renewals() {
 
     const rows = data?.targets?.data || [];
     const activeDealRow = useMemo(() => {
-        if (!activeDeal?.id) {
+        if (!activeDeal) {
             return null;
         }
 
-        return rows.find((row) => Number(row.id) === Number(activeDeal.id)) || activeDeal;
+        return rows.find((row) => {
+            if (row.is_virtual && activeDeal.is_virtual) {
+                return Number(row.client_id) === Number(activeDeal.client_id);
+            }
+            return Number(row.id) === Number(activeDeal.id);
+        }) || activeDeal;
     }, [activeDeal, rows]);
 
     const summary = {
@@ -219,6 +238,8 @@ export default function Renewals() {
         pending: data?.summary?.pending ?? 0,
         renewedThisMonth: data?.summary?.renewed_this_month ?? 0,
         paused: data?.summary?.paused_reminders ?? 0,
+        expired: data?.summary?.expired_deals ?? 0,
+        lapsed: data?.summary?.lapsed_deals ?? 0,
     };
 
     const activeCampaigns = useMemo(
@@ -233,9 +254,16 @@ export default function Renewals() {
             key: 'client',
             label: 'Client',
             render: (row) => (
-                <div>
-                    <p className="text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown client'}</p>
-                    <p className="crm-mono text-xs text-slate-500">{row.client?.phone_normalized || 'No phone'}</p>
+                <div className="flex flex-col">
+                    <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</span>
+                        {row.is_virtual && (
+                            <span className="inline-flex items-center rounded-sm bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+                                Legacy Record
+                            </span>
+                        )}
+                    </div>
+                    <span className="crm-mono text-xs text-slate-500">{row.client?.phone_normalized || ''}</span>
                 </div>
             ),
         },
@@ -270,17 +298,18 @@ export default function Renewals() {
             key: 'renewal_bucket',
             label: 'Renewal State',
             render: (row) => (
-                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
-                    row.renewal_bucket === 'paused'
-                        ? 'bg-slate-100 text-slate-700 ring-slate-300'
-                        : row.renewal_bucket === 'risk'
+                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${row.renewal_bucket === 'paused'
+                    ? 'bg-slate-100 text-slate-700 ring-slate-300'
+                    : row.renewal_bucket === 'risk'
                         ? 'bg-rose-50 text-rose-700 ring-rose-200'
                         : row.renewal_bucket === 'pending'
                             ? 'bg-amber-50 text-amber-700 ring-amber-200'
                             : row.renewal_bucket === 'expired'
                                 ? 'bg-slate-200 text-slate-700 ring-slate-300'
-                                : 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-                }`}>
+                                : row.renewal_bucket === 'lapsed'
+                                    ? 'bg-rose-100 text-rose-800 ring-rose-300'
+                                    : 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                    }`}>
                     {bucketLabel(row.renewal_bucket)}
                 </span>
             ),
@@ -312,10 +341,12 @@ export default function Renewals() {
             render: (row) => (
                 <div className="flex items-center gap-1.5">
                     <button
-                        type="button"
                         onClick={(event) => {
                             event.stopPropagation();
-                            remindMutation.mutate({ dealId: row.id }, {
+                            remindMutation.mutate({
+                                dealId: row.is_virtual ? null : row.id,
+                                clientId: row.client_id,
+                            }, {
                                 onSuccess: () => setFeedback({ tone: 'success', text: `Reminder sent for ${row.client?.name || 'client'}.` }),
                                 onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${row.client?.name || 'client'}.` }),
                             });
@@ -323,7 +354,7 @@ export default function Renewals() {
                         disabled={remindMutation.isPending || row.reminders_paused}
                         className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {row.reminders_paused ? 'Paused' : 'Remind'}
+                        {row.reminders_paused ? 'Paused' : (remindMutation.isPending ? '...' : 'Remind')}
                     </button>
                     <button
                         type="button"
@@ -331,7 +362,7 @@ export default function Renewals() {
                             event.stopPropagation();
                             setActiveDeal(row);
                         }}
-                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                        className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800"
                     >
                         Manage
                     </button>
@@ -343,11 +374,14 @@ export default function Renewals() {
     const bulkActions = [
         {
             key: 'bulk-remind',
-            label: 'Send reminder',
+            label: isGlobalSelected ? `Send reminders to all ${data?.targets?.total || ''} matches` : 'Send reminder',
             loadingLabel: 'Sending...',
             variant: 'primary',
             onClick: async (rowsSelection) => {
-                await bulkRemindMutation.mutateAsync(rowsSelection);
+                await bulkRemindMutation.mutateAsync({
+                    selection: rowsSelection,
+                    selectAll: isGlobalSelected
+                });
             },
         },
     ];
@@ -369,12 +403,14 @@ export default function Renewals() {
                 )}
             />
 
-            <section className="grid gap-4 md:grid-cols-5">
+            <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-7">
                 <MetricCard label="At Risk (0-3 days)" value={summary.risk.toLocaleString()} meta="urgent outreach" tone="danger" />
                 <MetricCard label="Pending (4-14 days)" value={summary.pending.toLocaleString()} meta="scheduled reminders" tone="warning" />
                 <MetricCard label="Renewed This Month" value={summary.renewedThisMonth.toLocaleString()} meta="already extended" tone="success" />
                 <MetricCard label="Paused Reminders" value={summary.paused.toLocaleString()} meta="manual hold state" tone="warning" />
                 <MetricCard label="Active Campaigns" value={activeCampaigns.toLocaleString()} meta="enabled automation rules" tone="accent" />
+                <MetricCard label="Recently Expired" value={summary.expired.toLocaleString()} meta="within 14 days" tone="danger" />
+                <MetricCard label="Lapsed" value={summary.lapsed.toLocaleString()} meta="expired > 14 days" tone="neutral" />
             </section>
 
             {lastRun ? (
@@ -420,8 +456,25 @@ export default function Renewals() {
                         <option value="pending">Pending</option>
                         <option value="stable">Stable</option>
                         <option value="expired">Expired</option>
+                        <option value="lapsed">Lapsed</option>
                         <option value="paused">Paused</option>
                     </select>
+
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-slate-500">Per page:</span>
+                        <select
+                            value={perPage}
+                            onChange={(e) => {
+                                setPerPage(Number(e.target.value));
+                                setPage(1);
+                            }}
+                            className="crm-select py-1 text-xs"
+                        >
+                            {[25, 50, 100, 250, 500].map(n => (
+                                <option key={n} value={n}>{n}</option>
+                            ))}
+                        </select>
+                    </div>
 
                     {(search || bucketFilter) ? (
                         <button
@@ -446,6 +499,34 @@ export default function Renewals() {
                 ) : null}
             </section>
 
+            {selectedRows.length === (data?.targets?.data?.length || 0) && data?.targets?.total > selectedRows.length && !isGlobalSelected ? (
+                <div className="rounded-lg border border-teal-100 bg-teal-50/50 p-3 text-center">
+                    <p className="text-sm text-teal-800 font-medium">
+                        All {selectedRows.length} visible records are selected.{' '}
+                        <button
+                            type="button"
+                            onClick={() => setIsGlobalSelected(true)}
+                            className="text-teal-700 underline hover:text-teal-900 ml-1"
+                        >
+                            Select all {data.targets.total.toLocaleString()} records matching these filters
+                        </button>
+                    </p>
+                </div>
+            ) : isGlobalSelected ? (
+                <div className="rounded-lg border border-teal-200 bg-teal-100/50 p-3 text-center">
+                    <p className="text-sm text-teal-900 font-medium">
+                        All {data?.targets?.total?.toLocaleString()} records matching current filters are selected.{' '}
+                        <button
+                            type="button"
+                            onClick={() => setIsGlobalSelected(false)}
+                            className="text-teal-700 underline hover:text-teal-900 ml-1"
+                        >
+                            Clear global selection
+                        </button>
+                    </p>
+                </div>
+            ) : null}
+
             <DataTable
                 columns={columns}
                 data={rows}
@@ -457,6 +538,7 @@ export default function Renewals() {
                 compact
                 selectable
                 bulkActions={bulkActions}
+                onSelectionChange={setSelectedRows}
                 clearSelectionKey={clearSelectionKey}
             />
 
@@ -503,7 +585,10 @@ export default function Renewals() {
                                     <button
                                         type="button"
                                         onClick={() => {
-                                            remindMutation.mutate({ dealId: activeDealRow.id }, {
+                                            remindMutation.mutate({
+                                                dealId: activeDealRow.is_virtual ? null : activeDealRow.id,
+                                                clientId: activeDealRow.client_id,
+                                            }, {
                                                 onSuccess: () => setFeedback({ tone: 'success', text: `Reminder sent for ${activeDealRow.client?.name || 'client'}.` }),
                                                 onError: () => setFeedback({ tone: 'warning', text: `Reminder failed for ${activeDealRow.client?.name || 'client'}.` }),
                                             });
@@ -511,17 +596,23 @@ export default function Renewals() {
                                         disabled={activeDealRow.reminders_paused || remindMutation.isPending}
                                         className="crm-btn-secondary text-xs"
                                     >
-                                        {activeDealRow.reminders_paused ? 'Reminders paused' : 'Send reminder'}
+                                        {activeDealRow.reminders_paused ? 'Reminders paused' : (remindMutation.isPending ? 'Sending...' : 'Send reminder')}
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={() => setRenewDialog({
-                                            open: true,
-                                            deal: activeDealRow,
-                                            days: '30',
-                                            reason: 'Manual renewal from renewals workspace',
-                                        })}
-                                        className="crm-btn-primary text-xs"
+                                        onClick={() => {
+                                            if (activeDealRow.is_virtual) {
+                                                setFeedback({ tone: 'warning', text: 'Please create a subscription for this client first to use manual extension.' });
+                                                return;
+                                            }
+                                            setRenewDialog({
+                                                open: true,
+                                                deal: activeDealRow,
+                                                days: '30',
+                                                reason: 'Manual renewal from renewals workspace',
+                                            });
+                                        }}
+                                        className={`crm-btn-primary text-xs ${activeDealRow.is_virtual ? 'opacity-50 grayscale' : ''}`}
                                     >
                                         Manual renew
                                     </button>

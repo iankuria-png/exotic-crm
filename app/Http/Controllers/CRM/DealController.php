@@ -21,7 +21,8 @@ class DealController extends Controller
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly \App\Services\RenewalService $renewalService
     ) {
     }
 
@@ -33,46 +34,21 @@ class DealController extends Controller
             'You do not have access to this deal market.'
         );
 
-        $query = Deal::with(['client', 'product', 'platform', 'assignedAgent']);
-        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-
+        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
         if ($request->filled('platform_id')) {
-            $query->where('platform_id', $request->platform_id);
+            $platformIds = [(int) $request->platform_id];
         }
 
-        if ($request->filled('client_id')) {
-            $query->where('client_id', $request->client_id);
-        }
-
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->whereHas('client', function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('phone_normalized', 'like', "%{$search}%");
-            });
-        }
-
-        $statsQuery = clone $query;
-        $stats = [
-            'total' => (clone $statsQuery)->count(),
-            'active' => (clone $statsQuery)->where('status', 'active')->count(),
-            'pending' => (clone $statsQuery)->where('status', 'pending')->count(),
-            'awaiting_payment' => (clone $statsQuery)->where('status', 'awaiting_payment')->count(),
-            'cancelled' => (clone $statsQuery)->where('status', 'cancelled')->count(),
-            'pipeline_value' => (float) (clone $statsQuery)
-                ->whereIn('status', ['pending', 'awaiting_payment', 'paid', 'active'])
-                ->sum('amount'),
-        ];
-
-        $deals = $query->orderBy('created_at', 'desc')
-            ->paginate($request->get('per_page', 25));
-
-        $payload = $deals->toArray();
-        $payload['stats'] = $stats;
+        // Pass relevant filters to match Renewals engine
+        $payload = $this->renewalService->buildOverview(
+            [
+                'search' => $request->get('search', ''),
+                'bucket' => $request->get('bucket', 'all'),
+                'platform_ids' => $platformIds,
+            ],
+            (int) $request->get('per_page', 25),
+            $request->user()
+        );
 
         return response()->json($payload);
     }
