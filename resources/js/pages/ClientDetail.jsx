@@ -18,6 +18,29 @@ function formatDateTime(value) {
     return date.toLocaleString();
 }
 
+function formatRelativeFromUnix(unixTs) {
+    const ts = Number(unixTs || 0);
+    if (!ts) return '—';
+
+    const diffSeconds = Math.floor(Date.now() / 1000) - ts;
+    if (diffSeconds < 60) return 'just now';
+
+    const minutes = Math.floor(diffSeconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days}d ago`;
+
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months}mo ago`;
+
+    const years = Math.floor(months / 12);
+    return `${years}y ago`;
+}
+
 function ProfileInfoCard({ title, children }) {
     return (
         <section className="crm-surface p-5">
@@ -42,13 +65,25 @@ export default function ClientDetail() {
     const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const toast = useToast();
-    const tabs = useMemo(() => ['overview', 'deals', 'notes', 'timeline', 'payments'], []);
+    const tabs = useMemo(() => ['overview', 'deals', 'notes', 'timeline', 'payments', 'edit_profile', 'profile_health'], []);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
     const initialTab = tabs.includes(requestedTab) ? requestedTab : 'overview';
     const [activeTab, setActiveTab] = useState(initialTab);
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
     const [showSyncConfirm, setShowSyncConfirm] = useState(false);
+    const [profileSection, setProfileSection] = useState('personal');
+    const [profileForm, setProfileForm] = useState(null);
+    const [profileReason, setProfileReason] = useState('Profile edited from CRM');
+    const [profileForce, setProfileForce] = useState(false);
+    const [profileConflict, setProfileConflict] = useState(null);
+    const [mediaUploadFile, setMediaUploadFile] = useState(null);
+    const [mediaUploadSetMain, setMediaUploadSetMain] = useState(false);
+    const [healthAction, setHealthAction] = useState('keep_primary');
+    const [healthReason, setHealthReason] = useState('Duplicate resolution from CRM');
+    const [selectedDuplicateIds, setSelectedDuplicateIds] = useState([]);
+    const [updatePhoneTargetId, setUpdatePhoneTargetId] = useState('');
+    const [updatePhoneValue, setUpdatePhoneValue] = useState('');
 
     const { data: client, isLoading } = useQuery({
         queryKey: ['client', id],
@@ -64,6 +99,24 @@ export default function ClientDetail() {
     const { data: products } = useQuery({
         queryKey: ['products'],
         queryFn: () => api.get('/crm/products').then((r) => r.data),
+    });
+
+    const { data: wpProfileData } = useQuery({
+        queryKey: ['client-wp-profile', id],
+        queryFn: () => api.get(`/crm/clients/${id}/wp-profile`).then((r) => r.data),
+        enabled: activeTab === 'edit_profile' && Number(client?.wp_post_id || 0) > 0,
+    });
+
+    const { data: mediaData, isLoading: mediaLoading } = useQuery({
+        queryKey: ['client-media', id],
+        queryFn: () => api.get(`/crm/clients/${id}/media`).then((r) => r.data),
+        enabled: activeTab === 'edit_profile' && profileSection === 'media' && Number(client?.wp_post_id || 0) > 0,
+    });
+
+    const { data: healthData, isLoading: healthLoading } = useQuery({
+        queryKey: ['client-health', id],
+        queryFn: () => api.get(`/crm/clients/${id}/health`).then((r) => r.data),
+        enabled: activeTab === 'profile_health',
     });
 
     const addNoteMutation = useMutation({
@@ -101,7 +154,10 @@ export default function ClientDetail() {
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`, { reason: 'Activated from client profile' }).then((r) => r.data),
+        mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`, {
+            reason: 'Activated from client profile',
+            free_trial: true,
+        }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
@@ -116,6 +172,8 @@ export default function ClientDetail() {
         mutationFn: () => api.post(`/crm/clients/${id}/sync`).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-wp-profile', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-media', id] });
             toast.success('Client profile synced from WordPress.');
             setShowSyncConfirm(false);
         },
@@ -125,13 +183,108 @@ export default function ClientDetail() {
         },
     });
 
+    const updateProfileMutation = useMutation({
+        mutationFn: ({ fields, force }) =>
+            api.patch(`/crm/clients/${id}/wp-profile`, {
+                fields,
+                force,
+                reason: profileReason,
+            }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-wp-profile', id] });
+            setProfileConflict(null);
+            setProfileForce(false);
+            toast.success('Profile synced to WordPress successfully.');
+        },
+        onError: (error) => {
+            if (error?.response?.status === 409) {
+                setProfileConflict(error.response.data?.conflict || null);
+                toast.warning('WordPress profile changed since last sync. Review conflict and force save if needed.');
+                return;
+            }
+            toast.error(error?.response?.data?.message || 'Profile update failed.');
+        },
+    });
+
+    const uploadMediaMutation = useMutation({
+        mutationFn: ({ file, setMain }) => {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('set_main', setMain ? '1' : '0');
+            formData.append('reason', 'Uploaded media from client detail');
+            return api.post(`/crm/clients/${id}/media`, formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            }).then((response) => response.data);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            setMediaUploadFile(null);
+            setMediaUploadSetMain(false);
+            toast.success('Image uploaded to WordPress.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Media upload failed.');
+        },
+    });
+
+    const deleteMediaMutation = useMutation({
+        mutationFn: (attachmentId) =>
+            api.delete(`/crm/clients/${id}/media/${attachmentId}`, {
+                data: { reason: 'Deleted media from client detail' },
+            }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            toast.success('Image deleted from WordPress.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Media delete failed.');
+        },
+    });
+
+    const setMainMediaMutation = useMutation({
+        mutationFn: (attachmentId) =>
+            api.patch(`/crm/clients/${id}/media/${attachmentId}/set-main`, {
+                reason: 'Set main image from client detail',
+            }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            toast.success('Main image updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Setting main image failed.');
+        },
+    });
+
+    const resolveHealthMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/clients/${id}/health/resolve`, payload).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-health', id] });
+            setSelectedDuplicateIds([]);
+            setUpdatePhoneTargetId('');
+            setUpdatePhoneValue('');
+            toast.success('Profile health resolution applied.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Profile health resolution failed.');
+        },
+    });
+
     const tabLinks = useMemo(() => [
         { key: 'overview', label: 'Overview' },
         { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
         { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
         { key: 'timeline', label: 'Timeline' },
         { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
-    ], [client]);
+        { key: 'edit_profile', label: 'Edit Profile' },
+        { key: 'profile_health', label: `Profile Health (${healthData?.summary?.duplicate_count || 0})` },
+    ], [client, healthData?.summary?.duplicate_count]);
 
     useEffect(() => {
         const nextTab = tabs.includes(requestedTab) ? requestedTab : 'overview';
@@ -139,6 +292,37 @@ export default function ClientDetail() {
             setActiveTab(nextTab);
         }
     }, [activeTab, requestedTab, tabs]);
+
+    useEffect(() => {
+        if (!wpProfileData?.wp_profile) {
+            return;
+        }
+
+        const profile = wpProfileData.wp_profile;
+        const meta = profile.meta || {};
+        const cityName = profile?.taxonomies?.city?.name || profile.city || '';
+
+        setProfileForm({
+            name: profile.name || profile?.post?.title || '',
+            phone: meta.phone || profile.phone || client?.phone_normalized || '',
+            email: profile.email || client?.email || '',
+            city: cityName || client?.city || '',
+            birthday: meta.birthday || '',
+            gender: meta.gender || '',
+            ethnicity: meta.ethnicity || '',
+            height: meta.height || '',
+            build: meta.build || meta.body_type || '',
+            services: Array.isArray(meta.services) ? meta.services.join(', ') : (meta.services || ''),
+            rates_incall: meta.incall || meta.rate_incall || '',
+            rates_outcall: meta.outcall || meta.rate_outcall || '',
+            whatsapp: meta.whatsapp || meta.whatsapp_number || '',
+            instagram: meta.instagram || meta.instagram_url || '',
+            twitter: meta.twitter || meta.twitter_url || '',
+            telegram: meta.telegram || '',
+            website: meta.website || meta.website_url || '',
+            bio: profile?.post?.content || meta.bio || '',
+        });
+    }, [wpProfileData?.wp_profile, client?.city, client?.email, client?.phone_normalized]);
 
     if (isLoading) {
         return (
@@ -155,6 +339,75 @@ export default function ClientDetail() {
     const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
 
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
+    const mediaItems = mediaData?.data || [];
+    const healthDuplicates = healthData?.duplicates || [];
+
+    const profileSections = [
+        { key: 'personal', label: 'Personal Info' },
+        { key: 'services', label: 'Services & Rates' },
+        { key: 'contact', label: 'Social & Contact' },
+        { key: 'subscription', label: 'Subscription & Status' },
+        { key: 'media', label: 'Media' },
+    ];
+
+    const submitProfileUpdate = () => {
+        if (!profileForm) {
+            return;
+        }
+
+        const fields = {
+            name: profileForm.name?.trim() || '',
+            phone: profileForm.phone?.trim() || null,
+            email: profileForm.email?.trim() || null,
+            city: profileForm.city?.trim() || null,
+            birthday: profileForm.birthday?.trim() || null,
+            gender: profileForm.gender?.trim() || null,
+            ethnicity: profileForm.ethnicity?.trim() || null,
+            height: profileForm.height?.trim() || null,
+            build: profileForm.build?.trim() || null,
+            services: profileForm.services?.trim() || null,
+            incall: profileForm.rates_incall?.trim() || null,
+            outcall: profileForm.rates_outcall?.trim() || null,
+            whatsapp: profileForm.whatsapp?.trim() || null,
+            instagram: profileForm.instagram?.trim() || null,
+            twitter: profileForm.twitter?.trim() || null,
+            telegram: profileForm.telegram?.trim() || null,
+            website: profileForm.website?.trim() || null,
+            content: profileForm.bio || '',
+        };
+
+        updateProfileMutation.mutate({ fields, force: profileForce });
+    };
+
+    const applyHealthResolution = () => {
+        if (!healthReason.trim()) {
+            return;
+        }
+
+        if (healthAction === 'update_phone') {
+            if (!updatePhoneTargetId || !updatePhoneValue.trim()) {
+                return;
+            }
+
+            resolveHealthMutation.mutate({
+                action: 'update_phone',
+                duplicate_id: Number(updatePhoneTargetId),
+                new_phone_normalized: updatePhoneValue.trim(),
+                reason: healthReason.trim(),
+            });
+            return;
+        }
+
+        if (!selectedDuplicateIds.length) {
+            return;
+        }
+
+        resolveHealthMutation.mutate({
+            action: healthAction,
+            duplicate_ids: selectedDuplicateIds.map((duplicateId) => Number(duplicateId)),
+            reason: healthReason.trim(),
+        });
+    };
 
     return (
         <div className="space-y-4">
@@ -240,6 +493,15 @@ export default function ClientDetail() {
                                     Open profile
                                 </a>
                             ) : 'Not available'}
+                        />
+                        <DefinitionRow
+                            label="Last Online"
+                            value={client.last_online_at ? (
+                                <span>
+                                    {new Date(client.last_online_at * 1000).toLocaleString()}
+                                    <span className="ml-1 text-xs text-slate-500">({formatRelativeFromUnix(client.last_online_at)})</span>
+                                </span>
+                            ) : '—'}
                         />
                         <DefinitionRow label="Last Synced" value={formatDateTime(client.last_synced_at)} />
                     </dl>
@@ -433,6 +695,341 @@ export default function ClientDetail() {
                         <section className="crm-surface p-8 text-center text-sm text-slate-500">No payments recorded.</section>
                     )}
                 </div>
+            ) : null}
+
+            {activeTab === 'edit_profile' ? (
+                <section className="crm-surface p-4">
+                    {!canSyncFromWp ? (
+                        <p className="text-sm text-slate-500">This is a CRM-only client record and does not support WordPress profile editing.</p>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="flex flex-wrap items-center gap-2">
+                                {profileSections.map((section) => (
+                                    <button
+                                        key={section.key}
+                                        type="button"
+                                        onClick={() => setProfileSection(section.key)}
+                                        className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                                            profileSection === section.key
+                                                ? 'bg-teal-700 text-white'
+                                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                        }`}
+                                    >
+                                        {section.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {profileConflict ? (
+                                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                                    <p className="font-semibold">WordPress has newer changes than CRM cache.</p>
+                                    <p className="mt-1">WP modified: {formatDateTime(profileConflict.wp_modified_at)} • CRM synced: {formatDateTime(profileConflict.crm_last_synced_at)}</p>
+                                    <div className="mt-2 space-y-1">
+                                        {Object.entries(profileConflict.diff || {}).map(([field, values]) => (
+                                            <p key={field}>
+                                                <span className="font-semibold">{field}:</span> CRM "{String(values.crm_value ?? '')}" vs WP "{String(values.wp_value ?? '')}"
+                                            </p>
+                                        ))}
+                                    </div>
+                                    <label className="mt-2 flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={profileForce}
+                                            onChange={(event) => setProfileForce(event.target.checked)}
+                                            className="h-4 w-4 rounded border-amber-300 text-amber-700 focus:ring-amber-200"
+                                        />
+                                        Force overwrite WordPress values
+                                    </label>
+                                </div>
+                            ) : null}
+
+                            {profileSection === 'personal' ? (
+                                <div className="grid gap-3 md:grid-cols-2">
+                                    <input value={profileForm?.name || ''} onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))} className="crm-input" placeholder="Display name" />
+                                    <input value={profileForm?.birthday || ''} onChange={(event) => setProfileForm((current) => ({ ...current, birthday: event.target.value }))} className="crm-input" placeholder="Birthday" />
+                                    <input value={profileForm?.gender || ''} onChange={(event) => setProfileForm((current) => ({ ...current, gender: event.target.value }))} className="crm-input" placeholder="Gender" />
+                                    <input value={profileForm?.ethnicity || ''} onChange={(event) => setProfileForm((current) => ({ ...current, ethnicity: event.target.value }))} className="crm-input" placeholder="Ethnicity" />
+                                    <input value={profileForm?.height || ''} onChange={(event) => setProfileForm((current) => ({ ...current, height: event.target.value }))} className="crm-input" placeholder="Height" />
+                                    <input value={profileForm?.build || ''} onChange={(event) => setProfileForm((current) => ({ ...current, build: event.target.value }))} className="crm-input" placeholder="Build / body type" />
+                                    <textarea
+                                        value={profileForm?.bio || ''}
+                                        onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))}
+                                        className="crm-input md:col-span-2"
+                                        rows={4}
+                                        placeholder="Profile bio/content"
+                                    />
+                                </div>
+                            ) : null}
+
+                            {profileSection === 'services' ? (
+                                <div className="grid gap-3 md:grid-cols-2">
+                                    <textarea
+                                        value={profileForm?.services || ''}
+                                        onChange={(event) => setProfileForm((current) => ({ ...current, services: event.target.value }))}
+                                        className="crm-input md:col-span-2"
+                                        rows={3}
+                                        placeholder="Services (comma separated)"
+                                    />
+                                    <input value={profileForm?.rates_incall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_incall: event.target.value }))} className="crm-input" placeholder="Incall rate" />
+                                    <input value={profileForm?.rates_outcall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_outcall: event.target.value }))} className="crm-input" placeholder="Outcall rate" />
+                                </div>
+                            ) : null}
+
+                            {profileSection === 'contact' ? (
+                                <div className="grid gap-3 md:grid-cols-2">
+                                    <input value={profileForm?.phone || ''} onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))} className="crm-input" placeholder="Phone" />
+                                    <input value={profileForm?.email || ''} onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))} className="crm-input" placeholder="Email" />
+                                    <input value={profileForm?.city || ''} onChange={(event) => setProfileForm((current) => ({ ...current, city: event.target.value }))} className="crm-input" placeholder="City" />
+                                    <input value={profileForm?.whatsapp || ''} onChange={(event) => setProfileForm((current) => ({ ...current, whatsapp: event.target.value }))} className="crm-input" placeholder="WhatsApp" />
+                                    <input value={profileForm?.instagram || ''} onChange={(event) => setProfileForm((current) => ({ ...current, instagram: event.target.value }))} className="crm-input" placeholder="Instagram URL" />
+                                    <input value={profileForm?.twitter || ''} onChange={(event) => setProfileForm((current) => ({ ...current, twitter: event.target.value }))} className="crm-input" placeholder="Twitter URL" />
+                                    <input value={profileForm?.telegram || ''} onChange={(event) => setProfileForm((current) => ({ ...current, telegram: event.target.value }))} className="crm-input" placeholder="Telegram" />
+                                    <input value={profileForm?.website || ''} onChange={(event) => setProfileForm((current) => ({ ...current, website: event.target.value }))} className="crm-input" placeholder="Website" />
+                                </div>
+                            ) : null}
+
+                            {profileSection === 'subscription' ? (
+                                <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-sm text-slate-700">Subscription fields are read-only in profile editor. Manage activation, extension, and deactivation from subscriptions workflows.</p>
+                                    <div className="grid gap-2 md:grid-cols-2">
+                                        <p className="text-xs text-slate-600">Status: <span className="font-semibold text-slate-900">{client.profile_status}</span></p>
+                                        <p className="text-xs text-slate-600">Plan: <span className="font-semibold text-slate-900">{client.plan_label || 'Basic'}</span></p>
+                                        <p className="text-xs text-slate-600">Expires: <span className="font-semibold text-slate-900">{client.escort_expire ? new Date(client.escort_expire * 1000).toLocaleString() : '—'}</span></p>
+                                        <p className="text-xs text-slate-600">Active subscription: <span className="font-semibold text-slate-900">{client.active_deal?.product?.name || client.active_deal?.plan_type || 'None'}</span></p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const next = new URLSearchParams(searchParams);
+                                            next.set('tab', 'deals');
+                                            setSearchParams(next, { replace: true });
+                                            setActiveTab('deals');
+                                        }}
+                                        className="crm-btn-secondary"
+                                    >
+                                        Open subscriptions tab
+                                    </button>
+                                </div>
+                            ) : null}
+
+                            {profileSection === 'media' ? (
+                                <div className="space-y-3">
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <div className="grid gap-2 md:grid-cols-2">
+                                            <input
+                                                type="file"
+                                                accept="image/jpeg,image/png,image/webp"
+                                                onChange={(event) => setMediaUploadFile(event.target.files?.[0] || null)}
+                                                className="crm-input"
+                                            />
+                                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={mediaUploadSetMain}
+                                                    onChange={(event) => setMediaUploadSetMain(event.target.checked)}
+                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                Set uploaded image as main
+                                            </label>
+                                        </div>
+                                        <div className="mt-2 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (!mediaUploadFile) return;
+                                                    uploadMediaMutation.mutate({
+                                                        file: mediaUploadFile,
+                                                        setMain: mediaUploadSetMain,
+                                                    });
+                                                }}
+                                                disabled={!mediaUploadFile || uploadMediaMutation.isPending}
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {uploadMediaMutation.isPending ? 'Uploading...' : 'Upload image'}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {mediaLoading ? (
+                                        <p className="text-sm text-slate-500">Loading media...</p>
+                                    ) : mediaItems.length > 0 ? (
+                                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                            {mediaItems.map((media) => (
+                                                <div
+                                                    key={media.id}
+                                                    className={`rounded-md border bg-white p-2 ${media.is_main ? 'border-amber-300 ring-1 ring-amber-200' : 'border-slate-200'}`}
+                                                >
+                                                    <img src={media.url} alt="" className="h-40 w-full rounded object-cover" />
+                                                    <p className="mt-2 truncate text-xs text-slate-600">{media.filename}</p>
+                                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                                        {!media.is_main ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setMainMediaMutation.mutate(media.id)}
+                                                                disabled={setMainMediaMutation.isPending}
+                                                                className="rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-700 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            >
+                                                                Set main
+                                                            </button>
+                                                        ) : (
+                                                            <span className="rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700">Main image</span>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => deleteMediaMutation.mutate(media.id)}
+                                                            disabled={deleteMediaMutation.isPending}
+                                                            className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+                                            No images uploaded. Drag and drop or click to upload.
+                                        </p>
+                                    )}
+                                </div>
+                            ) : null}
+
+                            {profileSection !== 'media' ? (
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                                    <textarea
+                                        rows={2}
+                                        value={profileReason}
+                                        onChange={(event) => setProfileReason(event.target.value)}
+                                        className="crm-input"
+                                    />
+                                    <div className="mt-2 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={submitProfileUpdate}
+                                            disabled={!profileForm?.name?.trim() || !profileReason.trim() || updateProfileMutation.isPending || (profileConflict && !profileForce)}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {updateProfileMutation.isPending ? 'Syncing to WordPress...' : 'Save profile changes'}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    )}
+                </section>
+            ) : null}
+
+            {activeTab === 'profile_health' ? (
+                <section className="crm-surface p-4">
+                    {healthLoading ? (
+                        <p className="text-sm text-slate-500">Loading profile health...</p>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                                <p>Phone: <span className="crm-mono font-semibold text-slate-900">{healthData?.summary?.phone_normalized || '—'}</span></p>
+                                <p className="mt-1">Duplicates: <span className="font-semibold text-slate-900">{healthData?.summary?.duplicate_count || 0}</span> • Lead matches: <span className="font-semibold text-slate-900">{healthData?.summary?.lead_matches || 0}</span></p>
+                            </div>
+
+                            {healthDuplicates.length > 0 ? (
+                                <div className="space-y-2">
+                                    {healthDuplicates.map((duplicate) => (
+                                        <label key={duplicate.id} className="flex items-start gap-3 rounded-md border border-slate-200 bg-white p-3">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedDuplicateIds.includes(String(duplicate.id))}
+                                                onChange={(event) => {
+                                                    setSelectedDuplicateIds((current) => {
+                                                        if (event.target.checked) {
+                                                            return [...current, String(duplicate.id)];
+                                                        }
+                                                        return current.filter((value) => value !== String(duplicate.id));
+                                                    });
+                                                }}
+                                                className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-semibold text-slate-900">{duplicate.name || `Client #${duplicate.id}`}</p>
+                                                <p className="text-xs text-slate-500">
+                                                    CRM #{duplicate.id} • WP #{duplicate.wp_post_id || '—'} • status {duplicate.profile_status} • active deals {duplicate.active_deals_count}
+                                                </p>
+                                                <p className="text-xs text-slate-500">Last payment: {formatDateTime(duplicate.last_payment_at)}</p>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+                                    No duplicate profiles detected for this phone number.
+                                </p>
+                            )}
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Resolution action</label>
+                                    <select value={healthAction} onChange={(event) => setHealthAction(event.target.value)} className="crm-select">
+                                        <option value="keep_primary">Keep primary (move deals/payments)</option>
+                                        <option value="merge_into_primary">Merge into primary</option>
+                                        <option value="archive_duplicate">Archive selected duplicates</option>
+                                        <option value="update_phone">Update duplicate phone</option>
+                                    </select>
+                                </div>
+                                {healthAction === 'update_phone' ? (
+                                    <>
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Duplicate profile</label>
+                                            <select value={updatePhoneTargetId} onChange={(event) => setUpdatePhoneTargetId(event.target.value)} className="crm-select">
+                                                <option value="">Select duplicate</option>
+                                                {healthDuplicates.map((duplicate) => (
+                                                    <option key={duplicate.id} value={duplicate.id}>
+                                                        {duplicate.name || `Client #${duplicate.id}`} (CRM #{duplicate.id})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">New phone</label>
+                                            <input
+                                                value={updatePhoneValue}
+                                                onChange={(event) => setUpdatePhoneValue(event.target.value)}
+                                                className="crm-input"
+                                                placeholder="2547XXXXXXXX"
+                                            />
+                                        </div>
+                                    </>
+                                ) : null}
+                                <div className="md:col-span-2">
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Resolution note</label>
+                                    <textarea
+                                        rows={3}
+                                        value={healthReason}
+                                        onChange={(event) => setHealthReason(event.target.value)}
+                                        className="crm-input"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex justify-end">
+                                <button
+                                    type="button"
+                                    onClick={applyHealthResolution}
+                                    disabled={
+                                        !healthReason.trim()
+                                        || resolveHealthMutation.isPending
+                                        || (
+                                            healthAction === 'update_phone'
+                                                ? (!updatePhoneTargetId || !updatePhoneValue.trim())
+                                                : !selectedDuplicateIds.length
+                                        )
+                                    }
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {resolveHealthMutation.isPending ? 'Applying...' : 'Apply resolution'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </section>
             ) : null}
 
             {showDealModal ? (

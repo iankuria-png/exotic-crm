@@ -23,16 +23,22 @@ final class CrmAuditAction
     public const DEAL_ACTIVATE = 'deal_activate';
     public const DEAL_DEACTIVATE = 'deal_deactivate';
     public const DEAL_EXTEND = 'deal_extend';
+    public const DEAL_RENEW = 'deal_renew';
+    public const DEAL_FREE_TRIAL = 'deal_free_trial';
     public const CONVERSATION_SMS_SENT = 'conversation_sms_sent';
     public const CONVERSATION_SMS_FAILED = 'conversation_sms_failed';
     public const RENEWAL_SMS_SENT = 'renewal_sms_sent';
     public const RENEWAL_SMS_FAILED = 'renewal_sms_failed';
     public const RENEWAL_PAUSE = 'renewal_pause';
     public const RENEWAL_RESUME = 'renewal_resume';
+    public const CAMPAIGN_RUN_CONFIGURED = 'campaign_run_configured';
     public const PAYMENT_MATCH_AUTO = 'payment_match_auto';
     public const PAYMENT_MATCH_CONFIRM = 'payment_match_confirm';
     public const PAYMENT_MATCH_BATCH = 'payment_match_batch';
     public const PAYMENT_RETRY_STK = 'payment_retry_stk';
     public const PAYMENT_SEND_LINK = 'payment_send_link';
     public const PAYMENT_CREATE_SUBSCRIPTION = 'payment_create_subscription';
+    public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
+    public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
+    public const LEAD_RECONCILE = 'lead_reconcile';
 }

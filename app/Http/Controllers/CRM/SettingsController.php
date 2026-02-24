@@ -517,6 +517,53 @@ class SettingsController extends Controller
         }
     }
 
+    public function updatePaymentLinkProviders(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can update payment link providers.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'payment_link_providers' => 'required|array',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $normalized = $this->normalizePaymentLinkProviders($validated['payment_link_providers']);
+        if ($normalized === null) {
+            return response()->json([
+                'message' => 'payment_link_providers must include active_provider and providers map.',
+            ], 422);
+        }
+
+        $beforeState = $this->platformAuditState($platform);
+        $platform->forceFill([
+            'payment_link_providers' => $normalized,
+        ])->save();
+        $platform->refresh();
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'platform',
+            (int) $platform->id,
+            $beforeState,
+            $this->platformAuditState($platform),
+            $validated['reason'] ?? 'Updated payment link provider configuration'
+        );
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform),
+        ]);
+    }
+
     public function storeScraperSource(Request $request)
     {
         $this->marketAuthorizationService->ensureRole(
@@ -1294,6 +1341,9 @@ class SettingsController extends Controller
                 'last_error' => $platform->sync_last_error,
                 'last_result' => $platform->sync_last_result,
             ],
+            'payment_link_providers' => is_array($platform->payment_link_providers)
+                ? $platform->payment_link_providers
+                : null,
         ];
     }
 
@@ -1341,6 +1391,56 @@ class SettingsController extends Controller
             'sync_last_scope' => $platform->sync_last_scope,
             'sync_last_status' => $platform->sync_last_status,
             'sync_last_error' => $platform->sync_last_error,
+            'payment_link_providers' => is_array($platform->payment_link_providers)
+                ? $platform->payment_link_providers
+                : null,
+        ];
+    }
+
+    private function normalizePaymentLinkProviders(array $config): ?array
+    {
+        $activeProvider = trim((string) ($config['active_provider'] ?? ''));
+        $providers = $config['providers'] ?? null;
+
+        if ($activeProvider === '' || !is_array($providers) || empty($providers)) {
+            return null;
+        }
+
+        $normalizedProviders = [];
+        foreach ($providers as $key => $provider) {
+            if (!is_array($provider)) {
+                continue;
+            }
+
+            $providerKey = trim((string) $key);
+            if ($providerKey === '') {
+                continue;
+            }
+
+            $label = trim((string) ($provider['label'] ?? $providerKey));
+            $url = trim((string) ($provider['url'] ?? ''));
+            $baseUrl = trim((string) ($provider['base_url'] ?? ''));
+            $path = trim((string) ($provider['path'] ?? ''));
+
+            if ($url === '' && $baseUrl === '') {
+                continue;
+            }
+
+            $normalizedProviders[$providerKey] = [
+                'label' => mb_substr($label, 0, 120),
+                'url' => $url !== '' ? mb_substr($url, 0, 500) : null,
+                'base_url' => $baseUrl !== '' ? mb_substr($baseUrl, 0, 500) : null,
+                'path' => $path !== '' ? mb_substr($path, 0, 255) : null,
+            ];
+        }
+
+        if (empty($normalizedProviders) || !array_key_exists($activeProvider, $normalizedProviders)) {
+            return null;
+        }
+
+        return [
+            'active_provider' => $activeProvider,
+            'providers' => $normalizedProviders,
         ];
     }
 

@@ -5,6 +5,7 @@ namespace App\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Platform;
+use Illuminate\Http\UploadedFile;
 
 class WpSyncService
 {
@@ -48,6 +49,24 @@ class WpSyncService
     public function getClient(int $postId): array
     {
         return $this->get("/clients/{$postId}");
+    }
+
+    /**
+     * Fetch full client profile payload from WordPress.
+     */
+    public function getClientProfile(int $postId): array
+    {
+        return $this->get("/clients/{$postId}");
+    }
+
+    /**
+     * Update editable profile fields on WordPress.
+     */
+    public function updateClientProfile(int $postId, array $fields): array
+    {
+        return $this->post("/clients/{$postId}/update", [
+            'fields' => $fields,
+        ]);
     }
 
     /**
@@ -101,22 +120,64 @@ class WpSyncService
         return $this->get('/stats');
     }
 
+    /**
+     * List all media items for a client profile.
+     */
+    public function getClientMedia(int $postId): array
+    {
+        return $this->get("/clients/{$postId}/media");
+    }
+
+    /**
+     * Upload a media file to a client profile.
+     */
+    public function uploadClientMedia(int $postId, UploadedFile $file, bool $setMain = false): array
+    {
+        $handle = fopen($file->getRealPath(), 'rb');
+        if ($handle === false) {
+            throw new \RuntimeException('Unable to read media file for upload.');
+        }
+
+        try {
+            $response = Http::withHeaders([
+                'Authorization' => $this->authHeader,
+            ])->timeout(60)
+                ->attach('file', $handle, $file->getClientOriginalName(), [
+                    'Content-Type' => $file->getMimeType() ?: 'application/octet-stream',
+                ])
+                ->post($this->baseUrl . "/clients/{$postId}/media", [
+                    'set_main' => $setMain ? '1' : '0',
+                ]);
+        } finally {
+            fclose($handle);
+        }
+
+        return $this->decodeResponse($response, 'POST', "/clients/{$postId}/media");
+    }
+
+    /**
+     * Delete a media item from a client profile.
+     */
+    public function deleteClientMedia(int $postId, int $attachmentId): array
+    {
+        return $this->delete("/clients/{$postId}/media/{$attachmentId}");
+    }
+
+    /**
+     * Mark one media item as the client's main image.
+     */
+    public function setClientMainImage(int $postId, int $attachmentId): array
+    {
+        return $this->patch("/clients/{$postId}/media/{$attachmentId}/set-main");
+    }
+
     private function get(string $path, array $params = []): array
     {
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
         ])->timeout(30)->get($this->baseUrl . $path, $params);
 
-        if ($response->failed()) {
-            Log::error('WpSyncService GET failed', [
-                'url'    => $this->baseUrl . $path,
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-            $response->throw();
-        }
-
-        return $response->json();
+        return $this->decodeResponse($response, 'GET', $path);
     }
 
     private function post(string $path, array $body = []): array
@@ -125,8 +186,31 @@ class WpSyncService
             'Authorization' => $this->authHeader,
         ])->timeout(30)->post($this->baseUrl . $path, $body);
 
+        return $this->decodeResponse($response, 'POST', $path);
+    }
+
+    private function patch(string $path, array $body = []): array
+    {
+        $response = Http::withHeaders([
+            'Authorization' => $this->authHeader,
+        ])->timeout(30)->patch($this->baseUrl . $path, $body);
+
+        return $this->decodeResponse($response, 'PATCH', $path);
+    }
+
+    private function delete(string $path): array
+    {
+        $response = Http::withHeaders([
+            'Authorization' => $this->authHeader,
+        ])->timeout(30)->delete($this->baseUrl . $path);
+
+        return $this->decodeResponse($response, 'DELETE', $path);
+    }
+
+    private function decodeResponse($response, string $method, string $path): array
+    {
         if ($response->failed()) {
-            Log::error('WpSyncService POST failed', [
+            Log::error("WpSyncService {$method} failed", [
                 'url'    => $this->baseUrl . $path,
                 'status' => $response->status(),
                 'body'   => $response->body(),
@@ -134,6 +218,6 @@ class WpSyncService
             $response->throw();
         }
 
-        return $response->json();
+        return (array) $response->json();
     }
 }

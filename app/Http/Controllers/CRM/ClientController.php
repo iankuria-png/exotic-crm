@@ -6,13 +6,20 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Client;
 use App\Models\ClientNote;
+use App\Models\Deal;
+use App\Models\Lead;
+use App\Models\Payment;
 use App\Models\TimelineEvent;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
+use App\Services\PaymentMatchingService;
+use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class ClientController extends Controller
 {
@@ -344,6 +351,610 @@ class ClientController extends Controller
         }
     }
 
+    public function wpProfile(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $profile = $wpSync->getClientProfile((int) $client->wp_post_id);
+
+            return response()->json([
+                'wp_profile' => $profile,
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to fetch WordPress profile.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+    }
+
+    public function updateWpProfile(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'fields' => 'required|array|min:1',
+            'force' => 'nullable|boolean',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $fields = $validated['fields'];
+        $blockedFields = [
+            'premium',
+            'premium_expire',
+            'featured',
+            'featured_expire',
+            'escort_expire',
+            'profile_status',
+            'needs_payment',
+            'notactive',
+        ];
+
+        $attemptedBlocked = array_values(array_intersect(array_keys($fields), $blockedFields));
+        if (!empty($attemptedBlocked)) {
+            return response()->json([
+                'message' => 'Subscription and activation fields are not editable from profile management.',
+                'blocked_fields' => $attemptedBlocked,
+            ], 422);
+        }
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $currentProfile = $wpSync->getClientProfile((int) $client->wp_post_id);
+
+            $wpModifiedAt = $this->extractWpModifiedAt($currentProfile);
+            $crmLastSyncedAt = $client->last_synced_at ? Carbon::parse($client->last_synced_at) : null;
+            $force = (bool) ($validated['force'] ?? false);
+
+            if (!$force && $wpModifiedAt && $crmLastSyncedAt && $wpModifiedAt->gt($crmLastSyncedAt)) {
+                return response()->json([
+                    'message' => 'WordPress profile was updated after CRM last sync. Review and confirm to overwrite.',
+                    'conflict' => [
+                        'wp_modified_at' => $wpModifiedAt->toIso8601String(),
+                        'crm_last_synced_at' => $crmLastSyncedAt->toIso8601String(),
+                        'diff' => $this->buildProfileDiff($fields, $currentProfile),
+                    ],
+                ], 409);
+            }
+
+            $beforeState = [
+                'fields' => $this->snapshotWpFieldValues($fields, $currentProfile),
+            ];
+
+            $updatedProfile = $wpSync->updateClientProfile((int) $client->wp_post_id, $fields);
+
+            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+            $syncService = new \App\Services\ClientSyncService($platform);
+            $syncService->syncOne((int) $client->wp_post_id);
+            $client->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_PROFILE_EDIT,
+                'client',
+                (int) $client->id,
+                $beforeState,
+                [
+                    'fields' => $fields,
+                    'wp_profile_updated' => true,
+                ],
+                (string) $validated['reason']
+            );
+
+            TimelineEvent::create([
+                'platform_id' => (int) $client->platform_id,
+                'entity_type' => 'client',
+                'entity_id' => (int) $client->id,
+                'event_type' => 'client_profile_updated',
+                'actor_id' => $request->user()->id,
+                'content' => [
+                    'fields' => array_keys($fields),
+                ],
+                'created_at' => now(),
+            ]);
+
+            return response()->json([
+                'client' => $client->load([
+                    'platform',
+                    'assignedAgent',
+                    'deals' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                    'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
+                    'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                    'activeDeal.product',
+                ]),
+                'wp_profile' => $updatedProfile,
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to update WordPress profile.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+    }
+
+    public function media(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            return response()->json($wpSync->getClientMedia((int) $client->wp_post_id));
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to fetch client media.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+    }
+
+    public function uploadMedia(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'file' => 'required|file|mimes:jpg,jpeg,png,webp|max:5120',
+            'set_main' => 'nullable|boolean',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $result = $wpSync->uploadClientMedia(
+                (int) $client->wp_post_id,
+                $request->file('file'),
+                (bool) ($validated['set_main'] ?? false)
+            );
+
+            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+            (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_PROFILE_EDIT,
+                'client',
+                (int) $client->id,
+                null,
+                [
+                    'media_upload' => [
+                        'attachment_id' => $result['attachment']['id'] ?? null,
+                        'filename' => $result['attachment']['filename'] ?? null,
+                        'set_main' => (bool) ($validated['set_main'] ?? false),
+                    ],
+                ],
+                $validated['reason'] ?? 'Uploaded profile media from CRM'
+            );
+
+            return response()->json($result);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to upload media.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+    }
+
+    public function deleteMedia(Request $request, Client $client, int $attachmentId)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $result = $wpSync->deleteClientMedia((int) $client->wp_post_id, $attachmentId);
+
+            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+            (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_PROFILE_EDIT,
+                'client',
+                (int) $client->id,
+                null,
+                [
+                    'media_delete' => [
+                        'attachment_id' => $attachmentId,
+                    ],
+                ],
+                $validated['reason'] ?? 'Deleted profile media from CRM'
+            );
+
+            return response()->json($result);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to delete media.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+    }
+
+    public function setMainMedia(Request $request, Client $client, int $attachmentId)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $result = $wpSync->setClientMainImage((int) $client->wp_post_id, $attachmentId);
+
+            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+            (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_PROFILE_EDIT,
+                'client',
+                (int) $client->id,
+                null,
+                [
+                    'media_set_main' => [
+                        'attachment_id' => $attachmentId,
+                    ],
+                ],
+                $validated['reason'] ?? 'Set main profile image from CRM'
+            );
+
+            return response()->json($result);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to set main image.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+    }
+
+    public function health(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $duplicates = collect();
+        if ($client->phone_normalized) {
+            $duplicates = Client::query()
+                ->where('platform_id', (int) $client->platform_id)
+                ->where('phone_normalized', $client->phone_normalized)
+                ->where('id', '!=', (int) $client->id)
+                ->orderBy('id')
+                ->get([
+                    'id',
+                    'name',
+                    'wp_post_id',
+                    'profile_status',
+                    'duplicate_of',
+                    'phone_normalized',
+                    'created_at',
+                ]);
+        }
+
+        $duplicateIds = $duplicates->pluck('id')->map(fn($id) => (int) $id)->all();
+        $activeDealsByClient = empty($duplicateIds)
+            ? collect()
+            : Deal::query()
+                ->whereIn('client_id', $duplicateIds)
+                ->where('status', 'active')
+                ->selectRaw('client_id, COUNT(*) as active_count')
+                ->groupBy('client_id')
+                ->pluck('active_count', 'client_id');
+        $lastPaymentsByClient = empty($duplicateIds)
+            ? collect()
+            : Payment::query()
+                ->whereIn('client_id', $duplicateIds)
+                ->selectRaw('client_id, MAX(created_at) as last_payment_at')
+                ->groupBy('client_id')
+                ->pluck('last_payment_at', 'client_id');
+
+        $leads = collect();
+        if ($client->phone_normalized) {
+            $leads = Lead::query()
+                ->where('platform_id', (int) $client->platform_id)
+                ->where('phone_normalized', $client->phone_normalized)
+                ->orderByDesc('created_at')
+                ->limit(30)
+                ->get([
+                    'id',
+                    'name',
+                    'status',
+                    'converted_client_id',
+                    'archived_at',
+                    'created_at',
+                ]);
+        }
+
+        return response()->json([
+            'summary' => [
+                'phone_normalized' => $client->phone_normalized,
+                'duplicate_count' => $duplicates->count(),
+                'lead_matches' => $leads->count(),
+            ],
+            'duplicates' => $duplicates->map(function (Client $duplicate) use ($activeDealsByClient, $lastPaymentsByClient) {
+                return [
+                    'id' => (int) $duplicate->id,
+                    'name' => $duplicate->name,
+                    'wp_post_id' => $duplicate->wp_post_id,
+                    'profile_status' => $duplicate->profile_status,
+                    'duplicate_of' => $duplicate->duplicate_of,
+                    'phone_normalized' => $duplicate->phone_normalized,
+                    'active_deals_count' => (int) ($activeDealsByClient->get($duplicate->id) ?? 0),
+                    'last_payment_at' => $lastPaymentsByClient->get($duplicate->id),
+                    'created_at' => optional($duplicate->created_at)->toDateTimeString(),
+                ];
+            })->values(),
+            'lead_matches' => $leads->map(function (Lead $lead) {
+                return [
+                    'id' => (int) $lead->id,
+                    'name' => $lead->name,
+                    'status' => $lead->status,
+                    'converted_client_id' => $lead->converted_client_id,
+                    'archived_at' => optional($lead->archived_at)->toDateTimeString(),
+                    'created_at' => optional($lead->created_at)->toDateTimeString(),
+                ];
+            })->values(),
+        ]);
+    }
+
+    public function resolveHealth(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'action' => 'required|in:keep_primary,merge_into_primary,archive_duplicate,update_phone',
+            'duplicate_ids' => 'nullable|array',
+            'duplicate_ids.*' => 'integer|exists:clients,id',
+            'duplicate_id' => 'nullable|integer|exists:clients,id',
+            'new_phone_normalized' => 'nullable|string|max:20',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $action = (string) $validated['action'];
+        $beforeState = null;
+        $afterState = null;
+        $result = [
+            'deals_reassigned' => 0,
+            'payments_reassigned' => 0,
+            'leads_relinked' => 0,
+            'notes_copied' => 0,
+            'duplicates_updated' => 0,
+            'auto_matched_payments' => 0,
+        ];
+
+        if ($action === 'update_phone') {
+            $duplicateId = (int) ($validated['duplicate_id'] ?? 0);
+            $normalizedPhone = $this->normalizePhone($validated['new_phone_normalized'] ?? null);
+            if ($duplicateId <= 0 || !$normalizedPhone) {
+                return response()->json([
+                    'message' => 'duplicate_id and new_phone_normalized are required for update_phone.',
+                ], 422);
+            }
+
+            $duplicate = Client::query()
+                ->where('id', $duplicateId)
+                ->where('platform_id', (int) $client->platform_id)
+                ->where('id', '!=', (int) $client->id)
+                ->first();
+
+            if (!$duplicate) {
+                return response()->json([
+                    'message' => 'Duplicate client not found in this market.',
+                ], 422);
+            }
+
+            $beforeState = [
+                'duplicate_id' => (int) $duplicate->id,
+                'phone_normalized' => $duplicate->phone_normalized,
+                'duplicate_of' => $duplicate->duplicate_of,
+            ];
+
+            DB::transaction(function () use (
+                $duplicate,
+                $normalizedPhone,
+                $client,
+                &$result
+            ) {
+                $duplicate->update([
+                    'phone_normalized' => $normalizedPhone,
+                    'duplicate_of' => null,
+                ]);
+
+                $matcher = new PaymentMatchingService();
+                $candidatePayments = Payment::query()
+                    ->where('platform_id', (int) $client->platform_id)
+                    ->whereNull('client_id')
+                    ->where(function ($query) use ($normalizedPhone) {
+                        $query->where('phone', $normalizedPhone)
+                            ->orWhere('phone', 'like', '%' . $normalizedPhone . '%');
+                    })
+                    ->get();
+
+                foreach ($candidatePayments as $payment) {
+                    $matchResult = $matcher->matchPayment($payment);
+                    if (!empty($matchResult['matched'])) {
+                        $result['auto_matched_payments'] += 1;
+                    }
+                }
+            });
+
+            $duplicate->refresh();
+            $afterState = [
+                'duplicate_id' => (int) $duplicate->id,
+                'phone_normalized' => $duplicate->phone_normalized,
+                'duplicate_of' => $duplicate->duplicate_of,
+                'auto_matched_payments' => $result['auto_matched_payments'],
+            ];
+        } else {
+            $duplicateIds = collect($validated['duplicate_ids'] ?? [])
+                ->map(fn($id) => (int) $id)
+                ->filter(fn($id) => $id > 0)
+                ->unique()
+                ->values();
+
+            if ($duplicateIds->isEmpty()) {
+                return response()->json([
+                    'message' => 'Select at least one duplicate profile to resolve.',
+                ], 422);
+            }
+
+            $duplicates = Client::query()
+                ->whereIn('id', $duplicateIds->all())
+                ->where('platform_id', (int) $client->platform_id)
+                ->where('id', '!=', (int) $client->id)
+                ->get();
+
+            if ($duplicates->count() !== $duplicateIds->count()) {
+                return response()->json([
+                    'message' => 'One or more selected duplicates are invalid for this market.',
+                ], 422);
+            }
+
+            $beforeState = [
+                'action' => $action,
+                'duplicates' => $duplicates->map(function (Client $duplicate) {
+                    return [
+                        'id' => (int) $duplicate->id,
+                        'profile_status' => $duplicate->profile_status,
+                        'duplicate_of' => $duplicate->duplicate_of,
+                    ];
+                })->values()->all(),
+            ];
+
+            DB::transaction(function () use (
+                $action,
+                $duplicates,
+                $client,
+                $request,
+                &$result
+            ) {
+                foreach ($duplicates as $duplicate) {
+                    if ($action === 'archive_duplicate') {
+                        $duplicate->update([
+                            'profile_status' => 'private',
+                            'duplicate_of' => (int) $client->id,
+                        ]);
+                        $result['duplicates_updated'] += 1;
+                        continue;
+                    }
+
+                    $duplicate->update([
+                        'profile_status' => 'private',
+                        'duplicate_of' => (int) $client->id,
+                    ]);
+                    $result['duplicates_updated'] += 1;
+
+                    $result['deals_reassigned'] += Deal::query()
+                        ->where('client_id', (int) $duplicate->id)
+                        ->update(['client_id' => (int) $client->id]);
+
+                    $result['payments_reassigned'] += Payment::query()
+                        ->where('client_id', (int) $duplicate->id)
+                        ->update(['client_id' => (int) $client->id]);
+
+                    if ($action === 'merge_into_primary') {
+                        $result['leads_relinked'] += Lead::query()
+                            ->where('converted_client_id', (int) $duplicate->id)
+                            ->update(['converted_client_id' => (int) $client->id]);
+
+                        $notes = ClientNote::query()
+                            ->where('client_id', (int) $duplicate->id)
+                            ->orderBy('id')
+                            ->get();
+
+                        foreach ($notes as $note) {
+                            ClientNote::create([
+                                'client_id' => (int) $client->id,
+                                'author_id' => (int) $request->user()->id,
+                                'note_type' => 'system',
+                                'content' => '[Merged from Client #' . $duplicate->id . '] ' . (string) $note->content,
+                                'follow_up_at' => null,
+                                'created_at' => now(),
+                            ]);
+                            $result['notes_copied'] += 1;
+                        }
+                    }
+                }
+            });
+
+            $afterState = [
+                'action' => $action,
+                'result' => $result,
+            ];
+        }
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'client_health_resolved',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'action' => $action,
+                'result' => $result,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_HEALTH_RESOLVE,
+            'client',
+            (int) $client->id,
+            $beforeState,
+            $afterState,
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'message' => 'Client health resolution applied.',
+            'result' => $result,
+        ]);
+    }
+
     private function authorizeClientAccess(Request $request, Client $client): void
     {
         if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
@@ -531,5 +1142,60 @@ class ClientController extends Controller
         fclose($handle);
 
         return $rows;
+    }
+
+    private function extractWpModifiedAt(array $profile): ?Carbon
+    {
+        $value = data_get($profile, 'post.modified_at');
+        if (!$value) {
+            $value = $profile['modified_at'] ?? null;
+        }
+
+        if (!$value) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable $exception) {
+            return null;
+        }
+    }
+
+    private function snapshotWpFieldValues(array $requestedFields, array $profile): array
+    {
+        $snapshot = [];
+        $meta = is_array($profile['meta'] ?? null) ? $profile['meta'] : [];
+        $taxonomies = is_array($profile['taxonomies'] ?? null) ? $profile['taxonomies'] : [];
+
+        foreach (array_keys($requestedFields) as $field) {
+            if ($field === 'name' || $field === 'post_title') {
+                $snapshot[$field] = data_get($profile, 'post.title');
+                continue;
+            }
+
+            if ($field === 'city') {
+                $snapshot[$field] = data_get($taxonomies, 'city.name');
+                continue;
+            }
+
+            $snapshot[$field] = $meta[$field] ?? ($profile[$field] ?? null);
+        }
+
+        return $snapshot;
+    }
+
+    private function buildProfileDiff(array $requestedFields, array $profile): array
+    {
+        $current = $this->snapshotWpFieldValues($requestedFields, $profile);
+        $diff = [];
+        foreach ($requestedFields as $field => $value) {
+            $diff[$field] = [
+                'crm_value' => $value,
+                'wp_value' => $current[$field] ?? null,
+            ];
+        }
+
+        return $diff;
     }
 }

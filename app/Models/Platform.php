@@ -14,7 +14,7 @@ class Platform extends Model
         'phone_prefix', 'timezone', 'currency_code',
         'sync_last_checked_at', 'sync_last_synced_at',
         'sync_last_scope', 'sync_last_status',
-        'sync_last_error', 'sync_last_result',
+        'sync_last_error', 'sync_last_result', 'payment_link_providers',
     ];
 
     protected $casts = [
@@ -22,6 +22,7 @@ class Platform extends Model
         'sync_last_checked_at' => 'datetime',
         'sync_last_synced_at' => 'datetime',
         'sync_last_result' => 'array',
+        'payment_link_providers' => 'array',
     ];
     
     public function getConnectionConfig()

@@ -27,6 +27,8 @@ class Client extends Model
         'verified',
         'main_image_url',
         'assigned_to',
+        'duplicate_of',
+        'last_online_at',
         'last_synced_at',
     ];
 
@@ -34,9 +36,11 @@ class Client extends Model
         'premium' => 'boolean',
         'featured' => 'boolean',
         'verified' => 'boolean',
-        'premium_expire' => 'datetime',
-        'featured_expire' => 'datetime',
-        'escort_expire' => 'datetime',
+        'premium_expire' => 'integer',
+        'featured_expire' => 'integer',
+        'escort_expire' => 'integer',
+        'duplicate_of' => 'integer',
+        'last_online_at' => 'integer',
         'last_synced_at' => 'datetime',
     ];
 
@@ -79,6 +83,16 @@ class Client extends Model
     public function payments()
     {
         return $this->hasMany(Payment::class);
+    }
+
+    public function duplicateParent()
+    {
+        return $this->belongsTo(self::class, 'duplicate_of');
+    }
+
+    public function duplicates()
+    {
+        return $this->hasMany(self::class, 'duplicate_of');
     }
 
     public function activeDeal()

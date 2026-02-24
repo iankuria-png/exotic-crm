@@ -13,7 +13,7 @@ class Deal extends Model
         'platform_id', 'client_id', 'lead_id', 'payment_id',
         'product_id', 'plan_type', 'amount', 'currency',
         'duration', 'status', 'activated_at', 'expires_at',
-        'assigned_to',
+        'assigned_to', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
     ];
 
@@ -21,6 +21,7 @@ class Deal extends Model
         'amount' => 'decimal:2',
         'activated_at' => 'datetime',
         'expires_at' => 'datetime',
+        'is_free_trial' => 'boolean',
         'renewal_reminders_paused' => 'boolean',
         'renewal_paused_until' => 'datetime',
     ];

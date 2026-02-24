@@ -49,6 +49,14 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline']);
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote']);
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne']);
+    Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile']);
+    Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile']);
+    Route::get('/clients/{client}/media', [ClientController::class, 'media']);
+    Route::post('/clients/{client}/media', [ClientController::class, 'uploadMedia']);
+    Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia']);
+    Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia']);
+    Route::get('/clients/{client}/health', [ClientController::class, 'health']);
+    Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth']);
 
     // Deals
     Route::get('/deals', [DealController::class, 'index']);
@@ -59,6 +67,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/deals/{deal}/activate', [DealController::class, 'activate']);
     Route::post('/deals/{deal}/deactivate', [DealController::class, 'deactivate']);
     Route::post('/deals/{deal}/extend', [DealController::class, 'extend']);
+    Route::post('/deals/{deal}/renew', [DealController::class, 'renew']);
 
     // Leads
     Route::get('/leads', [LeadController::class, 'index']);
@@ -72,6 +81,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::delete('/leads/{lead}', [LeadController::class, 'destroy']);
     Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
     Route::patch('/leads/{lead}/assign', [LeadController::class, 'assign']);
+    Route::post('/leads/{lead}/reconcile', [LeadController::class, 'reconcile']);
 
     // Conversations
     Route::post('/conversations/clients/{client}/send', [ConversationController::class, 'send']);
@@ -104,6 +114,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/settings/integrations/sms-provider/test', [SettingsController::class, 'testSmsProvider'])->middleware('role:admin');
     Route::post('/settings/integrations/platforms', [SettingsController::class, 'storeIntegrationPlatform'])->middleware('role:admin');
     Route::patch('/settings/integrations/platforms/{platform}', [SettingsController::class, 'updateIntegrationPlatform'])->middleware('role:admin,sub_admin');
+    Route::patch('/settings/integrations/platforms/{platform}/payment-link-providers', [SettingsController::class, 'updatePaymentLinkProviders'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/test-connection', [SettingsController::class, 'testPlatformConnection'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/scraper-sources', [SettingsController::class, 'storeScraperSource'])->middleware('role:admin,sub_admin');

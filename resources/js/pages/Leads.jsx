@@ -56,6 +56,12 @@ export default function Leads() {
         leads: [],
         reason: 'Bulk lead archive from leads page',
     });
+    const [reconcileDialog, setReconcileDialog] = useState({
+        lead: null,
+        action: 'convert',
+        client_id: '',
+        reason: 'Lead reconciled from leads page',
+    });
 
     const [createForm, setCreateForm] = useState({
         platform_id: '',
@@ -193,6 +199,29 @@ export default function Leads() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Lead assignment failed.');
+        },
+    });
+
+    const reconcileLeadMutation = useMutation({
+        mutationFn: ({ leadId, action, clientId, reason }) =>
+            api.post(`/crm/leads/${leadId}/reconcile`, {
+                action,
+                client_id: clientId || null,
+                reason,
+            }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setReconcileDialog({
+                lead: null,
+                action: 'convert',
+                client_id: '',
+                reason: 'Lead reconciled from leads page',
+            });
+            toast.success('Lead reconciliation completed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Lead reconciliation failed.');
         },
     });
 
@@ -501,6 +530,28 @@ export default function Leads() {
             render: (row) => <span className="crm-mono text-xs text-slate-600">{row.phone_normalized || '—'}</span>,
         },
         {
+            key: 'matched_client',
+            label: 'Linked Client',
+            render: (row) => {
+                const linked = row.converted_client || row.matched_client || null;
+                if (!linked) {
+                    return <span className="text-xs text-slate-400">No match</span>;
+                }
+
+                return (
+                    <div>
+                        <p className="text-xs font-semibold text-slate-900">
+                            {linked.name || `Client #${linked.id}`}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                            CRM #{linked.id}
+                            {row.match_confidence ? ` • ${row.match_confidence}` : ''}
+                        </p>
+                    </div>
+                );
+            },
+        },
+        {
             key: 'source',
             label: 'Source',
             render: (row) => <span className="capitalize text-xs text-slate-600">{row.source || 'registration'}</span>,
@@ -550,6 +601,25 @@ export default function Leads() {
                         >
                             Assign
                         </button>
+
+                        {row.matched_client || row.converted_client ? (
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    const linked = row.converted_client || row.matched_client;
+                                    setReconcileDialog({
+                                        lead: row,
+                                        action: row.status === 'converted' ? 'link' : 'convert',
+                                        client_id: linked?.id ? String(linked.id) : '',
+                                        reason: 'Lead reconciled from leads page',
+                                    });
+                                }}
+                                className="rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700 transition hover:bg-teal-100"
+                            >
+                                Reconcile
+                            </button>
+                        ) : null}
 
                         <button
                             type="button"
@@ -898,6 +968,85 @@ export default function Leads() {
                     rows={3}
                     value={archiveDialog.reason}
                     onChange={(event) => setArchiveDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={!!reconcileDialog.lead}
+                title="Reconcile Lead"
+                message={reconcileDialog.lead ? `Reconcile ${reconcileDialog.lead.name || `Lead #${reconcileDialog.lead.id}`} with a matched client.` : ''}
+                confirmLabel={reconcileLeadMutation.isPending ? 'Applying...' : 'Apply reconciliation'}
+                onCancel={() => setReconcileDialog({
+                    lead: null,
+                    action: 'convert',
+                    client_id: '',
+                    reason: 'Lead reconciled from leads page',
+                })}
+                onConfirm={() => {
+                    if (!reconcileDialog.lead?.id) return;
+                    reconcileLeadMutation.mutate({
+                        leadId: reconcileDialog.lead.id,
+                        action: reconcileDialog.action,
+                        clientId: reconcileDialog.client_id ? Number(reconcileDialog.client_id) : null,
+                        reason: reconcileDialog.reason.trim(),
+                    });
+                }}
+                confirmDisabled={!reconcileDialog.client_id || !reconcileDialog.reason.trim() || reconcileLeadMutation.isPending}
+                isPending={reconcileLeadMutation.isPending}
+            >
+                <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <p>
+                        Matched client:{' '}
+                        <span className="font-semibold text-slate-900">
+                            {reconcileDialog.lead?.matched_client?.name
+                                || reconcileDialog.lead?.converted_client?.name
+                                || 'Not available'}
+                        </span>
+                    </p>
+                    <p>
+                        Confidence:{' '}
+                        <span className="font-semibold text-slate-900">
+                            {reconcileDialog.lead?.match_confidence || 'n/a'}
+                        </span>
+                    </p>
+                </div>
+
+                <label htmlFor="reconcile-action" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Action</label>
+                <select
+                    id="reconcile-action"
+                    value={reconcileDialog.action}
+                    onChange={(event) => setReconcileDialog((current) => ({ ...current, action: event.target.value }))}
+                    className="crm-select w-full"
+                >
+                    <option value="convert">Convert lead</option>
+                    <option value="link">Link only (keep current status)</option>
+                    <option value="archive">Link + archive</option>
+                </select>
+
+                <label htmlFor="reconcile-client" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Client</label>
+                <select
+                    id="reconcile-client"
+                    value={reconcileDialog.client_id}
+                    onChange={(event) => setReconcileDialog((current) => ({ ...current, client_id: event.target.value }))}
+                    className="crm-select w-full"
+                >
+                    <option value="">Select client</option>
+                    {[reconcileDialog.lead?.matched_client, reconcileDialog.lead?.converted_client]
+                        .filter((clientOption, index, array) => clientOption?.id && array.findIndex((entry) => entry?.id === clientOption.id) === index)
+                        .map((clientOption) => (
+                            <option key={clientOption.id} value={clientOption.id}>
+                                {clientOption.name || `Client #${clientOption.id}`} (CRM #{clientOption.id})
+                            </option>
+                        ))}
+                </select>
+
+                <label htmlFor="reconcile-reason" className="mb-1 mt-2 block text-sm font-medium text-slate-700">Reason</label>
+                <textarea
+                    id="reconcile-reason"
+                    rows={3}
+                    value={reconcileDialog.reason}
+                    onChange={(event) => setReconcileDialog((current) => ({ ...current, reason: event.target.value }))}
                     className="crm-input"
                 />
             </ConfirmDialog>

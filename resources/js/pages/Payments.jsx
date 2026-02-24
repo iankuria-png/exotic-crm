@@ -430,24 +430,28 @@ export default function Payments() {
                             </button>
                         </>
                     )}
-                    <button
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            autoMatchMutation.mutate(row.id);
-                        }}
-                        className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                    >
-                        Auto-match
-                    </button>
-                    <button
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            openManualMatch(row);
-                        }}
-                        className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                    >
-                        Match manually
-                    </button>
+                    {row.status === 'completed' && !row.client_id && (
+                        <button
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                autoMatchMutation.mutate(row.id);
+                            }}
+                            className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                        >
+                            Auto-match
+                        </button>
+                    )}
+                    {!row.client_id && (
+                        <button
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                openManualMatch(row);
+                            }}
+                            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                        >
+                            Match manually
+                        </button>
+                    )}
                     {row.status === 'completed' && row.client_id && !row.deal_id && (
                         <button
                             onClick={(event) => {
@@ -458,6 +462,9 @@ export default function Payments() {
                         >
                             Create Sub
                         </button>
+                    )}
+                    {row.client_id && (
+                        <span className="text-[11px] font-medium text-slate-500">Matched</span>
                     )}
                 </div>
             ),

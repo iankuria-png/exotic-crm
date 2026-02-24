@@ -6,13 +6,16 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Deal;
 use App\Models\Client;
+use App\Models\Payment;
 use App\Models\Product;
+use App\Models\Template;
 use App\Models\TimelineEvent;
 use App\Models\Platform;
 use App\Services\AuditService;
 use App\Services\WpSyncService;
 use App\Services\ClientSyncService;
 use App\Services\MarketAuthorizationService;
+use App\Services\NotificationService;
 use App\Support\CrmAuditAction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -22,7 +25,8 @@ class DealController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
-        private readonly \App\Services\RenewalService $renewalService
+        private readonly \App\Services\RenewalService $renewalService,
+        private readonly NotificationService $notificationService
     ) {
     }
 
@@ -44,6 +48,7 @@ class DealController extends Controller
             [
                 'search' => $request->get('search', ''),
                 'bucket' => $request->get('bucket', 'all'),
+                'status' => $request->get('status'),
                 'platform_ids' => $platformIds,
             ],
             (int) $request->get('per_page', 25),
@@ -68,7 +73,7 @@ class DealController extends Controller
             'product_id' => 'sometimes|exists:products,id',
             'plan_type' => 'sometimes|in:basic,premium,vip',
             'duration' => 'sometimes|in:weekly,biweekly,monthly,manual',
-            'status' => 'sometimes|in:pending,awaiting_payment,paid,active,expired,cancelled',
+            'status' => 'sometimes|in:pending,awaiting_payment,paid,active,expired,cancelled,renewed',
         ]);
 
         $before = $deal->only(['product_id', 'plan_type', 'duration', 'status', 'amount']);
@@ -218,6 +223,8 @@ class DealController extends Controller
         $this->authorizeDealAccess($request, $deal);
         $request->validate([
             'reason' => 'nullable|string|max:500',
+            'payment_id' => 'nullable|integer|exists:payments,id',
+            'free_trial' => 'nullable|boolean',
         ]);
 
         if ($deal->status === 'active') {
@@ -227,6 +234,14 @@ class DealController extends Controller
         $client = $deal->client;
         if (!$client) {
             return response()->json(['message' => 'Deal has no associated client'], 422);
+        }
+
+        $verifiedPayment = $this->resolveVerifiedPaymentForDeal($deal, $request->input('payment_id'));
+        $isFreeTrial = $request->boolean('free_trial');
+        if (!$verifiedPayment && !$isFreeTrial) {
+            return response()->json([
+                'message' => 'Activation requires a verified completed payment, or a free trial approval.',
+            ], 422);
         }
 
         $durationDays = match ($deal->duration) {
@@ -239,6 +254,8 @@ class DealController extends Controller
         $beforeState = [
             'deal_status' => $deal->status,
             'client_profile_status' => $client->profile_status,
+            'payment_id' => $deal->payment_id,
+            'is_free_trial' => (bool) $deal->is_free_trial,
         ];
 
         DB::beginTransaction();
@@ -256,7 +273,15 @@ class DealController extends Controller
                 'status' => 'active',
                 'activated_at' => now(),
                 'expires_at' => now()->addDays($durationDays),
+                'payment_id' => $verifiedPayment?->id,
+                'payment_reference' => $verifiedPayment?->transaction_reference,
+                'is_free_trial' => $isFreeTrial,
+                'free_trial_approved_by' => $isFreeTrial ? (string) $request->user()->name : null,
             ]);
+
+            if ($verifiedPayment && (int) ($verifiedPayment->deal_id ?? 0) !== (int) $deal->id) {
+                $verifiedPayment->update(['deal_id' => $deal->id]);
+            }
 
             // Re-sync client from WP to get updated meta
             $syncService = new ClientSyncService($platform);
@@ -267,6 +292,8 @@ class DealController extends Controller
                 'deal_status' => 'active',
                 'client_profile_status' => $client->profile_status,
                 'expires_at' => $deal->expires_at->toDateTimeString(),
+                'payment_id' => $deal->payment_id,
+                'is_free_trial' => (bool) $deal->is_free_trial,
             ];
 
             $this->auditService->fromRequest(
@@ -279,6 +306,22 @@ class DealController extends Controller
                 $afterState,
                 $request->input('reason') ?: 'Activated via CRM flow'
             );
+
+            if ($isFreeTrial) {
+                $this->auditService->fromRequest(
+                    $request,
+                    (int) $client->platform_id,
+                    CrmAuditAction::DEAL_FREE_TRIAL,
+                    'deal',
+                    (int) $deal->id,
+                    null,
+                    [
+                        'approved_by' => $request->user()->name,
+                        'duration_days' => $durationDays,
+                    ],
+                    $request->input('reason') ?: 'Free trial activation from CRM flow'
+                );
+            }
 
             TimelineEvent::create([
                 'platform_id' => $client->platform_id,
@@ -335,6 +378,9 @@ class DealController extends Controller
 
         $request->validate([
             'reason' => 'required|string|max:500',
+            'notify_client' => 'nullable|boolean',
+            'notification_message' => 'nullable|string|max:500',
+            'notification_template_id' => 'nullable|integer|exists:templates,id',
         ]);
 
         $beforeState = [
@@ -383,6 +429,21 @@ class DealController extends Controller
 
             DB::commit();
 
+            if ($request->boolean('notify_client')) {
+                $message = $this->resolveDeactivationMessage(
+                    $client,
+                    $request->input('notification_message'),
+                    $request->input('notification_template_id')
+                );
+
+                if ($message) {
+                    $this->notificationService->sendSmsToClient($client, $message, [
+                        'purpose' => 'deal_deactivate_notice',
+                        'deal_id' => $deal->id,
+                    ]);
+                }
+            }
+
             $deal->load(['client', 'product', 'platform']);
             return response()->json($deal);
         } catch (\Exception $e) {
@@ -408,9 +469,23 @@ class DealController extends Controller
         $request->validate([
             'additional_days' => 'required|integer|min:1|max:365',
             'reason' => 'required|string|max:500',
+            'payment_id' => 'nullable|integer|exists:payments,id',
+            'free_trial' => 'nullable|boolean',
         ]);
 
         $client = $deal->client;
+        if (!$client) {
+            return response()->json(['message' => 'Deal has no associated client'], 422);
+        }
+
+        $verifiedPayment = $this->resolveVerifiedPaymentForDeal($deal, $request->input('payment_id'));
+        $isFreeTrial = $request->boolean('free_trial');
+        if (!$verifiedPayment && !$isFreeTrial) {
+            return response()->json([
+                'message' => 'Extension requires a verified completed payment, or a free trial approval.',
+            ], 422);
+        }
+
         $beforeState = ['expires_at' => $deal->expires_at?->toDateTimeString()];
 
         DB::beginTransaction();
@@ -420,7 +495,19 @@ class DealController extends Controller
             $wpSync->extendClient($client->wp_post_id, $request->additional_days);
 
             $newExpiry = ($deal->expires_at ?? now())->copy()->addDays($request->additional_days);
-            $deal->update(['expires_at' => $newExpiry]);
+            $deal->update([
+                'expires_at' => $newExpiry,
+                'payment_id' => $verifiedPayment?->id ?? $deal->payment_id,
+                'payment_reference' => $verifiedPayment?->transaction_reference ?? $deal->payment_reference,
+                'is_free_trial' => $isFreeTrial ? true : (bool) $deal->is_free_trial,
+                'free_trial_approved_by' => $isFreeTrial
+                    ? (string) $request->user()->name
+                    : $deal->free_trial_approved_by,
+            ]);
+
+            if ($verifiedPayment && (int) ($verifiedPayment->deal_id ?? 0) !== (int) $deal->id) {
+                $verifiedPayment->update(['deal_id' => $deal->id]);
+            }
 
             $syncService = new ClientSyncService($platform);
             $syncService->syncOne($client->wp_post_id);
@@ -460,6 +547,209 @@ class DealController extends Controller
                 'message' => 'Extension failed: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function renew(Request $request, Deal $deal)
+    {
+        $this->authorizeDealAccess($request, $deal);
+
+        $validated = $request->validate([
+            'additional_days' => 'required|integer|min:1|max:365',
+            'reason' => 'required|string|max:500',
+            'payment_id' => 'nullable|integer|exists:payments,id',
+            'free_trial' => 'nullable|boolean',
+        ]);
+
+        if (!in_array($deal->status, ['active', 'expired', 'cancelled'], true)) {
+            return response()->json([
+                'message' => 'Only active, expired, or cancelled subscriptions can be renewed.',
+            ], 422);
+        }
+
+        $client = $deal->client;
+        if (!$client) {
+            return response()->json(['message' => 'Deal has no associated client'], 422);
+        }
+
+        $verifiedPayment = $this->resolveVerifiedPaymentForDeal($deal, $validated['payment_id'] ?? null);
+        $isFreeTrial = (bool) ($validated['free_trial'] ?? false);
+
+        if (!$verifiedPayment && !$isFreeTrial) {
+            return response()->json([
+                'message' => 'Renewal requires a verified completed payment, or a free trial approval.',
+            ], 422);
+        }
+
+        $beforeState = [
+            'status' => $deal->status,
+            'expires_at' => $deal->expires_at?->toDateTimeString(),
+            'payment_id' => $deal->payment_id,
+            'is_free_trial' => (bool) $deal->is_free_trial,
+        ];
+
+        DB::beginTransaction();
+        try {
+            $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
+            $wpSync = WpSyncService::forPlatform($client->platform_id);
+            $additionalDays = (int) $validated['additional_days'];
+
+            if ($deal->status === 'active') {
+                $wpSync->extendClient($client->wp_post_id, $additionalDays);
+                $newExpiry = ($deal->expires_at ?? now())->copy()->addDays($additionalDays);
+            } else {
+                $wpSync->activateClient(
+                    $client->wp_post_id,
+                    $deal->plan_type,
+                    $additionalDays,
+                    $deal->id
+                );
+                $newExpiry = now()->addDays($additionalDays);
+            }
+
+            $deal->update([
+                'status' => 'active',
+                'activated_at' => now(),
+                'expires_at' => $newExpiry,
+                'payment_id' => $verifiedPayment?->id ?? $deal->payment_id,
+                'payment_reference' => $verifiedPayment?->transaction_reference ?? $deal->payment_reference,
+                'is_free_trial' => $isFreeTrial ? true : (bool) $deal->is_free_trial,
+                'free_trial_approved_by' => $isFreeTrial
+                    ? (string) $request->user()->name
+                    : $deal->free_trial_approved_by,
+            ]);
+
+            if ($verifiedPayment && (int) ($verifiedPayment->deal_id ?? 0) !== (int) $deal->id) {
+                $verifiedPayment->update(['deal_id' => $deal->id]);
+            }
+
+            $syncService = new ClientSyncService($platform);
+            $syncService->syncOne($client->wp_post_id);
+            $client->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::DEAL_RENEW,
+                'deal',
+                (int) $deal->id,
+                $beforeState,
+                [
+                    'status' => $deal->status,
+                    'expires_at' => $newExpiry->toDateTimeString(),
+                    'payment_id' => $deal->payment_id,
+                    'is_free_trial' => (bool) $deal->is_free_trial,
+                ],
+                (string) $validated['reason']
+            );
+
+            if ($isFreeTrial) {
+                $this->auditService->fromRequest(
+                    $request,
+                    (int) $client->platform_id,
+                    CrmAuditAction::DEAL_FREE_TRIAL,
+                    'deal',
+                    (int) $deal->id,
+                    null,
+                    [
+                        'approved_by' => $request->user()->name,
+                        'duration_days' => $additionalDays,
+                    ],
+                    (string) $validated['reason']
+                );
+            }
+
+            TimelineEvent::create([
+                'platform_id' => $client->platform_id,
+                'entity_type' => 'deal',
+                'entity_id' => $deal->id,
+                'event_type' => 'deal_renewed',
+                'actor_id' => $request->user()->id,
+                'content' => [
+                    'additional_days' => $additionalDays,
+                    'new_expires_at' => $newExpiry->toDateTimeString(),
+                ],
+                'created_at' => now(),
+            ]);
+
+            DB::commit();
+
+            $deal->load(['client', 'product', 'platform']);
+            return response()->json($deal);
+        } catch (\Throwable $exception) {
+            DB::rollBack();
+            Log::error('Deal renewal failed', [
+                'deal_id' => $deal->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Renewal failed: ' . $exception->getMessage(),
+            ], 500);
+        }
+    }
+
+    private function resolveVerifiedPaymentForDeal(Deal $deal, $paymentId = null): ?Payment
+    {
+        $query = Payment::query()
+            ->where('platform_id', $deal->platform_id)
+            ->whereIn('status', ['completed', 'success']);
+
+        if ($paymentId) {
+            $payment = $query->where('id', (int) $paymentId)->first();
+        } else {
+            $payment = $query
+                ->where('client_id', $deal->client_id)
+                ->orderByDesc('created_at')
+                ->first();
+        }
+
+        if (!$payment) {
+            return null;
+        }
+
+        if ($payment->client_id && (int) $payment->client_id !== (int) $deal->client_id) {
+            return null;
+        }
+
+        if ($payment->product_id && $deal->product_id && (int) $payment->product_id !== (int) $deal->product_id) {
+            return null;
+        }
+
+        if ($deal->amount !== null && abs((float) $payment->amount - (float) $deal->amount) > 0.01) {
+            return null;
+        }
+
+        if ($payment->deal_id && (int) $payment->deal_id !== (int) $deal->id) {
+            return null;
+        }
+
+        return $payment;
+    }
+
+    private function resolveDeactivationMessage(Client $client, ?string $customMessage = null, $templateId = null): ?string
+    {
+        $custom = trim((string) $customMessage);
+        if ($custom !== '') {
+            return $custom;
+        }
+
+        if (!empty($templateId)) {
+            $template = Template::query()
+                ->where('id', (int) $templateId)
+                ->where('channel', 'sms')
+                ->first();
+
+            if ($template && trim((string) $template->body) !== '') {
+                return str_replace(
+                    ['{{client_name}}', '{{name}}'],
+                    [$client->name ?: 'Client', $client->name ?: 'Client'],
+                    (string) $template->body
+                );
+            }
+        }
+
+        $name = $client->name ?: 'there';
+        return "Hi {$name}, your subscription has been deactivated. Contact support if this is unexpected.";
     }
 
     private function authorizeDealAccess(Request $request, Deal $deal): void

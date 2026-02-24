@@ -3,10 +3,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 const EMPTY_SELECTION = [];
 
 function defaultRowId(row, index, rowIdKey) {
-    if (row && Object.prototype.hasOwnProperty.call(row, rowIdKey)) {
+    if (row && Object.prototype.hasOwnProperty.call(row, rowIdKey) && row[rowIdKey] != null) {
         return row[rowIdKey];
     }
-    if (row && Object.prototype.hasOwnProperty.call(row, 'id')) {
+    if (row && Object.prototype.hasOwnProperty.call(row, 'id') && row.id != null) {
         return row.id;
     }
     return index;

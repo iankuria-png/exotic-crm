@@ -139,11 +139,12 @@ class ClientSyncService
                 'city'            => $city ?: null,
                 'profile_status'  => $wpClient['post_status'] ?? 'private',
                 'premium'         => (bool) ($wpClient['premium'] ?? false),
-                'premium_expire'  => $wpClient['premium_expire'] ?? null,
+                'premium_expire'  => $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null),
                 'featured'        => (bool) ($wpClient['featured'] ?? false),
-                'featured_expire' => $wpClient['featured_expire'] ?? null,
-                'escort_expire'   => $wpClient['escort_expire'] ?? null,
+                'featured_expire' => $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null),
+                'escort_expire'   => $this->ensureUnixTimestamp($wpClient['escort_expire'] ?? null),
                 'verified'        => (bool) ($wpClient['verified'] ?? false),
+                'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
                 'main_image_url'  => $imageUrl ?: null,
                 'last_synced_at'  => now(),
             ]
@@ -173,5 +174,20 @@ class ClientSyncService
         }
 
         return $phone;
+    }
+
+    private function ensureUnixTimestamp($value): ?int
+    {
+        if ($value === null || $value === '' || $value === false) {
+            return null;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        $ts = strtotime((string) $value);
+
+        return $ts !== false ? $ts : null;
     }
 }

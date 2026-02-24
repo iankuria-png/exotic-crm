@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
@@ -27,6 +27,13 @@ export default function Deals() {
     const [reason, setReason] = useState('Deactivated from subscriptions page');
     const [extendReason, setExtendReason] = useState('Extended from subscriptions page');
     const [extendDays, setExtendDays] = useState('7');
+    const [renewReason, setRenewReason] = useState('Renewed from subscriptions page');
+    const [renewDays, setRenewDays] = useState('30');
+    const [paymentId, setPaymentId] = useState('');
+    const [useFreeTrial, setUseFreeTrial] = useState(false);
+    const [notifyClient, setNotifyClient] = useState(false);
+    const [notificationTemplateId, setNotificationTemplateId] = useState('');
+    const [notificationMessage, setNotificationMessage] = useState('');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
 
     const [bucket, setBucket] = useState('all');
@@ -45,16 +52,35 @@ export default function Deals() {
             }).then((response) => response.data),
     });
 
+    const selectedDeal = dialog.deal;
+    const selectedClientId = selectedDeal?.client?.id || selectedDeal?.client_id || null;
+
+    const { data: selectedClientData, isLoading: selectedClientLoading } = useQuery({
+        queryKey: ['deal-dialog-client', selectedClientId],
+        queryFn: () => api.get(`/crm/clients/${selectedClientId}`).then((response) => response.data),
+        enabled: Boolean(selectedClientId),
+    });
+
+    const { data: templatesData } = useQuery({
+        queryKey: ['settings-templates', 'deals'],
+        queryFn: () => api.get('/crm/settings/templates').then((response) => response.data),
+        enabled: dialog.type === 'deactivate',
+    });
+
     const activateMutation = useMutation({
-        mutationFn: ({ dealId, activationReason }) =>
+        mutationFn: ({ dealId, activationReason, selectedPaymentId, freeTrial }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason: activationReason,
+                payment_id: selectedPaymentId || null,
+                free_trial: Boolean(freeTrial),
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
             setActivateReason('Activated from subscriptions page');
+            setPaymentId('');
+            setUseFreeTrial(false);
             toast.success('Subscription activated successfully.');
         },
         onError: (error) => {
@@ -63,15 +89,21 @@ export default function Deals() {
     });
 
     const deactivateMutation = useMutation({
-        mutationFn: ({ dealId, deactivateReason }) =>
+        mutationFn: ({ dealId, deactivateReason, shouldNotify, templateId, message }) =>
             api.post(`/crm/deals/${dealId}/deactivate`, {
                 reason: deactivateReason,
+                notify_client: Boolean(shouldNotify),
+                notification_template_id: templateId || null,
+                notification_message: message || null,
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
             setReason('Deactivated from subscriptions page');
+            setNotifyClient(false);
+            setNotificationTemplateId('');
+            setNotificationMessage('');
             toast.success('Subscription deactivated.');
         },
         onError: (error) => {
@@ -80,10 +112,12 @@ export default function Deals() {
     });
 
     const extendMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, extensionReason }) =>
+        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentId, freeTrial }) =>
             api.post(`/crm/deals/${dealId}/extend`, {
                 additional_days: additionalDays,
                 reason: extensionReason,
+                payment_id: selectedPaymentId || null,
+                free_trial: Boolean(freeTrial),
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
@@ -91,10 +125,35 @@ export default function Deals() {
             setDialog({ type: null, deal: null });
             setExtendDays('7');
             setExtendReason('Extended from subscriptions page');
+            setPaymentId('');
+            setUseFreeTrial(false);
             toast.success('Subscription extension saved.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription extension failed.');
+        },
+    });
+
+    const renewMutation = useMutation({
+        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentId, freeTrial }) =>
+            api.post(`/crm/deals/${dealId}/renew`, {
+                additional_days: additionalDays,
+                reason: renewalReason,
+                payment_id: selectedPaymentId || null,
+                free_trial: Boolean(freeTrial),
+            }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setDialog({ type: null, deal: null });
+            setRenewDays('30');
+            setRenewReason('Renewed from subscriptions page');
+            setPaymentId('');
+            setUseFreeTrial(false);
+            toast.success('Subscription renewed successfully.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Subscription renewal failed.');
         },
     });
 
@@ -163,9 +222,41 @@ export default function Deals() {
         return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, monthRevenue: 0, verifiedRevenue: 0 };
     }, [data?.summary]);
 
+    const completedPayments = useMemo(() => {
+        const payments = selectedClientData?.payments || [];
+        return payments
+            .filter((payment) => ['completed', 'success'].includes(String(payment.status || '').toLowerCase()))
+            .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+    }, [selectedClientData?.payments]);
+
+    const smsTemplates = useMemo(() => {
+        const templates = templatesData?.templates || templatesData?.data || [];
+        return templates.filter((template) => template.channel === 'sms' && template.status === 'active');
+    }, [templatesData]);
+
+    useEffect(() => {
+        if (!['activate', 'extend', 'renew'].includes(dialog.type || '')) {
+            return;
+        }
+
+        if (useFreeTrial) {
+            return;
+        }
+
+        if (paymentId) {
+            return;
+        }
+
+        if (completedPayments.length === 1) {
+            setPaymentId(String(completedPayments[0].id));
+        }
+    }, [dialog.type, useFreeTrial, paymentId, completedPayments]);
+
     const openDialog = (type, deal, event) => {
         event.stopPropagation();
         setDialog({ type, deal });
+        setPaymentId('');
+        setUseFreeTrial(false);
         if (type === 'activate') {
             setActivateReason('Activated from subscriptions page');
         }
@@ -173,8 +264,15 @@ export default function Deals() {
             setExtendReason('Extended from subscriptions page');
             setExtendDays('7');
         }
+        if (type === 'renew') {
+            setRenewReason('Renewed from subscriptions page');
+            setRenewDays('30');
+        }
         if (type === 'deactivate') {
             setReason('Deactivated from subscriptions page');
+            setNotifyClient(false);
+            setNotificationTemplateId('');
+            setNotificationMessage('');
         }
     };
 
@@ -199,12 +297,28 @@ export default function Deals() {
         {
             key: 'plan_type',
             label: 'Plan',
-            render: (row) => <span className="capitalize text-sm text-slate-700">{row.plan_type}</span>,
+            render: (row) => {
+                const value = row.plan_type || row.inferred_plan_type || null;
+                if (!value) {
+                    return <span className="text-sm text-slate-400">—</span>;
+                }
+
+                return (
+                    <span className="inline-flex items-center gap-1 text-sm text-slate-700">
+                        <span className="capitalize">{value}</span>
+                        {!row.plan_type && row.inferred_plan_type ? (
+                            <span className="inline-flex items-center rounded-sm bg-slate-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ring-1 ring-inset ring-slate-200">
+                                Legacy
+                            </span>
+                        ) : null}
+                    </span>
+                );
+            },
         },
         {
             key: 'product',
             label: 'Product',
-            render: (row) => <span className="text-sm text-slate-700">{row.product?.name || '—'}</span>,
+            render: (row) => <span className="text-sm text-slate-700">{row.product?.name || row.inferred_product_name || '—'}</span>,
         },
         {
             key: 'amount',
@@ -256,7 +370,11 @@ export default function Deals() {
             label: 'Actions',
             render: (row) => (
                 <div className="flex items-center gap-1.5">
-                    {row.status === 'pending' ? (
+                    {row.is_virtual ? (
+                        <span className="text-[11px] text-slate-500">Legacy record</span>
+                    ) : null}
+
+                    {!row.is_virtual && row.status === 'pending' ? (
                         <button
                             onClick={(event) => openDialog('activate', row, event)}
                             className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800"
@@ -265,7 +383,7 @@ export default function Deals() {
                         </button>
                     ) : null}
 
-                    {row.status === 'active' ? (
+                    {!row.is_virtual && row.status === 'active' ? (
                         <>
                             <button
                                 onClick={(event) => openDialog('extend', row, event)}
@@ -282,20 +400,28 @@ export default function Deals() {
                         </>
                     ) : null}
 
-                    {!['pending', 'active'].includes(row.status) ? (
-                        <button
-                            onClick={(event) => openDialog('delete', row, event)}
-                            className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                        >
-                            Delete
-                        </button>
+                    {!row.is_virtual && !['pending', 'active'].includes(row.status) ? (
+                        <>
+                            <button
+                                onClick={(event) => openDialog('renew', row, event)}
+                                className="rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700 transition hover:bg-teal-100"
+                            >
+                                Renew
+                            </button>
+                            <button
+                                onClick={(event) => openDialog('delete', row, event)}
+                                className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                            >
+                                Delete
+                            </button>
+                        </>
                     ) : null}
+
                 </div>
             ),
         },
     ];
 
-    const selectedDeal = dialog.deal;
     const bulkActions = [
         {
             key: 'bulk-activate',
@@ -318,6 +444,9 @@ export default function Deals() {
             },
         },
     ];
+
+    const needsPaymentVerification = ['activate', 'extend', 'renew'].includes(dialog.type || '');
+    const paymentReady = !needsPaymentVerification || useFreeTrial || Boolean(paymentId);
 
     return (
         <div className="space-y-4">
@@ -364,8 +493,10 @@ export default function Deals() {
                         <option value="active">Active Only</option>
                         <option value="risk">At Risk (0-3d)</option>
                         <option value="pending">Upcoming (4-14d)</option>
+                        <option value="stable">Stable ({'>'}14d)</option>
                         <option value="expired">Recently Expired</option>
                         <option value="lapsed">Lapsed (Legacy)</option>
+                        <option value="paused">Paused Reminders</option>
                     </select>
 
                     <select
@@ -382,16 +513,18 @@ export default function Deals() {
                         <option value="paid">Paid</option>
                         <option value="active">Active</option>
                         <option value="expired">Expired</option>
+                        <option value="renewed">Renewed</option>
                         <option value="cancelled">Cancelled</option>
                     </select>
 
-                    {(search || statusFilter) ? (
+                    {(search || statusFilter || bucket !== 'all') ? (
                         <button
                             type="button"
                             onClick={() => {
                                 setSearch('');
                                 setSearchInput('');
                                 setStatusFilter('');
+                                setBucket('all');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"
@@ -426,6 +559,8 @@ export default function Deals() {
                                         ? 'Activate Subscription'
                                         : dialog.type === 'extend'
                                             ? 'Extend Subscription'
+                                            : dialog.type === 'renew'
+                                                ? 'Renew Subscription'
                                             : dialog.type === 'deactivate'
                                                 ? 'Deactivate Subscription'
                                                 : 'Delete Subscription'}
@@ -437,6 +572,42 @@ export default function Deals() {
                         </header>
 
                         <div className="space-y-4 p-4">
+                            {['activate', 'extend', 'renew'].includes(dialog.type || '') ? (
+                                <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                                        <input
+                                            type="checkbox"
+                                            checked={useFreeTrial}
+                                            onChange={(event) => setUseFreeTrial(event.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                        />
+                                        Approve as free trial (skip payment requirement)
+                                    </label>
+
+                                    {!useFreeTrial ? (
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Verified payment</label>
+                                            <select
+                                                value={paymentId}
+                                                onChange={(event) => setPaymentId(event.target.value)}
+                                                className="crm-select"
+                                                disabled={selectedClientLoading}
+                                            >
+                                                <option value="">Select completed payment</option>
+                                                {completedPayments.map((payment) => (
+                                                    <option key={payment.id} value={payment.id}>
+                                                        #{payment.id} • {payment.transaction_reference || 'No reference'} • {formatCurrency(payment.amount, payment.currency || 'KES')}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            {!selectedClientLoading && completedPayments.length === 0 ? (
+                                                <p className="mt-1 text-xs text-amber-700">No verified completed payments found for this client. Select free trial to proceed.</p>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : null}
+
                             {dialog.type === 'activate' ? (
                                 <>
                                     <label className="block text-sm font-medium text-slate-700" htmlFor="activate-reason">Reason</label>
@@ -473,6 +644,29 @@ export default function Deals() {
                                 </>
                             ) : null}
 
+                            {dialog.type === 'renew' ? (
+                                <>
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="renew-days">Additional days</label>
+                                    <input
+                                        id="renew-days"
+                                        type="number"
+                                        min={1}
+                                        value={renewDays}
+                                        onChange={(event) => setRenewDays(event.target.value)}
+                                        className="crm-input"
+                                    />
+
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="renew-reason">Reason</label>
+                                    <textarea
+                                        id="renew-reason"
+                                        rows={3}
+                                        value={renewReason}
+                                        onChange={(event) => setRenewReason(event.target.value)}
+                                        className="crm-input"
+                                    />
+                                </>
+                            ) : null}
+
                             {dialog.type === 'deactivate' ? (
                                 <>
                                     <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-reason">Reason</label>
@@ -483,6 +677,43 @@ export default function Deals() {
                                         onChange={(event) => setReason(event.target.value)}
                                         className="crm-input"
                                     />
+
+                                    <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={notifyClient}
+                                                onChange={(event) => setNotifyClient(event.target.checked)}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Notify client via SMS
+                                        </label>
+
+                                        {notifyClient ? (
+                                            <>
+                                                <select
+                                                    value={notificationTemplateId}
+                                                    onChange={(event) => setNotificationTemplateId(event.target.value)}
+                                                    className="crm-select"
+                                                >
+                                                    <option value="">Choose SMS template (optional)</option>
+                                                    {smsTemplates.map((template) => (
+                                                        <option key={template.id} value={template.id}>
+                                                            {template.title}
+                                                        </option>
+                                                    ))}
+                                                </select>
+
+                                                <textarea
+                                                    rows={3}
+                                                    value={notificationMessage}
+                                                    onChange={(event) => setNotificationMessage(event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Optional custom SMS message override"
+                                                />
+                                            </>
+                                        ) : null}
+                                    </div>
                                 </>
                             ) : null}
 
@@ -504,8 +735,10 @@ export default function Deals() {
                                     onClick={() => activateMutation.mutate({
                                         dealId: selectedDeal.id,
                                         activationReason: activateReason.trim(),
+                                        selectedPaymentId: paymentId ? Number(paymentId) : null,
+                                        freeTrial: useFreeTrial,
                                     })}
-                                    disabled={!activateReason.trim() || activateMutation.isPending}
+                                    disabled={!activateReason.trim() || !paymentReady || activateMutation.isPending}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {activateMutation.isPending ? 'Activating...' : 'Confirm activation'}
@@ -519,18 +752,43 @@ export default function Deals() {
                                         dealId: selectedDeal.id,
                                         additionalDays: Number(extendDays),
                                         extensionReason: extendReason,
+                                        selectedPaymentId: paymentId ? Number(paymentId) : null,
+                                        freeTrial: useFreeTrial,
                                     })}
-                                    disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || !extendReason.trim() || extendMutation.isPending}
+                                    disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || !extendReason.trim() || !paymentReady || extendMutation.isPending}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {extendMutation.isPending ? 'Extending...' : 'Confirm extension'}
                                 </button>
                             ) : null}
 
+                            {dialog.type === 'renew' ? (
+                                <button
+                                    type="button"
+                                    onClick={() => renewMutation.mutate({
+                                        dealId: selectedDeal.id,
+                                        additionalDays: Number(renewDays),
+                                        renewalReason: renewReason,
+                                        selectedPaymentId: paymentId ? Number(paymentId) : null,
+                                        freeTrial: useFreeTrial,
+                                    })}
+                                    disabled={!Number.isInteger(Number(renewDays)) || Number(renewDays) < 1 || !renewReason.trim() || !paymentReady || renewMutation.isPending}
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {renewMutation.isPending ? 'Renewing...' : 'Confirm renewal'}
+                                </button>
+                            ) : null}
+
                             {dialog.type === 'deactivate' ? (
                                 <button
                                     type="button"
-                                    onClick={() => deactivateMutation.mutate({ dealId: selectedDeal.id, deactivateReason: reason })}
+                                    onClick={() => deactivateMutation.mutate({
+                                        dealId: selectedDeal.id,
+                                        deactivateReason: reason,
+                                        shouldNotify: notifyClient,
+                                        templateId: notificationTemplateId ? Number(notificationTemplateId) : null,
+                                        message: notificationMessage.trim(),
+                                    })}
                                     disabled={!reason.trim() || deactivateMutation.isPending}
                                     className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >

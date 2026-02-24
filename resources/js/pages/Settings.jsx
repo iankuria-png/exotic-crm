@@ -148,6 +148,53 @@ function defaultScraperForm(platformId = '') {
     };
 }
 
+function defaultPaymentLinkProviderForm() {
+    return {
+        active_provider: 'primary',
+        providers: [
+            {
+                key: 'primary',
+                label: 'Primary',
+                url: '',
+                base_url: '',
+                path: '/pay',
+            },
+        ],
+        reason: 'Updated payment link provider routing',
+    };
+}
+
+function buildPaymentLinkProviderForm(platform) {
+    const fallback = defaultPaymentLinkProviderForm();
+    const config = platform?.payment_link_providers;
+    if (!config || typeof config !== 'object') {
+        return fallback;
+    }
+
+    const providerEntries = Object.entries(config.providers || {})
+        .map(([key, provider]) => ({
+            key,
+            label: provider?.label || key,
+            url: provider?.url || '',
+            base_url: provider?.base_url || '',
+            path: provider?.path || '/pay',
+        }));
+
+    if (providerEntries.length === 0) {
+        return fallback;
+    }
+
+    const active = config.active_provider && providerEntries.some((provider) => provider.key === config.active_provider)
+        ? config.active_provider
+        : providerEntries[0].key;
+
+    return {
+        active_provider: active,
+        providers: providerEntries,
+        reason: 'Updated payment link provider routing',
+    };
+}
+
 function buildScraperEditor(source) {
     if (!source) {
         return null;
@@ -236,6 +283,7 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
         reason: 'Dry-run scraper execution from settings',
     });
     const [latestScraperRunResult, setLatestScraperRunResult] = useState(null);
+    const [paymentLinkForm, setPaymentLinkForm] = useState(defaultPaymentLinkProviderForm());
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
@@ -302,7 +350,8 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
 
         setEditor(buildPlatformEditor(selectedPlatform));
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
-    }, [selectedPlatformId]);
+        setPaymentLinkForm(buildPaymentLinkProviderForm(selectedPlatform));
+    }, [selectedPlatformId, selectedPlatform]);
 
     useEffect(() => {
         if (!scraperSources.length) {
@@ -380,6 +429,21 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Connection test failed.');
+        },
+    });
+
+    const savePaymentLinkProvidersMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}/payment-link-providers`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            const updatedPlatform = response?.platform || null;
+            if (updatedPlatform) {
+                setPaymentLinkForm(buildPaymentLinkProviderForm(updatedPlatform));
+            }
+            toast.success('Payment link providers updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update payment link providers.');
         },
     });
 
@@ -512,6 +576,105 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
         }
 
         saveSmsProviderMutation.mutate(payload);
+    };
+
+    const updatePaymentLinkProvider = (index, field, value) => {
+        setPaymentLinkForm((current) => ({
+            ...current,
+            providers: current.providers.map((provider, providerIndex) => (
+                providerIndex === index
+                    ? { ...provider, [field]: value }
+                    : provider
+            )),
+        }));
+    };
+
+    const addPaymentLinkProvider = () => {
+        setPaymentLinkForm((current) => ({
+            ...current,
+            providers: [
+                ...current.providers,
+                {
+                    key: '',
+                    label: '',
+                    url: '',
+                    base_url: '',
+                    path: '/pay',
+                },
+            ],
+        }));
+    };
+
+    const removePaymentLinkProvider = (index) => {
+        setPaymentLinkForm((current) => {
+            if (current.providers.length <= 1) {
+                return current;
+            }
+
+            const nextProviders = current.providers.filter((_, providerIndex) => providerIndex !== index);
+            const nextKeys = new Set(nextProviders.map((provider) => provider.key).filter(Boolean));
+            const nextActive = nextKeys.has(current.active_provider)
+                ? current.active_provider
+                : (nextProviders[0]?.key || '');
+
+            return {
+                ...current,
+                active_provider: nextActive,
+                providers: nextProviders,
+            };
+        });
+    };
+
+    const savePaymentLinkProviders = () => {
+        if (!selectedPlatform) {
+            return;
+        }
+
+        const normalizedProviders = paymentLinkForm.providers
+            .map((provider) => ({
+                key: provider.key.trim(),
+                label: provider.label.trim(),
+                url: provider.url.trim(),
+                base_url: provider.base_url.trim(),
+                path: provider.path.trim(),
+            }))
+            .filter((provider) => provider.key && (provider.url || provider.base_url));
+
+        if (!normalizedProviders.length) {
+            toast.error('Add at least one provider with a key and URL/base URL.');
+            return;
+        }
+
+        const keySet = new Set(normalizedProviders.map((provider) => provider.key));
+        if (keySet.size !== normalizedProviders.length) {
+            toast.error('Provider keys must be unique.');
+            return;
+        }
+
+        const activeProvider = keySet.has(paymentLinkForm.active_provider)
+            ? paymentLinkForm.active_provider
+            : normalizedProviders[0].key;
+
+        const providersPayload = normalizedProviders.reduce((acc, provider) => {
+            acc[provider.key] = {
+                label: provider.label || provider.key,
+                url: provider.url || null,
+                base_url: provider.base_url || null,
+                path: provider.path || null,
+            };
+            return acc;
+        }, {});
+
+        savePaymentLinkProvidersMutation.mutate({
+            platformId: selectedPlatform.platform_id,
+            payload: {
+                payment_link_providers: {
+                    active_provider: activeProvider,
+                    providers: providersPayload,
+                },
+                reason: paymentLinkForm.reason.trim() || 'Updated payment link provider routing',
+            },
+        });
     };
 
     const connectedServices = serviceRows.filter((item) => ['connected', 'healthy', 'success'].includes(item.status)).length;
@@ -971,6 +1134,106 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             {updatePlatformMutation.isPending ? 'Saving...' : 'Save profile'}
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Payment Link Providers</h4>
+                                    <p className="mt-1 text-xs text-slate-500">Configure provider-level payment URLs. Active provider is used by “Send payment link”.</p>
+
+                                    <div className="mt-3 space-y-3">
+                                        {paymentLinkForm.providers.map((provider, index) => (
+                                            <div key={`provider-${index}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                <div className="grid gap-2 md:grid-cols-2">
+                                                    <input
+                                                        value={provider.key}
+                                                        onChange={(event) => updatePaymentLinkProvider(index, 'key', event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                                                        className="crm-input"
+                                                        placeholder="Provider key (e.g. pesapal)"
+                                                    />
+                                                    <input
+                                                        value={provider.label}
+                                                        onChange={(event) => updatePaymentLinkProvider(index, 'label', event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="Provider label"
+                                                    />
+                                                    <input
+                                                        value={provider.url}
+                                                        onChange={(event) => updatePaymentLinkProvider(index, 'url', event.target.value)}
+                                                        className="crm-input md:col-span-2"
+                                                        placeholder="Direct URL (optional)"
+                                                    />
+                                                    <input
+                                                        value={provider.base_url}
+                                                        onChange={(event) => updatePaymentLinkProvider(index, 'base_url', event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="Base URL"
+                                                    />
+                                                    <input
+                                                        value={provider.path}
+                                                        onChange={(event) => updatePaymentLinkProvider(index, 'path', event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="Path (e.g. /pay)"
+                                                    />
+                                                </div>
+                                                <div className="mt-2 flex justify-end">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => removePaymentLinkProvider(index)}
+                                                        disabled={paymentLinkForm.providers.length <= 1}
+                                                        className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Active provider</label>
+                                            <select
+                                                value={paymentLinkForm.active_provider}
+                                                onChange={(event) => setPaymentLinkForm((current) => ({ ...current, active_provider: event.target.value }))}
+                                                className="crm-select"
+                                            >
+                                                {(paymentLinkForm.providers || [])
+                                                    .filter((provider) => provider.key.trim() !== '')
+                                                    .map((provider) => (
+                                                        <option key={provider.key} value={provider.key}>
+                                                            {provider.label || provider.key}
+                                                        </option>
+                                                    ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Audit reason</label>
+                                            <input
+                                                value={paymentLinkForm.reason}
+                                                onChange={(event) => setPaymentLinkForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="Reason for payment link config update"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={addPaymentLinkProvider}
+                                            className="crm-btn-secondary px-3 py-2"
+                                        >
+                                            Add provider
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={savePaymentLinkProviders}
+                                            disabled={savePaymentLinkProvidersMutation.isPending || !paymentLinkForm.reason.trim()}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {savePaymentLinkProvidersMutation.isPending ? 'Saving...' : 'Save payment link providers'}
                                         </button>
                                     </div>
                                 </section>

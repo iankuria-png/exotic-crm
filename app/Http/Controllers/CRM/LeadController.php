@@ -32,7 +32,7 @@ class LeadController extends Controller
             'You do not have access to this lead market.'
         );
 
-        $query = Lead::with(['platform', 'assignedAgent']);
+        $query = Lead::with(['platform', 'assignedAgent', 'convertedClient']);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
         if (!$request->boolean('include_archived')) {
@@ -74,6 +74,15 @@ class LeadController extends Controller
 
         $leads = $query->orderBy('created_at', 'desc')
             ->paginate($request->get('per_page', 25));
+
+        $leads->setCollection(
+            $leads->getCollection()->map(function (Lead $lead) {
+                $matched = $this->resolveMatchedClientSummary($lead);
+                $lead->setAttribute('matched_client', $matched);
+                $lead->setAttribute('match_confidence', $matched['confidence'] ?? null);
+                return $lead;
+            })
+        );
 
         $payload = $leads->toArray();
         $payload['stats'] = $stats;
@@ -339,7 +348,95 @@ class LeadController extends Controller
         $this->authorizeLeadAccess($request, $lead);
         $lead->load(['platform', 'assignedAgent', 'convertedClient']);
 
+        $matched = $this->resolveMatchedClientSummary($lead);
+        $lead->setAttribute('matched_client', $matched);
+        $lead->setAttribute('match_confidence', $matched['confidence'] ?? null);
+
         return response()->json($lead);
+    }
+
+    public function reconcile(Request $request, Lead $lead)
+    {
+        $this->authorizeLeadAccess($request, $lead);
+
+        $validated = $request->validate([
+            'action' => 'required|in:link,convert,archive',
+            'client_id' => 'nullable|integer|exists:clients,id',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $resolvedClientId = $this->resolveConvertedClientId($lead, $validated['client_id'] ?? null);
+        if (!$resolvedClientId) {
+            return response()->json([
+                'message' => 'No matching client could be resolved for this lead.',
+            ], 422);
+        }
+
+        $client = Client::query()->findOrFail($resolvedClientId);
+        if ((int) $client->platform_id !== (int) $lead->platform_id) {
+            return response()->json([
+                'message' => 'Selected client does not belong to this lead market.',
+            ], 422);
+        }
+
+        $beforeState = [
+            'status' => $lead->status,
+            'converted_client_id' => $lead->converted_client_id,
+            'archived_at' => optional($lead->archived_at)->toDateTimeString(),
+        ];
+
+        $updates = [
+            'converted_client_id' => (int) $client->id,
+        ];
+
+        if ($validated['action'] === 'convert') {
+            $updates['status'] = 'converted';
+        }
+
+        if ($validated['action'] === 'archive') {
+            $updates['archived_at'] = now();
+        }
+
+        $lead->update($updates);
+
+        TimelineEvent::create([
+            'platform_id' => $lead->platform_id,
+            'entity_type' => 'lead',
+            'entity_id' => $lead->id,
+            'event_type' => 'lead_reconciled',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'action' => $validated['action'],
+                'client_id' => (int) $client->id,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $lead->platform_id,
+            CrmAuditAction::LEAD_RECONCILE,
+            'lead',
+            (int) $lead->id,
+            $beforeState,
+            [
+                'status' => $lead->status,
+                'converted_client_id' => $lead->converted_client_id,
+                'archived_at' => optional($lead->archived_at)->toDateTimeString(),
+                'action' => $validated['action'],
+            ],
+            (string) $validated['reason']
+        );
+
+        $lead->load(['platform', 'assignedAgent', 'convertedClient']);
+        $matched = $this->resolveMatchedClientSummary($lead);
+        $lead->setAttribute('matched_client', $matched);
+        $lead->setAttribute('match_confidence', $matched['confidence'] ?? null);
+
+        return response()->json([
+            'lead' => $lead,
+            'message' => 'Lead reconciliation applied.',
+        ]);
     }
 
     public function archive(Request $request, Lead $lead)
@@ -692,6 +789,63 @@ class LeadController extends Controller
         }
 
         return null;
+    }
+
+    private function resolveMatchedClientSummary(Lead $lead): ?array
+    {
+        $clientId = $this->resolveConvertedClientId($lead, null);
+        if (!$clientId) {
+            return null;
+        }
+
+        $client = Client::query()
+            ->where('id', (int) $clientId)
+            ->where('platform_id', (int) $lead->platform_id)
+            ->first([
+                'id',
+                'name',
+                'wp_post_id',
+                'wp_user_id',
+                'phone_normalized',
+                'email',
+                'profile_status',
+            ]);
+
+        if (!$client) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $client->id,
+            'name' => $client->name,
+            'wp_post_id' => $client->wp_post_id,
+            'wp_user_id' => $client->wp_user_id,
+            'phone_normalized' => $client->phone_normalized,
+            'email' => $client->email,
+            'profile_status' => $client->profile_status,
+            'confidence' => $this->resolveMatchConfidence($lead, $client),
+        ];
+    }
+
+    private function resolveMatchConfidence(Lead $lead, Client $client): string
+    {
+        if ($lead->converted_client_id && (int) $lead->converted_client_id === (int) $client->id) {
+            return 'confirmed';
+        }
+
+        if ($lead->wp_post_id && (int) $lead->wp_post_id === (int) $client->wp_post_id) {
+            return 'high';
+        }
+
+        if ($lead->wp_user_id && (int) $lead->wp_user_id === (int) $client->wp_user_id) {
+            return 'high';
+        }
+
+        if ($lead->phone_normalized && $lead->phone_normalized === $client->phone_normalized) {
+            return 'medium';
+        }
+
+        return 'low';
     }
 
     private function createManualLead(Request $request, array $payload, string $reason): Lead
