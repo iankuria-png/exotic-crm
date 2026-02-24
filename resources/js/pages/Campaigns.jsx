@@ -42,18 +42,18 @@ export default function Campaigns() {
         open: false,
         deal: null,
         days: '30',
-        reason: 'Manual renewal from renewals workspace',
+        reason: 'Manual renewal from campaigns workspace',
     });
     const [pauseDialog, setPauseDialog] = useState({
         open: false,
         deal: null,
         pauseUntil: '',
-        reason: 'Pause reminders from renewals workspace',
+        reason: 'Pause reminders from campaigns workspace',
     });
     const [resumeDialog, setResumeDialog] = useState({
         open: false,
         deal: null,
-        reason: 'Resume reminders from renewals workspace',
+        reason: 'Resume reminders from campaigns workspace',
     });
     const [runConfigOpen, setRunConfigOpen] = useState(false);
     const [runConfig, setRunConfig] = useState({
@@ -78,6 +78,28 @@ export default function Campaigns() {
                     ...(bucketFilter ? { bucket: bucketFilter } : {}),
                 },
             }).then((response) => response.data),
+    });
+
+    const { data: runScopePreview, isFetching: isFetchingRunScopePreview } = useQuery({
+        queryKey: [
+            'campaign-run-scope-preview',
+            runConfigOpen,
+            runConfig.bucket,
+            runConfig.platform_id,
+            runConfig.search,
+        ],
+        enabled: runConfigOpen,
+        queryFn: () =>
+            api.get('/crm/renewals', {
+                params: {
+                    page: 1,
+                    per_page: 1,
+                    ...(runConfig.bucket ? { bucket: runConfig.bucket } : {}),
+                    ...(runConfig.platform_id ? { platform_id: Number(runConfig.platform_id) } : {}),
+                    ...(runConfig.search.trim() ? { search: runConfig.search.trim() } : {}),
+                },
+            }).then((response) => response.data),
+        staleTime: 15 * 1000,
     });
 
     const runCampaignsMutation = useMutation({
@@ -131,7 +153,7 @@ export default function Campaigns() {
                 open: false,
                 deal: null,
                 days: '30',
-                reason: 'Manual renewal from renewals workspace',
+                reason: 'Manual renewal from campaigns workspace',
             });
             setFeedback({
                 tone: 'success',
@@ -160,7 +182,7 @@ export default function Campaigns() {
                 open: false,
                 deal: null,
                 pauseUntil: '',
-                reason: 'Pause reminders from renewals workspace',
+                reason: 'Pause reminders from campaigns workspace',
             });
             setFeedback({
                 tone: 'success',
@@ -186,7 +208,7 @@ export default function Campaigns() {
             setResumeDialog({
                 open: false,
                 deal: null,
-                reason: 'Resume reminders from renewals workspace',
+                reason: 'Resume reminders from campaigns workspace',
             });
             setFeedback({
                 tone: 'success',
@@ -278,7 +300,14 @@ export default function Campaigns() {
     }, [rows]);
 
     const previewTargets = useMemo(
-        () => (runPreview?.campaigns || []).flatMap((campaign) => campaign.targets_preview || []).slice(0, 12),
+        () => (
+            runPreview?.campaigns || []
+        ).flatMap((campaign) => (
+            (campaign.targets_preview || []).map((target) => ({
+                ...target,
+                campaign_id: campaign.campaign_id,
+            }))
+        )).slice(0, 12),
         [runPreview],
     );
 
@@ -296,6 +325,62 @@ export default function Campaigns() {
             }));
         }
     }, [campaignOptions, runConfig.campaign_ids.length]);
+
+    const targetCountPreview = runScopePreview?.targets?.total ?? data?.targets?.total ?? 0;
+
+    const openRunConfigDialog = () => {
+        setRunPreview(null);
+        setRunConfig((current) => ({
+            ...current,
+            search: search || current.search,
+            bucket: bucketFilter || current.bucket,
+        }));
+        setRunConfigOpen(true);
+    };
+
+    const updateRunConfig = (patch) => {
+        setRunPreview(null);
+        setRunConfig((current) => ({
+            ...current,
+            ...patch,
+        }));
+    };
+
+    const toggleCampaignSelection = (campaignId) => {
+        setRunPreview(null);
+        setRunConfig((current) => {
+            const nextCampaignIds = current.campaign_ids.includes(campaignId)
+                ? current.campaign_ids.filter((id) => id !== campaignId)
+                : [...current.campaign_ids, campaignId];
+
+            return {
+                ...current,
+                campaign_ids: nextCampaignIds,
+            };
+        });
+    };
+
+    const submitCampaignRun = () => {
+        if (!runConfig.campaign_ids.length) {
+            setFeedback({
+                tone: 'warning',
+                text: 'Select at least one campaign before running.',
+            });
+            return;
+        }
+
+        const payload = {
+            campaign_ids: runConfig.campaign_ids,
+            channel: runConfig.channel,
+            dry_run: runConfig.dry_run,
+            reason: runConfig.reason.trim() || 'Campaign run configured from campaigns page',
+            ...(runConfig.bucket ? { bucket: runConfig.bucket } : {}),
+            ...(runConfig.platform_id ? { platform_id: Number(runConfig.platform_id) } : {}),
+            ...(runConfig.search.trim() ? { search: runConfig.search.trim() } : {}),
+        };
+
+        runCampaignsMutation.mutate(payload);
+    };
 
     const lastRun = data?.recent_runs?.[0];
 
@@ -439,16 +524,15 @@ export default function Campaigns() {
     return (
         <div className="space-y-4">
             <PageHeader
-                title="Renewals"
-                subtitle={data?.targets?.total ? `${data.targets.total.toLocaleString()} renewal targets in scope` : 'Manage upcoming expiries and SMS campaign runs.'}
+                title="Campaigns"
+                subtitle={data?.targets?.total ? `${data.targets.total.toLocaleString()} campaign targets in scope` : 'Configure outreach campaigns and manage reminder automation.'}
                 actions={(
                     <button
                         type="button"
-                        onClick={() => runCampaignsMutation.mutate()}
-                        disabled={runCampaignsMutation.isPending}
-                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={openRunConfigDialog}
+                        className="crm-btn-primary"
                     >
-                        {runCampaignsMutation.isPending ? 'Running...' : 'Run Campaigns'}
+                        Run Campaigns
                     </button>
                 )}
             />
@@ -465,13 +549,46 @@ export default function Campaigns() {
 
             {lastRun ? (
                 <section className="crm-surface p-4">
-                    <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Most Recent Renewal Run</p>
+                    <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Most Recent Campaign Run</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">
                         {new Date(lastRun.run_at).toLocaleString()} • {lastRun.status}
                     </p>
                     <p className="mt-1 text-xs text-slate-600">
                         Targeted: {lastRun.total_targeted} • Sent: {lastRun.sent_count} • Failed: {lastRun.failed_count} • Skipped: {lastRun.skipped_count}
                     </p>
+                </section>
+            ) : null}
+
+            {runPreview ? (
+                <section className="crm-surface p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Dry-Run Preview</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                Targeted: {runPreview?.totals?.targeted || 0} • Sent: {runPreview?.totals?.sent || 0} • Failed: {runPreview?.totals?.failed || 0}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setRunPreview(null)}
+                            className="crm-btn-secondary px-3 py-1.5 text-xs"
+                        >
+                            Clear preview
+                        </button>
+                    </div>
+                    {previewTargets.length ? (
+                        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                            {previewTargets.map((target, index) => (
+                                <div key={`${target.client_id || target.deal_id || 'target'}_${index}`} className="rounded-md border border-slate-200 bg-slate-50 p-2.5 text-xs">
+                                    <p className="font-semibold text-slate-900">{target.client_name || target.phone || `Client #${target.client_id || 'N/A'}`}</p>
+                                    <p className="text-slate-600">{target.phone || 'No phone'}</p>
+                                    <p className="text-slate-500">Campaign: {target.campaign_name || target.campaign_id || 'N/A'}</p>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="mt-2 text-xs text-slate-500">No targets matched the current dry-run configuration.</p>
+                    )}
                 </section>
             ) : null}
 
@@ -485,7 +602,7 @@ export default function Campaigns() {
                                 placeholder="Search by client name or phone..."
                                 className="crm-input pr-10"
                             />
-                            <button type="submit" aria-label="Run renewals search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                            <button type="submit" aria-label="Run campaigns search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
                                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                 </svg>
@@ -584,7 +701,7 @@ export default function Campaigns() {
                 onPageChange={setPage}
                 onRowClick={(row) => setActiveDeal(row)}
                 isLoading={isLoading}
-                emptyMessage="No renewals match current filters."
+                emptyMessage="No campaign targets match current filters."
                 compact
                 selectable
                 bulkActions={bulkActions}
@@ -659,7 +776,7 @@ export default function Campaigns() {
                                                 open: true,
                                                 deal: activeDealRow,
                                                 days: '30',
-                                                reason: 'Manual renewal from renewals workspace',
+                                                reason: 'Manual renewal from campaigns workspace',
                                             });
                                         }}
                                         className={`crm-btn-primary text-xs ${activeDealRow.is_virtual ? 'opacity-50 grayscale' : ''}`}
@@ -673,7 +790,7 @@ export default function Campaigns() {
                                                 setResumeDialog({
                                                     open: true,
                                                     deal: activeDealRow,
-                                                    reason: 'Resume reminders from renewals workspace',
+                                                    reason: 'Resume reminders from campaigns workspace',
                                                 });
                                                 return;
                                             }
@@ -682,7 +799,7 @@ export default function Campaigns() {
                                                 open: true,
                                                 deal: activeDealRow,
                                                 pauseUntil: '',
-                                                reason: 'Pause reminders from renewals workspace',
+                                                reason: 'Pause reminders from campaigns workspace',
                                             });
                                         }}
                                         className="crm-btn-secondary text-xs"
@@ -723,10 +840,200 @@ export default function Campaigns() {
                 </div>
             ) : null}
 
+            {runConfigOpen ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+                    onClick={() => setRunConfigOpen(false)}
+                >
+                    <div
+                        className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white shadow-xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Campaign Run Configuration</h3>
+                                <p className="crm-panel-subtitle">Choose campaigns, target scope, and execution mode before sending.</p>
+                            </div>
+                        </header>
+
+                        <div className="max-h-[70vh] space-y-4 overflow-y-auto p-4">
+                            <section className="space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">Campaign selection</p>
+                                    <button
+                                        type="button"
+                                        className="crm-btn-secondary px-2.5 py-1 text-xs"
+                                        onClick={() =>
+                                            updateRunConfig({
+                                                campaign_ids: campaignOptions
+                                                    .filter((campaign) => campaign.enabled)
+                                                    .map((campaign) => campaign.id),
+                                            })
+                                        }
+                                    >
+                                        Select enabled
+                                    </button>
+                                </div>
+                                <div className="grid gap-2 md:grid-cols-2">
+                                    {campaignOptions.map((campaign) => {
+                                        const selected = runConfig.campaign_ids.includes(campaign.id);
+                                        const campaignLabel = campaign.name || campaign.title || campaign.template?.title || `Campaign #${campaign.id}`;
+                                        const campaignChannel = campaign.template?.channel || campaign.channel || 'N/A';
+                                        return (
+                                            <label
+                                                key={campaign.id}
+                                                className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm transition ${
+                                                    selected
+                                                        ? 'border-teal-200 bg-teal-50'
+                                                        : 'border-slate-200 bg-white hover:border-slate-300'
+                                                }`}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selected}
+                                                    onChange={() => toggleCampaignSelection(campaign.id)}
+                                                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                <span className="min-w-0">
+                                                    <span className="block font-medium text-slate-900">{campaignLabel}</span>
+                                                    <span className="block text-xs text-slate-500">
+                                                        Trigger: {campaign.trigger_days} day(s) • Template: {campaign.template?.title || 'N/A'} • Channel: {campaignChannel}
+                                                    </span>
+                                                </span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                {!campaignOptions.length ? (
+                                    <p className="text-xs text-slate-500">No campaign rules are configured yet. Create campaigns in settings before running.</p>
+                                ) : null}
+                            </section>
+
+                            <section className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label htmlFor="campaign-bucket" className="mb-1 block text-sm font-medium text-slate-700">
+                                        Target bucket
+                                    </label>
+                                    <select
+                                        id="campaign-bucket"
+                                        value={runConfig.bucket}
+                                        onChange={(event) => updateRunConfig({ bucket: event.target.value })}
+                                        className="crm-select"
+                                    >
+                                        <option value="">All targets</option>
+                                        <option value="active">Active</option>
+                                        <option value="risk">At Risk</option>
+                                        <option value="pending">Pending</option>
+                                        <option value="stable">Stable</option>
+                                        <option value="expired">Expired</option>
+                                        <option value="lapsed">Lapsed</option>
+                                        <option value="paused">Paused</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label htmlFor="campaign-platform" className="mb-1 block text-sm font-medium text-slate-700">
+                                        Market
+                                    </label>
+                                    <select
+                                        id="campaign-platform"
+                                        value={runConfig.platform_id}
+                                        onChange={(event) => updateRunConfig({ platform_id: event.target.value })}
+                                        className="crm-select"
+                                    >
+                                        <option value="">All accessible markets</option>
+                                        {platformOptions.map((platform) => (
+                                            <option key={platform.id} value={platform.id}>
+                                                {platform.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label htmlFor="campaign-channel" className="mb-1 block text-sm font-medium text-slate-700">
+                                        Channel
+                                    </label>
+                                    <select
+                                        id="campaign-channel"
+                                        value={runConfig.channel}
+                                        onChange={(event) => updateRunConfig({ channel: event.target.value })}
+                                        className="crm-select"
+                                    >
+                                        <option value="sms">SMS</option>
+                                        <option value="email">Email</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label htmlFor="campaign-search" className="mb-1 block text-sm font-medium text-slate-700">
+                                        Search scope
+                                    </label>
+                                    <input
+                                        id="campaign-search"
+                                        value={runConfig.search}
+                                        onChange={(event) => updateRunConfig({ search: event.target.value })}
+                                        placeholder="Name or phone"
+                                        className="crm-input"
+                                    />
+                                </div>
+                            </section>
+
+                            <section className="space-y-2">
+                                <label className="flex items-center gap-2 text-sm text-slate-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={runConfig.dry_run}
+                                        onChange={(event) => updateRunConfig({ dry_run: event.target.checked })}
+                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                    />
+                                    Dry run (preview recipients without sending messages)
+                                </label>
+                                <label htmlFor="campaign-reason" className="block text-sm font-medium text-slate-700">
+                                    Reason
+                                </label>
+                                <textarea
+                                    id="campaign-reason"
+                                    rows={3}
+                                    value={runConfig.reason}
+                                    onChange={(event) => updateRunConfig({ reason: event.target.value })}
+                                    className="crm-input"
+                                />
+                                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                    Target count preview:{' '}
+                                    <span className="font-semibold text-slate-900">
+                                        {isFetchingRunScopePreview ? 'Calculating...' : targetCountPreview.toLocaleString()}
+                                    </span>
+                                </div>
+                            </section>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                onClick={() => setRunConfigOpen(false)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={runCampaignsMutation.isPending || !runConfig.campaign_ids.length}
+                                onClick={submitCampaignRun}
+                            >
+                                {runCampaignsMutation.isPending
+                                    ? 'Running...'
+                                    : runConfig.dry_run
+                                        ? 'Run Dry Preview'
+                                        : 'Execute Campaigns'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
             {renewDialog.open && renewDialog.deal ? (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
-                    onClick={() => setRenewDialog({ open: false, deal: null, days: '30', reason: 'Manual renewal from renewals workspace' })}
+                    onClick={() => setRenewDialog({ open: false, deal: null, days: '30', reason: 'Manual renewal from campaigns workspace' })}
                 >
                     <div
                         className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
@@ -774,7 +1081,7 @@ export default function Campaigns() {
                             <button
                                 type="button"
                                 className="crm-btn-secondary"
-                                onClick={() => setRenewDialog({ open: false, deal: null, days: '30', reason: 'Manual renewal from renewals workspace' })}
+                                onClick={() => setRenewDialog({ open: false, deal: null, days: '30', reason: 'Manual renewal from campaigns workspace' })}
                             >
                                 Cancel
                             </button>
@@ -798,7 +1105,7 @@ export default function Campaigns() {
             {pauseDialog.open && pauseDialog.deal ? (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
-                    onClick={() => setPauseDialog({ open: false, deal: null, pauseUntil: '', reason: 'Pause reminders from renewals workspace' })}
+                    onClick={() => setPauseDialog({ open: false, deal: null, pauseUntil: '', reason: 'Pause reminders from campaigns workspace' })}
                 >
                     <div
                         className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
@@ -846,7 +1153,7 @@ export default function Campaigns() {
                             <button
                                 type="button"
                                 className="crm-btn-secondary"
-                                onClick={() => setPauseDialog({ open: false, deal: null, pauseUntil: '', reason: 'Pause reminders from renewals workspace' })}
+                                onClick={() => setPauseDialog({ open: false, deal: null, pauseUntil: '', reason: 'Pause reminders from campaigns workspace' })}
                             >
                                 Cancel
                             </button>
@@ -871,7 +1178,7 @@ export default function Campaigns() {
             {resumeDialog.open && resumeDialog.deal ? (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
-                    onClick={() => setResumeDialog({ open: false, deal: null, reason: 'Resume reminders from renewals workspace' })}
+                    onClick={() => setResumeDialog({ open: false, deal: null, reason: 'Resume reminders from campaigns workspace' })}
                 >
                     <div
                         className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
@@ -906,7 +1213,7 @@ export default function Campaigns() {
                             <button
                                 type="button"
                                 className="crm-btn-secondary"
-                                onClick={() => setResumeDialog({ open: false, deal: null, reason: 'Resume reminders from renewals workspace' })}
+                                onClick={() => setResumeDialog({ open: false, deal: null, reason: 'Resume reminders from campaigns workspace' })}
                             >
                                 Cancel
                             </button>

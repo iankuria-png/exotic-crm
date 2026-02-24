@@ -24,13 +24,13 @@ React SPA (Vite 6)  →  Laravel 10 API (Sanctum)  →  MySQL (shared with Ads A
 | CRM controllers | `app/Http/Controllers/CRM/` |
 | Ads API controllers | `app/Http/Controllers/API/` (existing, do NOT break) |
 | CRM models | `app/Models/{Client,Lead,Deal,Template,RenewalCampaign,RenewalRun,TimelineEvent,AuditLog,ClientNote}.php` |
-| CRM services | `app/Services/{WpSyncService,ClientSyncService}.php` |
+| CRM services | `app/Services/{WpSyncService,ClientSyncService,RenewalService,PaymentMatchingService}.php` |
 | React entry | `resources/js/app.jsx` |
 | React pages | `resources/js/pages/` |
 | React components | `resources/js/components/` |
 | SPA blade template | `resources/views/crm.blade.php` |
 | WP sync plugin | `/Users/ian/Local Sites/exotic/app/public/wp-content/plugins/exotic-crm-sync/` |
-| Plan document | `~/.claude/plans/replicated-exploring-treasure.md` |
+| Plan document | `~/.claude/plans/zesty-plotting-snowglobe.md` |
 
 ## Running Locally
 
@@ -63,6 +63,13 @@ Requires Local by Flywheel running (provides MySQL + WordPress).
 - `platforms`: `wp_api_url`, `wp_api_user`, `wp_api_password`, `phone_prefix`, `timezone`, `currency_code`
 - `users`: `assigned_market_ids`, `status`
 - `payments`: `deal_id`, `client_id`, `match_confidence`, `confirmed_by`, `confirmed_at`
+- `clients`: `last_online_at`, `duplicate_of`
+- `deals`: `is_free_trial`, `free_trial_approved_by`, `payment_reference`, status enum now includes `renewed`
+- `platforms`: `payment_link_providers`
+
+### CRM Performance Indexes
+- `timeline_events(entity_type, entity_id, event_type)`
+- `payments(deal_id, status)`
 
 ## API Routes
 
@@ -97,7 +104,8 @@ Requires Local by Flywheel running (provides MySQL + WordPress).
 | Sprint | Status | Key Deliverable |
 |--------|--------|----------------|
 | Sprint 1: Foundation + Auth | ✅ Complete | 4,794 profiles synced, SPA shell, WP plugin |
-| Sprint 2: Clients + Payments + Deals | Pending | Client detail, activation flow, payments UI |
-| Sprint 3: Leads + Renewals + Notifications | Pending | Pipeline, renewal campaigns, SMS/email |
-| Sprint 4: Dashboard + Reports + Settings | Pending | KPIs, charts, RBAC, audit log |
-| Sprint 5: Polish + Testing + Launch | Pending | E2E testing, deploy, go-live |
+| Sprint 2: Clients + Payments + Deals | ✅ Complete | Core lifecycle management, payment matching, subscriptions baseline |
+| Sprint 3: Leads + Renewals + Notifications | ✅ Complete | Lead reconciliation, campaign workflows, reminders |
+| Sprint 4: Dashboard + Reports + Settings | ✅ Complete | KPI/reporting surfaces, settings workspace, audit visibility |
+| Sprint 5: Polish + Testing + Launch | ✅ Complete | Hardening, UX cleanup, regression coverage |
+| Sprint 6: Comprehensive Remediation | ✅ Complete | Campaigns rename/config modal, profile health, WP profile/media sync, free-trial + renew flows |
