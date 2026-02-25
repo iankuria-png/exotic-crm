@@ -18,8 +18,15 @@ function normalizePhone(phone) {
     return cleaned;
 }
 
+function percentage(part, total) {
+    if (!total) return 0;
+    return Math.round((Number(part || 0) / Number(total)) * 100);
+}
+
 export default function Clients() {
     const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending']);
+    const allowedPlans = new Set(['premium', 'featured', 'basic']);
+    const allowedVerifiedFilters = new Set(['1', '0']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -32,7 +39,14 @@ export default function Clients() {
         const requested = (searchParams.get('status') || '').trim();
         return allowedStatuses.has(requested) ? requested : '';
     });
-    const [planFilter, setPlanFilter] = useState('');
+    const [planFilter, setPlanFilter] = useState(() => {
+        const requested = (searchParams.get('plan') || '').trim();
+        return allowedPlans.has(requested) ? requested : '';
+    });
+    const [verifiedFilter, setVerifiedFilter] = useState(() => {
+        const requested = (searchParams.get('verified') || '').trim();
+        return allowedVerifiedFilters.has(requested) ? requested : '';
+    });
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
@@ -55,7 +69,7 @@ export default function Clients() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, search, statusFilter, planFilter],
+        queryKey: ['clients', page, search, statusFilter, planFilter, verifiedFilter],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
@@ -64,6 +78,7 @@ export default function Clients() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(planFilter && { plan: planFilter }),
+                    ...(verifiedFilter !== '' && { verified: verifiedFilter }),
                 },
             }).then((response) => response.data),
     });
@@ -211,6 +226,45 @@ export default function Clients() {
         };
     }, [data?.stats, data?.total, rows]);
 
+    const metricShare = useMemo(() => ({
+        active: percentage(stats.active, stats.total),
+        premium: percentage(stats.premium, stats.total),
+        verified: percentage(stats.verified, stats.total),
+    }), [stats]);
+
+    const activeMetric = useMemo(() => {
+        if (statusFilter === 'publish' && planFilter === '' && verifiedFilter === '') return 'active';
+        if (planFilter === 'premium' && statusFilter === '' && verifiedFilter === '') return 'premium';
+        if (verifiedFilter === '1' && statusFilter === '' && planFilter === '') return 'verified';
+        return '';
+    }, [statusFilter, planFilter, verifiedFilter]);
+
+    const applyMetricFilter = (metricKey) => {
+        if (activeMetric === metricKey) {
+            setStatusFilter('');
+            setPlanFilter('');
+            setVerifiedFilter('');
+            setPage(1);
+            return;
+        }
+
+        if (metricKey === 'active') {
+            setStatusFilter('publish');
+            setPlanFilter('');
+            setVerifiedFilter('');
+        } else if (metricKey === 'premium') {
+            setStatusFilter('');
+            setPlanFilter('premium');
+            setVerifiedFilter('');
+        } else if (metricKey === 'verified') {
+            setStatusFilter('');
+            setPlanFilter('');
+            setVerifiedFilter('1');
+        }
+
+        setPage(1);
+    };
+
     const columns = [
         {
             key: 'name',
@@ -305,7 +359,9 @@ export default function Clients() {
         <div className="space-y-4">
             <PageHeader
                 title="Clients"
-                subtitle={stats.total ? `${stats.total.toLocaleString()} client records in this scope` : 'Manage client records and subscription status.'}
+                subtitle={stats.total
+                    ? `${stats.total.toLocaleString()} clients in scope • ${stats.active.toLocaleString()} active • ${stats.verified.toLocaleString()} verified`
+                    : 'Manage client records and subscription status.'}
                 actions={(
                     <>
                         <button
@@ -327,10 +383,33 @@ export default function Clients() {
             />
 
             <section className="grid gap-4 md:grid-cols-3">
-                <MetricCard label="Active Clients" value={stats.active.toLocaleString()} meta="full filtered dataset" tone="success" />
-                <MetricCard label="Premium Profiles" value={stats.premium.toLocaleString()} meta="full filtered dataset" tone="accent" />
-                <MetricCard label="Verified Profiles" value={stats.verified.toLocaleString()} meta="full filtered dataset" tone="default" />
+                <MetricCard
+                    label="Active Clients"
+                    value={stats.active.toLocaleString()}
+                    meta={`${metricShare.active}% of current scope in publish status`}
+                    tone="success"
+                    onClick={() => applyMetricFilter('active')}
+                    active={activeMetric === 'active'}
+                />
+                <MetricCard
+                    label="Premium Profiles"
+                    value={stats.premium.toLocaleString()}
+                    meta={`${metricShare.premium}% of current scope on premium plan`}
+                    tone="accent"
+                    onClick={() => applyMetricFilter('premium')}
+                    active={activeMetric === 'premium'}
+                />
+                <MetricCard
+                    label="Verified Profiles"
+                    value={stats.verified.toLocaleString()}
+                    meta={`${metricShare.verified}% of current scope identity verified`}
+                    tone="default"
+                    onClick={() => applyMetricFilter('verified')}
+                    active={activeMetric === 'verified'}
+                />
             </section>
+
+            <p className="px-1 text-xs text-slate-500">Click a metric card to segment the table. Click the same card again to clear.</p>
 
             <section className="crm-filter-row">
                 <div className="flex flex-wrap items-center gap-3">
@@ -380,7 +459,20 @@ export default function Clients() {
                         <option value="basic">Basic</option>
                     </select>
 
-                    {(search || statusFilter || planFilter) ? (
+                    <select
+                        value={verifiedFilter}
+                        onChange={(event) => {
+                            setVerifiedFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All verification</option>
+                        <option value="1">Verified only</option>
+                        <option value="0">Not verified</option>
+                    </select>
+
+                    {(search || statusFilter || planFilter || verifiedFilter !== '') ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -388,6 +480,7 @@ export default function Clients() {
                                 setSearchInput('');
                                 setStatusFilter('');
                                 setPlanFilter('');
+                                setVerifiedFilter('');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"
@@ -396,7 +489,7 @@ export default function Clients() {
                         </button>
                     ) : null}
                 </div>
-                <p className="mt-2 text-xs text-slate-500">Plan labels: Basic = standard listing, Featured = promoted visibility, Premium = top-tier placement, Verified = identity badge. Numeric search supports CRM/WP IDs.</p>
+                <p className="mt-2 text-xs text-slate-500">Quick segments: Active, Premium, and Verified cards map to table filters. Numeric search supports CRM/WP IDs.</p>
             </section>
 
             {csvResult ? (
