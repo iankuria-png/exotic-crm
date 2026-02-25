@@ -223,13 +223,34 @@ export default function Deals() {
                 legacyActive: Number((data.summary.active_deals || 0) - (data.summary.modern_active_count || 0)),
                 pending: Number(data.summary.pending || 0),
                 risk: Number(data.summary.risk || 0),
-                monthRevenue: Number(data.summary.pipeline_value || 0),
-                verifiedRevenue: Number(data.summary.verified_revenue || 0),
+                expired: Number(data.summary.expired_deals || 0),
             };
         }
 
-        return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, monthRevenue: 0, verifiedRevenue: 0 };
+        return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, expired: 0 };
     }, [data?.summary]);
+
+    const activeMetric = useMemo(() => {
+        if (bucket === 'active') return 'warehouse';
+        if (bucket === 'risk') return 'risk';
+        if (bucket === 'pending') return 'pipeline';
+        if (bucket === 'expired') return 'expired';
+        return '';
+    }, [bucket]);
+
+    const applyMetricFilter = (metricKey) => {
+        const metricBucketMap = {
+            warehouse: 'active',
+            risk: 'risk',
+            pipeline: 'pending',
+            expired: 'expired',
+        };
+
+        const nextBucket = metricBucketMap[metricKey] || 'all';
+        setBucket((current) => (current === nextBucket ? 'all' : nextBucket));
+        setStatusFilter('');
+        setPage(1);
+    };
 
     const selectedClientPhone = selectedClientData?.phone_normalized || selectedDeal?.client?.phone_normalized || '';
 
@@ -453,11 +474,41 @@ export default function Deals() {
             />
 
             <section className="grid gap-4 md:grid-cols-4">
-                <MetricCard label="Active Warehouse" value={`${summary.active.toLocaleString()} / ${data?.targets?.total?.toLocaleString() || 0}`} meta={`${summary.modernActive} Modern + ${summary.legacyActive} Legacy`} tone="success" />
-                <MetricCard label="Immediate Risk" value={summary.risk.toLocaleString()} meta="Expiries in next 72 hours" tone="warning" />
-                <MetricCard label="Renewal Pipeline" value={summary.pending.toLocaleString()} meta="Expiries in 4-14 days" tone="accent" />
-                <MetricCard label="Forecasted Revenue" value={formatCurrency(summary.monthRevenue)} meta="Verified + Pending Sum" tone="slate" />
+                <MetricCard
+                    label="Active Warehouse"
+                    value={`${summary.active.toLocaleString()} / ${data?.targets?.total?.toLocaleString() || 0}`}
+                    meta={`${summary.modernActive} Modern + ${summary.legacyActive} Legacy`}
+                    tone="success"
+                    onClick={() => applyMetricFilter('warehouse')}
+                    active={activeMetric === 'warehouse'}
+                />
+                <MetricCard
+                    label="Immediate Risk"
+                    value={summary.risk.toLocaleString()}
+                    meta="Expiries in next 72 hours"
+                    tone="warning"
+                    onClick={() => applyMetricFilter('risk')}
+                    active={activeMetric === 'risk'}
+                />
+                <MetricCard
+                    label="Renewal Pipeline"
+                    value={summary.pending.toLocaleString()}
+                    meta="Expiries in 4-14 days"
+                    tone="accent"
+                    onClick={() => applyMetricFilter('pipeline')}
+                    active={activeMetric === 'pipeline'}
+                />
+                <MetricCard
+                    label="Recently Expired"
+                    value={summary.expired.toLocaleString()}
+                    meta="Expired in last 14 days"
+                    tone="danger"
+                    onClick={() => applyMetricFilter('expired')}
+                    active={activeMetric === 'expired'}
+                />
             </section>
+
+            <p className="px-1 text-xs text-slate-500">Click a metric card to filter this table. Click it again to clear.</p>
 
             <section className="crm-filter-row">
                 <div className="flex flex-wrap items-center gap-3">
