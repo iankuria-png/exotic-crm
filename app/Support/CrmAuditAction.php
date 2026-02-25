@@ -38,6 +38,7 @@ final class CrmAuditAction
     public const PAYMENT_RETRY_STK = 'payment_retry_stk';
     public const PAYMENT_SEND_LINK = 'payment_send_link';
     public const PAYMENT_CREATE_SUBSCRIPTION = 'payment_create_subscription';
+    public const PAYMENT_MANUAL_CLOSE = 'payment_manual_close';
     public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
     public const LEAD_RECONCILE = 'lead_reconcile';

@@ -6,9 +6,11 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Payment;
 use App\Models\Client;
+use App\Models\AuditLog;
 use App\Services\AuditService;
 use App\Services\NotificationService;
 use App\Services\PaymentMatchingService;
+use App\Services\PaymentAttemptService;
 use App\Services\MarketAuthorizationService;
 use App\Support\CrmAuditAction;
 use Illuminate\Support\Facades\Http;
@@ -20,7 +22,8 @@ class PaymentQueueController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
-        private readonly NotificationService $notificationService
+        private readonly NotificationService $notificationService,
+        private readonly PaymentAttemptService $paymentAttemptService
     ) {
     }
 
@@ -359,6 +362,190 @@ class PaymentQueueController extends Controller
         return response()->json($results);
     }
 
+    public function diagnostics(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $payment->load(['platform', 'product', 'client', 'deal', 'confirmedBy']);
+
+        $attempts = $payment->attempts()
+            ->with('actor:id,name,email')
+            ->orderByDesc('created_at')
+            ->limit(30)
+            ->get();
+
+        $auditEntries = AuditLog::query()
+            ->with('actor:id,name,email')
+            ->where('entity_type', 'payment')
+            ->where('entity_id', $payment->id)
+            ->whereIn('action', [
+                CrmAuditAction::PAYMENT_RETRY_STK,
+                CrmAuditAction::PAYMENT_SEND_LINK,
+                CrmAuditAction::PAYMENT_MATCH_AUTO,
+                CrmAuditAction::PAYMENT_MATCH_CONFIRM,
+                CrmAuditAction::PAYMENT_CREATE_SUBSCRIPTION,
+                CrmAuditAction::PAYMENT_MANUAL_CLOSE,
+            ])
+            ->orderByDesc('id')
+            ->limit(30)
+            ->get();
+
+        $latestFailedAttempt = $attempts->first(fn($attempt) => $attempt->status === 'failed');
+        $latestAttempt = $attempts->first();
+        $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
+        $manualCloseMeta = $rawPayload['manual_close'] ?? null;
+
+        $requestMeta = $attempts
+            ->map(fn($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
+            ->first(fn($meta) => is_array($meta) && !empty($meta));
+
+        $latencies = $attempts
+            ->pluck('latency_ms')
+            ->filter(fn($latency) => $latency !== null)
+            ->map(fn($latency) => (int) $latency)
+            ->sort()
+            ->values();
+
+        $avgLatency = $latencies->count() > 0
+            ? (int) round($latencies->sum() / $latencies->count())
+            : null;
+        $p95Latency = $latencies->count() > 0
+            ? (int) $latencies->get(max(0, (int) ceil(($latencies->count() * 0.95) - 1)))
+            : null;
+
+        $failureStage = $this->resolveFailureStage($payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta);
+        $failureReason = $latestFailedAttempt?->error_message
+            ?? (is_array($rawPayload['failure_data'] ?? null) ? ($rawPayload['failure_data']['message'] ?? null) : null)
+            ?? (is_array($manualCloseMeta) ? ($manualCloseMeta['reason'] ?? null) : null);
+
+        return response()->json([
+            'payment' => $payment,
+            'failure' => [
+                'status' => $payment->status,
+                'stage' => $failureStage,
+                'reason' => $failureReason,
+                'error_code' => $latestFailedAttempt?->error_code ?? null,
+                'http_status' => $latestFailedAttempt?->http_status ?? null,
+                'manual_close' => is_array($manualCloseMeta) ? $manualCloseMeta : null,
+            ],
+            'performance' => [
+                'attempt_count' => $attempts->count(),
+                'avg_latency_ms' => $avgLatency,
+                'p95_latency_ms' => $p95Latency,
+                'last_latency_ms' => $latestAttempt?->latency_ms ? (int) $latestAttempt->latency_ms : null,
+            ],
+            'browser_meta' => [
+                'origin_url' => $requestMeta['origin_url'] ?? null,
+                'referrer' => $requestMeta['referrer'] ?? null,
+                'user_agent_family' => $requestMeta['user_agent_family'] ?? null,
+                'device_type' => $requestMeta['device_type'] ?? null,
+                'ip_hash' => $requestMeta['ip_hash'] ?? null,
+                'request_id' => $requestMeta['request_id'] ?? null,
+            ],
+            'recommendations' => $this->buildRecommendations($payment),
+            'attempts' => $attempts->map(function ($attempt) {
+                return [
+                    'id' => (int) $attempt->id,
+                    'attempt_type' => $attempt->attempt_type,
+                    'provider' => $attempt->provider,
+                    'status' => $attempt->status,
+                    'error_code' => $attempt->error_code,
+                    'error_message' => $attempt->error_message,
+                    'http_status' => $attempt->http_status,
+                    'latency_ms' => $attempt->latency_ms,
+                    'request_meta' => $attempt->request_meta,
+                    'response_meta' => $attempt->response_meta,
+                    'actor' => $attempt->actor ? [
+                        'id' => (int) $attempt->actor->id,
+                        'name' => $attempt->actor->name,
+                        'email' => $attempt->actor->email,
+                    ] : null,
+                    'created_at' => optional($attempt->created_at)->toDateTimeString(),
+                ];
+            })->values(),
+            'audit_trail' => $auditEntries->map(function (AuditLog $log) {
+                return [
+                    'id' => (int) $log->id,
+                    'action' => $log->action,
+                    'reason' => $log->reason,
+                    'before_state' => $log->before_state,
+                    'after_state' => $log->after_state,
+                    'actor' => $log->actor ? [
+                        'id' => (int) $log->actor->id,
+                        'name' => $log->actor->name,
+                    ] : null,
+                    'created_at' => optional($log->created_at)->toDateTimeString(),
+                ];
+            })->values(),
+        ]);
+    }
+
+    public function manualClose(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'category' => 'required|in:timeout,customer_cancelled,duplicate_request,fraud_suspected,other',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        if (!in_array($payment->status, ['initiated', 'pending'], true)) {
+            return response()->json([
+                'message' => 'Only initiated or pending payments can be manually closed.',
+            ], 422);
+        }
+
+        $beforeState = [
+            'status' => $payment->status,
+            'raw_payload' => $payment->raw_payload,
+        ];
+
+        $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
+        $rawPayload['manual_close'] = [
+            'category' => $validated['category'],
+            'reason' => $validated['reason'],
+            'closed_by' => optional($request->user())->id,
+            'closed_at' => now()->toDateTimeString(),
+        ];
+
+        $payment->forceFill([
+            'status' => 'failed',
+            'raw_payload' => $rawPayload,
+        ])->save();
+
+        $this->paymentAttemptService->record($payment, 'manual_close', 'closed', [
+            'provider' => 'crm_operator',
+            'error_code' => 'manual_close',
+            'error_message' => $validated['reason'],
+            'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                'category' => $validated['category'],
+            ]),
+            'response_meta' => [
+                'category' => $validated['category'],
+            ],
+            'created_by' => optional($request->user())->id,
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_MANUAL_CLOSE,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'status' => $payment->status,
+                'manual_close' => $rawPayload['manual_close'],
+            ],
+            $validated['reason']
+        );
+
+        return response()->json([
+            'message' => 'Payment closed manually.',
+            'payment' => $payment->fresh(['platform', 'product', 'client']),
+        ]);
+    }
+
     /**
      * Retry STK push for a failed or initiated payment using the existing Django proxy.
      * Reuses the same initiate flow; callback will update this payment row.
@@ -437,13 +624,33 @@ class PaymentQueueController extends Controller
             'email' => $email,
         ];
 
+        $requestMeta = $this->paymentAttemptService->requestMetaFromRequest($request, [
+            'channel' => 'stk',
+            'phone' => $phone,
+            'amount' => $amount,
+            'duration' => $duration,
+        ]);
+        $attemptStartedAt = microtime(true);
         $response = Http::timeout(30)->post("{$baseUrl}/initiate/", $payload);
+        $latencyMs = (int) round((microtime(true) - $attemptStartedAt) * 1000);
 
         if ($response->successful()) {
             $data = $response->json();
             if (isset($data['message']) && $data['message'] === 'Payment initiated') {
                 $payment->status = 'pending';
                 $payment->save();
+
+                $this->paymentAttemptService->record($payment, 'retry_stk', 'success', [
+                    'provider' => 'django_stk',
+                    'http_status' => $response->status(),
+                    'latency_ms' => $latencyMs,
+                    'request_meta' => $requestMeta,
+                    'response_meta' => [
+                        'message' => $data['message'] ?? null,
+                        'payment_id' => $data['payment_id'] ?? null,
+                    ],
+                    'created_by' => optional($request->user())->id,
+                ]);
 
                 $this->auditService->fromRequest(
                     $request,
@@ -465,6 +672,17 @@ class PaymentQueueController extends Controller
             Log::warning('Retry STK: Django returned non-success message', ['data' => $data]);
             $payment->status = 'failed';
             $payment->save();
+
+            $this->paymentAttemptService->record($payment, 'retry_stk', 'failed', [
+                'provider' => 'django_stk',
+                'error_code' => $data['code'] ?? $data['error_code'] ?? null,
+                'error_message' => $data['error'] ?? $data['message'] ?? 'STK push could not be initiated.',
+                'http_status' => $response->status(),
+                'latency_ms' => $latencyMs,
+                'request_meta' => $requestMeta,
+                'response_meta' => is_array($data) ? $data : ['response' => $data],
+                'created_by' => optional($request->user())->id,
+            ]);
 
             $this->auditService->fromRequest(
                 $request,
@@ -489,6 +707,19 @@ class PaymentQueueController extends Controller
         ]);
         $payment->status = 'failed';
         $payment->save();
+
+        $this->paymentAttemptService->record($payment, 'retry_stk', 'failed', [
+            'provider' => 'django_stk',
+            'error_code' => 'http_error',
+            'error_message' => 'Payment service unavailable.',
+            'http_status' => $response->status(),
+            'latency_ms' => $latencyMs,
+            'request_meta' => $requestMeta,
+            'response_meta' => [
+                'body' => mb_substr($response->body(), 0, 2000),
+            ],
+            'created_by' => optional($request->user())->id,
+        ]);
 
         $this->auditService->fromRequest(
             $request,
@@ -559,10 +790,35 @@ class PaymentQueueController extends Controller
             $paymentUrl
         );
 
+        $requestMeta = $this->paymentAttemptService->requestMetaFromRequest($request, [
+            'channel' => $validated['channel'],
+            'requested_provider' => $validated['provider'] ?? null,
+            'phone' => $phone,
+        ]);
+        $attemptStartedAt = microtime(true);
         $result = $this->notificationService->sendSms($phone, $message, [
             'purpose' => 'payment_link',
             'payment_id' => $payment->id,
             'platform_id' => $payment->platform_id,
+        ]);
+        $latencyMs = (int) round((microtime(true) - $attemptStartedAt) * 1000);
+
+        $attemptStatus = ($result['success'] ?? false) === true
+            ? (($result['status'] ?? '') === 'disabled' ? 'disabled' : 'success')
+            : 'failed';
+
+        $this->paymentAttemptService->record($payment, 'send_payment_link', $attemptStatus, [
+            'provider' => $result['provider'] ?? ($validated['provider'] ?? 'payment_link'),
+            'error_code' => ($result['success'] ?? false) === true ? null : 'sms_send_failed',
+            'error_message' => ($result['success'] ?? false) === true ? null : ($result['provider_response'] ?? 'SMS could not be sent.'),
+            'latency_ms' => $latencyMs,
+            'request_meta' => $requestMeta,
+            'response_meta' => [
+                'sms_status' => $result['status'] ?? null,
+                'provider_response' => $result['provider_response'] ?? null,
+                'payment_url' => $paymentUrl,
+            ],
+            'created_by' => optional($request->user())->id,
         ]);
 
         $this->auditService->fromRequest(
@@ -596,6 +852,96 @@ class PaymentQueueController extends Controller
                 : 'Payment link sent by SMS.',
             'payment' => $payment->fresh(['platform', 'product']),
         ]);
+    }
+
+    private function resolveFailureStage(Payment $payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta): string
+    {
+        if (is_array($manualCloseMeta)) {
+            return 'manually_closed';
+        }
+
+        if ($latestFailedAttempt) {
+            return match ($latestFailedAttempt->attempt_type) {
+                'retry_stk' => 'stk_initiation',
+                'send_payment_link' => 'link_delivery',
+                'callback_update' => 'callback_processing',
+                default => $latestFailedAttempt->attempt_type,
+            };
+        }
+
+        if ($payment->status === 'pending') {
+            return 'awaiting_callback';
+        }
+
+        if ($payment->status === 'initiated') {
+            return 'initiation_queued';
+        }
+
+        if ($payment->status === 'failed') {
+            return 'failed_without_attempt_telemetry';
+        }
+
+        if ($latestAttempt) {
+            return $latestAttempt->attempt_type;
+        }
+
+        return 'unknown';
+    }
+
+    private function buildRecommendations(Payment $payment): array
+    {
+        $ageHours = $payment->created_at
+            ? now()->diffInHours($payment->created_at)
+            : 0;
+
+        if (in_array($payment->status, ['initiated', 'pending'], true)) {
+            if ($ageHours < 1) {
+                return [
+                    ['key' => 'wait_callback', 'label' => 'Wait for callback', 'description' => 'Payment is still fresh; monitor callback status first.', 'recommended' => true],
+                    ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Share a direct payment URL if customer missed the STK prompt.', 'recommended' => false],
+                ];
+            }
+            if ($ageHours < 24) {
+                return [
+                    ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Best first recovery path for pending payments older than one hour.', 'recommended' => true],
+                    ['key' => 'retry_stk', 'label' => 'Retry STK', 'description' => 'Retry STK once if customer confirms they can approve now.', 'recommended' => false],
+                ];
+            }
+            if ($ageHours < 72) {
+                return [
+                    ['key' => 'retry_stk', 'label' => 'Retry STK', 'description' => 'Retry once, then shift to manual follow-up if callback still does not arrive.', 'recommended' => true],
+                    ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Provide self-serve payment route during follow-up.', 'recommended' => false],
+                    ['key' => 'manual_close', 'label' => 'Close manually', 'description' => 'Use only if customer confirms no payment should proceed.', 'recommended' => false],
+                ];
+            }
+
+            return [
+                ['key' => 'manual_close', 'label' => 'Close manually', 'description' => 'Payment is stale (>72h). Close with a reason category after follow-up.', 'recommended' => true],
+                ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Optional final attempt before closure.', 'recommended' => false],
+            ];
+        }
+
+        if ($payment->status === 'failed') {
+            return [
+                ['key' => 'retry_stk', 'label' => 'Retry STK', 'description' => 'Retry after validating customer phone/network readiness.', 'recommended' => true],
+                ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Fallback when STK approvals repeatedly fail.', 'recommended' => true],
+            ];
+        }
+
+        if ($payment->status === 'completed' && !$payment->client_id) {
+            return [
+                ['key' => 'auto_match', 'label' => 'Auto-match', 'description' => 'Try phone-based matching first.', 'recommended' => true],
+                ['key' => 'manual_match', 'label' => 'Manual match', 'description' => 'Pick exact client when auto-match confidence is low.', 'recommended' => true],
+            ];
+        }
+
+        if ($payment->status === 'completed' && $payment->client_id && !$payment->deal_id) {
+            return [
+                ['key' => 'create_subscription', 'label' => 'Create subscription', 'description' => 'Link this payment to a new active subscription.', 'recommended' => true],
+            ];
+        }
+
+        return [];
     }
 
     private function buildPaymentLinkUrl($platform, ?string $requestedProvider = null): ?string

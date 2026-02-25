@@ -14,6 +14,7 @@ use App\Models\SmsLog;
 use App\Models\TimelineEvent;
 use App\Models\WordpressPost;
 use App\Services\DynamicDatabaseService;
+use App\Services\PaymentAttemptService;
 use App\Services\PaymentMatchingService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -156,6 +157,7 @@ class PaymentController extends Controller
     
                 // Pass the payment object directly instead of trying to extract ID
                 $this->handleSuccessfulPayment($payment, $resource, $metadata, $rawData);
+                $this->recordCallbackAttempt($request, $payment, 'success', $resource, $rawData);
     
             } elseif (($resource['status'] ?? null) === "Reversed" || $request->status === "reversed") {
                 $payment->status = 'reversed';
@@ -163,6 +165,15 @@ class PaymentController extends Controller
                 $payment->save();
     
                 $this->handleReversedPayment($resource, $metadata, $rawData);
+                $this->recordCallbackAttempt(
+                    $request,
+                    $payment,
+                    'reversed',
+                    $resource,
+                    $rawData,
+                    'Payment reversed by provider',
+                    'reversed'
+                );
     
             } else {
                 $payment->status = 'failed';
@@ -170,6 +181,15 @@ class PaymentController extends Controller
                 $payment->save();
     
                 $this->handleFailedPayment($resource, $metadata, $rawData);
+                $this->recordCallbackAttempt(
+                    $request,
+                    $payment,
+                    'failed',
+                    $resource,
+                    $rawData,
+                    (string) ($resource['status'] ?? $request->status ?? 'Payment failed'),
+                    'callback_failed'
+                );
             }
     
             return response()->json([
@@ -274,6 +294,52 @@ class PaymentController extends Controller
                 'timestamp' => now()->toDateTimeString()
             ] : null
         ], 500);
+    }
+
+    private function recordCallbackAttempt(
+        Request $request,
+        Payment $payment,
+        string $status,
+        array $resource = [],
+        array $rawData = [],
+        ?string $errorMessage = null,
+        ?string $errorCode = null
+    ): void {
+        try {
+            $eventResource = data_get($rawData, 'event.resource', []);
+            $origination = $resource['origination_time']
+                ?? (is_array($eventResource) ? ($eventResource['origination_time'] ?? null) : null);
+
+            $latencyMs = null;
+            if (!empty($origination)) {
+                $origin = Carbon::parse((string) $origination);
+                $diff = $origin->diffInMilliseconds(now(), false);
+                if ($diff >= 0) {
+                    $latencyMs = (int) $diff;
+                }
+            }
+
+            app(PaymentAttemptService::class)->record($payment, 'callback_update', $status, [
+                'provider' => 'kopokopo_webhook',
+                'error_code' => $errorCode,
+                'error_message' => $errorMessage,
+                'latency_ms' => $latencyMs,
+                'request_meta' => app(PaymentAttemptService::class)->requestMetaFromRequest($request, [
+                    'event_status' => $resource['status'] ?? $request->input('status'),
+                    'transaction_reference' => $resource['reference'] ?? $request->input('transaction_reference'),
+                ]),
+                'response_meta' => [
+                    'resource_status' => $resource['status'] ?? null,
+                    'resource_reference' => $resource['reference'] ?? null,
+                    'metadata_payment_id' => $rawData['metadata']['payment_id'] ?? null,
+                ],
+            ]);
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to record callback payment attempt', [
+                'payment_id' => $payment->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
   

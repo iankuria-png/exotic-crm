@@ -101,11 +101,13 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Payments
     Route::get('/payments', [PaymentQueueController::class, 'index']);
+    Route::get('/payments/{payment}/diagnostics', [PaymentQueueController::class, 'diagnostics']);
     Route::get('/payments/{payment}/candidates', [PaymentQueueController::class, 'candidates']);
     Route::post('/payments/{payment}/auto-match', [PaymentQueueController::class, 'autoMatch']);
     Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);
     Route::post('/payments/{payment}/retry-stk', [PaymentQueueController::class, 'retryStk']);
     Route::post('/payments/{payment}/send-payment-link', [PaymentQueueController::class, 'sendPaymentLink']);
+    Route::post('/payments/{payment}/manual-close', [PaymentQueueController::class, 'manualClose']);
     Route::post('/payments/{payment}/create-subscription', [PaymentQueueController::class, 'createSubscription']);
     Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
 

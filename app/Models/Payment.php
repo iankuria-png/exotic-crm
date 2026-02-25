@@ -72,4 +72,9 @@ class Payment extends Model
     {
         return $this->belongsTo(User::class, 'confirmed_by');
     }
+
+    public function attempts()
+    {
+        return $this->hasMany(PaymentAttempt::class);
+    }
 }

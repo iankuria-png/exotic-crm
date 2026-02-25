@@ -951,6 +951,7 @@ class SettingsController extends Controller
             CrmAuditAction::PAYMENT_MATCH_AUTO,
             CrmAuditAction::PAYMENT_MATCH_CONFIRM,
             CrmAuditAction::PAYMENT_MATCH_BATCH,
+            CrmAuditAction::PAYMENT_MANUAL_CLOSE,
             CrmAuditAction::RENEWAL_SMS_SENT,
             CrmAuditAction::RENEWAL_SMS_FAILED,
             CrmAuditAction::CONVERSATION_SMS_SENT,
@@ -1595,6 +1596,13 @@ class SettingsController extends Controller
                 'severity' => 'medium',
                 'summary' => 'Batch matching job completed.',
                 'suggested_action' => 'Review unmatched queue items if any remain.',
+            ],
+            CrmAuditAction::PAYMENT_MANUAL_CLOSE => [
+                'title' => 'Payment manually closed',
+                'category' => 'payments',
+                'severity' => 'medium',
+                'summary' => 'Pending payment was manually closed by an operator.',
+                'suggested_action' => 'Review closure reason and confirm customer follow-up was completed.',
             ],
             CrmAuditAction::RENEWAL_SMS_SENT => [
                 'title' => 'Renewal reminder sent',

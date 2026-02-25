@@ -97,6 +97,20 @@ function recommendationClass(tone) {
     return 'bg-slate-100 text-slate-600 ring-slate-200';
 }
 
+function formatDateTime(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString();
+}
+
+function titleize(value) {
+    if (!value) return '—';
+    return String(value)
+        .replaceAll('_', ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 export default function Payments() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -127,6 +141,13 @@ export default function Payments() {
         reason: 'Send payment link from CRM',
     });
     const [createSubDialog, setCreateSubDialog] = useState({ open: false, payment: null, reason: 'Create subscription from matched payment' });
+    const [diagnosticsDrawer, setDiagnosticsDrawer] = useState({ open: false, payment: null });
+    const [manualCloseDialog, setManualCloseDialog] = useState({
+        open: false,
+        payment: null,
+        category: 'timeout',
+        reason: '',
+    });
 
     const { data, isLoading } = useQuery({
         queryKey: ['payments', page, search, statusFilter, matchFilter],
@@ -149,14 +170,25 @@ export default function Payments() {
                 params: {
                     ...(candidateSearch ? { search: candidateSearch } : {}),
                 },
-            }).then((response) => response.data),
+        }).then((response) => response.data),
         enabled: !!selectedPayment?.id,
+    });
+
+    const {
+        data: diagnosticsData,
+        isLoading: diagnosticsLoading,
+        error: diagnosticsError,
+    } = useQuery({
+        queryKey: ['payment-diagnostics', diagnosticsDrawer.payment?.id],
+        queryFn: () => api.get(`/crm/payments/${diagnosticsDrawer.payment.id}/diagnostics`).then((response) => response.data),
+        enabled: diagnosticsDrawer.open && !!diagnosticsDrawer.payment?.id,
     });
 
     const autoMatchMutation = useMutation({
         mutationFn: (paymentId) => api.post(`/crm/payments/${paymentId}/auto-match`).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (_, paymentId) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', paymentId] });
             if (selectedPayment?.id) {
                 queryClient.invalidateQueries({ queryKey: ['payment-candidates', selectedPayment.id] });
             }
@@ -173,8 +205,9 @@ export default function Payments() {
                 client_id: clientId,
                 reason,
             }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
             setSelectedPayment(null);
             setSelectedClientId('');
             setConfirmReason('Manual payment match from queue');
@@ -203,8 +236,9 @@ export default function Payments() {
     const retryStkMutation = useMutation({
         mutationFn: ({ paymentId, reason }) =>
             api.post(`/crm/payments/${paymentId}/retry-stk`, { reason: reason || undefined }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
             setRetryStkDialog({ open: false, payment: null, reason: 'Retry STK from payment queue' });
             toast.success('STK push sent. Customer should complete the request on their phone.');
         },
@@ -221,8 +255,9 @@ export default function Payments() {
                 ...(phone && { phone: phone.trim() }),
                 reason: reason || undefined,
             }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
             setSendLinkDialog({ open: false, payment: null, channel: 'sms', provider: '', phone: '', reason: 'Send payment link from CRM' });
             toast.success('Payment link sent by SMS.');
         },
@@ -234,13 +269,28 @@ export default function Payments() {
     const createSubscriptionMutation = useMutation({
         mutationFn: ({ paymentId, reason }) =>
             api.post(`/crm/payments/${paymentId}/create-subscription`, { reason: reason || undefined }).then((response) => response.data),
-        onSuccess: (result) => {
+        onSuccess: (result, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
             setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' });
             toast.success(`Subscription created (Deal #${result.deal?.id}). Expires ${new Date(result.deal?.expires_at).toLocaleDateString()}.`);
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Create subscription failed.');
+        },
+    });
+
+    const manualCloseMutation = useMutation({
+        mutationFn: ({ paymentId, category, reason }) =>
+            api.post(`/crm/payments/${paymentId}/manual-close`, { category, reason }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+            setManualCloseDialog({ open: false, payment: null, category: 'timeout', reason: '' });
+            toast.success('Payment closed manually.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Manual payment closure failed.');
         },
     });
 
@@ -326,6 +376,64 @@ export default function Payments() {
         setCandidateSearchInput('');
     };
 
+    const openDiagnostics = (paymentRow) => {
+        setDiagnosticsDrawer({ open: true, payment: paymentRow });
+    };
+
+    const closeDiagnostics = () => {
+        setDiagnosticsDrawer({ open: false, payment: null });
+    };
+
+    const triggerRecommendation = (actionKey, paymentRow) => {
+        if (!paymentRow) return;
+
+        if (actionKey === 'retry_stk') {
+            closeDiagnostics();
+            setRetryStkDialog({ open: true, payment: paymentRow, reason: 'Retry STK from diagnostics drawer' });
+            return;
+        }
+
+        if (actionKey === 'send_link') {
+            closeDiagnostics();
+            setSendLinkDialog({
+                open: true,
+                payment: paymentRow,
+                channel: 'sms',
+                provider: '',
+                phone: paymentRow.phone || '',
+                reason: 'Send payment link from diagnostics drawer',
+            });
+            return;
+        }
+
+        if (actionKey === 'auto_match') {
+            autoMatchMutation.mutate(paymentRow.id);
+            return;
+        }
+
+        if (actionKey === 'manual_match') {
+            closeDiagnostics();
+            openManualMatch(paymentRow);
+            return;
+        }
+
+        if (actionKey === 'create_subscription') {
+            closeDiagnostics();
+            setCreateSubDialog({ open: true, payment: paymentRow, reason: 'Create subscription from diagnostics drawer' });
+            return;
+        }
+
+        if (actionKey === 'manual_close') {
+            closeDiagnostics();
+            setManualCloseDialog({ open: true, payment: paymentRow, category: 'timeout', reason: '' });
+            return;
+        }
+
+        if (actionKey === 'wait_callback') {
+            toast.info('Keep monitoring callback updates for this payment before retrying.');
+        }
+    };
+
     const rows = data?.data || [];
 
     const summary = useMemo(() => {
@@ -400,6 +508,8 @@ export default function Payments() {
         }
         setPage(1);
     };
+
+    const diagnosticsPayment = diagnosticsData?.payment || diagnosticsDrawer.payment;
 
     const modalCandidates = useMemo(() => {
         const candidates = candidatesData?.data || [];
@@ -542,6 +652,15 @@ export default function Payments() {
                                 </button>
                             </>
                         )}
+                        <button
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                openDiagnostics(row);
+                            }}
+                            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                        >
+                            Diagnose
+                        </button>
                         {row.status === 'completed' && !row.client_id && (
                             <button
                                 onClick={(event) => {
@@ -753,6 +872,7 @@ export default function Payments() {
                 data={data?.data}
                 pagination={data}
                 onPageChange={setPage}
+                onRowClick={openDiagnostics}
                 isLoading={isLoading}
                 emptyMessage="No payments found."
                 compact
@@ -761,6 +881,136 @@ export default function Payments() {
                 onSelectionChange={setSelectedRows}
                 clearSelectionKey={clearSelectionKey}
             />
+
+            {diagnosticsDrawer.open ? (
+                <div className="fixed inset-0 z-40 flex bg-slate-900/45" onClick={closeDiagnostics}>
+                    <aside
+                        className="ml-auto h-full w-full max-w-xl border-l border-slate-200 bg-white shadow-xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="crm-panel-header sticky top-0 z-10 bg-white">
+                            <div>
+                                <h3 className="crm-panel-title">Payment Diagnostics</h3>
+                                <p className="crm-panel-subtitle">
+                                    Payment #{diagnosticsPayment?.id || '--'} • {diagnosticsPayment?.phone || 'No phone'}
+                                </p>
+                            </div>
+                        </header>
+
+                        <div className="h-[calc(100%-132px)] space-y-4 overflow-y-auto p-4">
+                            {diagnosticsLoading ? (
+                                <p className="text-sm text-slate-500">Loading payment diagnostics...</p>
+                            ) : diagnosticsError ? (
+                                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                                    Diagnostics could not be loaded for this payment.
+                                </p>
+                            ) : diagnosticsData ? (
+                                <>
+                                    <section className="grid gap-3 sm:grid-cols-2">
+                                        <article className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Status</p>
+                                            <div className="mt-1"><StatusBadge status={diagnosticsData.payment?.status} /></div>
+                                        </article>
+                                        <article className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Amount</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatCurrency(diagnosticsData.payment?.amount, diagnosticsData.payment?.currency || 'KES')}</p>
+                                        </article>
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Failure Point</h4>
+                                        <p className="mt-1 text-sm text-slate-600"><span className="font-semibold text-slate-800">Stage:</span> {titleize(diagnosticsData.failure?.stage)}</p>
+                                        <p className="mt-1 text-sm text-slate-600"><span className="font-semibold text-slate-800">Reason:</span> {diagnosticsData.failure?.reason || 'Not provided'}</p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            Error code: {diagnosticsData.failure?.error_code || '—'} • HTTP: {diagnosticsData.failure?.http_status || '—'}
+                                        </p>
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">API Performance</h4>
+                                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                                            <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Attempts:</span> {diagnosticsData.performance?.attempt_count ?? 0}</p>
+                                            <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Avg:</span> {diagnosticsData.performance?.avg_latency_ms ?? '—'} ms</p>
+                                            <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">P95:</span> {diagnosticsData.performance?.p95_latency_ms ?? '—'} ms</p>
+                                        </div>
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Browser & Request Context</h4>
+                                        <p className="mt-1 text-xs text-slate-600">Origin: {diagnosticsData.browser_meta?.origin_url || '—'}</p>
+                                        <p className="mt-1 text-xs text-slate-600">Referrer: {diagnosticsData.browser_meta?.referrer || '—'}</p>
+                                        <p className="mt-1 text-xs text-slate-600">Browser: {diagnosticsData.browser_meta?.user_agent_family || '—'} • Device: {diagnosticsData.browser_meta?.device_type || '—'}</p>
+                                        <p className="mt-1 text-xs text-slate-500">IP hash: {diagnosticsData.browser_meta?.ip_hash || '—'}</p>
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Recommended Actions</h4>
+                                        {(diagnosticsData.recommendations || []).length === 0 ? (
+                                            <p className="mt-1 text-sm text-slate-500">No action recommendations for the current payment state.</p>
+                                        ) : (
+                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                {diagnosticsData.recommendations.map((item) => (
+                                                    <button
+                                                        key={item.key}
+                                                        type="button"
+                                                        onClick={() => triggerRecommendation(item.key, diagnosticsPayment)}
+                                                        className={`rounded-md px-2.5 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                                            item.recommended
+                                                                ? 'bg-teal-700 text-white hover:bg-teal-800'
+                                                                : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                                                        }`}
+                                                        title={item.description}
+                                                    >
+                                                        {item.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Recent Attempts</h4>
+                                        {(diagnosticsData.attempts || []).length === 0 ? (
+                                            <p className="mt-1 text-sm text-slate-500">No telemetry attempts recorded for this payment yet.</p>
+                                        ) : (
+                                            <div className="mt-2 space-y-2">
+                                                {diagnosticsData.attempts.slice(0, 8).map((attempt) => (
+                                                    <article key={attempt.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                        <p className="text-xs font-semibold text-slate-800">{titleize(attempt.attempt_type)} • {titleize(attempt.status)}</p>
+                                                        <p className="mt-1 text-xs text-slate-600">Provider: {attempt.provider || '—'} • HTTP: {attempt.http_status || '—'} • Latency: {attempt.latency_ms ?? '—'} ms</p>
+                                                        <p className="mt-1 text-xs text-slate-600">Reason: {attempt.error_message || '—'}</p>
+                                                        <p className="mt-1 text-[11px] text-slate-500">{formatDateTime(attempt.created_at)}</p>
+                                                    </article>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </section>
+                                </>
+                            ) : (
+                                <p className="text-sm text-slate-500">Select a payment to review diagnostics.</p>
+                            )}
+                        </div>
+
+                        <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            {['initiated', 'pending'].includes(diagnosticsPayment?.status) ? (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        closeDiagnostics();
+                                        setManualCloseDialog({ open: true, payment: diagnosticsPayment, category: 'timeout', reason: '' });
+                                    }}
+                                    className="crm-btn-danger"
+                                >
+                                    Close manually
+                                </button>
+                            ) : null}
+                            <button type="button" onClick={closeDiagnostics} className="crm-btn-secondary">
+                                Close
+                            </button>
+                        </footer>
+                    </aside>
+                </div>
+            ) : null}
 
             {selectedPayment ? (
                 <div className="fixed inset-0 z-50 flex bg-slate-900/45" onClick={() => setSelectedPayment(null)}>
@@ -1043,6 +1293,56 @@ export default function Payments() {
                     className="crm-input"
                     placeholder="e.g. Create subscription from matched payment"
                 />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={manualCloseDialog.open && !!manualCloseDialog.payment}
+                title="Close pending payment manually"
+                message={manualCloseDialog.payment
+                    ? `Close payment #${manualCloseDialog.payment.id} (${formatCurrency(manualCloseDialog.payment.amount, manualCloseDialog.payment.currency || 'KES')}) and move it out of pending queue.`
+                    : ''}
+                confirmLabel="Close payment"
+                onCancel={() => setManualCloseDialog({ open: false, payment: null, category: 'timeout', reason: '' })}
+                onConfirm={() => {
+                    if (manualCloseDialog.payment) {
+                        manualCloseMutation.mutate({
+                            paymentId: manualCloseDialog.payment.id,
+                            category: manualCloseDialog.category,
+                            reason: manualCloseDialog.reason.trim(),
+                        });
+                    }
+                }}
+                confirmDisabled={manualCloseMutation.isPending || !manualCloseDialog.reason.trim()}
+                isPending={manualCloseMutation.isPending}
+            >
+                <div className="space-y-3">
+                    <div>
+                        <label htmlFor="manual-close-category" className="mb-1 block text-sm font-medium text-slate-700">Closure category</label>
+                        <select
+                            id="manual-close-category"
+                            value={manualCloseDialog.category}
+                            onChange={(event) => setManualCloseDialog((current) => ({ ...current, category: event.target.value }))}
+                            className="crm-select"
+                        >
+                            <option value="timeout">Timeout / no callback</option>
+                            <option value="customer_cancelled">Customer cancelled</option>
+                            <option value="duplicate_request">Duplicate request</option>
+                            <option value="fraud_suspected">Fraud suspected</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label htmlFor="manual-close-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                        <textarea
+                            id="manual-close-reason"
+                            rows={3}
+                            value={manualCloseDialog.reason}
+                            onChange={(event) => setManualCloseDialog((current) => ({ ...current, reason: event.target.value }))}
+                            className="crm-input"
+                            placeholder="Explain why this pending payment is being closed manually."
+                        />
+                    </div>
+                </div>
             </ConfirmDialog>
         </div>
     );
