@@ -25,7 +25,7 @@ class RenewalController extends Controller
         $validated = $request->validate([
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'search' => 'nullable|string|max:255',
-            'bucket' => 'nullable|in:all,active,risk,pending,stable,expired,lapsed,paused',
+            'bucket' => 'nullable|in:all,active,risk,pending,workload,stable,expired,lapsed,paused',
             'page' => 'nullable|integer|min:1',
             'per_page' => 'nullable|integer|min:10|max:500',
         ]);
@@ -63,7 +63,7 @@ class RenewalController extends Controller
             'campaign_id' => 'nullable|integer|exists:renewal_campaigns,id',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'search' => 'nullable|string|max:255',
-            'bucket' => 'nullable|in:all,active,risk,pending,stable,expired,lapsed,paused',
+            'bucket' => 'nullable|in:all,active,risk,pending,workload,stable,expired,lapsed,paused',
             'channel' => 'nullable|in:sms,email',
             'dry_run' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
@@ -207,7 +207,7 @@ class RenewalController extends Controller
             'select_all' => 'nullable|boolean',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'search' => 'nullable|string|max:255',
-            'bucket' => 'nullable|in:all,active,risk,pending,stable,expired,lapsed,paused',
+            'bucket' => 'nullable|in:all,active,risk,pending,workload,stable,expired,lapsed,paused',
             'template_id' => 'nullable|integer|exists:templates,id',
         ]);
 

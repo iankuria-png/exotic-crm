@@ -55,6 +55,14 @@ class PaymentQueueController extends Controller
         if ($statusFilter !== '') {
             if ($statusFilter === 'awaiting_payment') {
                 $query->whereIn('status', ['initiated', 'pending']);
+            } elseif ($statusFilter === 'recovery_queue') {
+                $query->where(function ($builder) {
+                    $builder->whereIn('status', ['initiated', 'pending', 'failed'])
+                        ->orWhere(function ($unmatchedCompleted) {
+                            $unmatchedCompleted->where('status', 'completed')
+                                ->whereNull('client_id');
+                        });
+                });
             } else {
                 $query->where('status', $statusFilter);
             }

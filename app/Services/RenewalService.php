@@ -1045,6 +1045,11 @@ class RenewalService
             return;
         }
 
+        if ($bucket === 'workload') {
+            $query->whereBetween(DB::raw($dateExpr), [$nowTs, $nowTs + (14 * 86400)]);
+            return;
+        }
+
         if ($bucket === 'stable') {
             $query->where(DB::raw($dateExpr), '>', $nowTs + (14 * 86400));
             return;

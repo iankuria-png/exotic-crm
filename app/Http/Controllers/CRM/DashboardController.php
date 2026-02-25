@@ -108,7 +108,16 @@ class DashboardController extends Controller
         $activeDealsQuery = Deal::active();
         $expiringSoonQuery = Deal::expiringSoon(7);
         $paymentsWindowQuery = Payment::where('status', 'completed')->whereBetween('created_at', [$from, $to]);
-        $unmatchedPaymentsQuery = Payment::whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
+        $unmatchedPaymentsWindowQuery = Payment::whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
+        $awaitingPaymentsQuery = Payment::whereIn('status', ['initiated', 'pending']);
+        $failedPaymentsQuery = Payment::where('status', 'failed');
+        $unmatchedQueueQuery = Payment::whereNull('client_id')->where('status', 'completed');
+        $renewalRisk72hQuery = Deal::active()
+            ->where('expires_at', '>', now())
+            ->where('expires_at', '<=', now()->copy()->addDays(3));
+        $renewalPipeline14dQuery = Deal::active()
+            ->where('expires_at', '>', now()->copy()->addDays(3))
+            ->where('expires_at', '<=', now()->copy()->addDays(14));
 
         if (is_array($platformIds)) {
             $activeClientsQuery->whereIn('platform_id', $platformIds);
@@ -118,8 +127,39 @@ class DashboardController extends Controller
             $activeDealsQuery->whereIn('platform_id', $platformIds);
             $expiringSoonQuery->whereIn('platform_id', $platformIds);
             $paymentsWindowQuery->whereIn('platform_id', $platformIds);
-            $unmatchedPaymentsQuery->whereIn('platform_id', $platformIds);
+            $unmatchedPaymentsWindowQuery->whereIn('platform_id', $platformIds);
+            $awaitingPaymentsQuery->whereIn('platform_id', $platformIds);
+            $failedPaymentsQuery->whereIn('platform_id', $platformIds);
+            $unmatchedQueueQuery->whereIn('platform_id', $platformIds);
+            $renewalRisk72hQuery->whereIn('platform_id', $platformIds);
+            $renewalPipeline14dQuery->whereIn('platform_id', $platformIds);
         }
+
+        $windowSeconds = max(1, $to->diffInSeconds($from) + 1);
+        $previousFrom = (clone $from)->subSeconds($windowSeconds);
+        $previousTo = (clone $from)->subSecond();
+        $previousRevenueQuery = Payment::where('status', 'completed')->whereBetween('created_at', [$previousFrom, $previousTo]);
+        if (is_array($platformIds)) {
+            $previousRevenueQuery->whereIn('platform_id', $platformIds);
+        }
+
+        $completedPaymentsWindow = (clone $paymentsWindowQuery)->count();
+        $revenueWindow = (float) (clone $paymentsWindowQuery)->sum('amount');
+        $revenuePreviousWindow = (float) (clone $previousRevenueQuery)->sum('amount');
+        $averageTicket = $completedPaymentsWindow > 0 ? round($revenueWindow / $completedPaymentsWindow, 2) : 0.0;
+        $revenueDeltaPercent = $revenuePreviousWindow > 0
+            ? round((($revenueWindow - $revenuePreviousWindow) / $revenuePreviousWindow) * 100, 1)
+            : null;
+
+        $paymentRecoveryPending = (clone $awaitingPaymentsQuery)->count();
+        $paymentRecoveryFailed = (clone $failedPaymentsQuery)->count();
+        $paymentRecoveryUnmatched = (clone $unmatchedQueueQuery)->count();
+        $unmatchedPaymentsWindow = (clone $unmatchedPaymentsWindowQuery)->count();
+        $paymentRecoveryTotal = $paymentRecoveryPending + $paymentRecoveryFailed + $paymentRecoveryUnmatched;
+
+        $renewalRisk72h = (clone $renewalRisk72hQuery)->count();
+        $renewalPipeline14d = (clone $renewalPipeline14dQuery)->count();
+        $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
         return response()->json([
             'filters' => [
@@ -135,11 +175,23 @@ class DashboardController extends Controller
                 'total_leads' => $totalLeadsQuery->count(),
                 'active_deals' => $activeDealsQuery->count(),
                 'expiring_soon' => $expiringSoonQuery->count(),
-                'completed_payments_window' => (clone $paymentsWindowQuery)->count(),
-                'completed_payments_mtd' => (clone $paymentsWindowQuery)->count(),
-                'recent_payments' => (clone $paymentsWindowQuery)->count(),
-                'revenue_mtd' => (float) (clone $paymentsWindowQuery)->sum('amount'),
-                'unmatched_payments' => $unmatchedPaymentsQuery->count(),
+                'completed_payments_window' => $completedPaymentsWindow,
+                'completed_payments_mtd' => $completedPaymentsWindow,
+                'recent_payments' => $completedPaymentsWindow,
+                'revenue_window' => $revenueWindow,
+                'revenue_mtd' => $revenueWindow,
+                'revenue_previous_window' => $revenuePreviousWindow,
+                'revenue_delta_percent' => $revenueDeltaPercent,
+                'average_ticket_window' => $averageTicket,
+                'payment_recovery_queue_total' => $paymentRecoveryTotal,
+                'payment_recovery_pending' => $paymentRecoveryPending,
+                'payment_recovery_failed' => $paymentRecoveryFailed,
+                'payment_recovery_unmatched' => $paymentRecoveryUnmatched,
+                'unmatched_payments_window' => $unmatchedPaymentsWindow,
+                'unmatched_payments' => $unmatchedPaymentsWindow,
+                'renewal_risk_72h' => $renewalRisk72h,
+                'renewal_pipeline_4_14d' => $renewalPipeline14d,
+                'renewal_workload_14d' => $renewalWorkload14d,
             ],
             'expiring_deals' => $expiringDeals,
             'payment_review_queue' => $paymentReviewQueue,

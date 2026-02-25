@@ -13,6 +13,8 @@ function formatCurrency(amount, currency = 'KES') {
 }
 
 export default function Deals() {
+    const allowedBuckets = new Set(['all', 'active', 'risk', 'pending', 'workload', 'stable', 'expired', 'lapsed', 'paused']);
+    const allowedStatuses = new Set(['pending', 'awaiting_payment', 'paid', 'active', 'expired', 'renewed', 'cancelled']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -20,7 +22,10 @@ export default function Deals() {
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
-    const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
+    const [statusFilter, setStatusFilter] = useState(() => {
+        const requested = (searchParams.get('status') || '').trim();
+        return allowedStatuses.has(requested) ? requested : '';
+    });
 
     const [dialog, setDialog] = useState({ type: null, deal: null });
     const [activateReason, setActivateReason] = useState('Activated from subscriptions page');
@@ -37,7 +42,10 @@ export default function Deals() {
     const [notificationMessage, setNotificationMessage] = useState('');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
 
-    const [bucket, setBucket] = useState('all');
+    const [bucket, setBucket] = useState(() => {
+        const requested = (searchParams.get('bucket') || 'all').trim();
+        return allowedBuckets.has(requested) ? requested : 'all';
+    });
 
     const { data, isLoading } = useQuery({
         queryKey: ['deals', page, search, statusFilter, bucket],
@@ -541,6 +549,7 @@ export default function Deals() {
                         <option value="active">Active Only</option>
                         <option value="risk">At Risk (0-3d)</option>
                         <option value="pending">Upcoming (4-14d)</option>
+                        <option value="workload">Renewal Workload (0-14d)</option>
                         <option value="stable">Stable ({'>'}14d)</option>
                         <option value="expired">Recently Expired</option>
                         <option value="lapsed">Lapsed (Legacy)</option>

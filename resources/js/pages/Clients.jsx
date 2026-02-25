@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -19,14 +19,19 @@ function normalizePhone(phone) {
 }
 
 export default function Clients() {
+    const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
+    const [searchParams] = useSearchParams();
 
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
-    const [statusFilter, setStatusFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState(() => {
+        const requested = (searchParams.get('status') || '').trim();
+        return allowedStatuses.has(requested) ? requested : '';
+    });
     const [planFilter, setPlanFilter] = useState('');
 
     const [showCreateModal, setShowCreateModal] = useState(false);

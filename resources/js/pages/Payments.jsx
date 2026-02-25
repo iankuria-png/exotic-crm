@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -122,14 +122,23 @@ function titleize(value) {
 }
 
 export default function Payments() {
+    const allowedStatuses = new Set(['awaiting_payment', 'completed', 'initiated', 'pending', 'failed', 'recovery_queue']);
+    const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const toast = useToast();
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
-    const [statusFilter, setStatusFilter] = useState('');
-    const [matchFilter, setMatchFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState(() => {
+        const requested = (searchParams.get('status') || '').trim();
+        return allowedStatuses.has(requested) ? requested : '';
+    });
+    const [matchFilter, setMatchFilter] = useState(() => {
+        const requested = (searchParams.get('matched') || '').trim();
+        return allowedMatchFilters.has(requested) ? requested : '';
+    });
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
@@ -829,6 +838,7 @@ export default function Payments() {
                     >
                         <option value="">All Statuses</option>
                         <option value="awaiting_payment">Awaiting payment (initiated + pending)</option>
+                        <option value="recovery_queue">Recovery queue (pending + failed + unmatched)</option>
                         <option value="completed">Completed</option>
                         <option value="initiated">Initiated</option>
                         <option value="pending">Pending</option>

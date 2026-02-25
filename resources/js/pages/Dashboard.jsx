@@ -54,6 +54,13 @@ function formatExpiryWindow(value) {
     return `${daysDiff}d left`;
 }
 
+function formatDelta(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    if (numeric === 0) return 'Flat vs previous window';
+    return `${numeric > 0 ? '+' : ''}${numeric}% vs previous window`;
+}
+
 function SectionFrame({ title, subtitle, action, children, footer }) {
     return (
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -138,8 +145,14 @@ function PreviewFooter({ hiddenCount, noun, ctaLabel, onOpen }) {
 }
 
 function MetricCard({ metric, isLoading }) {
+    const interactive = typeof metric.onClick === 'function';
+    const Wrapper = interactive ? 'button' : 'article';
+
     return (
-        <article className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+        <Wrapper
+            {...(interactive ? { type: 'button', onClick: metric.onClick } : {})}
+            className={`rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm ${interactive ? 'w-full cursor-pointer text-left transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600' : ''}`}
+        >
             <p className="flex items-center gap-2 text-sm font-medium text-slate-600">
                 <span className={`h-2 w-2 rounded-full ${metric.accentDot}`} aria-hidden="true" />
                 {metric.label}
@@ -148,7 +161,8 @@ function MetricCard({ metric, isLoading }) {
                 {isLoading ? <span className="inline-block h-9 w-20 animate-pulse rounded bg-slate-100" /> : metric.value}
             </p>
             <p className={`mt-2 text-sm font-medium ${metric.hintClass}`}>{metric.hint}</p>
-        </article>
+            {metric.subHint ? <p className="mt-1 text-xs text-slate-500">{metric.subHint}</p> : null}
+        </Wrapper>
     );
 }
 
@@ -186,12 +200,21 @@ export default function Dashboard() {
     const totalClients = asNumber(kpis.total_clients);
     const pendingLeads = asNumber(kpis.pending_leads);
     const totalLeads = asNumber(kpis.total_leads);
-    const expiringSoon = asNumber(kpis.expiring_soon);
+    const revenueWindow = asNumber(kpis.revenue_window ?? kpis.revenue_mtd);
+    const averageTicketWindow = asNumber(kpis.average_ticket_window);
+    const revenueDeltaLabel = formatDelta(kpis.revenue_delta_percent);
     const recentPaymentsCount = asNumber(kpis.completed_payments_window ?? kpis.completed_payments_mtd ?? kpis.recent_payments);
-    const unmatchedPayments = asNumber(kpis.unmatched_payments);
+    const unmatchedPaymentsWindow = asNumber(kpis.unmatched_payments_window ?? kpis.unmatched_payments);
+    const paymentRecoveryPending = asNumber(kpis.payment_recovery_pending);
+    const paymentRecoveryFailed = asNumber(kpis.payment_recovery_failed);
+    const paymentRecoveryUnmatched = asNumber(kpis.payment_recovery_unmatched);
+    const paymentRecoveryQueueTotal = asNumber(kpis.payment_recovery_queue_total);
+    const renewalRisk72h = asNumber(kpis.renewal_risk_72h ?? kpis.expiring_soon);
+    const renewalPipeline14d = asNumber(kpis.renewal_pipeline_4_14d);
+    const renewalWorkload14d = asNumber(kpis.renewal_workload_14d ?? (renewalRisk72h + renewalPipeline14d));
 
     const matchQuality = recentPaymentsCount > 0
-        ? clampPercent(((recentPaymentsCount - unmatchedPayments) / recentPaymentsCount) * 100)
+        ? clampPercent(((recentPaymentsCount - unmatchedPaymentsWindow) / recentPaymentsCount) * 100)
         : 100;
     const leadBacklog = totalLeads > 0 ? clampPercent((pendingLeads / totalLeads) * 100) : 0;
     const activeCoverage = totalClients > 0 ? clampPercent((activeClients / totalClients) * 100) : 0;
@@ -205,11 +228,15 @@ export default function Dashboard() {
     const metrics = [
         {
             key: 'revenue',
-            label: 'Revenue In Window',
-            value: formatKes(kpis.revenue_mtd),
-            hint: recentPaymentsCount > 0 ? `${recentPaymentsCount} confirmed payments` : 'No confirmed payments in selected range',
+            label: 'Collected Revenue',
+            value: formatKes(revenueWindow),
+            hint: recentPaymentsCount > 0
+                ? `${recentPaymentsCount} completed • avg ${formatKes(averageTicketWindow)}`
+                : 'No completed payments in selected range',
+            subHint: revenueDeltaLabel || 'No previous window baseline',
             accentDot: 'bg-teal-600',
             hintClass: 'text-teal-700',
+            onClick: () => navigate('/payments?status=completed'),
         },
         {
             key: 'clients',
@@ -218,22 +245,29 @@ export default function Dashboard() {
             hint: `${Math.round(activeCoverage)}% coverage of ${totalClients.toLocaleString()} records`,
             accentDot: 'bg-slate-400',
             hintClass: 'text-slate-600',
+            onClick: () => navigate('/clients?status=publish'),
         },
         {
-            key: 'unmatched',
-            label: 'Unmatched Payments',
-            value: unmatchedPayments.toLocaleString(),
-            hint: unmatchedPayments > 0 ? 'Needs review in queue' : 'No payment review backlog',
-            accentDot: unmatchedPayments > 0 ? 'bg-rose-500' : 'bg-slate-400',
-            hintClass: unmatchedPayments > 0 ? 'text-rose-700' : 'text-slate-600',
+            key: 'recovery',
+            label: 'Payment Recovery Queue',
+            value: paymentRecoveryQueueTotal.toLocaleString(),
+            hint: paymentRecoveryQueueTotal > 0
+                ? `${paymentRecoveryFailed} failed • ${paymentRecoveryPending} pending • ${paymentRecoveryUnmatched} unmatched`
+                : 'No payment recovery backlog',
+            accentDot: paymentRecoveryQueueTotal > 0 ? 'bg-rose-500' : 'bg-slate-400',
+            hintClass: paymentRecoveryQueueTotal > 0 ? 'text-rose-700' : 'text-slate-600',
+            onClick: () => navigate('/payments?status=recovery_queue'),
         },
         {
             key: 'renewals',
-            label: 'Subscriptions At Risk',
-            value: expiringSoon.toLocaleString(),
-            hint: expiringSoon > 0 ? `${expiringSoon} require attention` : 'No urgent renewals',
-            accentDot: expiringSoon > 0 ? 'bg-amber-500' : 'bg-slate-400',
-            hintClass: expiringSoon > 0 ? 'text-amber-700' : 'text-emerald-700',
+            label: 'Renewal Workload (14d)',
+            value: renewalWorkload14d.toLocaleString(),
+            hint: renewalWorkload14d > 0
+                ? `${renewalRisk72h} in 0-3d • ${renewalPipeline14d} in 4-14d`
+                : 'No renewals due in next 14 days',
+            accentDot: renewalWorkload14d > 0 ? 'bg-amber-500' : 'bg-slate-400',
+            hintClass: renewalWorkload14d > 0 ? 'text-amber-700' : 'text-emerald-700',
+            onClick: () => navigate('/deals?bucket=workload'),
         },
     ];
 
@@ -262,14 +296,14 @@ export default function Dashboard() {
                     <div className="flex flex-wrap gap-2">
                         <button
                             type="button"
-                            onClick={() => navigate('/payments')}
+                            onClick={() => navigate('/payments?status=recovery_queue')}
                             className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
                         >
                             Review payment queue
                         </button>
                         <button
                             type="button"
-                            onClick={() => navigate('/deals?status=active')}
+                            onClick={() => navigate('/deals?bucket=workload')}
                             className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                         >
                             Open subscriptions
@@ -372,6 +406,8 @@ export default function Dashboard() {
                     <MetricCard key={metric.key} metric={metric} isLoading={isLoading} />
                 ))}
             </section>
+
+            <p className="px-1 text-xs text-slate-500">Click any metric card to open the relevant action queue.</p>
 
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
