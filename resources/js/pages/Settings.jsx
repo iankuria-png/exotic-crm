@@ -246,7 +246,7 @@ function dedupeModeLabel(mode) {
     return mode?.replaceAll('_', ' ') || 'Unknown';
 }
 
-function IntegrationsWorkspace({ canCreateMarkets }) {
+function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
     const queryClient = useQueryClient();
     const toast = useToast();
     const [integrationArea, setIntegrationArea] = useState('overview');
@@ -285,6 +285,7 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     });
     const [latestScraperRunResult, setLatestScraperRunResult] = useState(null);
     const [paymentLinkForm, setPaymentLinkForm] = useState(defaultPaymentLinkProviderForm());
+    const paymentLinkReadOnly = !canEditPaymentLinks;
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
@@ -331,6 +332,20 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     const scraperSchedules = data?.scraper?.fetch_schedules || ['manual_only', 'daily', 'weekly'];
     const scraperDedupeModes = data?.scraper?.dedupe_modes || ['phone_or_email', 'phone_only', 'email_only', 'source_url'];
     const selectedScraperSource = scraperSources.find((source) => source.id === selectedScraperSourceId) || null;
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const requestedArea = params.get('integrationArea');
+        const allowedAreas = new Set(['overview', 'markets', 'payment_links', 'sms', 'scraper']);
+        if (requestedArea && allowedAreas.has(requestedArea)) {
+            setIntegrationArea(requestedArea);
+        }
+
+        const requestedPlatform = Number(params.get('platform_id'));
+        if (requestedPlatform > 0) {
+            setSelectedPlatformId(requestedPlatform);
+        }
+    }, []);
 
     useEffect(() => {
         if (!platformRows.length) {
@@ -700,6 +715,7 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     const integrationAreas = [
         { id: 'overview', label: 'Overview', hint: 'Service health' },
         { id: 'markets', label: 'Markets', hint: `${platformRows.length} configured` },
+        { id: 'payment_links', label: 'Payment Links', hint: paymentLinkReadOnly ? 'Read-only' : 'Editable routing' },
         { id: 'sms', label: 'SMS Routing', hint: smsProviderForm.enabled ? 'Enabled' : 'Disabled' },
         { id: 'scraper', label: 'Scraper', hint: `${scraperSources.length} sources` },
     ];
@@ -1173,100 +1189,15 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
 
                                 <section className="rounded-lg border border-slate-200 bg-white p-3">
                                     <h4 className="text-sm font-semibold text-slate-900">Payment Link Providers</h4>
-                                    <p className="mt-1 text-xs text-slate-500">Configure provider-level payment URLs. Active provider is used by “Send payment link”.</p>
-
-                                    <div className="mt-3 space-y-3">
-                                        {paymentLinkForm.providers.map((provider, index) => (
-                                            <div key={`provider-${index}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                                                <div className="grid gap-2 md:grid-cols-2">
-                                                    <input
-                                                        value={provider.key}
-                                                        onChange={(event) => updatePaymentLinkProvider(index, 'key', event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
-                                                        className="crm-input"
-                                                        placeholder="Provider key (e.g. pesapal)"
-                                                    />
-                                                    <input
-                                                        value={provider.label}
-                                                        onChange={(event) => updatePaymentLinkProvider(index, 'label', event.target.value)}
-                                                        className="crm-input"
-                                                        placeholder="Provider label"
-                                                    />
-                                                    <input
-                                                        value={provider.url}
-                                                        onChange={(event) => updatePaymentLinkProvider(index, 'url', event.target.value)}
-                                                        className="crm-input md:col-span-2"
-                                                        placeholder="Direct URL (optional)"
-                                                    />
-                                                    <input
-                                                        value={provider.base_url}
-                                                        onChange={(event) => updatePaymentLinkProvider(index, 'base_url', event.target.value)}
-                                                        className="crm-input"
-                                                        placeholder="Base URL"
-                                                    />
-                                                    <input
-                                                        value={provider.path}
-                                                        onChange={(event) => updatePaymentLinkProvider(index, 'path', event.target.value)}
-                                                        className="crm-input"
-                                                        placeholder="Path (e.g. /pay)"
-                                                    />
-                                                </div>
-                                                <div className="mt-2 flex justify-end">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => removePaymentLinkProvider(index)}
-                                                        disabled={paymentLinkForm.providers.length <= 1}
-                                                        className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                    >
-                                                        Remove
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                                        <div>
-                                            <label className="mb-1 block text-sm font-medium text-slate-700">Active provider</label>
-                                            <select
-                                                value={paymentLinkForm.active_provider}
-                                                onChange={(event) => setPaymentLinkForm((current) => ({ ...current, active_provider: event.target.value }))}
-                                                className="crm-select"
-                                            >
-                                                {(paymentLinkForm.providers || [])
-                                                    .filter((provider) => provider.key.trim() !== '')
-                                                    .map((provider) => (
-                                                        <option key={provider.key} value={provider.key}>
-                                                            {provider.label || provider.key}
-                                                        </option>
-                                                    ))}
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label className="mb-1 block text-sm font-medium text-slate-700">Audit reason</label>
-                                            <input
-                                                value={paymentLinkForm.reason}
-                                                onChange={(event) => setPaymentLinkForm((current) => ({ ...current, reason: event.target.value }))}
-                                                className="crm-input"
-                                                placeholder="Reason for payment link config update"
-                                            />
-                                        </div>
-                                    </div>
-
+                                    <p className="mt-1 text-xs text-slate-500">Provider routing is managed in the dedicated Payment Links workspace for faster access from operations.</p>
                                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                        <p className="text-xs text-slate-500">Selected market: <span className="font-semibold text-slate-700">{selectedPlatform.platform_name}</span></p>
                                         <button
                                             type="button"
-                                            onClick={addPaymentLinkProvider}
+                                            onClick={() => setIntegrationArea('payment_links')}
                                             className="crm-btn-secondary px-3 py-2"
                                         >
-                                            Add provider
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={savePaymentLinkProviders}
-                                            disabled={savePaymentLinkProvidersMutation.isPending || !paymentLinkForm.reason.trim()}
-                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {savePaymentLinkProvidersMutation.isPending ? 'Saving...' : 'Save payment link providers'}
+                                            Open payment links workspace
                                         </button>
                                     </div>
                                 </section>
@@ -1384,6 +1315,156 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                             </div>
                         )}
                     </div>
+                </div>
+                </section>
+            ) : null}
+
+            {integrationArea === 'payment_links' ? (
+                <section className="crm-surface overflow-hidden">
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Payment Link Provider Routing</h3>
+                        <p className="crm-panel-subtitle">Configure provider-level payment URLs used by the Payments queue "Send link" action.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => queryClient.invalidateQueries({ queryKey: ['settings-integrations'] })}
+                        className="crm-btn-secondary px-3 py-2"
+                    >
+                        Refresh
+                    </button>
+                </header>
+
+                <div className="space-y-4 p-4">
+                    <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <label className="mb-1 block text-sm font-medium text-slate-700">Market</label>
+                        <select
+                            value={selectedPlatformId || ''}
+                            onChange={(event) => setSelectedPlatformId(Number(event.target.value) || null)}
+                            className="crm-select max-w-xl"
+                        >
+                            {platformRows.map((platform) => (
+                                <option key={platform.platform_id} value={platform.platform_id}>
+                                    {platform.platform_name} ({platform.country || '—'})
+                                </option>
+                            ))}
+                        </select>
+                        <p className="mt-2 text-xs text-slate-500">Active provider is used by default when operators send payment links from the Payments workspace.</p>
+                        {paymentLinkReadOnly ? (
+                            <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                                Read-only access: only admin and sub-admin roles can update payment link provider settings.
+                            </p>
+                        ) : null}
+                    </section>
+
+                    {!selectedPlatform ? (
+                        <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-sm text-slate-500">
+                            Select a market to edit payment link provider routing.
+                        </p>
+                    ) : (
+                        <section className="rounded-lg border border-slate-200 bg-white p-3">
+                            <h4 className="text-sm font-semibold text-slate-900">Providers</h4>
+                            <p className="mt-1 text-xs text-slate-500">Add one or more providers, choose the active provider, and keep an audit reason for every change.</p>
+
+                            <fieldset disabled={paymentLinkReadOnly || savePaymentLinkProvidersMutation.isPending} className={`${paymentLinkReadOnly ? 'opacity-70' : ''}`}>
+                                <div className="mt-3 space-y-3">
+                                    {paymentLinkForm.providers.map((provider, index) => (
+                                        <div key={`provider-${index}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                            <div className="grid gap-2 md:grid-cols-2">
+                                                <input
+                                                    value={provider.key}
+                                                    onChange={(event) => updatePaymentLinkProvider(index, 'key', event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                                                    className="crm-input"
+                                                    placeholder="Provider key (e.g. pesapal)"
+                                                />
+                                                <input
+                                                    value={provider.label}
+                                                    onChange={(event) => updatePaymentLinkProvider(index, 'label', event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Provider label"
+                                                />
+                                                <input
+                                                    value={provider.url}
+                                                    onChange={(event) => updatePaymentLinkProvider(index, 'url', event.target.value)}
+                                                    className="crm-input md:col-span-2"
+                                                    placeholder="Direct URL (optional)"
+                                                />
+                                                <input
+                                                    value={provider.base_url}
+                                                    onChange={(event) => updatePaymentLinkProvider(index, 'base_url', event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Base URL"
+                                                />
+                                                <input
+                                                    value={provider.path}
+                                                    onChange={(event) => updatePaymentLinkProvider(index, 'path', event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Path (e.g. /pay)"
+                                                />
+                                            </div>
+                                            <div className="mt-2 flex justify-end">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removePaymentLinkProvider(index)}
+                                                    disabled={paymentLinkForm.providers.length <= 1 || paymentLinkReadOnly}
+                                                    className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Active provider</label>
+                                        <select
+                                            value={paymentLinkForm.active_provider}
+                                            onChange={(event) => setPaymentLinkForm((current) => ({ ...current, active_provider: event.target.value }))}
+                                            className="crm-select"
+                                        >
+                                            {(paymentLinkForm.providers || [])
+                                                .filter((provider) => provider.key.trim() !== '')
+                                                .map((provider) => (
+                                                    <option key={provider.key} value={provider.key}>
+                                                        {provider.label || provider.key}
+                                                    </option>
+                                                ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Audit reason</label>
+                                        <input
+                                            value={paymentLinkForm.reason}
+                                            onChange={(event) => setPaymentLinkForm((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Reason for payment link config update"
+                                        />
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                <button
+                                    type="button"
+                                    onClick={addPaymentLinkProvider}
+                                    disabled={paymentLinkReadOnly}
+                                    className="crm-btn-secondary px-3 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    Add provider
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={savePaymentLinkProviders}
+                                    disabled={paymentLinkReadOnly || savePaymentLinkProvidersMutation.isPending || !paymentLinkForm.reason.trim()}
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {savePaymentLinkProvidersMutation.isPending ? 'Saving...' : 'Save payment link providers'}
+                                </button>
+                            </div>
+                        </section>
+                    )}
                 </div>
                 </section>
             ) : null}
@@ -2992,6 +3073,7 @@ export default function Settings() {
     const canManageTemplates = ['admin', 'sub_admin'].includes(user?.role || '');
     const canViewRoles = (user?.role || '') === 'admin';
     const canCreateMarkets = (user?.role || '') === 'admin';
+    const canEditPaymentLinks = ['admin', 'sub_admin'].includes(user?.role || '');
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
@@ -3022,7 +3104,12 @@ export default function Settings() {
                 </div>
             </section>
 
-            {activeTab === 'integrations' ? <IntegrationsWorkspace canCreateMarkets={canCreateMarkets} /> : null}
+            {activeTab === 'integrations' ? (
+                <IntegrationsWorkspace
+                    canCreateMarkets={canCreateMarkets}
+                    canEditPaymentLinks={canEditPaymentLinks}
+                />
+            ) : null}
 
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}

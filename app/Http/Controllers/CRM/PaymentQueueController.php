@@ -13,6 +13,7 @@ use App\Services\MarketAuthorizationService;
 use App\Support\CrmAuditAction;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Carbon;
 
 class PaymentQueueController extends Controller
 {
@@ -34,10 +35,6 @@ class PaymentQueueController extends Controller
         $query = Payment::with(['platform', 'product', 'client']);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-
         if ($request->filled('platform_id')) {
             $query->where('platform_id', $request->platform_id);
         }
@@ -48,6 +45,16 @@ class PaymentQueueController extends Controller
                 $q->where('phone', 'like', "%{$search}%")
                     ->orWhere('transaction_reference', 'like', "%{$search}%");
             });
+        }
+
+        $statsQuery = clone $query;
+        $statusFilter = trim((string) $request->input('status', ''));
+        if ($statusFilter !== '') {
+            if ($statusFilter === 'awaiting_payment') {
+                $query->whereIn('status', ['initiated', 'pending']);
+            } else {
+                $query->where('status', $statusFilter);
+            }
         }
 
         if ($request->filled('matched')) {
@@ -62,15 +69,41 @@ class PaymentQueueController extends Controller
             $query->where('match_confidence', $request->match_confidence);
         }
 
-        $statsQuery = clone $query;
+        $awaitingStatuses = ['initiated', 'pending'];
+        $oneHourAgo = Carbon::now()->subHour();
+        $dayAgo = Carbon::now()->subDay();
+        $threeDaysAgo = Carbon::now()->subDays(3);
+
         $stats = [
             'total' => (clone $statsQuery)->count(),
-            'pending' => (clone $statsQuery)->where('status', 'initiated')->count(),
+            'pending' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->count(),
+            'pending_amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->sum('amount'),
             'confirmed' => (clone $statsQuery)->where('status', 'completed')->count(),
+            'confirmed_amount' => (float) (clone $statsQuery)->where('status', 'completed')->sum('amount'),
             'failed' => (clone $statsQuery)->where('status', 'failed')->count(),
+            'failed_amount' => (float) (clone $statsQuery)->where('status', 'failed')->sum('amount'),
             'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
             'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
             'unmatched_review' => (clone $statsQuery)->where('status', 'completed')->whereNull('client_id')->count(),
+            'unmatched_review_amount' => (float) (clone $statsQuery)->where('status', 'completed')->whereNull('client_id')->sum('amount'),
+            'awaiting_aging' => [
+                'lt_1h' => [
+                    'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo)->count(),
+                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo)->sum('amount'),
+                ],
+                'h1_24' => [
+                    'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $oneHourAgo)->where('created_at', '>=', $dayAgo)->count(),
+                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $oneHourAgo)->where('created_at', '>=', $dayAgo)->sum('amount'),
+                ],
+                'h25_72' => [
+                    'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $dayAgo)->where('created_at', '>=', $threeDaysAgo)->count(),
+                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $dayAgo)->where('created_at', '>=', $threeDaysAgo)->sum('amount'),
+                ],
+                'gt_72h' => [
+                    'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $threeDaysAgo)->count(),
+                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $threeDaysAgo)->sum('amount'),
+                ],
+            ],
         ];
 
         $payments = $query->orderBy('created_at', 'desc')
@@ -338,9 +371,9 @@ class PaymentQueueController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!in_array($payment->status, ['failed', 'initiated'], true)) {
+        if (!in_array($payment->status, ['failed', 'initiated', 'pending'], true)) {
             return response()->json([
-                'message' => 'Only failed or initiated payments can be retried.',
+                'message' => 'Only failed, initiated, or pending payments can be retried.',
             ], 422);
         }
 
@@ -488,9 +521,9 @@ class PaymentQueueController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        if (!in_array($payment->status, ['failed', 'initiated'], true)) {
+        if (!in_array($payment->status, ['failed', 'initiated', 'pending'], true)) {
             return response()->json([
-                'message' => 'Payment link can only be sent for failed or initiated payments.',
+                'message' => 'Payment link can only be sent for failed, initiated, or pending payments.',
             ], 422);
         }
 

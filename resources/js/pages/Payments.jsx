@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
-import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
@@ -55,8 +55,51 @@ function toneClasses(tone) {
     return 'bg-slate-100 text-slate-600 ring-slate-200';
 }
 
+function toAmount(value) {
+    const amount = Number(value || 0);
+    return Number.isFinite(amount) ? amount : 0;
+}
+
+function hoursSince(timestamp) {
+    if (!timestamp) return Infinity;
+    const parsed = new Date(timestamp).getTime();
+    if (Number.isNaN(parsed)) return Infinity;
+    const diffMs = Date.now() - parsed;
+    return diffMs > 0 ? diffMs / (1000 * 60 * 60) : 0;
+}
+
+function pendingRecommendation(payment) {
+    if (!['initiated', 'pending'].includes(payment?.status)) {
+        return null;
+    }
+
+    const ageHours = hoursSince(payment.created_at);
+    if (ageHours < 1) {
+        return { label: 'Wait for callback', tone: 'default' };
+    }
+    if (ageHours < 24) {
+        return { label: 'Send payment link now', tone: 'warning' };
+    }
+    if (ageHours < 72) {
+        return { label: 'Retry STK then follow up', tone: 'warning' };
+    }
+
+    return { label: 'Escalate and follow up manually', tone: 'danger' };
+}
+
+function recommendationClass(tone) {
+    if (tone === 'danger') {
+        return 'bg-rose-50 text-rose-700 ring-rose-200';
+    }
+    if (tone === 'warning') {
+        return 'bg-amber-50 text-amber-700 ring-amber-200';
+    }
+    return 'bg-slate-100 text-slate-600 ring-slate-200';
+}
+
 export default function Payments() {
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
     const toast = useToast();
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
@@ -178,7 +221,7 @@ export default function Payments() {
                 ...(phone && { phone: phone.trim() }),
                 reason: reason || undefined,
             }).then((response) => response.data),
-        onSuccess: (_, variables) => {
+        onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             setSendLinkDialog({ open: false, payment: null, channel: 'sms', provider: '', phone: '', reason: 'Send payment link from CRM' });
             toast.success('Payment link sent by SMS.');
@@ -287,19 +330,76 @@ export default function Payments() {
 
     const summary = useMemo(() => {
         if (data?.stats) {
+            const aging = data.stats.awaiting_aging || {};
+            const olderThan24 = toAmount(aging.h25_72?.amount) + toAmount(aging.gt_72h?.amount);
+            const olderThan24Count = Number(aging.h25_72?.count || 0) + Number(aging.gt_72h?.count || 0);
+            const olderThan72 = toAmount(aging.gt_72h?.amount);
+            const olderThan72Count = Number(aging.gt_72h?.count || 0);
+
             return {
-                pending: Number(data.stats.pending || 0),
-                confirmed: Number(data.stats.confirmed || 0),
-                unmatched: Number((data.stats.unmatched_review ?? data.stats.unmatched) || 0),
+                awaitingCount: Number(data.stats.pending || 0),
+                awaitingAmount: toAmount(data.stats.pending_amount),
+                confirmedCount: Number(data.stats.confirmed || 0),
+                confirmedAmount: toAmount(data.stats.confirmed_amount),
+                unmatchedCount: Number((data.stats.unmatched_review ?? data.stats.unmatched) || 0),
+                unmatchedAmount: toAmount(data.stats.unmatched_review_amount),
+                failedCount: Number(data.stats.failed || 0),
+                failedAmount: toAmount(data.stats.failed_amount),
+                stale24Count: olderThan24Count,
+                stale24Amount: olderThan24,
+                stale72Count: olderThan72Count,
+                stale72Amount: olderThan72,
             };
         }
 
-        const pending = rows.filter((row) => row.status === 'initiated').length;
-        const confirmed = rows.filter((row) => row.status === 'completed').length;
-        const unmatched = rows.filter((row) => !row.client_id).length;
+        const awaitingRows = rows.filter((row) => ['initiated', 'pending'].includes(row.status));
+        const completedRows = rows.filter((row) => row.status === 'completed');
+        const unmatchedRows = completedRows.filter((row) => !row.client_id);
+        const failedRows = rows.filter((row) => row.status === 'failed');
+        const stale24Rows = awaitingRows.filter((row) => hoursSince(row.created_at) >= 24);
+        const stale72Rows = awaitingRows.filter((row) => hoursSince(row.created_at) >= 72);
+        const sumAmount = (list) => list.reduce((sum, row) => sum + toAmount(row.amount), 0);
 
-        return { pending, confirmed, unmatched };
+        return {
+            awaitingCount: awaitingRows.length,
+            awaitingAmount: sumAmount(awaitingRows),
+            confirmedCount: completedRows.length,
+            confirmedAmount: sumAmount(completedRows),
+            unmatchedCount: unmatchedRows.length,
+            unmatchedAmount: sumAmount(unmatchedRows),
+            failedCount: failedRows.length,
+            failedAmount: sumAmount(failedRows),
+            stale24Count: stale24Rows.length,
+            stale24Amount: sumAmount(stale24Rows),
+            stale72Count: stale72Rows.length,
+            stale72Amount: sumAmount(stale72Rows),
+        };
     }, [data?.stats, rows]);
+
+    const activeMetric = useMemo(() => {
+        if (statusFilter === 'awaiting_payment') return 'awaiting';
+        if (statusFilter === 'completed' && matchFilter === '') return 'confirmed';
+        if (statusFilter === 'completed' && matchFilter === 'unmatched') return 'unmatched';
+        if (statusFilter === 'failed') return 'failed';
+        return '';
+    }, [statusFilter, matchFilter]);
+
+    const applyMetricFilter = (metricKey) => {
+        if (metricKey === 'awaiting') {
+            setStatusFilter('awaiting_payment');
+            setMatchFilter('');
+        } else if (metricKey === 'confirmed') {
+            setStatusFilter('completed');
+            setMatchFilter('');
+        } else if (metricKey === 'unmatched') {
+            setStatusFilter('completed');
+            setMatchFilter('unmatched');
+        } else if (metricKey === 'failed') {
+            setStatusFilter('failed');
+            setMatchFilter('');
+        }
+        setPage(1);
+    };
 
     const modalCandidates = useMemo(() => {
         const candidates = candidatesData?.data || [];
@@ -408,75 +508,84 @@ export default function Payments() {
         {
             key: 'actions',
             label: 'Actions',
-            render: (row) => (
-                <div className="flex flex-wrap items-center gap-1.5">
-                    {(row.status === 'failed' || row.status === 'initiated') && (
-                        <>
+            render: (row) => {
+                const recommendation = pendingRecommendation(row);
+
+                return (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        {(row.status === 'failed' || row.status === 'initiated' || row.status === 'pending') && (
+                            <>
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' });
+                                    }}
+                                    className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                                >
+                                    Retry STK
+                                </button>
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        setSendLinkDialog({
+                                            open: true,
+                                            payment: row,
+                                            channel: 'sms',
+                                            provider: '',
+                                            phone: row.phone || '',
+                                            reason: 'Send payment link from CRM',
+                                        });
+                                    }}
+                                    className="rounded-md bg-slate-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                                >
+                                    Send link
+                                </button>
+                            </>
+                        )}
+                        {row.status === 'completed' && !row.client_id && (
                             <button
                                 onClick={(event) => {
                                     event.stopPropagation();
-                                    setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' });
+                                    autoMatchMutation.mutate(row.id);
                                 }}
-                                className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                                className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
                             >
-                                Retry STK
+                                Auto-match
                             </button>
+                        )}
+                        {row.status === 'completed' && !row.client_id && (
                             <button
                                 onClick={(event) => {
                                     event.stopPropagation();
-                                    setSendLinkDialog({
-                                        open: true,
-                                        payment: row,
-                                        channel: 'sms',
-                                        provider: '',
-                                        phone: row.phone || '',
-                                        reason: 'Send payment link from CRM',
-                                    });
+                                    openManualMatch(row);
                                 }}
-                                className="rounded-md bg-slate-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                             >
-                                Send link
+                                Match manually
                             </button>
-                        </>
-                    )}
-                    {row.status === 'completed' && !row.client_id && (
-                        <button
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                autoMatchMutation.mutate(row.id);
-                            }}
-                            className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                        >
-                            Auto-match
-                        </button>
-                    )}
-                    {row.status === 'completed' && !row.client_id && (
-                        <button
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                openManualMatch(row);
-                            }}
-                            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                        >
-                            Match manually
-                        </button>
-                    )}
-                    {row.status === 'completed' && row.client_id && !row.deal_id && (
-                        <button
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
-                            }}
-                            className="rounded-md border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                        >
-                            Create Sub
-                        </button>
-                    )}
-                    {row.client_id && (
-                        <span className="text-[11px] font-medium text-slate-500">Matched</span>
-                    )}
-                </div>
-            ),
+                        )}
+                        {row.status === 'completed' && row.client_id && !row.deal_id && (
+                            <button
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
+                                }}
+                                className="rounded-md border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                            >
+                                Create Sub
+                            </button>
+                        )}
+                        {row.client_id && (
+                            <span className="text-[11px] font-medium text-slate-500">Matched</span>
+                        )}
+                        {recommendation ? (
+                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${recommendationClass(recommendation.tone)}`}>
+                                Recommended: {recommendation.label}
+                            </span>
+                        ) : null}
+                    </div>
+                );
+            },
         },
     ];
 
@@ -496,10 +605,76 @@ export default function Payments() {
                 )}
             />
 
-            <section className="grid gap-4 md:grid-cols-3">
-                <MetricCard label="Pending" value={summary.pending.toLocaleString()} meta="initiated" tone="warning" />
-                <MetricCard label="Confirmed" value={summary.confirmed.toLocaleString()} meta="completed" tone="success" />
-                <MetricCard label="Unmatched" value={summary.unmatched.toLocaleString()} meta="completed, no client linked" tone="danger" />
+            <section className="grid gap-4 md:grid-cols-4">
+                <button
+                    type="button"
+                    onClick={() => applyMetricFilter('awaiting')}
+                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                        activeMetric === 'awaiting'
+                            ? 'border-amber-300 bg-amber-50/60'
+                            : 'border-slate-200 bg-white hover:border-amber-200 hover:bg-amber-50/30'
+                    }`}
+                >
+                    <p className="text-sm font-medium text-slate-600">Awaiting Payment</p>
+                    <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.awaitingCount.toLocaleString()}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.awaitingAmount)}</p>
+                    <p className="mt-1 text-xs text-slate-500">Initiated + pending</p>
+                    {summary.stale24Count > 0 ? (
+                        <p className="mt-2 text-[11px] font-medium text-amber-700">
+                            {summary.stale24Count.toLocaleString()} older than 24h ({formatCurrency(summary.stale24Amount)})
+                        </p>
+                    ) : null}
+                    {summary.stale72Count > 0 ? (
+                        <p className="mt-1 text-[11px] font-medium text-rose-700">
+                            {summary.stale72Count.toLocaleString()} older than 72h ({formatCurrency(summary.stale72Amount)})
+                        </p>
+                    ) : null}
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => applyMetricFilter('confirmed')}
+                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                        activeMetric === 'confirmed'
+                            ? 'border-emerald-300 bg-emerald-50/60'
+                            : 'border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/30'
+                    }`}
+                >
+                    <p className="text-sm font-medium text-slate-600">Confirmed</p>
+                    <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.confirmedAmount)}</p>
+                    <p className="mt-1 text-xs text-slate-500">Completed payments</p>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => applyMetricFilter('unmatched')}
+                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                        activeMetric === 'unmatched'
+                            ? 'border-rose-300 bg-rose-50/60'
+                            : 'border-slate-200 bg-white hover:border-rose-200 hover:bg-rose-50/30'
+                    }`}
+                >
+                    <p className="text-sm font-medium text-slate-600">Unmatched Confirmed</p>
+                    <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.unmatchedCount.toLocaleString()}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.unmatchedAmount)}</p>
+                    <p className="mt-1 text-xs text-slate-500">Completed, no client linked</p>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => applyMetricFilter('failed')}
+                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                        activeMetric === 'failed'
+                            ? 'border-slate-400 bg-slate-100/80'
+                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                >
+                    <p className="text-sm font-medium text-slate-600">Failed</p>
+                    <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.failedCount.toLocaleString()}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.failedAmount)}</p>
+                    <p className="mt-1 text-xs text-slate-500">Needs retry or follow-up</p>
+                </button>
             </section>
 
             <section className="crm-filter-row">
@@ -530,8 +705,10 @@ export default function Payments() {
                         className="crm-select"
                     >
                         <option value="">All Statuses</option>
+                        <option value="awaiting_payment">Awaiting payment (initiated + pending)</option>
                         <option value="completed">Completed</option>
                         <option value="initiated">Initiated</option>
+                        <option value="pending">Pending</option>
                         <option value="failed">Failed</option>
                     </select>
 
@@ -567,7 +744,7 @@ export default function Payments() {
 
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-slate-500">Bulk shortcut: press <span className="crm-mono">Ctrl/Cmd + Enter</span> to confirm selected rows.</p>
-                    <span className="text-xs text-slate-500">Auto-match attempts phone-based matching. Manual match lets you search and pick any client in scope.</span>
+                    <span className="text-xs text-slate-500">Pending triage: send link within 1h, retry STK within 24h, escalate after 72h.</span>
                 </div>
             </section>
 
@@ -795,6 +972,23 @@ export default function Payments() {
                                 </option>
                             ))}
                         </select>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                            <p className="text-xs text-slate-500">Need to edit provider URLs or active routing?</p>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const platformId = sendLinkDialog.payment?.platform_id || sendLinkDialog.payment?.platform?.id;
+                                    const query = new URLSearchParams({ integrationArea: 'payment_links' });
+                                    if (platformId) {
+                                        query.set('platform_id', String(platformId));
+                                    }
+                                    navigate(`/settings?${query.toString()}`);
+                                }}
+                                className="text-xs font-semibold text-teal-700 underline decoration-teal-200 underline-offset-2 hover:text-teal-800"
+                            >
+                                Manage providers
+                            </button>
+                        </div>
                     </div>
                     <div>
                         <label htmlFor="send-link-phone" className="mb-1 block text-sm font-medium text-slate-700">Phone number (optional)</label>
