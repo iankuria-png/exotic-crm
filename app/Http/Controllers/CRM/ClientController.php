@@ -16,11 +16,14 @@ use App\Services\AuditService;
 use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\PaymentMatchingService;
+use App\Services\ClientSyncService;
+use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Carbon\Carbon;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ClientController extends Controller
 {
@@ -109,19 +112,51 @@ class ClientController extends Controller
             'profile_status' => 'nullable|in:publish,private,draft,pending',
             'assigned_to' => 'nullable|exists:users,id',
             'wp_user_id' => 'nullable|integer|min:1',
+            'onboarding_mode' => 'nullable|in:manual,wp_provision',
+            'wp_username' => ['nullable', 'string', 'max:60', 'regex:/^[A-Za-z0-9._-]+$/'],
+            'wp_password' => 'nullable|string|min:8|max:100',
             'reason' => 'nullable|string|max:500',
         ]);
 
+        $onboardingMode = (string) ($validated['onboarding_mode'] ?? 'manual');
+        if (
+            $onboardingMode === 'wp_provision'
+            && empty($validated['email'])
+            && empty($validated['phone_normalized'])
+        ) {
+            return response()->json([
+                'message' => 'Email or phone is required when provisioning a WordPress profile.',
+            ], 422);
+        }
+
         try {
-            $client = $this->createManualClient(
-                $request,
-                $validated,
-                $validated['reason'] ?? 'Manual client create from CRM'
-            );
+            if ($onboardingMode === 'wp_provision') {
+                $client = $this->createProvisionedClient(
+                    $request,
+                    $validated,
+                    $validated['reason'] ?? 'WordPress-provisioned client create from CRM'
+                );
+            } else {
+                $client = $this->createManualClient(
+                    $request,
+                    $validated,
+                    $validated['reason'] ?? 'Manual client create from CRM'
+                );
+            }
         } catch (\InvalidArgumentException $exception) {
             return response()->json([
                 'message' => $exception->getMessage(),
             ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Client create failed', [
+                'onboarding_mode' => $onboardingMode,
+                'platform_id' => $validated['platform_id'] ?? null,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Client creation failed: ' . $exception->getMessage(),
+            ], 500);
         }
 
         return response()->json($client, 201);
@@ -980,6 +1015,139 @@ class ClientController extends Controller
         }
     }
 
+    private function createProvisionedClient(Request $request, array $payload, string $reason): Client
+    {
+        $platformId = (int) ($payload['platform_id'] ?? 0);
+        if ($platformId <= 0) {
+            throw new \InvalidArgumentException('platform_id is required.');
+        }
+
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this client market.'
+        );
+
+        $platform = Platform::query()->findOrFail($platformId);
+        if (!$this->platformHasWpDatabaseCredentials($platform)) {
+            throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
+        }
+
+        $name = trim((string) ($payload['name'] ?? ''));
+        if ($name === '') {
+            throw new \InvalidArgumentException('name is required.');
+        }
+
+        $profileStatus = strtolower(trim((string) ($payload['profile_status'] ?? 'private')));
+        if (!in_array($profileStatus, ['publish', 'private', 'draft', 'pending'], true)) {
+            $profileStatus = 'private';
+        }
+
+        $assignedTo = $this->resolveAssignedOwner($platformId, $payload, $name);
+
+        $provisioningResult = (new WpDirectProvisioningService($platform))->provisionEscort([
+            'name' => $name,
+            'email' => !empty($payload['email']) ? trim((string) $payload['email']) : '',
+            'phone' => $this->normalizePhone($payload['phone_normalized'] ?? null) ?? '',
+            'city' => !empty($payload['city']) ? trim((string) $payload['city']) : '',
+            'post_status' => $profileStatus,
+            'username' => !empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
+            'password' => !empty($payload['wp_password']) ? (string) $payload['wp_password'] : '',
+        ]);
+
+        $wpPostId = (int) ($provisioningResult['wp_post_id'] ?? 0);
+        $wpUserId = (int) ($provisioningResult['wp_user_id'] ?? 0);
+        if ($wpPostId <= 0 || $wpUserId <= 0) {
+            throw new \RuntimeException('WordPress provisioning did not return valid profile IDs.');
+        }
+
+        $client = Client::updateOrCreate(
+            [
+                'platform_id' => $platformId,
+                'wp_post_id' => $wpPostId,
+            ],
+            [
+                'wp_user_id' => $wpUserId,
+                'client_type' => 'escort',
+                'name' => $name,
+                'phone_normalized' => $this->normalizePhone($payload['phone_normalized'] ?? null),
+                'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
+                'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
+                'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
+                'assigned_to' => $assignedTo,
+                'premium' => false,
+                'featured' => false,
+                'verified' => false,
+                'last_synced_at' => now(),
+            ]
+        );
+
+        $syncStatus = 'skipped';
+        try {
+            $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
+            if ($assignedTo && (int) ($syncedClient->assigned_to ?? 0) !== $assignedTo) {
+                $syncedClient->assigned_to = $assignedTo;
+                $syncedClient->save();
+            }
+            $client = $syncedClient;
+            $syncStatus = 'success';
+        } catch (\Throwable $exception) {
+            $syncStatus = 'failed';
+            Log::warning('Provisioned client created but syncOne failed', [
+                'platform_id' => $platformId,
+                'wp_post_id' => $wpPostId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        TimelineEvent::create([
+            'platform_id' => $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => 'client_created',
+            'actor_id' => $request->user()->id,
+            'content' => [
+                'source' => 'wp_provisioned',
+                'assigned_to' => $client->assigned_to,
+                'profile_status' => $client->profile_status,
+                'wp_post_id' => $client->wp_post_id,
+                'wp_user_id' => $client->wp_user_id,
+                'linked_existing_user' => (bool) ($provisioningResult['linked_existing_user'] ?? false),
+                'placeholder_email_used' => (bool) ($provisioningResult['placeholder_email_used'] ?? false),
+                'sync_status' => $syncStatus,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_CREATE,
+            'client',
+            (int) $client->id,
+            null,
+            [
+                'source' => 'wp_provisioned',
+                'name' => $client->name,
+                'phone_normalized' => $client->phone_normalized,
+                'email' => $client->email,
+                'city' => $client->city,
+                'profile_status' => $client->profile_status,
+                'assigned_to' => $client->assigned_to,
+                'wp_post_id' => $client->wp_post_id,
+                'wp_user_id' => $client->wp_user_id,
+                'linked_existing_user' => (bool) ($provisioningResult['linked_existing_user'] ?? false),
+                'placeholder_email_used' => (bool) ($provisioningResult['placeholder_email_used'] ?? false),
+                'sync_status' => $syncStatus,
+            ],
+            $reason
+        );
+
+        $client->load(['platform', 'assignedAgent']);
+
+        return $client;
+    }
+
     private function createManualClient(Request $request, array $payload, string $reason): Client
     {
         $platformId = (int) ($payload['platform_id'] ?? 0);
@@ -1003,23 +1171,7 @@ class ClientController extends Controller
             $profileStatus = 'private';
         }
 
-        $assignedTo = !empty($payload['assigned_to']) ? (int) $payload['assigned_to'] : null;
-        if ($assignedTo) {
-            $assignee = User::query()->find($assignedTo);
-            if (
-                !$assignee ||
-                !$assignee->isActive() ||
-                !$this->marketAuthorizationService->userCanAccessPlatform($assignee, $platformId)
-            ) {
-                throw new \InvalidArgumentException('Assigned owner is not eligible for this market.');
-            }
-        } else {
-            $assignedTo = $this->leadAssignmentService->assignOwnerId($platformId, [
-                'phone_normalized' => $payload['phone_normalized'] ?? null,
-                'email' => $payload['email'] ?? null,
-                'name' => $name,
-            ]);
-        }
+        $assignedTo = $this->resolveAssignedOwner($platformId, $payload, $name);
 
         $manualWpPostId = $this->nextManualWpPostId($platformId);
 
@@ -1089,6 +1241,36 @@ class ClientController extends Controller
         }
 
         return ((int) $minId) - 1;
+    }
+
+    private function resolveAssignedOwner(int $platformId, array $payload, string $name): ?int
+    {
+        $assignedTo = !empty($payload['assigned_to']) ? (int) $payload['assigned_to'] : null;
+        if ($assignedTo) {
+            $assignee = User::query()->find($assignedTo);
+            if (
+                !$assignee ||
+                !$assignee->isActive() ||
+                !$this->marketAuthorizationService->userCanAccessPlatform($assignee, $platformId)
+            ) {
+                throw new \InvalidArgumentException('Assigned owner is not eligible for this market.');
+            }
+
+            return $assignedTo;
+        }
+
+        return $this->leadAssignmentService->assignOwnerId($platformId, [
+            'phone_normalized' => $payload['phone_normalized'] ?? null,
+            'email' => $payload['email'] ?? null,
+            'name' => $name,
+        ]);
+    }
+
+    private function platformHasWpDatabaseCredentials(Platform $platform): bool
+    {
+        return !empty($platform->db_host)
+            && !empty($platform->db_name)
+            && !empty($platform->db_user);
     }
 
     private function normalizePhone(?string $phone): ?string

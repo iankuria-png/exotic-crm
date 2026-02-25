@@ -60,6 +60,9 @@ export default function Clients() {
         city: '',
         profile_status: 'private',
         assigned_to: '',
+        onboarding_mode: 'manual',
+        wp_username: '',
+        wp_password: '',
     });
     const [csvForm, setCsvForm] = useState({
         platform_id: '',
@@ -140,6 +143,9 @@ export default function Clients() {
                 city: '',
                 profile_status: 'private',
                 assigned_to: '',
+                onboarding_mode: 'manual',
+                wp_username: '',
+                wp_password: '',
             });
         },
         onError: (error) => {
@@ -207,6 +213,15 @@ export default function Clients() {
 
     const rows = data?.data || [];
     const selectedCsvPlatformName = platformOptions.find((platform) => String(platform.platform_id) === String(csvForm.platform_id))?.platform_name || 'Selected market';
+    const requiresProvisionContact =
+        createForm.onboarding_mode === 'wp_provision'
+        && !createForm.email.trim()
+        && !createForm.phone_normalized.trim();
+    const canSubmitCreate =
+        Boolean(createForm.platform_id)
+        && createForm.name.trim().length > 0
+        && !createMutation.isPending
+        && !requiresProvisionContact;
 
     const stats = useMemo(() => {
         if (data?.stats) {
@@ -588,7 +603,11 @@ export default function Clients() {
                         <header className="crm-panel-header">
                             <div>
                                 <h3 className="crm-panel-title">Add Client</h3>
-                                <p className="crm-panel-subtitle">Create a manual CRM client record for outreach and deal tracking.</p>
+                                <p className="crm-panel-subtitle">
+                                    {createForm.onboarding_mode === 'wp_provision'
+                                        ? 'Provision a real WordPress profile and link it to CRM in one flow.'
+                                        : 'Create a manual CRM client record for outreach and deal tracking.'}
+                                </p>
                             </div>
                         </header>
 
@@ -608,6 +627,34 @@ export default function Clients() {
                                         </option>
                                     ))}
                                 </select>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label className="mb-1 block text-sm font-medium text-slate-700">Onboarding mode</label>
+                                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setCreateForm((current) => ({ ...current, onboarding_mode: 'manual', wp_username: '', wp_password: '' }))}
+                                        className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                                            createForm.onboarding_mode === 'manual'
+                                                ? 'bg-white text-slate-900 shadow-sm'
+                                                : 'text-slate-600 hover:text-slate-900'
+                                        }`}
+                                    >
+                                        CRM only
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setCreateForm((current) => ({ ...current, onboarding_mode: 'wp_provision' }))}
+                                        className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                                            createForm.onboarding_mode === 'wp_provision'
+                                                ? 'bg-white text-slate-900 shadow-sm'
+                                                : 'text-slate-600 hover:text-slate-900'
+                                        }`}
+                                    >
+                                        Provision in WordPress
+                                    </button>
+                                </div>
                             </div>
 
                             <div>
@@ -690,12 +737,51 @@ export default function Clients() {
                                     ))}
                                 </select>
                             </div>
+
+                            {createForm.onboarding_mode === 'wp_provision' ? (
+                                <>
+                                    <div>
+                                        <label htmlFor="client-wp-username" className="mb-1 block text-sm font-medium text-slate-700">WP username (optional)</label>
+                                        <input
+                                            id="client-wp-username"
+                                            type="text"
+                                            value={createForm.wp_username}
+                                            onChange={(event) => setCreateForm((current) => ({ ...current, wp_username: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Auto-generated if blank"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label htmlFor="client-wp-password" className="mb-1 block text-sm font-medium text-slate-700">Temp password (optional)</label>
+                                        <input
+                                            id="client-wp-password"
+                                            type="text"
+                                            value={createForm.wp_password}
+                                            onChange={(event) => setCreateForm((current) => ({ ...current, wp_password: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="Auto-generated if blank"
+                                        />
+                                    </div>
+                                </>
+                            ) : null}
                         </div>
 
                         <div className="border-t border-slate-100 px-4 py-3">
-                            <p className="text-xs text-slate-500">
-                                Manual clients are CRM-managed records for sales operations. “Sync from WP” is only available after a valid WordPress profile is linked.
-                            </p>
+                            {createForm.onboarding_mode === 'wp_provision' ? (
+                                <p className="text-xs text-slate-500">
+                                    WordPress provisioning creates a real user/profile now. Include either email or phone so credentials can be sent in the next step.
+                                </p>
+                            ) : (
+                                <p className="text-xs text-slate-500">
+                                    Manual clients are CRM-managed records for sales operations. WordPress profile linkage can be added later.
+                                </p>
+                            )}
+                            {requiresProvisionContact ? (
+                                <p className="mt-2 text-xs font-medium text-amber-700">
+                                    Add at least one contact channel (email or phone) to continue with WordPress provisioning.
+                                </p>
+                            ) : null}
                         </div>
 
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
@@ -704,7 +790,7 @@ export default function Clients() {
                             </button>
                             <button
                                 type="button"
-                                disabled={!createForm.platform_id || !createForm.name.trim() || createMutation.isPending}
+                                disabled={!canSubmitCreate}
                                 onClick={() => {
                                     createMutation.mutate({
                                         platform_id: Number(createForm.platform_id),
@@ -714,12 +800,21 @@ export default function Clients() {
                                         city: createForm.city.trim() || null,
                                         profile_status: createForm.profile_status,
                                         assigned_to: createForm.assigned_to ? Number(createForm.assigned_to) : null,
-                                        reason: 'Manual client create from clients page',
+                                        onboarding_mode: createForm.onboarding_mode,
+                                        wp_username: createForm.onboarding_mode === 'wp_provision' ? (createForm.wp_username.trim() || null) : null,
+                                        wp_password: createForm.onboarding_mode === 'wp_provision' ? (createForm.wp_password.trim() || null) : null,
+                                        reason: createForm.onboarding_mode === 'wp_provision'
+                                            ? 'WordPress-provisioned client create from clients page'
+                                            : 'Manual client create from clients page',
                                     });
                                 }}
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                {createMutation.isPending ? 'Creating...' : 'Create client'}
+                                {createMutation.isPending
+                                    ? 'Creating...'
+                                    : createForm.onboarding_mode === 'wp_provision'
+                                        ? 'Provision and create client'
+                                        : 'Create client'}
                             </button>
                         </footer>
                     </div>
