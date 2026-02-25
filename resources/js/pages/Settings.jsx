@@ -249,6 +249,7 @@ function dedupeModeLabel(mode) {
 function IntegrationsWorkspace({ canCreateMarkets }) {
     const queryClient = useQueryClient();
     const toast = useToast();
+    const [integrationArea, setIntegrationArea] = useState('overview');
     const [selectedPlatformId, setSelectedPlatformId] = useState(null);
     const [editor, setEditor] = useState(null);
     const [createOpen, setCreateOpen] = useState(false);
@@ -696,6 +697,12 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
     const scraperBlockedOrFailed = scraperSources.filter((source) => ['blocked', 'error'].includes(source.last_run_status)).length;
     const selectedScraperRules = scraperEditor?.parser_rules || defaultScraperRules();
     const selectedScraperCompliant = Boolean(scraperEditor?.compliance_ack_robots) && Boolean(scraperEditor?.compliance_ack_tos);
+    const integrationAreas = [
+        { id: 'overview', label: 'Overview', hint: 'Service health' },
+        { id: 'markets', label: 'Markets', hint: `${platformRows.length} configured` },
+        { id: 'sms', label: 'SMS Routing', hint: smsProviderForm.enabled ? 'Enabled' : 'Disabled' },
+        { id: 'scraper', label: 'Scraper', hint: `${scraperSources.length} sources` },
+    ];
 
     return (
         <div className="space-y-4">
@@ -726,43 +733,67 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                 />
             </section>
 
-            <section className="crm-surface overflow-hidden">
-                <header className="crm-panel-header">
-                    <div>
-                        <h3 className="crm-panel-title">Service Integrations</h3>
-                        <p className="crm-panel-subtitle">Live status for SMS, payment, and deferred email channels.</p>
-                    </div>
-                </header>
-                <div className="divide-y divide-slate-100">
-                    {isLoading ? (
-                        <p className="p-4 text-sm text-slate-500">Loading service health...</p>
-                    ) : serviceRows.map((service) => (
-                        <div key={service.key} className="flex flex-wrap items-center justify-between gap-3 p-4">
-                            <div>
-                                <p className="text-sm font-semibold text-slate-900">{service.label}</p>
-                                <p className="text-xs text-slate-500">{service.detail}</p>
-                            </div>
-                            <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(service.status)}`}>
-                                {service.status.replaceAll('_', ' ')}
-                            </span>
-                        </div>
+            <section className="crm-surface p-2">
+                <div className="flex flex-wrap gap-2">
+                    {integrationAreas.map((area) => (
+                        <button
+                            key={area.id}
+                            type="button"
+                            onClick={() => setIntegrationArea(area.id)}
+                            aria-pressed={integrationArea === area.id}
+                            className={`min-h-11 rounded-lg px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 ${
+                                integrationArea === area.id
+                                    ? 'bg-white text-slate-900 ring-1 ring-slate-200 shadow-sm'
+                                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+                            }`}
+                        >
+                            <p className="text-sm font-semibold">{area.label}</p>
+                            <p className="text-[11px] text-slate-500">{area.hint}</p>
+                        </button>
                     ))}
                 </div>
             </section>
 
-            <section className="crm-surface overflow-hidden">
-                <header className="crm-panel-header">
-                    <div>
-                        <h3 className="crm-panel-title">SMS Provider Routing</h3>
-                        <p className="crm-panel-subtitle">Choose an active SMS provider, set fallback behavior, and validate delivery from settings.</p>
+            {integrationArea === 'overview' ? (
+                <section className="crm-surface overflow-hidden">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Service Integrations</h3>
+                            <p className="crm-panel-subtitle">Live status for SMS, payment, and deferred email channels.</p>
+                        </div>
+                    </header>
+                    <div className="divide-y divide-slate-100">
+                        {isLoading ? (
+                            <p className="p-4 text-sm text-slate-500">Loading service health...</p>
+                        ) : serviceRows.map((service) => (
+                            <div key={service.key} className="flex flex-wrap items-center justify-between gap-3 p-4">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-900">{service.label}</p>
+                                    <p className="text-xs text-slate-500">{service.detail}</p>
+                                </div>
+                                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(service.status)}`}>
+                                    {service.status.replaceAll('_', ' ')}
+                                </span>
+                            </div>
+                        ))}
                     </div>
-                </header>
+                </section>
+            ) : null}
 
-                <div className="grid gap-4 p-4 xl:grid-cols-12">
-                    <div className="space-y-4 xl:col-span-7">
-                        <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                            <h4 className="text-sm font-semibold text-slate-900">Routing Controls</h4>
-                            <p className="mt-1 text-xs text-slate-500">These settings define which provider is used first and what happens if dispatch fails.</p>
+            {integrationArea === 'sms' ? (
+                <section className="crm-surface overflow-hidden">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">SMS Provider Routing</h3>
+                            <p className="crm-panel-subtitle">Choose an active SMS provider, set fallback behavior, and validate delivery from settings.</p>
+                        </div>
+                    </header>
+
+                    <div className="grid gap-4 p-4 xl:grid-cols-12">
+                        <div className="space-y-4 xl:col-span-7">
+                            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Routing Controls</h4>
+                                <p className="mt-1 text-xs text-slate-500">These settings define which provider is used first and what happens if dispatch fails.</p>
 
                             <div className="mt-3 grid gap-3 md:grid-cols-2">
                                 <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
@@ -913,8 +944,8 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                         </div>
                     </div>
 
-                    <div className="space-y-4 xl:col-span-5">
-                        <section className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="space-y-4 xl:col-span-5">
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
                             <h4 className="text-sm font-semibold text-slate-900">Test Dispatch</h4>
                             <p className="mt-1 text-xs text-slate-500">Send a controlled SMS to verify routing and provider response in real time.</p>
                             <div className="mt-3 space-y-3">
@@ -972,11 +1003,13 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                                 </div>
                             </section>
                         ) : null}
+                        </div>
                     </div>
-                </div>
-            </section>
+                </section>
+            ) : null}
 
-            <section className="crm-surface overflow-hidden">
+            {integrationArea === 'markets' ? (
+                <section className="crm-surface overflow-hidden">
                 <header className="crm-panel-header">
                     <div>
                         <h3 className="crm-panel-title">Market Integration Workspace</h3>
@@ -1352,9 +1385,11 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                         )}
                     </div>
                 </div>
-            </section>
+                </section>
+            ) : null}
 
-            <section className="crm-surface overflow-hidden">
+            {integrationArea === 'scraper' ? (
+                <section className="crm-surface overflow-hidden">
                 <header className="crm-panel-header">
                     <div>
                         <h3 className="crm-panel-title">Scraper Configuration</h3>
@@ -1719,7 +1754,8 @@ function IntegrationsWorkspace({ canCreateMarkets }) {
                         )}
                     </div>
                 </div>
-            </section>
+                </section>
+            ) : null}
 
             {createOpen ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setCreateOpen(false)}>
