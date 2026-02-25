@@ -19,6 +19,7 @@ use App\Services\PaymentMatchingService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Carbon\Carbon;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 
 class ClientController extends Controller
@@ -479,6 +480,23 @@ class ClientController extends Controller
                 ]),
                 'wp_profile' => $updatedProfile,
             ]);
+        } catch (RequestException $exception) {
+            $status = $exception->response?->status() ?? 502;
+            $payload = $exception->response?->json();
+            if (!is_array($payload)) {
+                $payload = [
+                    'message' => $exception->response?->body() ?: 'WordPress profile update failed.',
+                ];
+            }
+
+            if ($status >= 400 && $status < 500) {
+                return response()->json($payload, $status);
+            }
+
+            return response()->json([
+                'message' => 'Failed to update WordPress profile.',
+                'error' => $payload['message'] ?? $exception->getMessage(),
+            ], 502);
         } catch (\Throwable $exception) {
             return response()->json([
                 'message' => 'Failed to update WordPress profile.',

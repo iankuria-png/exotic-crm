@@ -19,6 +19,7 @@ use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -519,6 +520,13 @@ class SettingsController extends Controller
 
     public function updatePaymentLinkProviders(Request $request, Platform $platform)
     {
+        if (!Schema::hasColumn('platforms', 'payment_link_providers')) {
+            return response()->json([
+                'message' => 'Sprint 6 migration is pending for payment link providers. Run `php artisan migrate` before updating provider configuration.',
+                'missing_column' => 'platforms.payment_link_providers',
+            ], 409);
+        }
+
         $this->marketAuthorizationService->ensureRole(
             $request->user(),
             [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],

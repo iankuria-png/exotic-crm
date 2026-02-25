@@ -156,7 +156,8 @@ export default function ClientDetail() {
     const activateDealMutation = useMutation({
         mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`, {
             reason: 'Activated from client profile',
-            free_trial: true,
+            payment_method: 'free_trial',
+            approved_by: user?.name || 'Admin',
         }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });

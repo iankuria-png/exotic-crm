@@ -29,8 +29,9 @@ export default function Deals() {
     const [extendDays, setExtendDays] = useState('7');
     const [renewReason, setRenewReason] = useState('Renewed from subscriptions page');
     const [renewDays, setRenewDays] = useState('30');
-    const [paymentId, setPaymentId] = useState('');
-    const [useFreeTrial, setUseFreeTrial] = useState(false);
+    const [paymentMethod, setPaymentMethod] = useState('manual');
+    const [paymentReference, setPaymentReference] = useState('');
+    const [approvedBy, setApprovedBy] = useState('');
     const [notifyClient, setNotifyClient] = useState(false);
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
     const [notificationMessage, setNotificationMessage] = useState('');
@@ -68,19 +69,21 @@ export default function Deals() {
     });
 
     const activateMutation = useMutation({
-        mutationFn: ({ dealId, activationReason, selectedPaymentId, freeTrial }) =>
+        mutationFn: ({ dealId, activationReason, selectedPaymentMethod, referenceValue, approvedByValue }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason: activationReason,
-                payment_id: selectedPaymentId || null,
-                free_trial: Boolean(freeTrial),
+                payment_method: selectedPaymentMethod,
+                ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
+                ...(selectedPaymentMethod === 'free_trial' ? { approved_by: approvedByValue } : {}),
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
             setActivateReason('Activated from subscriptions page');
-            setPaymentId('');
-            setUseFreeTrial(false);
+            setPaymentMethod('manual');
+            setPaymentReference('');
+            setApprovedBy('');
             toast.success('Subscription activated successfully.');
         },
         onError: (error) => {
@@ -112,12 +115,13 @@ export default function Deals() {
     });
 
     const extendMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentId, freeTrial }) =>
+        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, approvedByValue }) =>
             api.post(`/crm/deals/${dealId}/extend`, {
                 additional_days: additionalDays,
                 reason: extensionReason,
-                payment_id: selectedPaymentId || null,
-                free_trial: Boolean(freeTrial),
+                payment_method: selectedPaymentMethod,
+                ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
+                ...(selectedPaymentMethod === 'free_trial' ? { approved_by: approvedByValue } : {}),
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
@@ -125,8 +129,9 @@ export default function Deals() {
             setDialog({ type: null, deal: null });
             setExtendDays('7');
             setExtendReason('Extended from subscriptions page');
-            setPaymentId('');
-            setUseFreeTrial(false);
+            setPaymentMethod('manual');
+            setPaymentReference('');
+            setApprovedBy('');
             toast.success('Subscription extension saved.');
         },
         onError: (error) => {
@@ -135,12 +140,13 @@ export default function Deals() {
     });
 
     const renewMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentId, freeTrial }) =>
+        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, approvedByValue }) =>
             api.post(`/crm/deals/${dealId}/renew`, {
                 additional_days: additionalDays,
                 reason: renewalReason,
-                payment_id: selectedPaymentId || null,
-                free_trial: Boolean(freeTrial),
+                payment_method: selectedPaymentMethod,
+                ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
+                ...(selectedPaymentMethod === 'free_trial' ? { approved_by: approvedByValue } : {}),
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
@@ -148,8 +154,9 @@ export default function Deals() {
             setDialog({ type: null, deal: null });
             setRenewDays('30');
             setRenewReason('Renewed from subscriptions page');
-            setPaymentId('');
-            setUseFreeTrial(false);
+            setPaymentMethod('manual');
+            setPaymentReference('');
+            setApprovedBy('');
             toast.success('Subscription renewed successfully.');
         },
         onError: (error) => {
@@ -178,6 +185,8 @@ export default function Deals() {
                 targets.map((row) =>
                     api.post(`/crm/deals/${row.id}/activate`, {
                         reason: 'Bulk activation from subscriptions page',
+                        payment_method: 'free_trial',
+                        approved_by: 'Bulk activation',
                     }),
                 ),
             );
@@ -222,41 +231,19 @@ export default function Deals() {
         return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, monthRevenue: 0, verifiedRevenue: 0 };
     }, [data?.summary]);
 
-    const completedPayments = useMemo(() => {
-        const payments = selectedClientData?.payments || [];
-        return payments
-            .filter((payment) => ['completed', 'success'].includes(String(payment.status || '').toLowerCase()))
-            .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-    }, [selectedClientData?.payments]);
+    const selectedClientPhone = selectedClientData?.phone_normalized || selectedDeal?.client?.phone_normalized || '';
 
     const smsTemplates = useMemo(() => {
         const templates = templatesData?.templates || templatesData?.data || [];
         return templates.filter((template) => template.channel === 'sms' && template.status === 'active');
     }, [templatesData]);
 
-    useEffect(() => {
-        if (!['activate', 'extend', 'renew'].includes(dialog.type || '')) {
-            return;
-        }
-
-        if (useFreeTrial) {
-            return;
-        }
-
-        if (paymentId) {
-            return;
-        }
-
-        if (completedPayments.length === 1) {
-            setPaymentId(String(completedPayments[0].id));
-        }
-    }, [dialog.type, useFreeTrial, paymentId, completedPayments]);
-
     const openDialog = (type, deal, event) => {
         event.stopPropagation();
         setDialog({ type, deal });
-        setPaymentId('');
-        setUseFreeTrial(false);
+        setPaymentMethod('manual');
+        setPaymentReference('');
+        setApprovedBy('');
         if (type === 'activate') {
             setActivateReason('Activated from subscriptions page');
         }
@@ -445,8 +432,18 @@ export default function Deals() {
         },
     ];
 
+    useEffect(() => {
+        if (dialog.type === 'extend' && !['manual', 'free_trial'].includes(paymentMethod)) {
+            setPaymentMethod('manual');
+        }
+    }, [dialog.type, paymentMethod]);
+
     const needsPaymentVerification = ['activate', 'extend', 'renew'].includes(dialog.type || '');
-    const paymentReady = !needsPaymentVerification || useFreeTrial || Boolean(paymentId);
+    const requiresPaymentReference = needsPaymentVerification && paymentMethod === 'manual';
+    const requiresApprovedBy = needsPaymentVerification && paymentMethod === 'free_trial';
+    const paymentReady = !needsPaymentVerification
+        || ((!requiresPaymentReference || paymentReference.trim() !== '')
+            && (!requiresApprovedBy || approvedBy.trim() !== ''));
 
     return (
         <div className="space-y-4">
@@ -574,35 +571,73 @@ export default function Deals() {
                         <div className="space-y-4 p-4">
                             {['activate', 'extend', 'renew'].includes(dialog.type || '') ? (
                                 <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                                    <label className="flex items-center gap-2 text-sm text-slate-700">
-                                        <input
-                                            type="checkbox"
-                                            checked={useFreeTrial}
-                                            onChange={(event) => setUseFreeTrial(event.target.checked)}
-                                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                        />
-                                        Approve as free trial (skip payment requirement)
-                                    </label>
-
-                                    {!useFreeTrial ? (
-                                        <div>
-                                            <label className="mb-1 block text-sm font-medium text-slate-700">Verified payment</label>
-                                            <select
-                                                value={paymentId}
-                                                onChange={(event) => setPaymentId(event.target.value)}
-                                                className="crm-select"
-                                                disabled={selectedClientLoading}
+                                    <p className="text-sm font-semibold text-slate-800">Payment Method</p>
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                        {(dialog.type === 'extend'
+                                            ? ['manual', 'free_trial']
+                                            : ['manual', 'stk', 'link', 'free_trial']
+                                        ).map((method) => (
+                                            <button
+                                                key={method}
+                                                type="button"
+                                                onClick={() => setPaymentMethod(method)}
+                                                className={`rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                                    paymentMethod === method
+                                                        ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                                }`}
                                             >
-                                                <option value="">Select completed payment</option>
-                                                {completedPayments.map((payment) => (
-                                                    <option key={payment.id} value={payment.id}>
-                                                        #{payment.id} • {payment.transaction_reference || 'No reference'} • {formatCurrency(payment.amount, payment.currency || 'KES')}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            {!selectedClientLoading && completedPayments.length === 0 ? (
-                                                <p className="mt-1 text-xs text-amber-700">No verified completed payments found for this client. Select free trial to proceed.</p>
-                                            ) : null}
+                                                {method === 'manual'
+                                                    ? 'Manual Payment'
+                                                    : method === 'stk'
+                                                        ? 'STK Push'
+                                                        : method === 'link'
+                                                            ? 'Payment Link'
+                                                            : 'Free Trial'}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {paymentMethod === 'manual' ? (
+                                        <div>
+                                            <label htmlFor="payment-reference" className="mb-1 block text-sm font-medium text-slate-700">
+                                                MPESA / Transaction Reference
+                                            </label>
+                                            <input
+                                                id="payment-reference"
+                                                type="text"
+                                                value={paymentReference}
+                                                onChange={(event) => setPaymentReference(event.target.value)}
+                                                className="crm-input"
+                                                placeholder="e.g. MPESA123ABC"
+                                            />
+                                        </div>
+                                    ) : null}
+
+                                    {paymentMethod === 'free_trial' ? (
+                                        <div>
+                                            <label htmlFor="approved-by" className="mb-1 block text-sm font-medium text-slate-700">
+                                                Approved By
+                                            </label>
+                                            <input
+                                                id="approved-by"
+                                                type="text"
+                                                value={approvedBy}
+                                                onChange={(event) => setApprovedBy(event.target.value)}
+                                                className="crm-input"
+                                                placeholder="Manager or approver name"
+                                            />
+                                        </div>
+                                    ) : null}
+
+                                    {(paymentMethod === 'stk' || paymentMethod === 'link') ? (
+                                        <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                            {paymentMethod === 'stk'
+                                                ? 'An STK push will be sent to the client phone. Subscription will activate after payment confirmation.'
+                                                : 'A payment link will be sent to the client phone. Subscription will activate after payment confirmation.'}
+                                            <span className="mt-1 block crm-mono text-[11px] text-slate-500">
+                                                Target phone: {selectedClientLoading ? 'Loading...' : (selectedClientPhone || 'Unavailable')}
+                                            </span>
                                         </div>
                                     ) : null}
                                 </div>
@@ -735,8 +770,9 @@ export default function Deals() {
                                     onClick={() => activateMutation.mutate({
                                         dealId: selectedDeal.id,
                                         activationReason: activateReason.trim(),
-                                        selectedPaymentId: paymentId ? Number(paymentId) : null,
-                                        freeTrial: useFreeTrial,
+                                        selectedPaymentMethod: paymentMethod,
+                                        referenceValue: paymentReference.trim(),
+                                        approvedByValue: approvedBy.trim(),
                                     })}
                                     disabled={!activateReason.trim() || !paymentReady || activateMutation.isPending}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -752,8 +788,9 @@ export default function Deals() {
                                         dealId: selectedDeal.id,
                                         additionalDays: Number(extendDays),
                                         extensionReason: extendReason,
-                                        selectedPaymentId: paymentId ? Number(paymentId) : null,
-                                        freeTrial: useFreeTrial,
+                                        selectedPaymentMethod: paymentMethod,
+                                        referenceValue: paymentReference.trim(),
+                                        approvedByValue: approvedBy.trim(),
                                     })}
                                     disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || !extendReason.trim() || !paymentReady || extendMutation.isPending}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -769,8 +806,9 @@ export default function Deals() {
                                         dealId: selectedDeal.id,
                                         additionalDays: Number(renewDays),
                                         renewalReason: renewReason,
-                                        selectedPaymentId: paymentId ? Number(paymentId) : null,
-                                        freeTrial: useFreeTrial,
+                                        selectedPaymentMethod: paymentMethod,
+                                        referenceValue: paymentReference.trim(),
+                                        approvedByValue: approvedBy.trim(),
                                     })}
                                     disabled={!Number.isInteger(Number(renewDays)) || Number(renewDays) < 1 || !renewReason.trim() || !paymentReady || renewMutation.isPending}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"

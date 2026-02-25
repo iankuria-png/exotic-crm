@@ -62,6 +62,13 @@ export default function Leads() {
         client_id: '',
         reason: 'Lead reconciled from leads page',
     });
+    const [batchReconcileDialog, setBatchReconcileDialog] = useState({
+        open: false,
+        action: 'archive',
+        reason: 'Batch lead reconciliation from leads page',
+        leads: [],
+        mode: 'auto',
+    });
 
     const [createForm, setCreateForm] = useState({
         platform_id: '',
@@ -222,6 +229,32 @@ export default function Leads() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Lead reconciliation failed.');
+        },
+    });
+
+    const batchReconcileMutation = useMutation({
+        mutationFn: ({ action, reason, leadIds }) =>
+            api.post('/crm/leads/reconcile', {
+                action,
+                reason,
+                ...(Array.isArray(leadIds) && leadIds.length > 0 ? { lead_ids: leadIds } : {}),
+            }).then((response) => response.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setBatchReconcileDialog({
+                open: false,
+                action: 'archive',
+                reason: 'Batch lead reconciliation from leads page',
+                leads: [],
+                mode: 'auto',
+            });
+            toast.success(
+                `Batch reconcile complete: ${result.processed || 0} processed, ${result.failed || 0} failed.`,
+            );
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Batch reconciliation failed.');
         },
     });
 
@@ -444,6 +477,9 @@ export default function Leads() {
     const scrapeOwners = scrapeOwnersData?.owners || [];
     const selectedCsvPlatformName = platformOptions.find((platform) => String(platform.platform_id) === String(csvForm.platform_id))?.platform_name || 'Selected market';
     const selectedAssignOwner = assignOwners.find((owner) => String(owner.id) === String(assignDialog.assigned_to));
+    const batchReconcilePreviewCount = batchReconcileDialog.mode === 'selected'
+        ? batchReconcileDialog.leads.length
+        : rows.filter((row) => (row.matched_client || row.converted_client) && !row.archived_at).length;
 
     const ownerOptions = useMemo(() => {
         const map = new Map();
@@ -483,6 +519,25 @@ export default function Leads() {
             variant: 'primary',
             onClick: async (rowsSelection) => {
                 await bulkStatusMutation.mutateAsync({ rowsSelection, targetStatus: bulkTargetStatus });
+            },
+        },
+        {
+            key: 'bulk-reconcile',
+            label: 'Reconcile selected',
+            onClick: (rowsSelection) => {
+                const reconcilableLeads = rowsSelection.filter((row) => row.matched_client || row.converted_client);
+                if (!reconcilableLeads.length) {
+                    toast.warning('No selected leads have a linked client candidate to reconcile.');
+                    return;
+                }
+
+                setBatchReconcileDialog({
+                    open: true,
+                    action: 'archive',
+                    reason: 'Batch lead reconciliation from leads page',
+                    leads: reconcilableLeads,
+                    mode: 'selected',
+                });
             },
         },
         {
@@ -685,6 +740,19 @@ export default function Leads() {
                         </button>
                         <button
                             type="button"
+                            onClick={() => setBatchReconcileDialog({
+                                open: true,
+                                action: 'archive',
+                                reason: 'Batch lead reconciliation from leads page',
+                                leads: [],
+                                mode: 'auto',
+                            })}
+                            className="crm-btn-secondary"
+                        >
+                            Bulk Reconcile
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => setShowCreateModal(true)}
                             className="crm-btn-primary"
                         >
@@ -860,6 +928,63 @@ export default function Leads() {
                 confirmDisabled={importMutation.isPending}
                 isPending={importMutation.isPending}
             />
+
+            <ConfirmDialog
+                open={batchReconcileDialog.open}
+                title="Bulk Reconcile Leads"
+                message={batchReconcileDialog.mode === 'selected'
+                    ? `Apply ${batchReconcileDialog.action} to ${batchReconcileDialog.leads.length} selected leads with matched clients.`
+                    : 'Apply reconciliation to non-archived leads that match existing clients by phone (max 500 per run).'}
+                confirmLabel={batchReconcileMutation.isPending ? 'Reconciling...' : 'Run reconciliation'}
+                onCancel={() => setBatchReconcileDialog({
+                    open: false,
+                    action: 'archive',
+                    reason: 'Batch lead reconciliation from leads page',
+                    leads: [],
+                    mode: 'auto',
+                })}
+                onConfirm={() => {
+                    batchReconcileMutation.mutate({
+                        action: batchReconcileDialog.action,
+                        reason: batchReconcileDialog.reason.trim(),
+                        leadIds: batchReconcileDialog.mode === 'selected'
+                            ? batchReconcileDialog.leads.map((lead) => lead.id)
+                            : [],
+                    });
+                }}
+                confirmDisabled={!batchReconcileDialog.reason.trim() || batchReconcileMutation.isPending}
+                isPending={batchReconcileMutation.isPending}
+            >
+                <div className="space-y-3">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        Preview count: <span className="crm-mono font-semibold text-slate-900">{batchReconcilePreviewCount}</span>
+                        {batchReconcileDialog.mode === 'selected'
+                            ? ' selected leads.'
+                            : ' matched leads on the current page. Server run may process additional matched leads up to limit.'}
+                    </div>
+
+                    <label htmlFor="batch-reconcile-action" className="mb-1 block text-sm font-medium text-slate-700">Action</label>
+                    <select
+                        id="batch-reconcile-action"
+                        value={batchReconcileDialog.action}
+                        onChange={(event) => setBatchReconcileDialog((current) => ({ ...current, action: event.target.value }))}
+                        className="crm-select w-full"
+                    >
+                        <option value="link">Link to matched client</option>
+                        <option value="convert">Convert lead</option>
+                        <option value="archive">Archive lead</option>
+                    </select>
+
+                    <label htmlFor="batch-reconcile-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                    <textarea
+                        id="batch-reconcile-reason"
+                        rows={3}
+                        value={batchReconcileDialog.reason}
+                        onChange={(event) => setBatchReconcileDialog((current) => ({ ...current, reason: event.target.value }))}
+                        className="crm-input"
+                    />
+                </div>
+            </ConfirmDialog>
 
             <ConfirmDialog
                 open={!!assignDialog.lead}

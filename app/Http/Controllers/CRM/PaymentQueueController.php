@@ -484,6 +484,7 @@ class PaymentQueueController extends Controller
         $validated = $request->validate([
             'channel' => 'required|in:sms',
             'phone' => 'nullable|string|max:20',
+            'provider' => 'nullable|string|max:50',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -509,7 +510,7 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $paymentUrl = $this->buildPaymentLinkUrl($platform);
+        $paymentUrl = $this->buildPaymentLinkUrl($platform, $validated['provider'] ?? null);
         if (!$paymentUrl) {
             return response()->json([
                 'message' => 'Payment page URL could not be determined for this market.',
@@ -537,8 +538,16 @@ class PaymentQueueController extends Controller
             CrmAuditAction::PAYMENT_SEND_LINK,
             'payment',
             (int) $payment->id,
-            ['channel' => $validated['channel'], 'phone' => $phone],
-            ['sms_success' => $result['success'] ?? false, 'sms_status' => $result['status'] ?? null],
+            [
+                'channel' => $validated['channel'],
+                'phone' => $phone,
+                'provider' => $validated['provider'] ?? null,
+            ],
+            [
+                'sms_success' => $result['success'] ?? false,
+                'sms_status' => $result['status'] ?? null,
+                'provider' => $validated['provider'] ?? null,
+            ],
             (string) ($validated['reason'] ?? 'Send payment link from CRM')
         );
 
@@ -556,10 +565,11 @@ class PaymentQueueController extends Controller
         ]);
     }
 
-    private function buildPaymentLinkUrl($platform): ?string
+    private function buildPaymentLinkUrl($platform, ?string $requestedProvider = null): ?string
     {
         if (is_array($platform->payment_link_providers)) {
-            $activeProvider = trim((string) ($platform->payment_link_providers['active_provider'] ?? ''));
+            $configuredProvider = trim((string) ($platform->payment_link_providers['active_provider'] ?? ''));
+            $activeProvider = trim((string) ($requestedProvider ?: $configuredProvider));
             $providers = $platform->payment_link_providers['providers'] ?? [];
 
             if ($activeProvider !== '' && is_array($providers) && isset($providers[$activeProvider]) && is_array($providers[$activeProvider])) {

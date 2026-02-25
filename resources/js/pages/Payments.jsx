@@ -75,7 +75,14 @@ export default function Payments() {
         reason: 'Batch auto-match from payment queue',
     });
     const [retryStkDialog, setRetryStkDialog] = useState({ open: false, payment: null, reason: 'Retry STK from payment queue' });
-    const [sendLinkDialog, setSendLinkDialog] = useState({ open: false, payment: null, channel: 'sms', phone: '', reason: 'Send payment link from CRM' });
+    const [sendLinkDialog, setSendLinkDialog] = useState({
+        open: false,
+        payment: null,
+        channel: 'sms',
+        provider: '',
+        phone: '',
+        reason: 'Send payment link from CRM',
+    });
     const [createSubDialog, setCreateSubDialog] = useState({ open: false, payment: null, reason: 'Create subscription from matched payment' });
 
     const { data, isLoading } = useQuery({
@@ -164,15 +171,16 @@ export default function Payments() {
     });
 
     const sendPaymentLinkMutation = useMutation({
-        mutationFn: ({ paymentId, channel, phone, reason }) =>
+        mutationFn: ({ paymentId, channel, provider, phone, reason }) =>
             api.post(`/crm/payments/${paymentId}/send-payment-link`, {
                 channel,
+                ...(provider ? { provider } : {}),
                 ...(phone && { phone: phone.trim() }),
                 reason: reason || undefined,
             }).then((response) => response.data),
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
-            setSendLinkDialog({ open: false, payment: null, channel: 'sms', phone: '', reason: 'Send payment link from CRM' });
+            setSendLinkDialog({ open: false, payment: null, channel: 'sms', provider: '', phone: '', reason: 'Send payment link from CRM' });
             toast.success('Payment link sent by SMS.');
         },
         onError: (error) => {
@@ -420,6 +428,7 @@ export default function Payments() {
                                         open: true,
                                         payment: row,
                                         channel: 'sms',
+                                        provider: '',
                                         phone: row.phone || '',
                                         reason: 'Send payment link from CRM',
                                     });
@@ -441,7 +450,7 @@ export default function Payments() {
                             Auto-match
                         </button>
                     )}
-                    {!row.client_id && (
+                    {row.status === 'completed' && !row.client_id && (
                         <button
                             onClick={(event) => {
                                 event.stopPropagation();
@@ -755,12 +764,13 @@ export default function Payments() {
                     ? `Send a payment page link by SMS for payment #${sendLinkDialog.payment.id} (${formatCurrency(sendLinkDialog.payment.amount, sendLinkDialog.payment.currency || 'KES')}).`
                     : ''}
                 confirmLabel="Send SMS"
-                onCancel={() => setSendLinkDialog({ open: false, payment: null, channel: 'sms', phone: '', reason: 'Send payment link from CRM' })}
+                onCancel={() => setSendLinkDialog({ open: false, payment: null, channel: 'sms', provider: '', phone: '', reason: 'Send payment link from CRM' })}
                 onConfirm={() => {
                     if (sendLinkDialog.payment) {
                         sendPaymentLinkMutation.mutate({
                             paymentId: sendLinkDialog.payment.id,
                             channel: sendLinkDialog.channel,
+                            provider: sendLinkDialog.provider || undefined,
                             phone: sendLinkDialog.phone.trim() || undefined,
                             reason: sendLinkDialog.reason.trim() || undefined,
                         });
@@ -770,6 +780,22 @@ export default function Payments() {
                 isPending={sendPaymentLinkMutation.isPending}
             >
                 <div className="space-y-3">
+                    <div>
+                        <label htmlFor="send-link-provider" className="mb-1 block text-sm font-medium text-slate-700">Payment link provider</label>
+                        <select
+                            id="send-link-provider"
+                            value={sendLinkDialog.provider}
+                            onChange={(event) => setSendLinkDialog((current) => ({ ...current, provider: event.target.value }))}
+                            className="crm-select"
+                        >
+                            <option value="">Default configured provider</option>
+                            {Object.entries(sendLinkDialog.payment?.platform?.payment_link_providers?.providers || {}).map(([providerKey, providerConfig]) => (
+                                <option key={providerKey} value={providerKey}>
+                                    {providerConfig?.label || providerKey}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
                     <div>
                         <label htmlFor="send-link-phone" className="mb-1 block text-sm font-medium text-slate-700">Phone number (optional)</label>
                         <input

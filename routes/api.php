@@ -81,6 +81,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::delete('/leads/{lead}', [LeadController::class, 'destroy']);
     Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
     Route::patch('/leads/{lead}/assign', [LeadController::class, 'assign']);
+    Route::post('/leads/reconcile', [LeadController::class, 'batchReconcile']);
     Route::post('/leads/{lead}/reconcile', [LeadController::class, 'reconcile']);
 
     // Conversations

@@ -13,6 +13,7 @@ use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class LeadController extends Controller
 {
@@ -436,6 +437,174 @@ class LeadController extends Controller
         return response()->json([
             'lead' => $lead,
             'message' => 'Lead reconciliation applied.',
+        ]);
+    }
+
+    public function batchReconcile(Request $request)
+    {
+        $validated = $request->validate([
+            'action' => 'required|in:link,convert,archive',
+            'lead_ids' => 'nullable|array',
+            'lead_ids.*' => 'integer|exists:leads,id',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $requestedLeadIds = collect($validated['lead_ids'] ?? [])
+            ->map(fn($id) => (int) $id)
+            ->filter(fn($id) => $id > 0)
+            ->unique()
+            ->values();
+
+        $maxBatch = 500;
+
+        $query = Lead::query();
+        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+
+        if ($requestedLeadIds->isNotEmpty()) {
+            $query->whereIn('id', $requestedLeadIds->all());
+        } else {
+            $query->whereNull('archived_at')
+                ->whereNotNull('phone_normalized')
+                ->where('phone_normalized', '!=', '')
+                ->whereExists(function ($subQuery) {
+                    $subQuery->selectRaw('1')
+                        ->from('clients')
+                        ->whereColumn('clients.platform_id', 'leads.platform_id')
+                        ->whereColumn('clients.phone_normalized', 'leads.phone_normalized');
+                });
+        }
+
+        $leads = $query->orderBy('id')->limit($maxBatch + 1)->get();
+        if ($leads->count() > $maxBatch) {
+            return response()->json([
+                'message' => "Batch reconcile is limited to {$maxBatch} leads per request. Narrow your selection and retry.",
+                'limit' => $maxBatch,
+            ], 422);
+        }
+
+        if ($leads->isEmpty()) {
+            return response()->json([
+                'processed' => 0,
+                'linked' => 0,
+                'converted' => 0,
+                'archived' => 0,
+                'failed' => 0,
+                'errors' => [],
+            ]);
+        }
+
+        $processed = 0;
+        $linked = 0;
+        $converted = 0;
+        $archived = 0;
+        $failed = 0;
+        $errors = [];
+        $platformIds = [];
+
+        DB::beginTransaction();
+        try {
+            foreach ($leads as $lead) {
+                $platformIds[] = (int) $lead->platform_id;
+
+                $resolvedClientId = $this->resolveConvertedClientId($lead, null);
+                if (!$resolvedClientId) {
+                    $failed++;
+                    $errors[] = [
+                        'lead_id' => (int) $lead->id,
+                        'message' => 'No matching client could be resolved for this lead.',
+                    ];
+                    continue;
+                }
+
+                $client = Client::query()->find((int) $resolvedClientId);
+                if (!$client || (int) $client->platform_id !== (int) $lead->platform_id) {
+                    $failed++;
+                    $errors[] = [
+                        'lead_id' => (int) $lead->id,
+                        'message' => 'Resolved client is missing or not in the same market.',
+                    ];
+                    continue;
+                }
+
+                $updates = [
+                    'converted_client_id' => (int) $client->id,
+                ];
+
+                if ($validated['action'] === 'convert') {
+                    $updates['status'] = 'converted';
+                }
+
+                if ($validated['action'] === 'archive') {
+                    $updates['archived_at'] = now();
+                }
+
+                $lead->update($updates);
+
+                TimelineEvent::create([
+                    'platform_id' => $lead->platform_id,
+                    'entity_type' => 'lead',
+                    'entity_id' => $lead->id,
+                    'event_type' => 'lead_reconciled',
+                    'actor_id' => $request->user()->id,
+                    'content' => [
+                        'action' => $validated['action'],
+                        'client_id' => (int) $client->id,
+                        'batch' => true,
+                    ],
+                    'created_at' => now(),
+                ]);
+
+                $processed++;
+                if ($validated['action'] === 'link') {
+                    $linked++;
+                } elseif ($validated['action'] === 'convert') {
+                    $converted++;
+                } elseif ($validated['action'] === 'archive') {
+                    $archived++;
+                }
+            }
+
+            DB::commit();
+        } catch (\Throwable $exception) {
+            DB::rollBack();
+            return response()->json([
+                'message' => 'Batch lead reconciliation failed.',
+                'error' => $exception->getMessage(),
+            ], 500);
+        }
+
+        $auditPlatformId = (int) (collect($platformIds)->filter(fn($id) => $id > 0)->first() ?? 0);
+        $auditEntityLeadId = (int) $leads->first()->id;
+        if ($auditPlatformId > 0 && $auditEntityLeadId > 0) {
+            $this->auditService->fromRequest(
+                $request,
+                $auditPlatformId,
+                CrmAuditAction::LEAD_RECONCILE,
+                'lead',
+                $auditEntityLeadId,
+                [
+                    'action' => $validated['action'],
+                    'requested_lead_ids' => $requestedLeadIds->all(),
+                    'mode' => $requestedLeadIds->isNotEmpty() ? 'selected' : 'auto',
+                ],
+                [
+                    'processed' => $processed,
+                    'linked' => $linked,
+                    'converted' => $converted,
+                    'archived' => $archived,
+                    'failed' => $failed,
+                ],
+                (string) $validated['reason']
+            );
+        }
+
+        return response()->json([
+            'processed' => $processed,
+            'linked' => $linked,
+            'converted' => $converted,
+            'archived' => $archived,
+            'failed' => $failed,
+            'errors' => $errors,
         ]);
     }
 
