@@ -41,5 +41,7 @@ final class CrmAuditAction
     public const PAYMENT_MANUAL_CLOSE = 'payment_manual_close';
     public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
+    public const CLIENT_CREDENTIAL_SEND = 'client_credential_send';
+    public const CLIENT_CREDENTIAL_RETRY = 'client_credential_retry';
     public const LEAD_RECONCILE = 'lead_reconcile';
 }

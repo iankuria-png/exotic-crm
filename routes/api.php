@@ -57,6 +57,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia']);
     Route::get('/clients/{client}/health', [ClientController::class, 'health']);
     Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth']);
+    Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches']);
+    Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials']);
+    Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch']);
 
     // Deals
     Route::get('/deals', [DealController::class, 'index']);

@@ -7,6 +7,7 @@ import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
+import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import { useToast } from '../components/ToastProvider';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
@@ -52,6 +53,11 @@ export default function Clients() {
     const [showCsvModal, setShowCsvModal] = useState(false);
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
     const [csvResult, setCsvResult] = useState(null);
+    const [credentialDrawer, setCredentialDrawer] = useState({
+        open: false,
+        client: null,
+        source: 'clients_page',
+    });
     const [createForm, setCreateForm] = useState({
         platform_id: '',
         name: '',
@@ -130,10 +136,9 @@ export default function Clients() {
 
     const createMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/clients', payload).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (createdClient, variables) => {
             queryClient.invalidateQueries({ queryKey: ['clients'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-            toast.success('Client created successfully.');
             setShowCreateModal(false);
             setCreateForm({
                 platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
@@ -147,6 +152,19 @@ export default function Clients() {
                 wp_username: '',
                 wp_password: '',
             });
+
+            const isWpProvision = variables?.onboarding_mode === 'wp_provision';
+            if (isWpProvision && createdClient?.id) {
+                toast.success('Client provisioned. Dispatch credentials to complete onboarding.');
+                setCredentialDrawer({
+                    open: true,
+                    client: createdClient,
+                    source: 'clients_add_modal',
+                });
+                return;
+            }
+
+            toast.success('Client created successfully.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Client creation failed. Please review the form and try again.');
@@ -912,6 +930,21 @@ export default function Clients() {
                     </div>
                 </div>
             ) : null}
+
+            <CredentialDispatchDrawer
+                open={credentialDrawer.open}
+                client={credentialDrawer.client}
+                defaultSource={credentialDrawer.source}
+                defaultReason="Client onboarding credential dispatch from add-client flow"
+                onClose={() => setCredentialDrawer({
+                    open: false,
+                    client: null,
+                    source: 'clients_page',
+                })}
+                onSuccess={() => {
+                    queryClient.invalidateQueries({ queryKey: ['clients'] });
+                }}
+            />
         </div>
     );
 }

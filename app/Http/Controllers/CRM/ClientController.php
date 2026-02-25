@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Client;
+use App\Models\ClientCredentialDispatch;
 use App\Models\ClientNote;
 use App\Models\Deal;
 use App\Models\Lead;
@@ -16,6 +17,7 @@ use App\Services\AuditService;
 use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\PaymentMatchingService;
+use App\Services\CredentialDeliveryService;
 use App\Services\ClientSyncService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
@@ -30,7 +32,8 @@ class ClientController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly LeadAssignmentService $leadAssignmentService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly CredentialDeliveryService $credentialDeliveryService
     ) {
     }
 
@@ -1008,6 +1011,189 @@ class ClientController extends Controller
         ]);
     }
 
+    public function credentialDispatches(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $dispatches = $client->credentialDispatches()
+            ->with('actor')
+            ->orderByDesc('created_at')
+            ->paginate($request->integer('per_page', 15));
+
+        return response()->json($dispatches);
+    }
+
+    public function sendCredentials(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'method' => 'required|in:setup_link,temporary_password',
+            'channel' => 'required|in:email,sms,both',
+            'timing' => 'required|in:send_now,manual_send_later',
+            'recipient_email' => 'nullable|email|max:255',
+            'recipient_phone' => 'nullable|string|max:30',
+            'temporary_password' => 'nullable|string|min:8|max:100',
+            'reason' => 'required|string|max:500',
+            'source' => 'nullable|string|max:100',
+        ]);
+
+        try {
+            $dispatch = $this->credentialDeliveryService->createDispatch(
+                $client,
+                $validated,
+                (int) $request->user()->id
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Credential dispatch create failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Credential dispatch failed. Please retry.',
+            ], 500);
+        }
+
+        $dispatch->load('actor');
+        $eventType = match ($dispatch->status) {
+            'deferred' => 'client_credentials_deferred',
+            'sent' => 'client_credentials_sent',
+            'partial' => 'client_credentials_partially_sent',
+            default => 'client_credentials_failed',
+        };
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => $eventType,
+            'actor_id' => (int) $request->user()->id,
+            'content' => [
+                'dispatch_id' => (int) $dispatch->id,
+                'method' => $dispatch->method,
+                'channel' => $dispatch->channel,
+                'timing' => $dispatch->timing,
+                'status' => $dispatch->status,
+                'recipient_email' => $dispatch->recipient_email,
+                'recipient_phone' => $dispatch->recipient_phone,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_CREDENTIAL_SEND,
+            'client',
+            (int) $client->id,
+            null,
+            [
+                'dispatch_id' => (int) $dispatch->id,
+                'method' => $dispatch->method,
+                'channel' => $dispatch->channel,
+                'timing' => $dispatch->timing,
+                'status' => $dispatch->status,
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'dispatch' => $dispatch,
+            'recommendation' => $this->buildCredentialDispatchRecommendation($dispatch),
+        ], 201);
+    }
+
+    public function retryCredentialDispatch(Request $request, Client $client, ClientCredentialDispatch $dispatch)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $dispatch->client_id !== (int) $client->id) {
+            return response()->json([
+                'message' => 'Dispatch record does not belong to this client.',
+            ], 404);
+        }
+
+        $validated = $request->validate([
+            'recipient_email' => 'nullable|email|max:255',
+            'recipient_phone' => 'nullable|string|max:30',
+            'temporary_password' => 'nullable|string|min:8|max:100',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        try {
+            $dispatch = $this->credentialDeliveryService->retryDispatch(
+                $client,
+                $dispatch,
+                (int) $request->user()->id,
+                $validated
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Credential dispatch retry failed', [
+                'client_id' => (int) $client->id,
+                'dispatch_id' => (int) $dispatch->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Credential retry failed. Please retry again.',
+            ], 500);
+        }
+
+        $dispatch->load('actor');
+        $eventType = match ($dispatch->status) {
+            'sent' => 'client_credentials_sent',
+            'partial' => 'client_credentials_partially_sent',
+            default => 'client_credentials_failed',
+        };
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => $eventType,
+            'actor_id' => (int) $request->user()->id,
+            'content' => [
+                'dispatch_id' => (int) $dispatch->id,
+                'retry' => true,
+                'method' => $dispatch->method,
+                'channel' => $dispatch->channel,
+                'status' => $dispatch->status,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_CREDENTIAL_RETRY,
+            'client',
+            (int) $client->id,
+            null,
+            [
+                'dispatch_id' => (int) $dispatch->id,
+                'status' => $dispatch->status,
+                'method' => $dispatch->method,
+                'channel' => $dispatch->channel,
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'dispatch' => $dispatch,
+            'recommendation' => $this->buildCredentialDispatchRecommendation($dispatch),
+        ]);
+    }
+
     private function authorizeClientAccess(Request $request, Client $client): void
     {
         if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
@@ -1271,6 +1457,39 @@ class ClientController extends Controller
         return !empty($platform->db_host)
             && !empty($platform->db_name)
             && !empty($platform->db_user);
+    }
+
+    private function buildCredentialDispatchRecommendation(ClientCredentialDispatch $dispatch): array
+    {
+        if ($dispatch->status === 'deferred') {
+            return [
+                'label' => 'Queued for manual send',
+                'cta' => 'Open the client profile and send when contact details are confirmed.',
+                'tone' => 'info',
+            ];
+        }
+
+        if ($dispatch->status === 'sent') {
+            return [
+                'label' => 'Credentials sent',
+                'cta' => 'Ask the client to confirm receipt and first login.',
+                'tone' => 'success',
+            ];
+        }
+
+        if ($dispatch->status === 'partial') {
+            return [
+                'label' => 'Partially delivered',
+                'cta' => 'Retry the failed channel or switch to the available channel.',
+                'tone' => 'warning',
+            ];
+        }
+
+        return [
+            'label' => 'Delivery failed',
+            'cta' => 'Validate recipient details and retry with setup link first.',
+            'tone' => 'danger',
+        ];
     }
 
     private function normalizePhone(?string $phone): ?string

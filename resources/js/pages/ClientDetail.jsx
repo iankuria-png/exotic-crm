@@ -5,6 +5,7 @@ import api from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import Timeline from '../components/Timeline';
 import ConfirmDialog from '../components/ConfirmDialog';
+import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import { useToast } from '../components/ToastProvider';
 
 function formatCurrency(value, currency = 'KES') {
@@ -84,10 +85,16 @@ export default function ClientDetail() {
     const [selectedDuplicateIds, setSelectedDuplicateIds] = useState([]);
     const [updatePhoneTargetId, setUpdatePhoneTargetId] = useState('');
     const [updatePhoneValue, setUpdatePhoneValue] = useState('');
+    const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
 
     const { data: client, isLoading } = useQuery({
         queryKey: ['client', id],
         queryFn: () => api.get(`/crm/clients/${id}`).then((r) => r.data),
+    });
+
+    const { data: meData } = useQuery({
+        queryKey: ['me'],
+        queryFn: () => api.get('/crm/me').then((response) => response.data),
     });
 
     const { data: timelineData } = useQuery({
@@ -157,7 +164,7 @@ export default function ClientDetail() {
         mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`, {
             reason: 'Activated from client profile',
             payment_method: 'free_trial',
-            approved_by: user?.name || 'Admin',
+            approved_by: meData?.name || 'Admin',
         }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
@@ -340,6 +347,7 @@ export default function ClientDetail() {
     const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
 
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
+    const canDispatchCredentials = Number(client.wp_post_id || 0) > 0;
     const mediaItems = mediaData?.data || [];
     const healthDuplicates = healthData?.duplicates || [];
 
@@ -452,6 +460,15 @@ export default function ClientDetail() {
                             title={!canSyncFromWp ? 'Sync unavailable for manual CRM-only records' : undefined}
                         >
                             {syncMutation.isPending ? 'Syncing...' : 'Sync latest from WP'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowCredentialDrawer(true)}
+                            disabled={!canDispatchCredentials}
+                            className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                            title={!canDispatchCredentials ? 'Credential send is available for WP-linked client profiles.' : undefined}
+                        >
+                            Send credentials
                         </button>
                         <button
                             onClick={() => setShowDealModal(true)}
@@ -1053,6 +1070,18 @@ export default function ClientDetail() {
                 onConfirm={() => syncMutation.mutate()}
                 confirmDisabled={syncMutation.isPending}
                 isPending={syncMutation.isPending}
+            />
+
+            <CredentialDispatchDrawer
+                open={showCredentialDrawer}
+                client={client}
+                defaultSource="client_detail"
+                defaultReason="Credential dispatch from client detail"
+                onClose={() => setShowCredentialDrawer(false)}
+                onSuccess={() => {
+                    queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+                    queryClient.invalidateQueries({ queryKey: ['client', id] });
+                }}
             />
         </div>
     );

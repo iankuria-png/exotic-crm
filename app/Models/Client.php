@@ -85,6 +85,11 @@ class Client extends Model
         return $this->hasMany(Payment::class);
     }
 
+    public function credentialDispatches()
+    {
+        return $this->hasMany(ClientCredentialDispatch::class);
+    }
+
     public function duplicateParent()
     {
         return $this->belongsTo(self::class, 'duplicate_of');
