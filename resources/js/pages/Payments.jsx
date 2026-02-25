@@ -89,12 +89,22 @@ function pendingRecommendation(payment) {
 
 function recommendationClass(tone) {
     if (tone === 'danger') {
-        return 'bg-rose-50 text-rose-700 ring-rose-200';
+        return 'border-rose-200 bg-rose-50 text-rose-700';
     }
     if (tone === 'warning') {
-        return 'bg-amber-50 text-amber-700 ring-amber-200';
+        return 'border-amber-200 bg-amber-50 text-amber-700';
     }
-    return 'bg-slate-100 text-slate-600 ring-slate-200';
+    return 'border-slate-200 bg-slate-100 text-slate-600';
+}
+
+function recommendationDotClass(tone) {
+    if (tone === 'danger') {
+        return 'bg-rose-500';
+    }
+    if (tone === 'warning') {
+        return 'bg-amber-500';
+    }
+    return 'bg-slate-400';
 }
 
 function formatDateTime(value) {
@@ -438,12 +448,6 @@ export default function Payments() {
 
     const summary = useMemo(() => {
         if (data?.stats) {
-            const aging = data.stats.awaiting_aging || {};
-            const olderThan24 = toAmount(aging.h25_72?.amount) + toAmount(aging.gt_72h?.amount);
-            const olderThan24Count = Number(aging.h25_72?.count || 0) + Number(aging.gt_72h?.count || 0);
-            const olderThan72 = toAmount(aging.gt_72h?.amount);
-            const olderThan72Count = Number(aging.gt_72h?.count || 0);
-
             return {
                 awaitingCount: Number(data.stats.pending || 0),
                 awaitingAmount: toAmount(data.stats.pending_amount),
@@ -453,10 +457,6 @@ export default function Payments() {
                 unmatchedAmount: toAmount(data.stats.unmatched_review_amount),
                 failedCount: Number(data.stats.failed || 0),
                 failedAmount: toAmount(data.stats.failed_amount),
-                stale24Count: olderThan24Count,
-                stale24Amount: olderThan24,
-                stale72Count: olderThan72Count,
-                stale72Amount: olderThan72,
             };
         }
 
@@ -464,8 +464,6 @@ export default function Payments() {
         const completedRows = rows.filter((row) => row.status === 'completed');
         const unmatchedRows = completedRows.filter((row) => !row.client_id);
         const failedRows = rows.filter((row) => row.status === 'failed');
-        const stale24Rows = awaitingRows.filter((row) => hoursSince(row.created_at) >= 24);
-        const stale72Rows = awaitingRows.filter((row) => hoursSince(row.created_at) >= 72);
         const sumAmount = (list) => list.reduce((sum, row) => sum + toAmount(row.amount), 0);
 
         return {
@@ -477,10 +475,6 @@ export default function Payments() {
             unmatchedAmount: sumAmount(unmatchedRows),
             failedCount: failedRows.length,
             failedAmount: sumAmount(failedRows),
-            stale24Count: stale24Rows.length,
-            stale24Amount: sumAmount(stale24Rows),
-            stale72Count: stale72Rows.length,
-            stale72Amount: sumAmount(stale72Rows),
         };
     }, [data?.stats, rows]);
 
@@ -622,85 +616,93 @@ export default function Payments() {
                 const recommendation = pendingRecommendation(row);
 
                 return (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                        {(row.status === 'failed' || row.status === 'initiated' || row.status === 'pending') && (
-                            <>
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' });
-                                    }}
-                                    className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                                >
-                                    Retry STK
-                                </button>
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        setSendLinkDialog({
-                                            open: true,
-                                            payment: row,
-                                            channel: 'sms',
-                                            provider: '',
-                                            phone: row.phone || '',
-                                            reason: 'Send payment link from CRM',
-                                        });
-                                    }}
-                                    className="rounded-md bg-slate-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
-                                >
-                                    Send link
-                                </button>
-                            </>
-                        )}
-                        <button
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                openDiagnostics(row);
-                            }}
-                            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                        >
-                            Diagnose
-                        </button>
-                        {row.status === 'completed' && !row.client_id && (
+                    <div className="min-w-[220px] space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            {(row.status === 'failed' || row.status === 'initiated' || row.status === 'pending') && (
+                                <>
+                                    <button
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' });
+                                        }}
+                                        className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                                    >
+                                        Retry STK
+                                    </button>
+                                    <button
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            setSendLinkDialog({
+                                                open: true,
+                                                payment: row,
+                                                channel: 'sms',
+                                                provider: '',
+                                                phone: row.phone || '',
+                                                reason: 'Send payment link from CRM',
+                                            });
+                                        }}
+                                        className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                                    >
+                                        Send link
+                                    </button>
+                                </>
+                            )}
                             <button
                                 onClick={(event) => {
                                     event.stopPropagation();
-                                    autoMatchMutation.mutate(row.id);
-                                }}
-                                className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                            >
-                                Auto-match
-                            </button>
-                        )}
-                        {row.status === 'completed' && !row.client_id && (
-                            <button
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    openManualMatch(row);
+                                    openDiagnostics(row);
                                 }}
                                 className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                             >
-                                Match manually
+                                Diagnose
                             </button>
-                        )}
-                        {row.status === 'completed' && row.client_id && !row.deal_id && (
-                            <button
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
-                                }}
-                                className="rounded-md border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                            >
-                                Create Sub
-                            </button>
-                        )}
-                        {row.client_id && (
-                            <span className="text-[11px] font-medium text-slate-500">Matched</span>
-                        )}
+                            {row.status === 'completed' && !row.client_id && (
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        autoMatchMutation.mutate(row.id);
+                                    }}
+                                    className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                                >
+                                    Auto-match
+                                </button>
+                            )}
+                            {row.status === 'completed' && !row.client_id && (
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        openManualMatch(row);
+                                    }}
+                                    className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                                >
+                                    Match manually
+                                </button>
+                            )}
+                            {row.status === 'completed' && row.client_id && !row.deal_id && (
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
+                                    }}
+                                    className="rounded-md border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                                >
+                                    Create Sub
+                                </button>
+                            )}
+                            {row.client_id ? (
+                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                                    Matched
+                                </span>
+                            ) : null}
+                        </div>
                         {recommendation ? (
-                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${recommendationClass(recommendation.tone)}`}>
-                                Recommended: {recommendation.label}
-                            </span>
+                            <div className={`inline-flex max-w-full items-start gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium leading-4 ${recommendationClass(recommendation.tone)}`}>
+                                <span
+                                    aria-hidden="true"
+                                    className={`mt-[3px] h-2 w-2 shrink-0 rounded-full ${recommendationDotClass(recommendation.tone)}`}
+                                />
+                                <span className="text-left">Next best action: {recommendation.label}</span>
+                            </div>
                         ) : null}
                     </div>
                 );
@@ -728,38 +730,34 @@ export default function Payments() {
                 <button
                     type="button"
                     onClick={() => applyMetricFilter('awaiting')}
-                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                    className={`h-full rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                         activeMetric === 'awaiting'
                             ? 'border-amber-300 bg-amber-50/60'
                             : 'border-slate-200 bg-white hover:border-amber-200 hover:bg-amber-50/30'
                     }`}
                 >
-                    <p className="text-sm font-medium text-slate-600">Awaiting Payment</p>
+                    <div className="flex items-center gap-2">
+                        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-amber-500" />
+                        <p className="text-sm font-semibold text-slate-700">Awaiting Payment</p>
+                    </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.awaitingCount.toLocaleString()}</p>
                     <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.awaitingAmount)}</p>
-                    <p className="mt-1 text-xs text-slate-500">Initiated + pending</p>
-                    {summary.stale24Count > 0 ? (
-                        <p className="mt-2 text-[11px] font-medium text-amber-700">
-                            {summary.stale24Count.toLocaleString()} older than 24h ({formatCurrency(summary.stale24Amount)})
-                        </p>
-                    ) : null}
-                    {summary.stale72Count > 0 ? (
-                        <p className="mt-1 text-[11px] font-medium text-rose-700">
-                            {summary.stale72Count.toLocaleString()} older than 72h ({formatCurrency(summary.stale72Amount)})
-                        </p>
-                    ) : null}
+                    <p className="mt-1 text-xs text-slate-500">Initiated + pending transactions</p>
                 </button>
 
                 <button
                     type="button"
                     onClick={() => applyMetricFilter('confirmed')}
-                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                    className={`h-full rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                         activeMetric === 'confirmed'
                             ? 'border-emerald-300 bg-emerald-50/60'
                             : 'border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/30'
                     }`}
                 >
-                    <p className="text-sm font-medium text-slate-600">Confirmed</p>
+                    <div className="flex items-center gap-2">
+                        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                        <p className="text-sm font-semibold text-slate-700">Confirmed</p>
+                    </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
                     <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.confirmedAmount)}</p>
                     <p className="mt-1 text-xs text-slate-500">Completed payments</p>
@@ -768,13 +766,16 @@ export default function Payments() {
                 <button
                     type="button"
                     onClick={() => applyMetricFilter('unmatched')}
-                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                    className={`h-full rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                         activeMetric === 'unmatched'
-                            ? 'border-rose-300 bg-rose-50/60'
-                            : 'border-slate-200 bg-white hover:border-rose-200 hover:bg-rose-50/30'
+                            ? 'border-sky-300 bg-sky-50/60'
+                            : 'border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/30'
                     }`}
                 >
-                    <p className="text-sm font-medium text-slate-600">Unmatched Confirmed</p>
+                    <div className="flex items-center gap-2">
+                        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-sky-500" />
+                        <p className="text-sm font-semibold text-slate-700">Unmatched Confirmed</p>
+                    </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.unmatchedCount.toLocaleString()}</p>
                     <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.unmatchedAmount)}</p>
                     <p className="mt-1 text-xs text-slate-500">Completed, no client linked</p>
@@ -783,13 +784,16 @@ export default function Payments() {
                 <button
                     type="button"
                     onClick={() => applyMetricFilter('failed')}
-                    className={`rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                    className={`h-full rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                         activeMetric === 'failed'
-                            ? 'border-slate-400 bg-slate-100/80'
-                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                            ? 'border-rose-300 bg-rose-50/70'
+                            : 'border-slate-200 bg-white hover:border-rose-200 hover:bg-rose-50/30'
                     }`}
                 >
-                    <p className="text-sm font-medium text-slate-600">Failed</p>
+                    <div className="flex items-center gap-2">
+                        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-rose-500" />
+                        <p className="text-sm font-semibold text-slate-700">Failed</p>
+                    </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.failedCount.toLocaleString()}</p>
                     <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.failedAmount)}</p>
                     <p className="mt-1 text-xs text-slate-500">Needs retry or follow-up</p>
@@ -863,7 +867,10 @@ export default function Payments() {
 
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-slate-500">Bulk shortcut: press <span className="crm-mono">Ctrl/Cmd + Enter</span> to confirm selected rows.</p>
-                    <span className="text-xs text-slate-500">Pending triage: send link within 1h, retry STK within 24h, escalate after 72h.</span>
+                    <p className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+                        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        Pending triage recommendation: send link within 1h, retry STK within 24h, escalate after 72h.
+                    </p>
                 </div>
             </section>
 
