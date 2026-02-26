@@ -447,6 +447,14 @@ export default function Payments() {
         setPage(1);
     };
 
+    const openImportTemplate = () => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        window.open('/api/crm/payments/import/template', '_blank', 'noopener,noreferrer');
+    };
+
     const openManualMatch = (paymentRow) => {
         setSelectedPayment(paymentRow);
         setSelectedClientId('');
@@ -861,13 +869,22 @@ export default function Payments() {
                 title="Payments"
                 subtitle={data?.total ? `${data.total.toLocaleString()} payment records` : 'Incoming payments and match queue'}
                 actions={(
-                    <button
-                        onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue' })}
-                        disabled={batchMatchMutation.isPending}
-                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {batchMatchMutation.isPending ? 'Matching...' : 'Auto-match queue'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={openImportTemplate}
+                            className="crm-btn-secondary px-3 py-2"
+                        >
+                            Download import template
+                        </button>
+                        <button
+                            onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue' })}
+                            disabled={batchMatchMutation.isPending}
+                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {batchMatchMutation.isPending ? 'Matching...' : 'Auto-match queue'}
+                        </button>
+                    </div>
                 )}
             />
 
@@ -1079,6 +1096,9 @@ export default function Payments() {
                         Pending triage recommendation: send link within 1h, retry STK within 24h, escalate after 72h.
                     </p>
                 </div>
+                <p className="mt-2 text-xs text-slate-500">
+                    Import template fields: <span className="crm-mono">payment_date</span>, <span className="crm-mono">amount</span>, and one identifier (<span className="crm-mono">phone</span> or <span className="crm-mono">transaction_reference</span> or <span className="crm-mono">profile_url</span>).
+                </p>
             </section>
 
             <DataTable

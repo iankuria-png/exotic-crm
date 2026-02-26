@@ -496,6 +496,143 @@ class PaymentQueueController extends Controller
         return response()->json($result);
     }
 
+    public function importTemplate(): \Symfony\Component\HttpFoundation\Response
+    {
+        $headers = [
+            'payment_date',
+            'amount',
+            'currency',
+            'phone',
+            'transaction_reference',
+            'status',
+            'profile_url',
+            'subscription_type',
+            'notes',
+        ];
+
+        $sample = [
+            '2026-01-31 09:15:00',
+            '2500',
+            'KES',
+            '0711000001',
+            'SAMPLEABC123',
+            'completed',
+            'https://example.com/profile/sample',
+            'renewal',
+            'Optional free-form note',
+        ];
+
+        $csv = implode(',', $headers) . PHP_EOL . implode(',', $sample) . PHP_EOL;
+
+        return response($csv, 200, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="payment-import-template.csv"',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate',
+        ]);
+    }
+
+    public function importKpis(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+        ]);
+
+        $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this payment market.'
+        );
+
+        $batchQuery = PaymentImportBatch::query();
+        $paymentQuery = Payment::query()->where('source', 'excel_import');
+
+        if (!empty($validated['platform_id'])) {
+            $platformId = (int) $validated['platform_id'];
+            $batchQuery->where('platform_id', $platformId);
+            $paymentQuery->where('platform_id', $platformId);
+        } else {
+            $accessiblePlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+            if (is_array($accessiblePlatformIds)) {
+                if (empty($accessiblePlatformIds)) {
+                    return response()->json([
+                        'kpis' => [
+                            'batches' => 0,
+                            'rows_total' => 0,
+                            'rows_committed' => 0,
+                            'rows_duplicate' => 0,
+                            'rows_invalid' => 0,
+                            'payments_imported' => 0,
+                            'duplicate_rate_pct' => 0,
+                            'auto_high_rate_pct' => 0,
+                            'manual_review_open' => 0,
+                        ],
+                        'aging' => [
+                            'lt_3d' => 0,
+                            'd4_14' => 0,
+                            'gt_14d' => 0,
+                        ],
+                    ]);
+                }
+
+                $batchQuery->whereIn('platform_id', $accessiblePlatformIds);
+                $paymentQuery->whereIn('platform_id', $accessiblePlatformIds);
+            }
+        }
+
+        if (!empty($validated['from'])) {
+            $batchQuery->whereDate('created_at', '>=', $validated['from']);
+            $paymentQuery->whereDate('created_at', '>=', $validated['from']);
+        }
+        if (!empty($validated['to'])) {
+            $batchQuery->whereDate('created_at', '<=', $validated['to']);
+            $paymentQuery->whereDate('created_at', '<=', $validated['to']);
+        }
+
+        $batches = (clone $batchQuery)->count();
+        $rowsTotal = (int) (clone $batchQuery)->sum('total_rows');
+        $rowsCommitted = (int) (clone $batchQuery)->sum('committed_rows');
+        $rowsDuplicate = (int) (clone $batchQuery)->sum('duplicate_rows');
+        $rowsInvalid = (int) (clone $batchQuery)->sum('invalid_rows');
+
+        $paymentsImported = (clone $paymentQuery)->count();
+        $autoHighCount = (clone $paymentQuery)->where('reconciliation_confidence', 'high')->count();
+        $manualReviewOpen = (clone $paymentQuery)->where('reconciliation_state', 'manual_review')->count();
+
+        $now = now();
+        $aging = [
+            'lt_3d' => (clone $paymentQuery)
+                ->where('reconciliation_state', 'manual_review')
+                ->where('created_at', '>=', $now->copy()->subDays(3))
+                ->count(),
+            'd4_14' => (clone $paymentQuery)
+                ->where('reconciliation_state', 'manual_review')
+                ->where('created_at', '<', $now->copy()->subDays(3))
+                ->where('created_at', '>=', $now->copy()->subDays(14))
+                ->count(),
+            'gt_14d' => (clone $paymentQuery)
+                ->where('reconciliation_state', 'manual_review')
+                ->where('created_at', '<', $now->copy()->subDays(14))
+                ->count(),
+        ];
+
+        return response()->json([
+            'kpis' => [
+                'batches' => $batches,
+                'rows_total' => $rowsTotal,
+                'rows_committed' => $rowsCommitted,
+                'rows_duplicate' => $rowsDuplicate,
+                'rows_invalid' => $rowsInvalid,
+                'payments_imported' => $paymentsImported,
+                'duplicate_rate_pct' => $rowsTotal > 0 ? round(($rowsDuplicate / $rowsTotal) * 100, 2) : 0,
+                'auto_high_rate_pct' => $paymentsImported > 0 ? round(($autoHighCount / $paymentsImported) * 100, 2) : 0,
+                'manual_review_open' => $manualReviewOpen,
+            ],
+            'aging' => $aging,
+        ]);
+    }
+
     public function diagnostics(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
