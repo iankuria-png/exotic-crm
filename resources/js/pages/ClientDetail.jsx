@@ -324,6 +324,15 @@ export default function ClientDetail() {
     const [activeTab, setActiveTab] = useState(initialTab);
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
+    const [activationDialog, setActivationDialog] = useState({
+        open: false,
+        dealId: null,
+        dealLabel: '',
+    });
+    const [activationReason, setActivationReason] = useState('Activation initiated from client profile');
+    const [activationPaymentMethod, setActivationPaymentMethod] = useState('manual');
+    const [activationPaymentReference, setActivationPaymentReference] = useState('');
+    const [activationApprovedBy, setActivationApprovedBy] = useState('');
     const [showSyncConfirm, setShowSyncConfirm] = useState(false);
     const [profileSection, setProfileSection] = useState('personal');
     const [profileForm, setProfileForm] = useState(null);
@@ -414,15 +423,22 @@ export default function ClientDetail() {
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: (dealId) => api.post(`/crm/deals/${dealId}/activate`, {
-            reason: 'Activated from client profile',
-            payment_method: 'free_trial',
-            approved_by: meData?.name || 'Admin',
-        }).then((r) => r.data),
-        onSuccess: () => {
+        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, approvedBy }) =>
+            api.post(`/crm/deals/${dealId}/activate`, {
+                reason,
+                payment_method: paymentMethod,
+                ...(paymentMethod === 'manual' ? { payment_reference: paymentReference } : {}),
+                ...(paymentMethod === 'free_trial' ? { approved_by: approvedBy } : {}),
+            }).then((r) => r.data),
+        onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
-            toast.success('Subscription activated.');
+            setActivationDialog({ open: false, dealId: null, dealLabel: '' });
+            setActivationReason('Activation initiated from client profile');
+            setActivationPaymentMethod('manual');
+            setActivationPaymentReference('');
+            setActivationApprovedBy('');
+            toast.success(payload?.message || 'Subscription activation request submitted.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription activation failed.');
@@ -644,6 +660,59 @@ export default function ClientDetail() {
     const supportChatUrl = client?.platform?.support_chat_url || DEFAULT_SUPPORT_CHAT_URL;
     const mediaItems = mediaData?.data || [];
     const healthDuplicates = healthData?.duplicates || [];
+    const activationRequiresReference = activationPaymentMethod === 'manual';
+    const activationRequiresApprovedBy = activationPaymentMethod === 'free_trial';
+    const activationTargetPhone = client?.phone_normalized || '';
+
+    const openActivationDialog = (deal) => {
+        const dealLabel = deal?.product?.name || deal?.plan_type || 'Subscription';
+        setActivationDialog({
+            open: true,
+            dealId: deal.id,
+            dealLabel,
+        });
+        setActivationReason('Activation initiated from client profile');
+        setActivationPaymentMethod('manual');
+        setActivationPaymentReference('');
+        setActivationApprovedBy(meData?.name || '');
+    };
+
+    const closeActivationDialog = () => {
+        setActivationDialog({ open: false, dealId: null, dealLabel: '' });
+        setActivationReason('Activation initiated from client profile');
+        setActivationPaymentMethod('manual');
+        setActivationPaymentReference('');
+        setActivationApprovedBy('');
+    };
+
+    const submitActivation = () => {
+        if (!activationDialog.dealId) {
+            return;
+        }
+
+        if (activationRequiresReference && !activationPaymentReference.trim()) {
+            toast.error('Transaction reference is required for manual activation.');
+            return;
+        }
+
+        if (activationRequiresApprovedBy && !activationApprovedBy.trim()) {
+            toast.error('Approver name is required for free trial activation.');
+            return;
+        }
+
+        activateDealMutation.mutate({
+            dealId: activationDialog.dealId,
+            reason: activationReason.trim() || 'Activation initiated from client profile',
+            paymentMethod: activationPaymentMethod,
+            paymentReference: activationPaymentReference.trim(),
+            approvedBy: activationApprovedBy.trim(),
+        });
+    };
+
+    const activationSubmitDisabled = activateDealMutation.isPending
+        || !activationDialog.dealId
+        || (activationRequiresReference && !activationPaymentReference.trim())
+        || (activationRequiresApprovedBy && !activationApprovedBy.trim());
 
     const submitProfileUpdate = () => {
         if (!profileForm) {
@@ -943,11 +1012,11 @@ export default function ClientDetail() {
 
                                 {deal.status === 'pending' ? (
                                     <button
-                                        onClick={() => activateDealMutation.mutate(deal.id)}
+                                        onClick={() => openActivationDialog(deal)}
                                         disabled={activateDealMutation.isPending}
                                         className="crm-btn-primary px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
-                                        {activateDealMutation.isPending ? 'Activating...' : 'Activate'}
+                                        {activateDealMutation.isPending ? 'Submitting...' : 'Activate'}
                                     </button>
                                 ) : null}
                             </div>
@@ -1492,6 +1561,125 @@ export default function ClientDetail() {
                         </div>
                     )}
                 </section>
+            ) : null}
+
+            {activationDialog.open ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={closeActivationDialog}>
+                    <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Activate Subscription</h3>
+                                <p className="crm-panel-subtitle">{client.name} • {activationDialog.dealLabel}</p>
+                            </div>
+                        </header>
+                        <div className="space-y-4 p-4">
+                            <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-sm font-semibold text-slate-800">Payment Method</p>
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    {['manual', 'stk', 'link', 'free_trial'].map((method) => (
+                                        <button
+                                            key={method}
+                                            type="button"
+                                            onClick={() => setActivationPaymentMethod(method)}
+                                            className={`rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                                activationPaymentMethod === method
+                                                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                            }`}
+                                        >
+                                            {method === 'manual'
+                                                ? 'Manual Payment'
+                                                : method === 'stk'
+                                                    ? 'STK Push'
+                                                    : method === 'link'
+                                                        ? 'Payment Link'
+                                                        : 'Free Trial'}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {activationPaymentMethod === 'manual' ? (
+                                    <div>
+                                        <label htmlFor="client-detail-payment-reference" className="mb-1 block text-sm font-medium text-slate-700">
+                                            MPESA / Transaction Reference
+                                        </label>
+                                        <input
+                                            id="client-detail-payment-reference"
+                                            type="text"
+                                            value={activationPaymentReference}
+                                            onChange={(event) => setActivationPaymentReference(event.target.value)}
+                                            className="crm-input"
+                                            placeholder="e.g. MPESA123ABC"
+                                        />
+                                    </div>
+                                ) : null}
+
+                                {activationPaymentMethod === 'free_trial' ? (
+                                    <div>
+                                        <label htmlFor="client-detail-approved-by" className="mb-1 block text-sm font-medium text-slate-700">
+                                            Approved By
+                                        </label>
+                                        <input
+                                            id="client-detail-approved-by"
+                                            type="text"
+                                            value={activationApprovedBy}
+                                            onChange={(event) => setActivationApprovedBy(event.target.value)}
+                                            className="crm-input"
+                                            placeholder="Admin or sub-admin approver"
+                                        />
+                                    </div>
+                                ) : null}
+
+                                {(activationPaymentMethod === 'stk' || activationPaymentMethod === 'link') ? (
+                                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                        {activationPaymentMethod === 'stk'
+                                            ? 'An STK push will be sent to the client phone. Subscription activates after payment confirmation.'
+                                            : 'A payment link will be sent to the client phone. Subscription activates after payment confirmation.'}
+                                        <span className="mt-1 block crm-mono text-[11px] text-slate-500">
+                                            Target phone: {activationTargetPhone || 'Unavailable'}
+                                        </span>
+                                    </div>
+                                ) : null}
+
+                            </div>
+
+                            <div>
+                                <label htmlFor="client-detail-activation-reason" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Reason
+                                </label>
+                                <textarea
+                                    id="client-detail-activation-reason"
+                                    rows={3}
+                                    value={activationReason}
+                                    onChange={(event) => setActivationReason(event.target.value)}
+                                    className="crm-input"
+                                />
+                            </div>
+                        </div>
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
+                            <button
+                                type="button"
+                                onClick={closeActivationDialog}
+                                className="crm-btn-secondary"
+                                disabled={activateDealMutation.isPending}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={submitActivation}
+                                disabled={activationSubmitDisabled}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {activateDealMutation.isPending
+                                    ? 'Submitting...'
+                                    : (activationPaymentMethod === 'stk' || activationPaymentMethod === 'link')
+                                        ? 'Initiate payment'
+                                        : 'Activate subscription'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
             ) : null}
 
             {showDealModal ? (

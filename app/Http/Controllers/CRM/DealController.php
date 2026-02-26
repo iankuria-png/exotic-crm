@@ -247,6 +247,9 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod)) {
+            return $freeTrialGuard;
+        }
 
         $durationDays = match ($deal->duration) {
             'weekly' => 7,
@@ -562,6 +565,9 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod)) {
+            return $freeTrialGuard;
+        }
 
         $beforeState = [
             'expires_at' => $deal->expires_at?->toDateTimeString(),
@@ -700,6 +706,9 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod)) {
+            return $freeTrialGuard;
+        }
         $isFreeTrial = $paymentMethod === 'free_trial';
 
         $beforeState = [
@@ -1180,6 +1189,21 @@ class DealController extends Controller
         }
 
         return $payment;
+    }
+
+    private function freeTrialPermissionResponse(Request $request, string $paymentMethod): ?\Illuminate\Http\JsonResponse
+    {
+        if ($paymentMethod !== 'free_trial') {
+            return null;
+        }
+
+        if ($this->marketAuthorizationService->isManager($request->user())) {
+            return null;
+        }
+
+        return response()->json([
+            'message' => 'Only admin or sub-admin users can approve free trial activations.',
+        ], 403);
     }
 
     private function missingSprint6DealColumnsResponse(): ?\Illuminate\Http\JsonResponse
