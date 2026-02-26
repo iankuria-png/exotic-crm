@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
+const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
 function asNumber(value) {
     const parsed = Number(value);
@@ -16,8 +17,17 @@ function clampPercent(value) {
     return Math.max(0, Math.min(100, value));
 }
 
-function formatKes(value) {
-    return `KES ${asNumber(value).toLocaleString()}`;
+function formatCurrency(value, currency = 'KES') {
+    return `${currency} ${asNumber(value).toLocaleString()}`;
+}
+
+function normalizePlatformFilter(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') {
+        return '';
+    }
+
+    return /^\d+$/.test(raw) ? raw : '';
 }
 
 function formatDate(value) {
@@ -178,7 +188,13 @@ function MetricCard({ metric, isLoading }) {
 
 export default function Dashboard() {
     const navigate = useNavigate();
-    const [platformFilter, setPlatformFilter] = useState('');
+    const [platformFilter, setPlatformFilter] = useState(() => {
+        if (typeof window === 'undefined') {
+            return '';
+        }
+
+        return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
+    });
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [didHydrateDefaultRange, setDidHydrateDefaultRange] = useState(false);
@@ -202,8 +218,39 @@ export default function Dashboard() {
     });
 
     const platforms = integrationData?.platforms || [];
+    const selectedPlatform = platforms.find(
+        (platform) => String(platform.platform_id) === String(platformFilter),
+    ) || null;
+    const selectedCurrency = selectedPlatform?.currency || 'KES';
     const defaultWindowFrom = data?.window?.default_from || data?.filters?.from || '';
     const defaultWindowTo = data?.window?.default_to || data?.filters?.to || '';
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        if (platformFilter) {
+            window.localStorage.setItem(DASHBOARD_MARKET_STORAGE_KEY, platformFilter);
+            return;
+        }
+
+        window.localStorage.removeItem(DASHBOARD_MARKET_STORAGE_KEY);
+    }, [platformFilter]);
+
+    useEffect(() => {
+        if (!platformFilter || !platforms.length) {
+            return;
+        }
+
+        const stillAccessible = platforms.some(
+            (platform) => String(platform.platform_id) === String(platformFilter),
+        );
+
+        if (!stillAccessible) {
+            setPlatformFilter('');
+        }
+    }, [platformFilter, platforms]);
 
     useEffect(() => {
         if (didHydrateDefaultRange) {
@@ -256,9 +303,9 @@ export default function Dashboard() {
         {
             key: 'revenue',
             label: 'Collected Revenue',
-            value: formatKes(revenueWindow),
+            value: formatCurrency(revenueWindow, selectedCurrency),
             hint: recentPaymentsCount > 0
-                ? `${recentPaymentsCount} completed • avg ${formatKes(averageTicketWindow)}`
+                ? `${recentPaymentsCount} completed • avg ${formatCurrency(averageTicketWindow, selectedCurrency)}`
                 : 'No completed payments in selected range',
             subHint: revenueDeltaLabel || 'No previous window baseline',
             accentDot: 'bg-teal-600',
@@ -389,7 +436,7 @@ export default function Dashboard() {
                                 <select
                                     id="dashboard-market"
                                     value={platformFilter}
-                                    onChange={(event) => setPlatformFilter(event.target.value)}
+                                    onChange={(event) => setPlatformFilter(normalizePlatformFilter(event.target.value))}
                                     className="w-full border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
                                 >
                                     <option value="">All accessible markets</option>
@@ -517,7 +564,7 @@ export default function Dashboard() {
                                         className="flex w-full items-center justify-between gap-4 rounded-md border border-slate-200 bg-white px-3.5 py-2.5 text-left transition hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                                     >
                                         <div className="min-w-0">
-                                            <p className="truncate text-sm font-semibold text-slate-900">{formatKes(payment.amount)}</p>
+                                            <p className="truncate text-sm font-semibold text-slate-900">{formatCurrency(payment.amount, payment.currency || selectedCurrency)}</p>
                                             <p className="truncate text-xs text-slate-500">
                                                 {payment.phone || 'No phone'} {payment.transaction_reference ? `- ${payment.transaction_reference}` : ''}
                                             </p>
