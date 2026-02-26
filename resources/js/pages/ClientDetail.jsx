@@ -42,6 +42,8 @@ function formatRelativeFromUnix(unixTs) {
     return `${years}y ago`;
 }
 
+const DEFAULT_SUPPORT_CHAT_URL = 'https://chat.cloud.board.support/1369683147';
+
 const PROFILE_ENUM_CHOICES = {
     gender: [
         { code: '1', label: 'Female' },
@@ -638,6 +640,7 @@ export default function ClientDetail() {
 
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canDispatchCredentials = Number(client.wp_post_id || 0) > 0;
+    const supportChatUrl = client?.platform?.support_chat_url || DEFAULT_SUPPORT_CHAT_URL;
     const mediaItems = mediaData?.data || [];
     const healthDuplicates = healthData?.duplicates || [];
 
@@ -780,6 +783,14 @@ export default function ClientDetail() {
                         >
                             Send credentials
                         </button>
+                        <a
+                            href={supportChatUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="crm-btn-secondary"
+                        >
+                            Support chat
+                        </a>
                         <button
                             onClick={() => setShowDealModal(true)}
                             className="crm-btn-primary"
@@ -821,6 +832,14 @@ export default function ClientDetail() {
                                     Open profile
                                 </a>
                             ) : 'Not available'}
+                        />
+                        <DefinitionRow
+                            label="Support Chat"
+                            value={supportChatUrl ? (
+                                <a href={supportChatUrl} target="_blank" rel="noreferrer" className="text-teal-700 underline decoration-teal-200 underline-offset-2">
+                                    Open support board
+                                </a>
+                            ) : 'Not configured'}
                         />
                         <DefinitionRow
                             label="Last Online"

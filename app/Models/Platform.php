@@ -14,7 +14,7 @@ class Platform extends Model
         'phone_prefix', 'timezone', 'currency_code',
         'sync_last_checked_at', 'sync_last_synced_at',
         'sync_last_scope', 'sync_last_status',
-        'sync_last_error', 'sync_last_result', 'payment_link_providers',
+        'sync_last_error', 'sync_last_result', 'payment_link_providers', 'support_chat_url',
     ];
 
     protected $casts = [

@@ -13,6 +13,8 @@ use Illuminate\Support\Str;
 
 class CredentialDeliveryService
 {
+    private const DEFAULT_SUPPORT_CHAT_URL = 'https://chat.cloud.board.support/1369683147';
+
     public function __construct(
         private readonly NotificationService $notificationService
     ) {
@@ -327,6 +329,7 @@ class CredentialDeliveryService
         $loginUrl = $baseUrl ? rtrim($baseUrl, '/') . '/wp-login.php' : null;
         $setupUrl = $baseUrl ? rtrim($baseUrl, '/') . '/wp-login.php?action=lostpassword' : null;
         $wpUsername = $this->resolveWpUsername($platform, (int) ($client->wp_user_id ?? 0));
+        $supportChatUrl = trim((string) ($platform->support_chat_url ?: self::DEFAULT_SUPPORT_CHAT_URL));
 
         $clientName = trim((string) ($client->name ?: 'there'));
 
@@ -338,6 +341,7 @@ class CredentialDeliveryService
                 $wpUsername ? "Username: {$wpUsername}" : null,
                 $temporaryPassword ? "Temporary password: {$temporaryPassword}" : null,
                 $loginUrl ? "Login: {$loginUrl}" : null,
+                $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
                 'Please change your password after login.',
             ])));
 
@@ -349,6 +353,7 @@ class CredentialDeliveryService
                 $temporaryPassword ? "Temporary password: {$temporaryPassword}" : null,
                 $loginUrl ? "Login URL: {$loginUrl}" : null,
                 $profileUrl ? "Profile URL: {$profileUrl}" : null,
+                $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
                 '',
                 'For security, please sign in and change this password immediately.',
             ])));
@@ -371,6 +376,7 @@ class CredentialDeliveryService
             $setupUrl ? "Set password: {$setupUrl}" : null,
             $loginUrl ? "Login: {$loginUrl}" : null,
             $profileUrl ? "Profile: {$profileUrl}" : null,
+            $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
         ])));
 
         $emailBody = trim(implode("\n", array_filter([
@@ -381,6 +387,7 @@ class CredentialDeliveryService
             $setupUrl ? "Password setup: {$setupUrl}" : null,
             $loginUrl ? "Login URL: {$loginUrl}" : null,
             $profileUrl ? "Profile URL: {$profileUrl}" : null,
+            $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
             '',
             'If you did not request this, contact support immediately.',
         ])));

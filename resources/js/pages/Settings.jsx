@@ -46,6 +46,7 @@ function buildPlatformEditor(platform) {
         currency_code: platform.currency || 'KES',
         timezone: platform.timezone || 'Africa/Nairobi',
         phone_prefix: platform.phone_prefix || '254',
+        support_chat_url: platform.support_chat_url || '',
     };
 }
 
@@ -61,6 +62,7 @@ function defaultPlatformForm() {
         currency_code: 'KES',
         timezone: 'Africa/Nairobi',
         phone_prefix: '254',
+        support_chat_url: '',
     };
 }
 
@@ -1138,6 +1140,12 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                             placeholder="WordPress Sync API URL"
                                         />
                                         <input
+                                            value={editor.support_chat_url}
+                                            onChange={(event) => setEditor((current) => ({ ...current, support_chat_url: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="Support board URL (e.g. https://chat.cloud.board.support/...)"
+                                        />
+                                        <input
                                             value={editor.wp_api_user}
                                             onChange={(event) => setEditor((current) => ({ ...current, wp_api_user: event.target.value }))}
                                             className="crm-input"
@@ -1855,6 +1863,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                             <input value={createForm.currency_code} onChange={(event) => setCreateForm((current) => ({ ...current, currency_code: event.target.value.toUpperCase() }))} className="crm-input" placeholder="Currency code" />
                             <input value={createForm.timezone} onChange={(event) => setCreateForm((current) => ({ ...current, timezone: event.target.value }))} className="crm-input" placeholder="Timezone" />
                             <input value={createForm.wp_api_url} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_url: event.target.value }))} className="crm-input md:col-span-2" placeholder="WordPress Sync API URL" />
+                            <input value={createForm.support_chat_url} onChange={(event) => setCreateForm((current) => ({ ...current, support_chat_url: event.target.value }))} className="crm-input md:col-span-2" placeholder="Support board URL" />
                             <input value={createForm.wp_api_user} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_user: event.target.value }))} className="crm-input" placeholder="WordPress API user" />
                             <input value={createForm.wp_api_password} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_password: event.target.value }))} className="crm-input" type="password" placeholder="WordPress API password" />
                             <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">

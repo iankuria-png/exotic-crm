@@ -117,6 +117,7 @@ class SettingsController extends Controller
             'scraper' => [
                 'sources' => $scraperSources,
                 'recent_runs' => $scraperRuns,
+                'presets' => $this->scraperSourceService->competitorPresets(),
                 'parser_profiles' => ScraperSourceService::PARSER_PROFILES,
                 'fetch_schedules' => ScraperSourceService::FETCH_SCHEDULES,
                 'dedupe_modes' => ScraperSourceService::DEDUPE_MODES,
@@ -244,6 +245,7 @@ class SettingsController extends Controller
             'db_user' => 'nullable|string|max:255',
             'db_pass' => 'nullable|string|max:255',
             'db_prefix' => 'nullable|string|max:32',
+            'support_chat_url' => 'nullable|url|max:500',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -295,6 +297,7 @@ class SettingsController extends Controller
             'db_user' => 'sometimes|nullable|string|max:255',
             'db_pass' => 'sometimes|nullable|string|max:255',
             'db_prefix' => 'sometimes|nullable|string|max:32',
+            'support_chat_url' => 'sometimes|nullable|url|max:500',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -1335,6 +1338,7 @@ class SettingsController extends Controller
             'currency' => $platform->currency_code ?: 'KES',
             'timezone' => $platform->timezone ?: 'Africa/Nairobi',
             'phone_prefix' => $platform->phone_prefix ?: '254',
+            'support_chat_url' => $platform->support_chat_url,
             'wp_sync' => [
                 'status' => $wpStatus,
                 'credentials_ready' => $hasWpCredentials,
@@ -1395,6 +1399,7 @@ class SettingsController extends Controller
             'phone_prefix' => $platform->phone_prefix,
             'timezone' => $platform->timezone,
             'currency_code' => $platform->currency_code,
+            'support_chat_url' => $platform->support_chat_url,
             'sync_last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
             'sync_last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
             'sync_last_scope' => $platform->sync_last_scope,
