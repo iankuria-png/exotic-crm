@@ -179,19 +179,16 @@ function MetricCard({ metric, isLoading }) {
 export default function Dashboard() {
     const navigate = useNavigate();
     const [platformFilter, setPlatformFilter] = useState('');
-    const [searchInput, setSearchInput] = useState('');
-    const [search, setSearch] = useState('');
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [didHydrateDefaultRange, setDidHydrateDefaultRange] = useState(false);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['dashboard', platformFilter, search, fromDate, toDate],
+        queryKey: ['dashboard', platformFilter, fromDate, toDate],
         queryFn: () =>
             api.get('/crm/dashboard', {
                 params: {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
-                    ...(search ? { search } : {}),
                     ...(fromDate ? { from: fromDate } : {}),
                     ...(toDate ? { to: toDate } : {}),
                 },
@@ -342,8 +339,6 @@ export default function Dashboard() {
 
     const resetFilters = () => {
         setPlatformFilter('');
-        setSearch('');
-        setSearchInput('');
         applyAllTimeWindow();
     };
 
@@ -451,7 +446,7 @@ export default function Dashboard() {
                             >
                                 7d
                             </button>
-                            {(platformFilter || search || hasNonDefaultDateRange) ? (
+                            {(platformFilter || hasNonDefaultDateRange) ? (
                                 <button
                                     type="button"
                                     onClick={resetFilters}
@@ -462,35 +457,6 @@ export default function Dashboard() {
                             ) : null}
                         </div>
                     </div>
-
-                    <form
-                        onSubmit={(event) => {
-                            event.preventDefault();
-                            setSearch(searchInput.trim());
-                        }}
-                        className="mt-3 flex min-w-[240px] flex-1 gap-2"
-                    >
-                        <div className="relative flex-1">
-                            <input
-                                type="text"
-                                value={searchInput}
-                                onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search by client, phone, or payment reference..."
-                                className="crm-input pr-10"
-                            />
-                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400">
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                </svg>
-                            </span>
-                        </div>
-                        <button
-                            type="submit"
-                            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
-                        >
-                            Search
-                        </button>
-                    </form>
 
                     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                         <span className="rounded-full border border-slate-300 bg-white px-3 py-1">
