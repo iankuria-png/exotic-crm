@@ -124,6 +124,9 @@ class ClientSyncService
         $email = mb_substr($wpClient['email'] ?? '', 0, 255);
         $city = mb_substr($wpClient['city'] ?? '', 0, 100);
         $imageUrl = mb_substr($wpClient['main_image_url'] ?? '', 0, 500);
+        $premiumExpire = $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null);
+        $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
+        $escortExpire = $this->resolveEscortExpiry($wpClient, $premiumExpire, $featuredExpire);
 
         $client = Client::updateOrCreate(
             [
@@ -139,10 +142,10 @@ class ClientSyncService
                 'city'            => $city ?: null,
                 'profile_status'  => $wpClient['post_status'] ?? 'private',
                 'premium'         => (bool) ($wpClient['premium'] ?? false),
-                'premium_expire'  => $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null),
+                'premium_expire'  => $premiumExpire,
                 'featured'        => (bool) ($wpClient['featured'] ?? false),
-                'featured_expire' => $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null),
-                'escort_expire'   => $this->ensureUnixTimestamp($wpClient['escort_expire'] ?? null),
+                'featured_expire' => $featuredExpire,
+                'escort_expire'   => $escortExpire,
                 'verified'        => (bool) ($wpClient['verified'] ?? false),
                 'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
                 'main_image_url'  => $imageUrl ?: null,
@@ -189,5 +192,24 @@ class ClientSyncService
         $ts = strtotime((string) $value);
 
         return $ts !== false ? $ts : null;
+    }
+
+    private function resolveEscortExpiry(array $wpClient, ?int $premiumExpire, ?int $featuredExpire): ?int
+    {
+        $directExpiry = $this->ensureUnixTimestamp($wpClient['escort_expire'] ?? null);
+        if ($directExpiry !== null) {
+            return $directExpiry;
+        }
+
+        $fallbacks = array_values(array_filter([
+            $premiumExpire,
+            $featuredExpire,
+        ], static fn($value) => $value !== null));
+
+        if (empty($fallbacks)) {
+            return null;
+        }
+
+        return max($fallbacks);
     }
 }

@@ -53,6 +53,8 @@ class RenewalService
             ->where(function ($q) {
                 $q->whereNotNull('deals.id')
                     ->orWhereNotNull('clients.escort_expire')
+                    ->orWhereNotNull('clients.premium_expire')
+                    ->orWhereNotNull('clients.featured_expire')
                     ->orWhere('clients.profile_status', 'private');
             });
 
@@ -78,8 +80,9 @@ class RenewalService
         }
 
         /** @var \Illuminate\Pagination\LengthAwarePaginator $targets */
+        $expiryDateExpr = $this->expiryDateExpr();
         $targets = $query
-            ->orderByRaw('COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire) DESC')
+            ->orderByRaw("{$expiryDateExpr} DESC")
             ->paginate($perPage);
 
         $targetRows = $targets->getCollection();
@@ -97,7 +100,12 @@ class RenewalService
 
         $targets->setCollection(
             $targetRows->map(function (Client $client) use ($paidDealIds, $telemetryByKey) {
-                $expiryDate = $this->resolveExpiryDate($client->deal_expires_at, $client->escort_expire);
+                $expiryDate = $this->resolveExpiryDate(
+                    $client->deal_expires_at,
+                    $client->escort_expire,
+                    $client->premium_expire,
+                    $client->featured_expire
+                );
                 $daysLeft = $this->daysUntil($expiryDate);
 
                 $status = $client->deal_status ?: ($daysLeft !== null && $daysLeft < 0 ? 'expired' : 'active');
@@ -180,6 +188,8 @@ class RenewalService
             ->where(function ($q) {
                 $q->whereNotNull('deals.id')
                     ->orWhereNotNull('clients.escort_expire')
+                    ->orWhereNotNull('clients.premium_expire')
+                    ->orWhereNotNull('clients.featured_expire')
                     ->orWhere('clients.profile_status', 'private');
             });
 
@@ -198,7 +208,7 @@ class RenewalService
         }
 
         $nowTs = now()->timestamp;
-        $dateExpr = 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire)';
+        $dateExpr = $this->expiryDateExpr();
         $summaryRow = (clone $summaryBase)
             ->selectRaw(
                 "SUM(CASE WHEN (deals.status = 'active' OR (deals.id IS NULL AND {$dateExpr} >= ?)) THEN 1 ELSE 0 END) as active_deals,
@@ -207,7 +217,7 @@ class RenewalService
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as pending,
                  SUM(CASE WHEN deals.renewal_reminders_paused = 1 THEN 1 ELSE 0 END) as paused_reminders,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as expired_deals,
-                 SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
+                 SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL AND clients.premium_expire IS NULL AND clients.featured_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
                  SUM(CASE WHEN deals.status IN ('pending','awaiting_payment','paid','active') THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
                  SUM(CASE WHEN deals.status = 'active' AND deals.payment_id IS NOT NULL THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
                 [
@@ -283,10 +293,19 @@ class RenewalService
                         ->whereIn('deals.status', ['active', 'expired'])
                         ->whereRaw('deals.id = (SELECT id FROM deals d2 WHERE d2.client_id = clients.id ORDER BY d2.created_at DESC LIMIT 1)');
                 })
-                ->select('clients.id as client_id', 'deals.id as deal_id', 'deals.expires_at as deal_expires_at', 'clients.escort_expire')
+                ->select(
+                    'clients.id as client_id',
+                    'deals.id as deal_id',
+                    'deals.expires_at as deal_expires_at',
+                    'clients.escort_expire',
+                    'clients.premium_expire',
+                    'clients.featured_expire'
+                )
                 ->where(function ($q) {
                     $q->whereNotNull('deals.id')
                         ->orWhereNotNull('clients.escort_expire')
+                        ->orWhereNotNull('clients.premium_expire')
+                        ->orWhereNotNull('clients.featured_expire')
                         ->orWhere('clients.profile_status', 'private');
                 });
 
@@ -315,7 +334,12 @@ class RenewalService
             }
 
             $targets = $query->get()->map(function ($row) {
-                $expiryDate = $this->resolveExpiryDate($row->deal_expires_at, $row->escort_expire);
+                $expiryDate = $this->resolveExpiryDate(
+                    $row->deal_expires_at,
+                    $row->escort_expire,
+                    $row->premium_expire,
+                    $row->featured_expire
+                );
                 return [
                     'deal_id' => $row->deal_id,
                     'client_id' => $row->client_id,
@@ -340,7 +364,8 @@ class RenewalService
                     $deal->client_id = $client->id;
                     $deal->platform_id = $client->platform_id;
                     $deal->client = $client;
-                    $deal->expires_at = $target['expires_at'] ?? $client->escort_expire;
+                    $deal->expires_at = $target['expires_at']
+                        ?? $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
                 }
 
                 $res = $this->sendManualReminder($deal, $templateId, $actorId);
@@ -862,7 +887,8 @@ class RenewalService
                 $virtualDeal->platform_id = (int) $client->platform_id;
                 $virtualDeal->client = $client;
                 $virtualDeal->product = null;
-                $virtualDeal->expires_at = $row['expires_at'] ?? $client->escort_expire;
+                $virtualDeal->expires_at = $row['expires_at']
+                    ?? $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
                 return $virtualDeal;
             }
 
@@ -895,10 +921,10 @@ class RenewalService
             ->with(['client.platform', 'product'])
             ->get();
 
-        // 2. Target Virtual Renewals (Clients with escort_expire and no active/expired Deal)
+        // 2. Target virtual renewals from legacy expiry signals when no active/expired deal exists.
         // Note: Filters on product_id are ignored for virtual renewals as they have no linked product.
         $virtuals = Client::query()
-            ->whereBetween('escort_expire', [
+            ->whereBetween(DB::raw('COALESCE(clients.escort_expire, clients.premium_expire, clients.featured_expire)'), [
                 $targetDate->copy()->startOfDay()->timestamp,
                 $targetDate->copy()->endOfDay()->timestamp,
             ])
@@ -918,7 +944,7 @@ class RenewalService
                 // Return a Deal-like object (or the client itself with necessary fields)
                 $client->client = $client;
                 $client->client_id = $client->id;
-                $client->expires_at = $client->escort_expire;
+                $client->expires_at = $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
                 $client->product = null;
                 // deal_id is null, signaling virtual
                 return $client;
@@ -971,13 +997,20 @@ class RenewalService
         });
     }
 
-    private function resolveExpiryDate($dealExpiry, $clientExpiry): ?Carbon
+    private function resolveExpiryDate($dealExpiry, $clientExpiry, $premiumExpiry = null, $featuredExpiry = null): ?Carbon
     {
         if ($dealExpiry) {
             return $dealExpiry instanceof Carbon ? $dealExpiry : Carbon::parse($dealExpiry);
         }
 
-        $ts = $this->toUnixTimestamp($clientExpiry);
+        $candidates = [
+            $this->toUnixTimestamp($clientExpiry),
+            $this->toUnixTimestamp($premiumExpiry),
+            $this->toUnixTimestamp($featuredExpiry),
+        ];
+        $candidates = array_values(array_filter($candidates, static fn($value) => $value !== null));
+
+        $ts = !empty($candidates) ? max($candidates) : null;
         if ($ts === null) {
             return null;
         }
@@ -1003,7 +1036,7 @@ class RenewalService
     private function applyBucketFilter(Builder|\Illuminate\Database\Query\Builder $query, string $bucket): void
     {
         $nowTs = now()->timestamp;
-        $dateExpr = 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire)';
+        $dateExpr = $this->expiryDateExpr();
         $bucket = trim(strtolower($bucket));
 
         if ($bucket === '' || $bucket === 'all') {
@@ -1015,7 +1048,9 @@ class RenewalService
                 })->where(function ($lapsedGuard) {
                     $lapsedGuard->whereNotNull('deals.id')
                         ->orWhere('clients.profile_status', '!=', 'private')
-                        ->orWhereNotNull('clients.escort_expire');
+                        ->orWhereNotNull('clients.escort_expire')
+                        ->orWhereNotNull('clients.premium_expire')
+                        ->orWhereNotNull('clients.featured_expire');
                 });
             });
             return;
@@ -1066,7 +1101,9 @@ class RenewalService
                     ->orWhere(function ($sq) {
                         $sq->whereNull('deals.id')
                             ->where('clients.profile_status', 'private')
-                            ->whereNull('clients.escort_expire');
+                            ->whereNull('clients.escort_expire')
+                            ->whereNull('clients.premium_expire')
+                            ->whereNull('clients.featured_expire');
                     });
             });
         }
@@ -1080,7 +1117,7 @@ class RenewalService
         }
 
         $nowTs = now()->timestamp;
-        $dateExpr = 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire)';
+        $dateExpr = $this->expiryDateExpr();
 
         if ($status === 'active') {
             $query->where(function ($builder) use ($dateExpr, $nowTs) {
@@ -1105,6 +1142,11 @@ class RenewalService
         }
 
         $query->where('deals.status', $status);
+    }
+
+    private function expiryDateExpr(): string
+    {
+        return 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire, clients.premium_expire, clients.featured_expire)';
     }
 
     private function alreadyAttemptedToday(string $entityType, int $entityId, int $campaignId): bool
