@@ -431,7 +431,7 @@ class ClientController extends Controller
             'reason' => 'required|string|max:500',
         ]);
 
-        $fields = $validated['fields'];
+        $fields = $this->normalizeWpProfileFields($validated['fields']);
         $blockedFields = [
             'premium',
             'premium_expire',
@@ -1588,6 +1588,209 @@ class ClientController extends Controller
         } catch (\Throwable $exception) {
             return null;
         }
+    }
+
+    private function normalizeWpProfileFields(array $fields): array
+    {
+        $normalized = $fields;
+
+        foreach (['gender', 'ethnicity', 'build'] as $field) {
+            if (!array_key_exists($field, $normalized)) {
+                continue;
+            }
+
+            $resolved = $this->normalizeWpProfileEnumCode($field, $normalized[$field]);
+            $normalized[$field] = $resolved;
+        }
+
+        if (array_key_exists('services', $normalized)) {
+            $normalized['services'] = $this->normalizeWpProfileServices($normalized['services']);
+        }
+
+        if (array_key_exists('height', $normalized)) {
+            $normalized['height'] = $this->normalizeWpProfileHeight($normalized['height']);
+        }
+
+        return $normalized;
+    }
+
+    private function normalizeWpProfileEnumCode(string $field, mixed $value): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $raw = trim((string) $value);
+        if ($raw === '') {
+            return null;
+        }
+
+        $maps = $this->wpProfileEnumMaps();
+        $options = $maps[$field] ?? [];
+        if (empty($options)) {
+            return $raw;
+        }
+
+        if (array_key_exists($raw, $options)) {
+            return $raw;
+        }
+
+        if (preg_match('/\d+/', $raw, $match)) {
+            $code = (string) ((int) $match[0]);
+            if ($code !== '0' && array_key_exists($code, $options)) {
+                return $code;
+            }
+        }
+
+        $needle = $this->normalizeWpEnumLookupToken($raw);
+        foreach ($options as $code => $label) {
+            $normalizedLabel = $this->normalizeWpEnumLookupToken((string) $label);
+            if ($needle === $normalizedLabel) {
+                return (string) $code;
+            }
+
+            $normalizedDisplay = $this->normalizeWpEnumLookupToken(sprintf('%s (%s)', $label, $code));
+            if ($needle === $normalizedDisplay) {
+                return (string) $code;
+            }
+        }
+
+        return $raw;
+    }
+
+    private function normalizeWpProfileServices(mixed $value): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $tokens = [];
+        if (is_array($value)) {
+            $tokens = $value;
+        } else {
+            $raw = trim((string) $value);
+            if ($raw === '') {
+                return null;
+            }
+
+            $tokens = explode(',', $raw);
+        }
+
+        $normalized = [];
+        foreach ($tokens as $token) {
+            $resolved = $this->normalizeWpProfileEnumCode('services', $token);
+            if ($resolved === null || $resolved === '') {
+                continue;
+            }
+
+            $resolvedRaw = trim((string) $resolved);
+            if ($resolvedRaw === '') {
+                continue;
+            }
+
+            // Keep numeric codes only to align with WordPress service storage.
+            if (!preg_match('/^\d+$/', $resolvedRaw)) {
+                continue;
+            }
+
+            $resolvedCode = (string) ((int) $resolvedRaw);
+            if ($resolvedCode === '0') {
+                continue;
+            }
+
+            if (!in_array($resolvedCode, $normalized, true)) {
+                $normalized[] = $resolvedCode;
+            }
+        }
+
+        return empty($normalized) ? null : $normalized;
+    }
+
+    private function normalizeWpProfileHeight(mixed $value): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $raw = trim((string) $value);
+        if ($raw === '') {
+            return null;
+        }
+
+        $legacyCodeToCm = [
+            '1' => '128',
+            '2' => '134',
+            '3' => '140',
+            '4' => '146',
+            '5' => '152',
+            '6' => '155',
+            '7' => '158',
+            '8' => '162',
+            '9' => '165',
+            '10' => '168',
+            '11' => '171',
+            '12' => '174',
+            '13' => '177',
+            '14' => '180',
+            '15' => '183',
+            '16' => '189',
+            '17' => '195',
+            '18' => '201',
+            '19' => '207',
+            '20' => '213',
+        ];
+
+        return $legacyCodeToCm[$raw] ?? $raw;
+    }
+
+    private function normalizeWpEnumLookupToken(string $value): string
+    {
+        $lower = strtolower($value);
+        $normalized = preg_replace('/[^a-z0-9]+/', ' ', $lower) ?? '';
+        return trim($normalized);
+    }
+
+    private function wpProfileEnumMaps(): array
+    {
+        // Child-theme canonical maps used by operators in production.
+        return [
+            'gender' => [
+                '1' => 'Female',
+                '2' => 'Male',
+                '3' => 'Couple',
+                '4' => 'Gay',
+                '5' => 'Transsexual',
+            ],
+            'ethnicity' => [
+                '1' => 'Latin',
+                '2' => 'Caucasian',
+                '3' => 'Black',
+                '4' => 'White',
+                '5' => 'MiddleEast',
+                '6' => 'Asian',
+                '7' => 'Indian',
+                '8' => 'Aborigine',
+                '9' => 'Native American',
+                '10' => 'Other',
+            ],
+            'build' => [
+                '1' => 'Skinny',
+                '2' => 'Slim',
+                '3' => 'Regular',
+                '4' => 'Curvy',
+                '5' => 'Fat',
+            ],
+            'services' => [
+                '1' => 'BDSM',
+                '2' => 'Couples',
+                '3' => 'Domination',
+                '4' => 'Escort',
+                '5' => 'Massage',
+                '6' => 'Fetish',
+                '7' => 'Mature',
+                '8' => 'GFE',
+            ],
+        ];
     }
 
     private function snapshotWpFieldValues(array $requestedFields, array $profile): array

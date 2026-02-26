@@ -42,6 +42,176 @@ function formatRelativeFromUnix(unixTs) {
     return `${years}y ago`;
 }
 
+const PROFILE_ENUM_CHOICES = {
+    gender: [
+        { code: '1', label: 'Female' },
+        { code: '2', label: 'Male' },
+        { code: '3', label: 'Couple' },
+        { code: '4', label: 'Gay' },
+        { code: '5', label: 'Transsexual' },
+    ],
+    ethnicity: [
+        { code: '1', label: 'Latin' },
+        { code: '2', label: 'Caucasian' },
+        { code: '3', label: 'Black' },
+        { code: '4', label: 'White' },
+        { code: '5', label: 'MiddleEast' },
+        { code: '6', label: 'Asian' },
+        { code: '7', label: 'Indian' },
+        { code: '8', label: 'Aborigine' },
+        { code: '9', label: 'Native American' },
+        { code: '10', label: 'Other' },
+    ],
+    build: [
+        { code: '1', label: 'Skinny' },
+        { code: '2', label: 'Slim' },
+        { code: '3', label: 'Regular' },
+        { code: '4', label: 'Curvy' },
+        { code: '5', label: 'Fat' },
+    ],
+    services: [
+        { code: '1', label: 'BDSM' },
+        { code: '2', label: 'Couples' },
+        { code: '3', label: 'Domination' },
+        { code: '4', label: 'Escort' },
+        { code: '5', label: 'Massage' },
+        { code: '6', label: 'Fetish' },
+        { code: '7', label: 'Mature' },
+        { code: '8', label: 'GFE' },
+    ],
+};
+
+const LEGACY_HEIGHT_CODE_TO_CM = {
+    1: '128',
+    2: '134',
+    3: '140',
+    4: '146',
+    5: '152',
+    6: '155',
+    7: '158',
+    8: '162',
+    9: '165',
+    10: '168',
+    11: '171',
+    12: '174',
+    13: '177',
+    14: '180',
+    15: '183',
+    16: '189',
+    17: '195',
+    18: '201',
+    19: '207',
+    20: '213',
+};
+
+const PROFILE_ENUM_OPTIONS = Object.fromEntries(
+    Object.entries(PROFILE_ENUM_CHOICES).map(([field, options]) => [
+        field,
+        options.map((option) => ({
+            value: option.code,
+            plainLabel: option.label,
+            label: `${option.label} (${option.code})`,
+        })),
+    ]),
+);
+
+const PROFILE_ENUM_LOOKUP = Object.fromEntries(
+    Object.entries(PROFILE_ENUM_OPTIONS).map(([field, options]) => {
+        const byCode = new Map();
+        const byLabel = new Map();
+
+        options.forEach((option) => {
+            byCode.set(option.value, option.value);
+            byLabel.set(normalizeLookupToken(option.plainLabel), option.value);
+            byLabel.set(normalizeLookupToken(option.label), option.value);
+            byLabel.set(normalizeLookupToken(`${option.value}`), option.value);
+            byLabel.set(normalizeLookupToken(`${option.plainLabel} ${option.value}`), option.value);
+            byLabel.set(normalizeLookupToken(`${option.value} ${option.plainLabel}`), option.value);
+        });
+
+        return [field, { byCode, byLabel }];
+    }),
+);
+
+function normalizeLookupToken(value) {
+    const normalized = String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+
+    return normalized;
+}
+
+function resolveProfileEnumValue(field, value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+
+    const lookup = PROFILE_ENUM_LOOKUP[field];
+    if (!lookup) return raw;
+
+    if (lookup.byCode.has(raw)) {
+        return lookup.byCode.get(raw);
+    }
+
+    const numericCode = raw.replace(/[^0-9]/g, '');
+    if (numericCode) {
+        const normalizedCode = String(Number.parseInt(numericCode, 10));
+        if (lookup.byCode.has(normalizedCode)) {
+            return normalizedCode;
+        }
+    }
+
+    const token = normalizeLookupToken(raw);
+    if (lookup.byLabel.has(token)) {
+        return lookup.byLabel.get(token);
+    }
+
+    return raw;
+}
+
+function isKnownProfileEnumCode(field, value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return true;
+
+    const lookup = PROFILE_ENUM_LOOKUP[field];
+    if (!lookup) return true;
+
+    return lookup.byCode.has(raw);
+}
+
+function parseProfileServices(value) {
+    const tokens = Array.isArray(value)
+        ? value
+        : String(value ?? '')
+            .split(',')
+            .map((item) => item.trim());
+
+    const normalized = [];
+    tokens.forEach((token) => {
+        const raw = String(token ?? '').trim();
+        if (!raw) return;
+
+        const resolved = resolveProfileEnumValue('services', raw);
+        if (!normalized.includes(resolved)) {
+            normalized.push(resolved);
+        }
+    });
+
+    return normalized;
+}
+
+function normalizeHeightForEditor(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    return LEGACY_HEIGHT_CODE_TO_CM[raw] || raw;
+}
+
+function normalizeHeightForSave(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    return LEGACY_HEIGHT_CODE_TO_CM[raw] || raw;
+}
+
 function ProfileInfoCard({ title, children }) {
     return (
         <section className="crm-surface p-5">
@@ -316,11 +486,11 @@ export default function ClientDetail() {
             email: profile.email || client?.email || '',
             city: cityName || client?.city || '',
             birthday: meta.birthday || '',
-            gender: meta.gender || '',
-            ethnicity: meta.ethnicity || '',
-            height: meta.height || '',
-            build: meta.build || meta.body_type || '',
-            services: Array.isArray(meta.services) ? meta.services.join(', ') : (meta.services || ''),
+            gender: resolveProfileEnumValue('gender', meta.gender),
+            ethnicity: resolveProfileEnumValue('ethnicity', meta.ethnicity),
+            height: normalizeHeightForEditor(meta.height),
+            build: resolveProfileEnumValue('build', meta.build || meta.body_type),
+            services: parseProfileServices(meta.services),
             rates_incall: meta.incall || meta.rate_incall || '',
             rates_outcall: meta.outcall || meta.rate_outcall || '',
             whatsapp: meta.whatsapp || meta.whatsapp_number || '',
@@ -359,8 +529,50 @@ export default function ClientDetail() {
         { key: 'media', label: 'Media' },
     ];
 
+    const serviceOptions = useMemo(() => {
+        const selectedServices = Array.isArray(profileForm?.services) ? profileForm.services : [];
+        const unknownOptions = selectedServices
+            .map((code) => String(code || '').trim())
+            .filter((code) => code && !isKnownProfileEnumCode('services', code))
+            .map((code) => ({
+                value: code,
+                plainLabel: /^\d+$/.test(code) ? `Legacy service code` : 'Unknown service value',
+                label: /^\d+$/.test(code) ? `Legacy service code (${code})` : `Unknown service value (${code})`,
+            }));
+
+        return [...PROFILE_ENUM_OPTIONS.services, ...unknownOptions];
+    }, [profileForm?.services]);
+
     const submitProfileUpdate = () => {
         if (!profileForm) {
+            return;
+        }
+
+        const normalizedGender = resolveProfileEnumValue('gender', profileForm.gender);
+        const normalizedEthnicity = resolveProfileEnumValue('ethnicity', profileForm.ethnicity);
+        const normalizedBuild = resolveProfileEnumValue('build', profileForm.build);
+        const normalizedServices = parseProfileServices(profileForm.services)
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+        const invalidServiceValues = normalizedServices.filter((value) => !/^\d+$/.test(value));
+
+        if (normalizedGender && !isKnownProfileEnumCode('gender', normalizedGender)) {
+            toast.error('Gender must be selected from the dropdown list (label + code).');
+            return;
+        }
+
+        if (normalizedEthnicity && !isKnownProfileEnumCode('ethnicity', normalizedEthnicity)) {
+            toast.error('Ethnicity must be selected from the dropdown list (label + code).');
+            return;
+        }
+
+        if (normalizedBuild && !isKnownProfileEnumCode('build', normalizedBuild)) {
+            toast.error('Build must be selected from the dropdown list (label + code).');
+            return;
+        }
+
+        if (invalidServiceValues.length > 0) {
+            toast.error('Services include unknown text values. Re-select using listed service codes before saving.');
             return;
         }
 
@@ -370,11 +582,11 @@ export default function ClientDetail() {
             email: profileForm.email?.trim() || null,
             city: profileForm.city?.trim() || null,
             birthday: profileForm.birthday?.trim() || null,
-            gender: profileForm.gender?.trim() || null,
-            ethnicity: profileForm.ethnicity?.trim() || null,
-            height: profileForm.height?.trim() || null,
-            build: profileForm.build?.trim() || null,
-            services: profileForm.services?.trim() || null,
+            gender: normalizedGender || null,
+            ethnicity: normalizedEthnicity || null,
+            height: normalizeHeightForSave(profileForm.height),
+            build: normalizedBuild || null,
+            services: normalizedServices.length ? normalizedServices : null,
             incall: profileForm.rates_incall?.trim() || null,
             outcall: profileForm.rates_outcall?.trim() || null,
             whatsapp: profileForm.whatsapp?.trim() || null,
@@ -762,34 +974,102 @@ export default function ClientDetail() {
                             ) : null}
 
                             {profileSection === 'personal' ? (
-                                <div className="grid gap-3 md:grid-cols-2">
-                                    <input value={profileForm?.name || ''} onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))} className="crm-input" placeholder="Display name" />
-                                    <input value={profileForm?.birthday || ''} onChange={(event) => setProfileForm((current) => ({ ...current, birthday: event.target.value }))} className="crm-input" placeholder="Birthday" />
-                                    <input value={profileForm?.gender || ''} onChange={(event) => setProfileForm((current) => ({ ...current, gender: event.target.value }))} className="crm-input" placeholder="Gender" />
-                                    <input value={profileForm?.ethnicity || ''} onChange={(event) => setProfileForm((current) => ({ ...current, ethnicity: event.target.value }))} className="crm-input" placeholder="Ethnicity" />
-                                    <input value={profileForm?.height || ''} onChange={(event) => setProfileForm((current) => ({ ...current, height: event.target.value }))} className="crm-input" placeholder="Height" />
-                                    <input value={profileForm?.build || ''} onChange={(event) => setProfileForm((current) => ({ ...current, build: event.target.value }))} className="crm-input" placeholder="Build / body type" />
-                                    <textarea
-                                        value={profileForm?.bio || ''}
-                                        onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))}
-                                        className="crm-input md:col-span-2"
-                                        rows={4}
-                                        placeholder="Profile bio/content"
-                                    />
+                                <div className="space-y-3">
+                                    <p className="text-xs text-slate-500">Use the dropdown options with visible codes. CRM saves the WordPress code value automatically.</p>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Display Name</span>
+                                            <input value={profileForm?.name || ''} onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))} className="crm-input" placeholder="e.g. Majesty" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Birthday</span>
+                                            <input type="date" value={profileForm?.birthday || ''} onChange={(event) => setProfileForm((current) => ({ ...current, birthday: event.target.value }))} className="crm-input" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Gender (Code)</span>
+                                            <select value={profileForm?.gender || ''} onChange={(event) => setProfileForm((current) => ({ ...current, gender: event.target.value }))} className="crm-input">
+                                                <option value="">Select gender</option>
+                                                {PROFILE_ENUM_OPTIONS.gender.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                            {profileForm?.gender && !isKnownProfileEnumCode('gender', profileForm.gender) ? (
+                                                <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.gender)}</p>
+                                            ) : null}
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Ethnicity (Code)</span>
+                                            <select value={profileForm?.ethnicity || ''} onChange={(event) => setProfileForm((current) => ({ ...current, ethnicity: event.target.value }))} className="crm-input">
+                                                <option value="">Select ethnicity</option>
+                                                {PROFILE_ENUM_OPTIONS.ethnicity.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                            {profileForm?.ethnicity && !isKnownProfileEnumCode('ethnicity', profileForm.ethnicity) ? (
+                                                <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.ethnicity)}</p>
+                                            ) : null}
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Height (cm)</span>
+                                            <input type="number" min="1" max="260" value={profileForm?.height || ''} onChange={(event) => setProfileForm((current) => ({ ...current, height: event.target.value }))} className="crm-input" placeholder="e.g. 167" />
+                                            <p className="text-xs text-slate-500">Legacy code values (1-20) are auto-converted to centimeters on save.</p>
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Build (Code)</span>
+                                            <select value={profileForm?.build || ''} onChange={(event) => setProfileForm((current) => ({ ...current, build: event.target.value }))} className="crm-input">
+                                                <option value="">Select build</option>
+                                                {PROFILE_ENUM_OPTIONS.build.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                            {profileForm?.build && !isKnownProfileEnumCode('build', profileForm.build) ? (
+                                                <p className="text-xs text-rose-600">Unknown current value: {String(profileForm.build)}</p>
+                                            ) : null}
+                                        </label>
+                                        <label className="space-y-1 md:col-span-2">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Profile Bio</span>
+                                            <textarea
+                                                value={profileForm?.bio || ''}
+                                                onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))}
+                                                className="crm-input"
+                                                rows={4}
+                                                placeholder="Public profile description"
+                                            />
+                                        </label>
+                                    </div>
                                 </div>
                             ) : null}
 
                             {profileSection === 'services' ? (
-                                <div className="grid gap-3 md:grid-cols-2">
-                                    <textarea
-                                        value={profileForm?.services || ''}
-                                        onChange={(event) => setProfileForm((current) => ({ ...current, services: event.target.value }))}
-                                        className="crm-input md:col-span-2"
-                                        rows={3}
-                                        placeholder="Services (comma separated)"
-                                    />
-                                    <input value={profileForm?.rates_incall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_incall: event.target.value }))} className="crm-input" placeholder="Incall rate" />
-                                    <input value={profileForm?.rates_outcall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_outcall: event.target.value }))} className="crm-input" placeholder="Outcall rate" />
+                                <div className="space-y-3">
+                                    <p className="text-xs text-slate-500">Services are saved as WordPress service codes. Select one or more options with visible code values.</p>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <label className="space-y-1 md:col-span-2">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Services (Code)</span>
+                                            <select
+                                                multiple
+                                                value={Array.isArray(profileForm?.services) ? profileForm.services : []}
+                                                onChange={(event) => {
+                                                    const values = Array.from(event.target.selectedOptions).map((option) => option.value);
+                                                    setProfileForm((current) => ({ ...current, services: values }));
+                                                }}
+                                                className="crm-input min-h-[170px]"
+                                            >
+                                                {serviceOptions.map((option) => (
+                                                    <option key={`${option.value}-${option.label}`} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                            <p className="text-xs text-slate-500">Tip: Hold `Ctrl`/`Cmd` while clicking to select multiple services.</p>
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Incall Rate</span>
+                                            <input value={profileForm?.rates_incall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_incall: event.target.value }))} className="crm-input" placeholder="e.g. 1500" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Outcall Rate</span>
+                                            <input value={profileForm?.rates_outcall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_outcall: event.target.value }))} className="crm-input" placeholder="e.g. 2000" />
+                                        </label>
+                                    </div>
                                 </div>
                             ) : null}
 
