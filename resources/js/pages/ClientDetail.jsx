@@ -200,16 +200,96 @@ function parseProfileServices(value) {
     return normalized;
 }
 
+function toDateInputValue(year, month, day) {
+    const y = Number.parseInt(year, 10);
+    const m = Number.parseInt(month, 10);
+    const d = Number.parseInt(day, 10);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return '';
+    if (m < 1 || m > 12 || d < 1 || d > 31) return '';
+
+    const paddedMonth = String(m).padStart(2, '0');
+    const paddedDay = String(d).padStart(2, '0');
+    return `${y}-${paddedMonth}-${paddedDay}`;
+}
+
+function normalizeBirthdayForEditor(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+
+    const ymdMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (ymdMatch) {
+        return toDateInputValue(ymdMatch[1], ymdMatch[2], ymdMatch[3]);
+    }
+
+    const dmyMatch = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (dmyMatch) {
+        // Stored legacy format may be dd/mm/yyyy or mm/dd/yyyy; date parser resolves valid local date.
+        const parsed = new Date(raw);
+        if (!Number.isNaN(parsed.getTime())) {
+            return toDateInputValue(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
+        }
+
+        return toDateInputValue(dmyMatch[3], dmyMatch[2], dmyMatch[1]);
+    }
+
+    if (/^\d{10,13}$/.test(raw)) {
+        const numeric = Number.parseInt(raw, 10);
+        const millis = raw.length === 13 ? numeric : numeric * 1000;
+        const parsed = new Date(millis);
+        if (!Number.isNaN(parsed.getTime())) {
+            return toDateInputValue(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
+        }
+    }
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+        return '';
+    }
+
+    return toDateInputValue(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
+}
+
+function normalizeBirthdayForSave(value) {
+    const normalized = normalizeBirthdayForEditor(value);
+    return normalized || null;
+}
+
 function normalizeHeightForEditor(value) {
     const raw = String(value ?? '').trim();
     if (!raw) return '';
-    return LEGACY_HEIGHT_CODE_TO_CM[raw] || raw;
+    if (LEGACY_HEIGHT_CODE_TO_CM[raw]) return LEGACY_HEIGHT_CODE_TO_CM[raw];
+
+    const cmInParens = raw.match(/\((\d+(?:\.\d+)?)\)/);
+    if (cmInParens) {
+        return String(Math.round(Number.parseFloat(cmInParens[1])));
+    }
+
+    const explicitCm = raw.match(/(\d+(?:\.\d+)?)\s*cm/i);
+    if (explicitCm) {
+        return String(Math.round(Number.parseFloat(explicitCm[1])));
+    }
+
+    const feetInches = raw.match(/(\d+)\s*(?:ft|')\s*(\d+)?/i);
+    if (feetInches) {
+        const feet = Number.parseInt(feetInches[1], 10);
+        const inches = Number.parseInt(feetInches[2] || '0', 10);
+        if (Number.isFinite(feet) && Number.isFinite(inches)) {
+            return String(Math.round((feet * 12 + inches) * 2.54));
+        }
+    }
+
+    const numeric = raw.match(/^\d+(?:\.\d+)?$/);
+    if (numeric) {
+        return String(Math.round(Number.parseFloat(raw)));
+    }
+
+    return raw;
 }
 
 function normalizeHeightForSave(value) {
-    const raw = String(value ?? '').trim();
-    if (!raw) return null;
-    return LEGACY_HEIGHT_CODE_TO_CM[raw] || raw;
+    const normalized = normalizeHeightForEditor(value);
+    if (!normalized) return null;
+    return normalized;
 }
 
 function ProfileInfoCard({ title, children }) {
@@ -485,7 +565,7 @@ export default function ClientDetail() {
             phone: meta.phone || profile.phone || client?.phone_normalized || '',
             email: profile.email || client?.email || '',
             city: cityName || client?.city || '',
-            birthday: meta.birthday || '',
+            birthday: normalizeBirthdayForEditor(meta.birthday),
             gender: resolveProfileEnumValue('gender', meta.gender),
             ethnicity: resolveProfileEnumValue('ethnicity', meta.ethnicity),
             height: normalizeHeightForEditor(meta.height),
@@ -523,6 +603,9 @@ export default function ClientDetail() {
 
         return [...PROFILE_ENUM_OPTIONS.services, ...unknownOptions];
     }, [profileForm?.services]);
+    const selectedServiceCodes = Array.isArray(profileForm?.services)
+        ? profileForm.services.map((value) => String(value || '').trim()).filter(Boolean)
+        : [];
 
     if (isLoading) {
         return (
@@ -581,7 +664,7 @@ export default function ClientDetail() {
             phone: profileForm.phone?.trim() || null,
             email: profileForm.email?.trim() || null,
             city: profileForm.city?.trim() || null,
-            birthday: profileForm.birthday?.trim() || null,
+            birthday: normalizeBirthdayForSave(profileForm.birthday),
             gender: normalizedGender || null,
             ethnicity: normalizedEthnicity || null,
             height: normalizeHeightForSave(profileForm.height),
@@ -1011,8 +1094,8 @@ export default function ClientDetail() {
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Height (cm)</span>
-                                            <input type="number" min="1" max="260" value={profileForm?.height || ''} onChange={(event) => setProfileForm((current) => ({ ...current, height: event.target.value }))} className="crm-input" placeholder="e.g. 167" />
-                                            <p className="text-xs text-slate-500">Legacy code values (1-20) are auto-converted to centimeters on save.</p>
+                                            <input type="text" value={profileForm?.height || ''} onChange={(event) => setProfileForm((current) => ({ ...current, height: event.target.value }))} className="crm-input" placeholder={`e.g. 167 or 5'6" (167.64)`} />
+                                            <p className="text-xs text-slate-500">You can enter cm or legacy formats. CRM auto-converts to centimeter value on save.</p>
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Build (Code)</span>
@@ -1046,20 +1129,48 @@ export default function ClientDetail() {
                                     <div className="grid gap-3 md:grid-cols-2">
                                         <label className="space-y-1 md:col-span-2">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Services (Code)</span>
-                                            <select
-                                                multiple
-                                                value={Array.isArray(profileForm?.services) ? profileForm.services : []}
-                                                onChange={(event) => {
-                                                    const values = Array.from(event.target.selectedOptions).map((option) => option.value);
-                                                    setProfileForm((current) => ({ ...current, services: values }));
-                                                }}
-                                                className="crm-input min-h-[170px]"
-                                            >
-                                                {serviceOptions.map((option) => (
-                                                    <option key={`${option.value}-${option.label}`} value={option.value}>{option.label}</option>
-                                                ))}
-                                            </select>
-                                            <p className="text-xs text-slate-500">Tip: Hold `Ctrl`/`Cmd` while clicking to select multiple services.</p>
+                                            <div className="rounded-md border border-slate-200 bg-white p-3">
+                                                <div className="flex flex-wrap gap-2">
+                                                    {serviceOptions.map((option) => {
+                                                        const isSelected = selectedServiceCodes.includes(option.value);
+                                                        const isUnknown = !isKnownProfileEnumCode('services', option.value);
+
+                                                        return (
+                                                            <button
+                                                                key={`${option.value}-${option.label}`}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setProfileForm((current) => {
+                                                                        const currentValues = Array.isArray(current?.services)
+                                                                            ? current.services.map((value) => String(value || '').trim()).filter(Boolean)
+                                                                            : [];
+
+                                                                        const nextValues = currentValues.includes(option.value)
+                                                                            ? currentValues.filter((value) => value !== option.value)
+                                                                            : [...currentValues, option.value];
+
+                                                                        return {
+                                                                            ...current,
+                                                                            services: nextValues,
+                                                                        };
+                                                                    });
+                                                                }}
+                                                                aria-pressed={isSelected}
+                                                                className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                                                                    isSelected
+                                                                        ? 'border-teal-600 bg-teal-50 text-teal-700'
+                                                                        : isUnknown
+                                                                            ? 'border-amber-300 bg-amber-50 text-amber-700'
+                                                                            : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400 hover:text-teal-700'
+                                                                }`}
+                                                            >
+                                                                {option.label}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-slate-500">Click a service chip to add or remove it. Selected: {selectedServiceCodes.length}</p>
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Incall Rate</span>
