@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
@@ -22,9 +22,19 @@ function formatKes(value) {
 
 function formatDate(value) {
     if (!value) return '--';
-    const date = new Date(value);
+    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(String(value))
+        ? `${value}T00:00:00`
+        : value;
+    const date = new Date(normalized);
     if (Number.isNaN(date.getTime())) return '--';
     return date.toLocaleDateString();
+}
+
+function toInputDateString(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
 }
 
 function formatRelativeTime(value) {
@@ -173,6 +183,7 @@ export default function Dashboard() {
     const [search, setSearch] = useState('');
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
+    const [didHydrateDefaultRange, setDidHydrateDefaultRange] = useState(false);
 
     const { data, isLoading } = useQuery({
         queryKey: ['dashboard', platformFilter, search, fromDate, toDate],
@@ -194,6 +205,25 @@ export default function Dashboard() {
     });
 
     const platforms = integrationData?.platforms || [];
+    const defaultWindowFrom = data?.window?.default_from || data?.filters?.from || '';
+    const defaultWindowTo = data?.window?.default_to || data?.filters?.to || '';
+
+    useEffect(() => {
+        if (didHydrateDefaultRange) {
+            return;
+        }
+
+        if (!defaultWindowFrom || !defaultWindowTo) {
+            return;
+        }
+
+        if (!fromDate && !toDate) {
+            setFromDate(defaultWindowFrom);
+            setToDate(defaultWindowTo);
+        }
+
+        setDidHydrateDefaultRange(true);
+    }, [defaultWindowFrom, defaultWindowTo, didHydrateDefaultRange, fromDate, toDate]);
 
     const kpis = data?.kpis || {};
     const activeClients = asNumber(kpis.active_clients);
@@ -282,6 +312,40 @@ export default function Dashboard() {
     const followUps = data?.upcoming_follow_ups || [];
     const followUpPreview = followUps.slice(0, LIST_PREVIEW_LIMIT);
     const hiddenFollowUpCount = Math.max(0, followUps.length - LIST_PREVIEW_LIMIT);
+    const appliedRangeFrom = data?.window?.applied_from || data?.filters?.from || fromDate || '';
+    const appliedRangeTo = data?.window?.applied_to || data?.filters?.to || toDate || '';
+    const isDefaultDateWindow = Boolean(data?.window?.is_default);
+    const hasNonDefaultDateRange = Boolean(
+        fromDate
+        && toDate
+        && defaultWindowFrom
+        && defaultWindowTo
+        && (fromDate !== defaultWindowFrom || toDate !== defaultWindowTo)
+    );
+
+    const applyAllTimeWindow = () => {
+        if (!defaultWindowFrom || !defaultWindowTo) {
+            return;
+        }
+
+        setFromDate(defaultWindowFrom);
+        setToDate(defaultWindowTo);
+    };
+
+    const applyRelativeDaysWindow = (days) => {
+        const end = new Date();
+        const start = new Date();
+        start.setDate(end.getDate() - (days - 1));
+        setFromDate(toInputDateString(start));
+        setToDate(toInputDateString(end));
+    };
+
+    const resetFilters = () => {
+        setPlatformFilter('');
+        setSearch('');
+        setSearchInput('');
+        applyAllTimeWindow();
+    };
 
     return (
         <div className="space-y-4">
@@ -297,28 +361,28 @@ export default function Dashboard() {
                         <button
                             type="button"
                             onClick={() => navigate('/payments?status=recovery_queue')}
-                            className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                            className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
                         >
-                            Review payment queue
+                            Open payment recovery
                         </button>
                         <button
                             type="button"
                             onClick={() => navigate('/deals?bucket=workload')}
-                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                         >
-                            Open subscriptions
+                            Open renewal workload
                         </button>
                         <button
                             type="button"
                             onClick={() => navigate('/leads')}
-                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                         >
-                            Open leads
+                            Open lead backlog
                         </button>
                     </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center gap-2">
+                <div className="mt-4 flex flex-col gap-2">
                     <form
                         onSubmit={(event) => {
                             event.preventDefault();
@@ -346,58 +410,91 @@ export default function Dashboard() {
                         </div>
                     </form>
 
-                    <input
-                        type="date"
-                        value={fromDate}
-                        onChange={(event) => setFromDate(event.target.value)}
-                        className="crm-input w-auto min-w-[150px]"
-                        aria-label="From date"
-                    />
-                    <input
-                        type="date"
-                        value={toDate}
-                        onChange={(event) => setToDate(event.target.value)}
-                        className="crm-input w-auto min-w-[150px]"
-                        aria-label="To date"
-                    />
+                    <div className="flex flex-wrap items-end gap-2">
+                        <div className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
+                            <span className={`h-2 w-2 rounded-full ${platformFilter ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true" />
+                            <label htmlFor="dashboard-market" className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market</label>
+                            <select
+                                id="dashboard-market"
+                                value={platformFilter}
+                                onChange={(event) => setPlatformFilter(event.target.value)}
+                                className="border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
+                            >
+                                <option value="">All accessible markets</option>
+                                {platforms.map((platform) => (
+                                    <option key={platform.platform_id} value={platform.platform_id}>
+                                        {platform.platform_name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
 
-                    <div className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
-                        <span className={`h-2 w-2 rounded-full ${platformFilter ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true" />
-                        <label htmlFor="dashboard-market" className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market</label>
-                        <select
-                            id="dashboard-market"
-                            value={platformFilter}
-                            onChange={(event) => setPlatformFilter(event.target.value)}
-                            className="border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
-                        >
-                            <option value="">All accessible markets</option>
-                            {platforms.map((platform) => (
-                                <option key={platform.platform_id} value={platform.platform_id}>
-                                    {platform.platform_name}
-                                </option>
-                            ))}
-                        </select>
+                        <label className="space-y-1">
+                            <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">From</span>
+                            <input
+                                type="date"
+                                value={fromDate}
+                                onChange={(event) => setFromDate(event.target.value)}
+                                className="crm-input w-auto min-w-[150px]"
+                                aria-label="From date"
+                            />
+                        </label>
+
+                        <label className="space-y-1">
+                            <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">To</span>
+                            <input
+                                type="date"
+                                value={toDate}
+                                onChange={(event) => setToDate(event.target.value)}
+                                className="crm-input w-auto min-w-[150px]"
+                                aria-label="To date"
+                            />
+                        </label>
+
+                        <div className="flex flex-wrap gap-1">
+                            <button
+                                type="button"
+                                onClick={applyAllTimeWindow}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            >
+                                All-time
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => applyRelativeDaysWindow(30)}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            >
+                                Last 30d
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => applyRelativeDaysWindow(7)}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            >
+                                Last 7d
+                            </button>
+                        </div>
                     </div>
 
-                    {(platformFilter || search || fromDate || toDate) ? (
+                    {(platformFilter || search || hasNonDefaultDateRange) ? (
                         <button
                             type="button"
-                            onClick={() => {
-                                setPlatformFilter('');
-                                setSearch('');
-                                setSearchInput('');
-                                setFromDate('');
-                                setToDate('');
-                            }}
-                            className="crm-btn-secondary px-3 py-2"
+                            onClick={resetFilters}
+                            className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                         >
                             Reset filters
                         </button>
                     ) : null}
 
-                    {platformFilter ? (
-                        <p className="text-xs font-medium text-emerald-700">Active market filter applied</p>
-                    ) : null}
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                        <p className="font-medium text-slate-700">
+                            Showing data from <span className="crm-mono">{formatDate(appliedRangeFrom)}</span> to <span className="crm-mono">{formatDate(appliedRangeTo)}</span>.
+                        </p>
+                        <p className="mt-0.5">
+                            {isDefaultDateWindow ? 'Default range: oldest accessible record to today.' : 'Custom range selected.'}
+                            {platformFilter ? ' Active market filter applied.' : ''}
+                        </p>
+                    </div>
                 </div>
             </section>
 

@@ -12,6 +12,7 @@ use App\Models\Product;
 use App\Models\ClientNote;
 use App\Services\MarketAuthorizationService;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 
 class DashboardController extends Controller
 {
@@ -28,15 +29,6 @@ class DashboardController extends Controller
             'search' => 'nullable|string|max:120',
         ]);
 
-        $from = !empty($validated['from'])
-            ? Carbon::parse($validated['from'])->startOfDay()
-            : now()->startOfMonth();
-        $to = !empty($validated['to'])
-            ? Carbon::parse($validated['to'])->endOfDay()
-            : now()->endOfDay();
-        $search = trim((string) ($validated['search'] ?? ''));
-        $hasExplicitDateFilter = !empty($validated['from']) || !empty($validated['to']);
-
         $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
             $request,
             'platform_id',
@@ -46,6 +38,28 @@ class DashboardController extends Controller
         $platformIds = $selectedPlatformId
             ? [(int) $selectedPlatformId]
             : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        $search = trim((string) ($validated['search'] ?? ''));
+        $oldestRecordAt = $this->resolveOldestDashboardRecordAt($platformIds);
+        $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
+        $defaultTo = now()->endOfDay();
+
+        $from = !empty($validated['from'])
+            ? Carbon::parse($validated['from'])->startOfDay()
+            : (clone $defaultFrom);
+        $to = !empty($validated['to'])
+            ? Carbon::parse($validated['to'])->endOfDay()
+            : (clone $defaultTo);
+        $hasExplicitDateFilter = !empty($validated['from']) || !empty($validated['to']);
+        $requestedFromDate = !empty($validated['from']) ? Carbon::parse($validated['from'])->toDateString() : null;
+        $requestedToDate = !empty($validated['to']) ? Carbon::parse($validated['to'])->toDateString() : null;
+        $isDefaultDateWindow = (empty($validated['from']) && empty($validated['to']))
+            || (
+                $requestedFromDate !== null
+                && $requestedToDate !== null
+                && $requestedFromDate === $defaultFrom->toDateString()
+                && $requestedToDate === $defaultTo->toDateString()
+            );
 
         $expiringDealsQuery = Deal::expiringSoon(7)
             ->with(['client', 'product'])
@@ -168,6 +182,14 @@ class DashboardController extends Controller
                 'to' => $to->toDateString(),
                 'search' => $search !== '' ? $search : null,
             ],
+            'window' => [
+                'default_from' => $defaultFrom->toDateString(),
+                'default_to' => $defaultTo->toDateString(),
+                'applied_from' => $from->toDateString(),
+                'applied_to' => $to->toDateString(),
+                'is_default' => $isDefaultDateWindow,
+                'label' => $isDefaultDateWindow ? 'All-time default (oldest record to today)' : 'Custom range',
+            ],
             'kpis' => [
                 'active_clients' => $activeClientsQuery->count(),
                 'total_clients' => $totalClientsQuery->count(),
@@ -203,5 +225,57 @@ class DashboardController extends Controller
     public function products()
     {
         return response()->json(Product::where('is_active', true)->get());
+    }
+
+    private function resolveOldestDashboardRecordAt(?array $platformIds): ?Carbon
+    {
+        $oldestCandidates = [];
+
+        $clientsQuery = Client::query();
+        $leadsQuery = Lead::query();
+        $dealsQuery = Deal::query();
+        $paymentsQuery = Payment::query();
+        $notesQuery = ClientNote::query();
+
+        if (is_array($platformIds)) {
+            $clientsQuery->whereIn('platform_id', $platformIds);
+            $leadsQuery->whereIn('platform_id', $platformIds);
+            $dealsQuery->whereIn('platform_id', $platformIds);
+            $paymentsQuery->whereIn('platform_id', $platformIds);
+            $notesQuery->whereHas('client', function (Builder $query) use ($platformIds) {
+                $query->whereIn('platform_id', $platformIds);
+            });
+        }
+
+        foreach ([
+            $clientsQuery->min('created_at'),
+            $leadsQuery->min('created_at'),
+            $dealsQuery->min('created_at'),
+            $paymentsQuery->min('created_at'),
+            $notesQuery->min('created_at'),
+        ] as $candidate) {
+            if (!$candidate) {
+                continue;
+            }
+
+            try {
+                $oldestCandidates[] = Carbon::parse((string) $candidate);
+            } catch (\Throwable $exception) {
+                continue;
+            }
+        }
+
+        if (empty($oldestCandidates)) {
+            return null;
+        }
+
+        usort($oldestCandidates, function (Carbon $left, Carbon $right): int {
+            if ($left->equalTo($right)) {
+                return 0;
+            }
+
+            return $left->lt($right) ? -1 : 1;
+        });
+        return $oldestCandidates[0];
     }
 }
