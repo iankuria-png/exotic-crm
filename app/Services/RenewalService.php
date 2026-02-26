@@ -31,6 +31,7 @@ class RenewalService
 
     public function buildOverview(array $filters = [], int $perPage = 50, ?User $viewer = null): array
     {
+        $includeUntracked = (bool) ($filters['include_untracked'] ?? false);
         $query = Client::query()
             ->with(['platform', 'assignedAgent', 'activeDeal.product'])
             ->leftJoin('deals', function ($join) {
@@ -51,12 +52,22 @@ class RenewalService
                 'deals.amount as deal_amount',
                 'deals.currency as deal_currency'
             )
-            ->where(function ($q) {
+            ->where(function ($q) use ($includeUntracked) {
                 $q->whereNotNull('deals.id')
                     ->orWhereNotNull('clients.escort_expire')
                     ->orWhereNotNull('clients.premium_expire')
                     ->orWhereNotNull('clients.featured_expire')
                     ->orWhere('clients.profile_status', 'private');
+
+                if ($includeUntracked) {
+                    $q->orWhere(function ($untracked) {
+                        $untracked->whereNull('deals.id')
+                            ->where('clients.profile_status', 'publish')
+                            ->whereNull('clients.escort_expire')
+                            ->whereNull('clients.premium_expire')
+                            ->whereNull('clients.featured_expire');
+                    });
+                }
             });
 
         if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
@@ -113,6 +124,7 @@ class RenewalService
                 );
                 $daysLeft = $this->daysUntil($expiryDate);
 
+                $isUntracked = !$client->deal_id && !$expiryDate && $client->profile_status === 'publish';
                 $status = $client->deal_status ?: ($daysLeft !== null && $daysLeft < 0 ? 'expired' : 'active');
                 $remindersPaused = $client->activeDeal ? $this->isReminderPaused($client->activeDeal) : false;
 
@@ -127,7 +139,14 @@ class RenewalService
                     $status = 'expired';
                 }
 
-                $originType = $client->deal_id ? 'modern' : 'legacy';
+                if ($isUntracked) {
+                    $renewalBucket = 'untracked';
+                    $status = 'untracked';
+                }
+
+                $originType = $isUntracked
+                    ? 'untracked'
+                    : ($client->deal_id ? 'modern' : 'legacy');
                 $paymentStatus = $client->deal_id && $paidDealIds->has((int) $client->deal_id) ? 'verified' : 'unlinked';
                 $telemetryKey = $client->deal_id ? 'deal_' . $client->deal_id : 'client_' . $client->id;
                 $telemetry = $telemetryByKey->get($telemetryKey, [
@@ -170,12 +189,15 @@ class RenewalService
                     'client_id' => $client->id,
                     'client' => $record,
                     'is_virtual' => !$client->deal_id,
+                    'is_untracked' => $isUntracked,
                     'origin_type' => $originType,
                     'payment_status' => $paymentStatus,
                     'plan_type' => $client->deal_plan_type ?? $inferredPlanType,
-                    'duration' => $client->deal_duration ?? $legacyEstimate['duration'],
-                    'amount' => $client->deal_amount ?? $legacyEstimate['amount'],
-                    'currency' => $client->deal_currency ?? $legacyEstimate['currency'],
+                    'duration' => $isUntracked ? null : ($client->deal_duration ?? $legacyEstimate['duration']),
+                    'amount' => $isUntracked ? null : ($client->deal_amount ?? $legacyEstimate['amount']),
+                    'currency' => $isUntracked
+                        ? (string) ($client->platform?->currency_code ?: ($legacyEstimate['currency'] ?? 'KES'))
+                        : ($client->deal_currency ?? $legacyEstimate['currency']),
                     'product' => $client->deal_id ? [
                         'id' => $client->deal_product_id,
                         'name' => $client->deal_product_name ?: $client->activeDeal?->product?->name,
@@ -183,8 +205,8 @@ class RenewalService
                     'product_id' => $client->deal_product_id,
                     'inferred_plan_type' => $inferredPlanType,
                     'inferred_product_name' => $inferredProductName,
-                    'amount_is_estimate' => !$client->deal_id && $client->deal_amount === null && $legacyEstimate['amount'] !== null,
-                    'duration_is_estimate' => !$client->deal_id && $client->deal_duration === null && !empty($legacyEstimate['duration']),
+                    'amount_is_estimate' => !$isUntracked && !$client->deal_id && $client->deal_amount === null && $legacyEstimate['amount'] !== null,
+                    'duration_is_estimate' => !$isUntracked && !$client->deal_id && $client->deal_duration === null && !empty($legacyEstimate['duration']),
                     'expires_at' => $expiryDate ? $expiryDate->toDateTimeString() : null,
                     'status' => $status,
                     'days_left' => $daysLeft,
@@ -204,12 +226,22 @@ class RenewalService
                 $join->on('clients.id', '=', 'deals.client_id')
                     ->whereRaw('deals.id = (SELECT id FROM deals d2 WHERE d2.client_id = clients.id ORDER BY d2.created_at DESC LIMIT 1)');
             })
-            ->where(function ($q) {
+            ->where(function ($q) use ($includeUntracked) {
                 $q->whereNotNull('deals.id')
                     ->orWhereNotNull('clients.escort_expire')
                     ->orWhereNotNull('clients.premium_expire')
                     ->orWhereNotNull('clients.featured_expire')
                     ->orWhere('clients.profile_status', 'private');
+
+                if ($includeUntracked) {
+                    $q->orWhere(function ($untracked) {
+                        $untracked->whereNull('deals.id')
+                            ->where('clients.profile_status', 'publish')
+                            ->whereNull('clients.escort_expire')
+                            ->whereNull('clients.premium_expire')
+                            ->whereNull('clients.featured_expire');
+                    });
+                }
             });
 
         if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
@@ -236,6 +268,7 @@ class RenewalService
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as pending,
                  SUM(CASE WHEN deals.renewal_reminders_paused = 1 THEN 1 ELSE 0 END) as paused_reminders,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as expired_deals,
+                 SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' THEN 1 ELSE 0 END) as untracked_active,
                  SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL AND clients.premium_expire IS NULL AND clients.featured_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
                  SUM(CASE WHEN deals.status IN ('pending','awaiting_payment','paid','active') THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
                  SUM(CASE WHEN deals.status = 'active' AND deals.payment_id IS NOT NULL THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
@@ -270,6 +303,7 @@ class RenewalService
                     fn($q) => $q->where('platform_id', (int) $filters['platform_id'])
                 )
                 ->count(),
+            'untracked_active' => (int) ($summaryRow->untracked_active ?? 0),
             'paused_reminders' => (int) ($summaryRow->paused_reminders ?? 0),
             'expired_deals' => (int) ($summaryRow->expired_deals ?? 0),
             'lapsed_deals' => (int) ($summaryRow->lapsed_deals ?? 0),
@@ -881,6 +915,7 @@ class RenewalService
 
         $normalizedTargets = $targets
             ->filter(fn($row) => is_array($row))
+            ->reject(fn($row) => (!empty($row['is_untracked'])) || (($row['status'] ?? null) === 'untracked'))
             ->values();
 
         $dealIds = $normalizedTargets
@@ -1117,6 +1152,13 @@ class RenewalService
             return;
         }
 
+        if ($bucket === 'untracked') {
+            $query->whereNull('deals.id')
+                ->where('clients.profile_status', 'publish')
+                ->whereRaw("{$dateExpr} IS NULL");
+            return;
+        }
+
         if ($bucket === 'risk') {
             $query->whereBetween(DB::raw($dateExpr), [$nowTs, $nowTs + (3 * 86400)]);
             return;
@@ -1185,6 +1227,13 @@ class RenewalService
                             ->where(DB::raw($dateExpr), '<', $nowTs);
                     });
             });
+            return;
+        }
+
+        if ($status === 'untracked') {
+            $query->whereNull('deals.id')
+                ->where('clients.profile_status', 'publish')
+                ->whereRaw("{$dateExpr} IS NULL");
             return;
         }
 

@@ -13,6 +13,7 @@ const statusStyles = {
     expired: 'bg-rose-50 text-rose-700 ring-rose-200',
     renewed: 'bg-teal-50 text-teal-700 ring-teal-200',
     cancelled: 'bg-slate-100 text-slate-500 ring-slate-200',
+    untracked: 'bg-amber-50 text-amber-700 ring-amber-200',
     // Payment statuses
     completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     initiated: 'bg-amber-50 text-amber-700 ring-amber-200',
@@ -41,6 +42,7 @@ const statusLabels = {
     private: 'Inactive',
     awaiting_payment: 'Awaiting Payment',
     renewed: 'Renewed',
+    untracked: 'Untracked',
     auto_high: 'Auto (High)',
     auto_low: 'Auto (Low)',
     manual_review: 'Manual Review',

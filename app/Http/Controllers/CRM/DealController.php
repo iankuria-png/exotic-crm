@@ -53,6 +53,7 @@ class DealController extends Controller
                 'bucket' => $request->get('bucket', 'all'),
                 'status' => $request->get('status'),
                 'platform_ids' => $platformIds,
+                'include_untracked' => true,
             ],
             (int) $request->get('per_page', 25),
             $request->user()

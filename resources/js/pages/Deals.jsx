@@ -28,8 +28,8 @@ function normalizePlatformFilter(value) {
 }
 
 export default function Deals() {
-    const allowedBuckets = new Set(['all', 'active', 'risk', 'pending', 'workload', 'stable', 'expired', 'lapsed', 'paused']);
-    const allowedStatuses = new Set(['pending', 'awaiting_payment', 'paid', 'active', 'expired', 'renewed', 'cancelled']);
+    const allowedBuckets = new Set(['all', 'active', 'risk', 'pending', 'workload', 'stable', 'expired', 'lapsed', 'paused', 'untracked']);
+    const allowedStatuses = new Set(['pending', 'awaiting_payment', 'paid', 'active', 'expired', 'renewed', 'cancelled', 'untracked']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -267,10 +267,11 @@ export default function Deals() {
                 pending: Number(data.summary.pending || 0),
                 risk: Number(data.summary.risk || 0),
                 expired: Number(data.summary.expired_deals || 0),
+                untracked: Number(data.summary.untracked_active || 0),
             };
         }
 
-        return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, expired: 0 };
+        return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, expired: 0, untracked: 0 };
     }, [data?.summary]);
 
     const activeMetric = useMemo(() => {
@@ -278,6 +279,7 @@ export default function Deals() {
         if (bucket === 'risk') return 'risk';
         if (bucket === 'pending') return 'pipeline';
         if (bucket === 'expired') return 'expired';
+        if (bucket === 'untracked') return 'untracked';
         return '';
     }, [bucket]);
 
@@ -287,6 +289,7 @@ export default function Deals() {
             risk: 'risk',
             pipeline: 'pending',
             expired: 'expired',
+            untracked: 'untracked',
         };
 
         const nextBucket = metricBucketMap[metricKey] || 'all';
@@ -337,6 +340,8 @@ export default function Deals() {
                         <p className="text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</p>
                         {row.origin_type === 'modern' ? (
                             <span className="inline-flex items-center rounded-sm bg-blue-50 px-1 text-[10px] font-bold uppercase tracking-wider text-blue-600 ring-1 ring-inset ring-blue-600/20">Modern</span>
+                        ) : row.origin_type === 'untracked' ? (
+                            <span className="inline-flex items-center rounded-sm bg-amber-50 px-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-inset ring-amber-700/20">Untracked</span>
                         ) : (
                             <span className="inline-flex items-center rounded-sm bg-slate-50 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 ring-1 ring-inset ring-slate-600/10">Legacy</span>
                         )}
@@ -452,12 +457,13 @@ export default function Deals() {
                                 onClick={(event) => {
                                     event.stopPropagation();
                                     if (!row.client_id) return;
-                                    navigate(`/clients/${row.client_id}?tab=deals&action=new_subscription&source=legacy_row`);
+                                    const source = row.status === 'untracked' ? 'untracked_row' : 'legacy_row';
+                                    navigate(`/clients/${row.client_id}?tab=deals&action=new_subscription&source=${source}`);
                                 }}
                                 disabled={!row.client_id}
                                 className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                Activate
+                                {row.status === 'untracked' ? 'Create subscription' : 'Activate'}
                             </button>
                             <button
                                 type="button"
@@ -593,7 +599,7 @@ export default function Deals() {
                 subtitle={data?.targets?.total ? `${summary.active.toLocaleString()} active records out of ${data.targets.total.toLocaleString()} total targets in scope` : 'Subscription activation and lifecycle management'}
             />
 
-            <section className="grid gap-4 md:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-5">
                 <MetricCard
                     label="Active Warehouse"
                     value={`${summary.active.toLocaleString()} / ${data?.targets?.total?.toLocaleString() || 0}`}
@@ -625,6 +631,14 @@ export default function Deals() {
                     tone="danger"
                     onClick={() => applyMetricFilter('expired')}
                     active={activeMetric === 'expired'}
+                />
+                <MetricCard
+                    label="Untracked Active"
+                    value={summary.untracked.toLocaleString()}
+                    meta="Published profiles with no expiry/deal"
+                    tone="warning"
+                    onClick={() => applyMetricFilter('untracked')}
+                    active={activeMetric === 'untracked'}
                 />
             </section>
 
@@ -680,6 +694,7 @@ export default function Deals() {
                         <option value="workload">Renewal Workload (0-14d)</option>
                         <option value="stable">Stable ({'>'}14d)</option>
                         <option value="expired">Recently Expired</option>
+                        <option value="untracked">Untracked Active</option>
                         <option value="lapsed">Lapsed (Legacy)</option>
                         <option value="paused">Paused Reminders</option>
                     </select>
@@ -692,12 +707,13 @@ export default function Deals() {
                         }}
                         className="crm-select"
                     >
-                        <option value="">Legacy Status Filter</option>
+                        <option value="">Status Filter</option>
                         <option value="pending">Pending</option>
                         <option value="awaiting_payment">Awaiting payment</option>
                         <option value="paid">Paid</option>
                         <option value="active">Active</option>
                         <option value="expired">Expired</option>
+                        <option value="untracked">Untracked</option>
                         <option value="renewed">Renewed</option>
                         <option value="cancelled">Cancelled</option>
                     </select>
