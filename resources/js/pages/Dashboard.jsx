@@ -350,84 +350,62 @@ export default function Dashboard() {
     return (
         <div className="space-y-4">
             <section className="rounded-lg border border-slate-200 bg-white px-5 py-5 shadow-sm">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{todayLabel}</p>
                         <h2 className="mt-1 text-[2.1rem] leading-[1.08] font-semibold tracking-tight text-slate-900 sm:text-[2.3rem]">Dashboard</h2>
                         <p className="mt-1.5 text-[1.05rem] text-slate-600">Sales, payments, and renewal workload in one operational view.</p>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2 xl:justify-end">
                         <button
                             type="button"
                             onClick={() => navigate('/payments?status=recovery_queue')}
                             className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                            title="Open payment recovery queue"
                         >
-                            Open payment recovery
+                            Recovery
                         </button>
                         <button
                             type="button"
                             onClick={() => navigate('/deals?bucket=workload')}
                             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            title="Open renewal workload"
                         >
-                            Open renewal workload
+                            Renewals
                         </button>
                         <button
                             type="button"
                             onClick={() => navigate('/leads')}
                             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            title="Open lead backlog"
                         >
-                            Open lead backlog
+                            Leads
                         </button>
                     </div>
                 </div>
 
-                <div className="mt-4 flex flex-col gap-2">
-                    <form
-                        onSubmit={(event) => {
-                            event.preventDefault();
-                            setSearch(searchInput.trim());
-                        }}
-                        className="min-w-[240px] flex-1"
-                    >
-                        <div className="relative">
-                            <input
-                                type="text"
-                                value={searchInput}
-                                onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search by client, phone, or payment reference..."
-                                className="crm-input pr-10"
-                            />
-                            <button
-                                type="submit"
-                                aria-label="Run dashboard search"
-                                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600"
-                            >
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                </svg>
-                            </button>
-                        </div>
-                    </form>
-
-                    <div className="flex flex-wrap items-end gap-2">
-                        <div className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
-                            <span className={`h-2 w-2 rounded-full ${platformFilter ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true" />
-                            <label htmlFor="dashboard-market" className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Market</label>
-                            <select
-                                id="dashboard-market"
-                                value={platformFilter}
-                                onChange={(event) => setPlatformFilter(event.target.value)}
-                                className="border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
-                            >
-                                <option value="">All accessible markets</option>
-                                {platforms.map((platform) => (
-                                    <option key={platform.platform_id} value={platform.platform_id}>
-                                        {platform.platform_name}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4">
+                    <div className="grid gap-2 lg:grid-cols-[minmax(220px,1fr)_160px_160px_auto] lg:items-end">
+                        <label className="space-y-1">
+                            <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Market</span>
+                            <span className="inline-flex w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
+                                <span className={`h-2 w-2 rounded-full ${platformFilter ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true" />
+                                <select
+                                    id="dashboard-market"
+                                    value={platformFilter}
+                                    onChange={(event) => setPlatformFilter(event.target.value)}
+                                    className="w-full border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
+                                >
+                                    <option value="">All accessible markets</option>
+                                    {platforms.map((platform) => (
+                                        <option key={platform.platform_id} value={platform.platform_id}>
+                                            {platform.platform_name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </span>
+                        </label>
 
                         <label className="space-y-1">
                             <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">From</span>
@@ -435,7 +413,7 @@ export default function Dashboard() {
                                 type="date"
                                 value={fromDate}
                                 onChange={(event) => setFromDate(event.target.value)}
-                                className="crm-input w-auto min-w-[150px]"
+                                className="crm-input w-full"
                                 aria-label="From date"
                             />
                         </label>
@@ -446,12 +424,12 @@ export default function Dashboard() {
                                 type="date"
                                 value={toDate}
                                 onChange={(event) => setToDate(event.target.value)}
-                                className="crm-input w-auto min-w-[150px]"
+                                className="crm-input w-full"
                                 aria-label="To date"
                             />
                         </label>
 
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-1 lg:justify-end">
                             <button
                                 type="button"
                                 onClick={applyAllTimeWindow}
@@ -464,36 +442,68 @@ export default function Dashboard() {
                                 onClick={() => applyRelativeDaysWindow(30)}
                                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                             >
-                                Last 30d
+                                30d
                             </button>
                             <button
                                 type="button"
                                 onClick={() => applyRelativeDaysWindow(7)}
                                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                             >
-                                Last 7d
+                                7d
                             </button>
+                            {(platformFilter || search || hasNonDefaultDateRange) ? (
+                                <button
+                                    type="button"
+                                    onClick={resetFilters}
+                                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                                >
+                                    Reset
+                                </button>
+                            ) : null}
                         </div>
                     </div>
 
-                    {(platformFilter || search || hasNonDefaultDateRange) ? (
+                    <form
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            setSearch(searchInput.trim());
+                        }}
+                        className="mt-3 flex min-w-[240px] flex-1 gap-2"
+                    >
+                        <div className="relative flex-1">
+                            <input
+                                type="text"
+                                value={searchInput}
+                                onChange={(event) => setSearchInput(event.target.value)}
+                                placeholder="Search by client, phone, or payment reference..."
+                                className="crm-input pr-10"
+                            />
+                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400">
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                            </span>
+                        </div>
                         <button
-                            type="button"
-                            onClick={resetFilters}
-                            className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                            type="submit"
+                            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                         >
-                            Reset filters
+                            Search
                         </button>
-                    ) : null}
+                    </form>
 
-                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                        <p className="font-medium text-slate-700">
-                            Showing data from <span className="crm-mono">{formatDate(appliedRangeFrom)}</span> to <span className="crm-mono">{formatDate(appliedRangeTo)}</span>.
-                        </p>
-                        <p className="mt-0.5">
-                            {isDefaultDateWindow ? 'Default range: oldest accessible record to today.' : 'Custom range selected.'}
-                            {platformFilter ? ' Active market filter applied.' : ''}
-                        </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                        <span className="rounded-full border border-slate-300 bg-white px-3 py-1">
+                            Range: <span className="crm-mono font-medium text-slate-700">{formatDate(appliedRangeFrom)}</span> to <span className="crm-mono font-medium text-slate-700">{formatDate(appliedRangeTo)}</span>
+                        </span>
+                        <span className="rounded-full border border-slate-300 bg-white px-3 py-1">
+                            {isDefaultDateWindow ? 'Default: oldest to today' : 'Custom range'}
+                        </span>
+                        {platformFilter ? (
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
+                                Market filter active
+                            </span>
+                        ) : null}
                     </div>
                 </div>
             </section>
