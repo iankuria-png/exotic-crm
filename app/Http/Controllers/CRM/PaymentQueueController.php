@@ -6,9 +6,12 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Payment;
 use App\Models\Client;
+use App\Models\Platform;
+use App\Models\PaymentImportBatch;
 use App\Models\AuditLog;
 use App\Services\AuditService;
 use App\Services\NotificationService;
+use App\Services\PaymentImportService;
 use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\MarketAuthorizationService;
@@ -17,6 +20,7 @@ use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Carbon;
+use InvalidArgumentException;
 
 class PaymentQueueController extends Controller
 {
@@ -24,7 +28,8 @@ class PaymentQueueController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
         private readonly NotificationService $notificationService,
-        private readonly PaymentAttemptService $paymentAttemptService
+        private readonly PaymentAttemptService $paymentAttemptService,
+        private readonly PaymentImportService $paymentImportService
     ) {
     }
 
@@ -373,6 +378,100 @@ class PaymentQueueController extends Controller
         }
 
         return response()->json($results);
+    }
+
+    public function importPreview(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'file' => 'required|file|mimes:csv,txt,xlsx|max:10240',
+            'has_header' => 'nullable|boolean',
+            'default_currency' => 'nullable|string|max:10',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this payment market.'
+        );
+
+        $platform = Platform::query()->findOrFail($platformId);
+
+        try {
+            $result = $this->paymentImportService->previewImport(
+                $validated['file'],
+                $platform,
+                (int) $request->user()->id,
+                (bool) ($validated['has_header'] ?? true),
+                (string) $validated['reason'],
+                $validated['default_currency'] ?? null
+            );
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        $this->auditService->fromRequest(
+            $request,
+            $platformId,
+            CrmAuditAction::PAYMENT_IMPORT_PREVIEW,
+            'payment_import_batch',
+            (int) $result['batch_id'],
+            null,
+            [
+                'file_name' => $validated['file']->getClientOriginalName(),
+                'summary' => $result['summary'] ?? [],
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json($result);
+    }
+
+    public function importCommit(Request $request)
+    {
+        $validated = $request->validate([
+            'batch_id' => 'required|integer|exists:payment_import_batches,id',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $batch = PaymentImportBatch::query()->findOrFail((int) $validated['batch_id']);
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $batch->platform_id,
+            'You do not have access to this payment market.'
+        );
+
+        $beforeState = [
+            'status' => $batch->status,
+            'total_rows' => (int) $batch->total_rows,
+            'valid_rows' => (int) $batch->valid_rows,
+            'invalid_rows' => (int) $batch->invalid_rows,
+            'duplicate_rows' => (int) $batch->duplicate_rows,
+            'committed_rows' => (int) $batch->committed_rows,
+        ];
+
+        $result = $this->paymentImportService->commitImport(
+            $batch,
+            (int) $request->user()->id,
+            (string) $validated['reason']
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $batch->platform_id,
+            CrmAuditAction::PAYMENT_IMPORT_COMMIT,
+            'payment_import_batch',
+            (int) $batch->id,
+            $beforeState,
+            $result['summary'] ?? [],
+            (string) $validated['reason']
+        );
+
+        return response()->json($result);
     }
 
     public function diagnostics(Request $request, Payment $payment)

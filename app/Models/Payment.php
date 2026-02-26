@@ -24,6 +24,9 @@ class Payment extends Model
         'transaction_uuid',
         'transaction_reference',
         'status',
+        'source',
+        'import_batch_id',
+        'import_legacy_hash',
         'raw_payload',
         'duration',
         'start_date',
@@ -76,5 +79,10 @@ class Payment extends Model
     public function attempts()
     {
         return $this->hasMany(PaymentAttempt::class);
+    }
+
+    public function importBatch()
+    {
+        return $this->belongsTo(PaymentImportBatch::class, 'import_batch_id');
     }
 }
