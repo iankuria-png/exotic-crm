@@ -502,25 +502,6 @@ export default function ClientDetail() {
         });
     }, [wpProfileData?.wp_profile, client?.city, client?.email, client?.phone_normalized]);
 
-    if (isLoading) {
-        return (
-            <div className="flex h-64 items-center justify-center">
-                <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-600 border-t-transparent" />
-            </div>
-        );
-    }
-
-    if (!client) {
-        return <p className="py-12 text-center text-sm text-slate-500">Client not found.</p>;
-    }
-
-    const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
-
-    const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
-    const canDispatchCredentials = Number(client.wp_post_id || 0) > 0;
-    const mediaItems = mediaData?.data || [];
-    const healthDuplicates = healthData?.duplicates || [];
-
     const profileSections = [
         { key: 'personal', label: 'Personal Info' },
         { key: 'services', label: 'Services & Rates' },
@@ -542,6 +523,25 @@ export default function ClientDetail() {
 
         return [...PROFILE_ENUM_OPTIONS.services, ...unknownOptions];
     }, [profileForm?.services]);
+
+    if (isLoading) {
+        return (
+            <div className="flex h-64 items-center justify-center">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-600 border-t-transparent" />
+            </div>
+        );
+    }
+
+    if (!client) {
+        return <p className="py-12 text-center text-sm text-slate-500">Client not found.</p>;
+    }
+
+    const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
+
+    const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
+    const canDispatchCredentials = Number(client.wp_post_id || 0) > 0;
+    const mediaItems = mediaData?.data || [];
+    const healthDuplicates = healthData?.duplicates || [];
 
     const submitProfileUpdate = () => {
         if (!profileForm) {
