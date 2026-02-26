@@ -29,6 +29,7 @@ class SendPaymentSmsJob implements ShouldQueue
         try {
             $status = $this->payment->status;
             $amount = $this->payment->amount;
+            $currency = $this->payment->currency ?? 'KES';
 
             $escortPost = WordpressPost::where('post_author', $this->payment->user_id)
                 ->where('post_type', 'escort')
@@ -52,10 +53,10 @@ class SendPaymentSmsJob implements ShouldQueue
 
             switch ($status) {
                 case 'success':
-                    $message = "Payment of KES {$amount} confirmed. Transaction ID: {$this->payment->transaction_reference}. Your profile is now active.";
+                    $message = "Payment of {$currency} {$amount} confirmed. Transaction ID: {$this->payment->transaction_reference}. Your profile is now active.";
                     break;
                 case 'failed':
-                    $message = "Your payment of Ksh {$amount} failed. Please try again or contact support.";
+                    $message = "Your payment of {$currency} {$amount} failed. Please try again or contact support.";
                     break;
                 default:
                     $message = "Your payment is still being processed. Please wait for confirmation.";
@@ -89,4 +90,3 @@ class SendPaymentSmsJob implements ShouldQueue
         }
     }
 }
-

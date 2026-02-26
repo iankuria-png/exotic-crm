@@ -39,10 +39,19 @@ class Kernel extends ConsoleKernel
         ->onOneServer()
         ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
 
-        // Sprint 3: import lead candidates from WP profiles flagged needs_payment=1
-        $schedule->command('crm:import-leads')
+        // Keep CRM clients in sync with WordPress profile changes across active markets.
+        $schedule->command('crm:sync-clients')
+            ->name('crm_sync_clients_delta')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_sync_clients.log'));
+
+        // Keep lead intake synced from WordPress profiles flagged needs_payment=1.
+        $schedule->command('crm:import-leads --per-page=100')
             ->name('crm_import_leads')
-            ->dailyAt('00:35')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(10)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_import_leads.log'));
 

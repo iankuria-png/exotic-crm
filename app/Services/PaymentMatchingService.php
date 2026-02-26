@@ -6,6 +6,7 @@ use App\Models\Payment;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Product;
+use App\Support\PhoneNormalizer;
 use Illuminate\Database\Eloquent\Builder;
 
 class PaymentMatchingService
@@ -13,7 +14,7 @@ class PaymentMatchingService
     /**
      * Attempt to auto-match a payment to a client by phone + amount + platform.
      */
-    public function matchPayment(Payment $payment): array
+    public function matchPayment(Payment $payment, ?string $prefix = null): array
     {
         if ($payment->client_id) {
             return [
@@ -23,7 +24,12 @@ class PaymentMatchingService
             ];
         }
 
-        $phone = $this->normalizePhone($payment->phone);
+        if ($prefix === null) {
+            $payment->loadMissing('platform');
+            $prefix = (string) ($payment->platform?->phone_prefix ?: '254');
+        }
+
+        $phone = PhoneNormalizer::normalize($payment->phone, $prefix);
         if (!$phone) {
             return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No phone number'];
         }
@@ -125,11 +131,12 @@ class PaymentMatchingService
 
     private function runBatchMatch(\Illuminate\Database\Eloquent\Builder $query): array
     {
-        $payments = $query->get();
+        $payments = $query->with('platform:id,phone_prefix')->get();
         $results = ['matched' => 0, 'unmatched' => 0, 'low_confidence' => 0];
 
         foreach ($payments as $payment) {
-            $result = $this->matchPayment($payment);
+            $prefix = (string) ($payment->platform?->phone_prefix ?: '254');
+            $result = $this->matchPayment($payment, $prefix);
             if ($result['matched'] && $result['confidence'] === 'auto_high') {
                 $results['matched']++;
             } elseif ($result['matched'] && $result['confidence'] === 'auto_low') {
@@ -140,18 +147,6 @@ class PaymentMatchingService
         }
 
         return $results;
-    }
-
-    private function normalizePhone(?string $phone): ?string
-    {
-        if (!$phone)
-            return null;
-        $phone = preg_replace('/[^\d+]/', '', $phone);
-        $phone = ltrim($phone, '+');
-        if (str_starts_with($phone, '0')) {
-            $phone = '254' . substr($phone, 1);
-        }
-        return $phone;
     }
 
     private function matchProductByAmount(float $amount, ?int $productId): ?Product

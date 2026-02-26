@@ -76,6 +76,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/leads', [LeadController::class, 'index']);
     Route::post('/leads', [LeadController::class, 'store']);
     Route::post('/leads/scrape-entry', [LeadController::class, 'scrapeEntry']);
+    Route::post('/leads/scraper/preview', [LeadController::class, 'scrapePreview']);
+    Route::post('/leads/scraper/preview/{previewId}/commit', [LeadController::class, 'commitScrapePreview']);
+    Route::delete('/leads/scraper/preview/{previewId}', [LeadController::class, 'dismissScrapePreview']);
     Route::post('/leads/upload-csv', [LeadController::class, 'uploadCsv']);
     Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
     Route::post('/leads/import', [LeadController::class, 'import']);

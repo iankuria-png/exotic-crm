@@ -24,6 +24,7 @@ class ReportController extends Controller
     public function summary(Request $request)
     {
         $validated = $request->validate([
+            'platform_id' => 'nullable|exists:platforms,id',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
         ]);
@@ -35,7 +36,15 @@ class ReportController extends Controller
             ? Carbon::parse($validated['to'])->endOfDay()
             : now()->endOfDay();
 
-        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+        $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this report market.'
+        );
+
+        $platformIds = $selectedPlatformId
+            ? [(int) $selectedPlatformId]
+            : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         $paymentsQuery = Payment::query()
             ->where('status', 'completed')
@@ -229,6 +238,9 @@ class ReportController extends Controller
         ];
 
         return response()->json([
+            'filters' => [
+                'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+            ],
             'range' => [
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),

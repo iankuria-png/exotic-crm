@@ -11,6 +11,8 @@ class WpSyncService
 {
     private string $baseUrl;
     private string $authHeader;
+    private int $defaultTimeout;
+    private int $mediaUploadTimeout;
 
     public function __construct(Platform $platform)
     {
@@ -18,6 +20,9 @@ class WpSyncService
         $this->authHeader = 'Basic ' . base64_encode(
             $platform->wp_api_user . ':' . $platform->wp_api_password
         );
+        $isRemoteEndpoint = $this->isRemoteEndpoint($this->baseUrl);
+        $this->defaultTimeout = $isRemoteEndpoint ? 60 : 30;
+        $this->mediaUploadTimeout = $isRemoteEndpoint ? 120 : 60;
     }
 
     public static function forPlatform(int $platformId): self
@@ -141,7 +146,7 @@ class WpSyncService
         try {
             $response = Http::withHeaders([
                 'Authorization' => $this->authHeader,
-            ])->timeout(60)
+            ])->timeout($this->mediaUploadTimeout)
                 ->attach('file', $handle, $file->getClientOriginalName(), [
                     'Content-Type' => $file->getMimeType() ?: 'application/octet-stream',
                 ])
@@ -175,7 +180,7 @@ class WpSyncService
     {
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
-        ])->timeout(30)->get($this->baseUrl . $path, $params);
+        ])->timeout($this->defaultTimeout)->get($this->baseUrl . $path, $params);
 
         return $this->decodeResponse($response, 'GET', $path);
     }
@@ -184,7 +189,7 @@ class WpSyncService
     {
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
-        ])->timeout(30)->post($this->baseUrl . $path, $body);
+        ])->timeout($this->defaultTimeout)->post($this->baseUrl . $path, $body);
 
         return $this->decodeResponse($response, 'POST', $path);
     }
@@ -193,7 +198,7 @@ class WpSyncService
     {
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
-        ])->timeout(30)->patch($this->baseUrl . $path, $body);
+        ])->timeout($this->defaultTimeout)->patch($this->baseUrl . $path, $body);
 
         return $this->decodeResponse($response, 'PATCH', $path);
     }
@@ -202,9 +207,29 @@ class WpSyncService
     {
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
-        ])->timeout(30)->delete($this->baseUrl . $path);
+        ])->timeout($this->defaultTimeout)->delete($this->baseUrl . $path);
 
         return $this->decodeResponse($response, 'DELETE', $path);
+    }
+
+    private function isRemoteEndpoint(string $url): bool
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+        if (!is_string($host) || $host === '') {
+            return false;
+        }
+
+        return !$this->isLocalHost($host);
+    }
+
+    private function isLocalHost(string $host): bool
+    {
+        $normalized = strtolower(trim($host));
+        if ($normalized === 'localhost' || $normalized === '127.0.0.1' || $normalized === '::1') {
+            return true;
+        }
+
+        return str_ends_with($normalized, '.local');
     }
 
     private function decodeResponse($response, string $method, string $path): array

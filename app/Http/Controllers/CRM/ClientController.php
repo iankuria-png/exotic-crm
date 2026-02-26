@@ -22,6 +22,7 @@ use App\Services\ClientSyncService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
+use App\Support\PhoneNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
@@ -822,7 +823,12 @@ class ClientController extends Controller
 
         if ($action === 'update_phone') {
             $duplicateId = (int) ($validated['duplicate_id'] ?? 0);
-            $normalizedPhone = $this->normalizePhone($validated['new_phone_normalized'] ?? null);
+            $client->loadMissing('platform');
+            $platformPhonePrefix = (string) ($client->platform?->phone_prefix ?: '254');
+            $normalizedPhone = PhoneNormalizer::normalize(
+                $validated['new_phone_normalized'] ?? null,
+                $platformPhonePrefix
+            );
             if ($duplicateId <= 0 || !$normalizedPhone) {
                 return response()->json([
                     'message' => 'duplicate_id and new_phone_normalized are required for update_phone.',
@@ -851,6 +857,7 @@ class ClientController extends Controller
                 $duplicate,
                 $normalizedPhone,
                 $client,
+                $platformPhonePrefix,
                 &$result
             ) {
                 $duplicate->update([
@@ -869,7 +876,7 @@ class ClientController extends Controller
                     ->get();
 
                 foreach ($candidatePayments as $payment) {
-                    $matchResult = $matcher->matchPayment($payment);
+                    $matchResult = $matcher->matchPayment($payment, $platformPhonePrefix);
                     if (!empty($matchResult['matched'])) {
                         $result['auto_matched_payments'] += 1;
                     }
@@ -1227,6 +1234,7 @@ class ClientController extends Controller
         if (!$this->platformHasWpDatabaseCredentials($platform)) {
             throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
         }
+        $phonePrefix = (string) ($platform->phone_prefix ?: '254');
 
         $name = trim((string) ($payload['name'] ?? ''));
         if ($name === '') {
@@ -1243,7 +1251,7 @@ class ClientController extends Controller
         $provisioningResult = (new WpDirectProvisioningService($platform))->provisionEscort([
             'name' => $name,
             'email' => !empty($payload['email']) ? trim((string) $payload['email']) : '',
-            'phone' => $this->normalizePhone($payload['phone_normalized'] ?? null) ?? '',
+            'phone' => PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix) ?? '',
             'city' => !empty($payload['city']) ? trim((string) $payload['city']) : '',
             'post_status' => $profileStatus,
             'username' => !empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
@@ -1265,7 +1273,7 @@ class ClientController extends Controller
                 'wp_user_id' => $wpUserId,
                 'client_type' => 'escort',
                 'name' => $name,
-                'phone_normalized' => $this->normalizePhone($payload['phone_normalized'] ?? null),
+                'phone_normalized' => PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix),
                 'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
                 'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
                 'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
@@ -1367,6 +1375,7 @@ class ClientController extends Controller
         }
 
         $assignedTo = $this->resolveAssignedOwner($platformId, $payload, $name);
+        $phonePrefix = (string) (Platform::query()->whereKey($platformId)->value('phone_prefix') ?: '254');
 
         $manualWpPostId = $this->nextManualWpPostId($platformId);
 
@@ -1376,7 +1385,7 @@ class ClientController extends Controller
             'wp_user_id' => !empty($payload['wp_user_id']) ? (int) $payload['wp_user_id'] : null,
             'client_type' => 'escort',
             'name' => $name,
-            'phone_normalized' => $this->normalizePhone($payload['phone_normalized'] ?? null),
+            'phone_normalized' => PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix),
             'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
             'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
             'profile_status' => $profileStatus,
@@ -1499,25 +1508,6 @@ class ClientController extends Controller
             'cta' => 'Validate recipient details and retry with setup link first.',
             'tone' => 'danger',
         ];
-    }
-
-    private function normalizePhone(?string $phone): ?string
-    {
-        if (!$phone) {
-            return null;
-        }
-
-        $normalized = preg_replace('/[^\d+]/', '', $phone);
-        if (!$normalized) {
-            return null;
-        }
-
-        $normalized = ltrim($normalized, '+');
-        if (str_starts_with($normalized, '0')) {
-            $normalized = '254' . substr($normalized, 1);
-        }
-
-        return $normalized ?: null;
     }
 
     private function parseCsvRows(string $path, bool $hasHeader): array

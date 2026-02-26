@@ -13,6 +13,7 @@ use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\MarketAuthorizationService;
 use App\Support\CrmAuditAction;
+use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Carbon;
@@ -137,7 +138,9 @@ class PaymentQueueController extends Controller
             return response()->json(['data' => []]);
         }
 
-        $phone = $this->normalizePhone($payment->phone);
+        $payment->loadMissing('platform');
+        $phonePrefix = (string) ($payment->platform?->phone_prefix ?: '254');
+        $phone = PhoneNormalizer::normalize($payment->phone, $phonePrefix);
         $search = trim((string) ($validated['search'] ?? ''));
 
         $query = Client::where('platform_id', $payment->platform_id)
@@ -181,8 +184,10 @@ class PaymentQueueController extends Controller
             'confirmed_by' => $payment->confirmed_by,
         ];
 
+        $payment->loadMissing('platform');
+        $phonePrefix = (string) ($payment->platform?->phone_prefix ?: '254');
         $service = new PaymentMatchingService();
-        $result = $service->matchPayment($payment);
+        $result = $service->matchPayment($payment, $phonePrefix);
         $freshPayment = $payment->fresh(['platform', 'product', 'client']);
 
         $this->auditService->fromRequest(
@@ -582,7 +587,7 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $phone = $this->normalizePhone($payment->phone);
+        $phone = PhoneNormalizer::normalize($payment->phone, (string) ($platform->phone_prefix ?: '254'));
         if (!$phone) {
             return response()->json([
                 'message' => 'Payment has no valid phone number for STK push.',
@@ -775,7 +780,10 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $phone = $this->normalizePhone($validated['phone'] ?? $payment->phone);
+        $phone = PhoneNormalizer::normalize(
+            $validated['phone'] ?? $payment->phone,
+            (string) ($platform->phone_prefix ?: '254')
+        );
         if (!$phone) {
             return response()->json([
                 'message' => 'No valid phone number to send the link to.',
@@ -1001,22 +1009,6 @@ class PaymentQueueController extends Controller
         $path = config('services.payment_link.path', '/pay');
 
         return $baseUrl . $path;
-    }
-
-    private function normalizePhone(?string $phone): ?string
-    {
-        if (!$phone) {
-            return null;
-        }
-
-        $phone = preg_replace('/[^\d+]/', '', $phone);
-        $phone = ltrim($phone, '+');
-
-        if (str_starts_with($phone, '0')) {
-            $phone = '254' . substr($phone, 1);
-        }
-
-        return $phone ?: null;
     }
 
     private function authorizePaymentAccess(Request $request, Payment $payment): void

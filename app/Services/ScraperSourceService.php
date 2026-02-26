@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Lead;
+use App\Models\Platform;
 use App\Models\ScraperRun;
 use App\Models\ScraperSource;
 use App\Models\TimelineEvent;
@@ -18,6 +19,101 @@ class ScraperSourceService
     public const PARSER_PROFILES = ['contact_cards', 'profile_links'];
     public const FETCH_SCHEDULES = ['manual_only', 'daily', 'weekly'];
     public const DEDUPE_MODES = ['phone_or_email', 'phone_only', 'email_only', 'source_url'];
+
+    private const COMPETITOR_PRESETS = [
+        [
+            'key' => 'massagerepublic_nairobi',
+            'name' => 'MassageRepublic Nairobi',
+            'host' => 'massagerepublic.com',
+            'status' => 'supported',
+            'source_url' => 'https://massagerepublic.com/female-escorts-in-nairobi',
+            'parser_profile' => 'profile_links',
+            'dedupe_mode' => 'source_url',
+            'parser_rules' => [
+                'link_selector' => '.listing-li h2 a.nostyle-link',
+            ],
+            'traffic_estimate_monthly' => 6300000,
+            'traffic_band' => 'high',
+            'notes' => 'High-traffic listing source; extract profile URLs and follow-up scrape at profile level if needed.',
+        ],
+        [
+            'key' => 'bedescorts_nairobi',
+            'name' => 'BedEscorts Nairobi',
+            'host' => 'bedescorts.com',
+            'status' => 'supported',
+            'source_url' => 'https://www.bedescorts.com/escorts/kenya/nairobi/',
+            'parser_profile' => 'contact_cards',
+            'dedupe_mode' => 'phone_or_email',
+            'parser_rules' => [
+                'row_selector' => '.girl',
+                'name_selector' => '.girl-name',
+                'phone_selector' => 'a.inicslab-phone-link',
+                'link_selector' => '.thumbwrapper > a',
+            ],
+            'traffic_estimate_monthly' => 46800,
+            'traffic_band' => 'medium',
+            'notes' => 'Card rows expose direct phone link; good fit for contact-card parser.',
+        ],
+        [
+            'key' => 'kenyaraha_nairobi',
+            'name' => 'KenyaRaha Nairobi',
+            'host' => 'kenyaraha.co.ke',
+            'status' => 'supported',
+            'source_url' => 'https://kenyaraha.co.ke/',
+            'parser_profile' => 'contact_cards',
+            'dedupe_mode' => 'phone_or_email',
+            'parser_rules' => [
+                'row_selector' => 'li.escort-item-one',
+                'name_selector' => '.profile-name h5 a',
+                'phone_selector' => 'a[href^="tel:"]',
+                'link_selector' => '.btn-sec a',
+            ],
+            'traffic_estimate_monthly' => 40100,
+            'traffic_band' => 'medium',
+            'notes' => 'Listing cards include tel links and profile links.',
+        ],
+        [
+            'key' => 'mombasahot_nairobi',
+            'name' => 'MombasaHot Nairobi',
+            'host' => 'mombasahot.com',
+            'status' => 'supported',
+            'source_url' => 'https://mombasahot.com/public/escorts-from/kenya/nairobi',
+            'parser_profile' => 'contact_cards',
+            'dedupe_mode' => 'phone_or_email',
+            'parser_rules' => [
+                'row_selector' => 'li.escort-item-one',
+                'name_selector' => '.profile-name h5 a',
+                'phone_selector' => 'a[href^="tel:"]',
+                'link_selector' => '.profile-name h5 a',
+            ],
+            'traffic_estimate_monthly' => 22000,
+            'traffic_band' => 'medium',
+            'notes' => 'Template is structurally aligned with KenyaRaha selectors.',
+        ],
+        [
+            'key' => 'nairobihot_nairobi',
+            'name' => 'NairobiHot Nairobi',
+            'host' => 'nairobihot.com',
+            'status' => 'blocked',
+            'source_url' => 'https://nairobihot.com/public/escorts-from/kenya/nairobi',
+            'parser_profile' => 'contact_cards',
+            'dedupe_mode' => 'phone_or_email',
+            'parser_rules' => [
+                'row_selector' => 'li.escort-item-one',
+                'name_selector' => '.profile-name h5 a',
+                'phone_selector' => 'a[href^="tel:"]',
+                'link_selector' => '.profile-name h5 a',
+            ],
+            'traffic_estimate_monthly' => 595000,
+            'traffic_band' => 'high',
+            'blocked_reason' => 'Cloudflare anti-bot challenge blocks automated scraping in the current environment.',
+            'notes' => 'Keep listed for visibility, but disable direct run until challenge-solving support is added.',
+        ],
+    ];
+
+    private const PREVIEW_SAMPLE_LIMIT = 20;
+    private const QUALITY_HIGH_THRESHOLD = 80;
+    private const QUALITY_MEDIUM_THRESHOLD = 60;
     private const SCRAPER_USER_AGENT = 'ExoticCRMLeadBot/1.0 (+https://exoticcrm.local)';
 
     private ?CssSelectorConverter $cssSelectorConverter = null;
@@ -25,6 +121,274 @@ class ScraperSourceService
     public function __construct(
         private readonly LeadAssignmentService $leadAssignmentService
     ) {
+    }
+
+    public function competitorPresets(): array
+    {
+        return array_map(function (array $preset): array {
+            $parserProfile = in_array($preset['parser_profile'] ?? '', self::PARSER_PROFILES, true)
+                ? (string) $preset['parser_profile']
+                : 'contact_cards';
+            $dedupeMode = in_array($preset['dedupe_mode'] ?? '', self::DEDUPE_MODES, true)
+                ? (string) $preset['dedupe_mode']
+                : 'phone_or_email';
+
+            return [
+                'key' => (string) ($preset['key'] ?? ''),
+                'name' => (string) ($preset['name'] ?? ''),
+                'host' => (string) ($preset['host'] ?? ''),
+                'status' => (string) ($preset['status'] ?? 'supported'),
+                'source_url' => (string) ($preset['source_url'] ?? ''),
+                'traffic_estimate_monthly' => (int) ($preset['traffic_estimate_monthly'] ?? 0),
+                'traffic_band' => (string) ($preset['traffic_band'] ?? 'unknown'),
+                'notes' => (string) ($preset['notes'] ?? ''),
+                'blocked_reason' => $preset['blocked_reason'] ?? null,
+                'configuration' => [
+                    'parser_profile' => $parserProfile,
+                    'dedupe_mode' => $dedupeMode,
+                    'fetch_schedule' => 'manual_only',
+                    'is_active' => ($preset['status'] ?? 'supported') === 'supported',
+                    'compliance_ack_robots' => true,
+                    'compliance_ack_tos' => true,
+                    'parser_rules' => $this->normalizeParserRules($preset['parser_rules'] ?? []),
+                ],
+            ];
+        }, self::COMPETITOR_PRESETS);
+    }
+
+    public function competitorPresetByKey(?string $key): ?array
+    {
+        $normalized = strtolower(trim((string) $key));
+        if ($normalized === '') {
+            return null;
+        }
+
+        foreach ($this->competitorPresets() as $preset) {
+            if (strtolower((string) ($preset['key'] ?? '')) === $normalized) {
+                return $preset;
+            }
+        }
+
+        return null;
+    }
+
+    public function normalizeParserRules(array $rules): array
+    {
+        $normalized = [];
+        foreach (['row_selector', 'name_selector', 'phone_selector', 'email_selector', 'link_selector'] as $key) {
+            if (!array_key_exists($key, $rules)) {
+                continue;
+            }
+
+            $value = trim((string) $rules[$key]);
+            if ($value !== '') {
+                $normalized[$key] = mb_substr($value, 0, 255);
+            }
+        }
+
+        return $normalized;
+    }
+
+    public function previewSourceConfig(
+        Platform $platform,
+        User $actor,
+        array $sourceConfig,
+        int $maxCandidates = 50
+    ): array {
+        $source = $this->buildTransientSource($platform, $actor, $sourceConfig);
+
+        if (!$source->is_active) {
+            return [
+                'status' => 'blocked',
+                'message' => 'Scraper source is inactive.',
+                'errors' => ['Scraper source is inactive.'],
+                'robots' => null,
+                'http' => null,
+                'discovered' => 0,
+                'duplicates' => 0,
+                'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
+                'candidates' => [],
+            ];
+        }
+
+        if (!$source->compliance_ack_robots || !$source->compliance_ack_tos) {
+            return [
+                'status' => 'blocked',
+                'message' => 'Compliance acknowledgement is incomplete.',
+                'errors' => ['Compliance acknowledgement is incomplete.'],
+                'robots' => null,
+                'http' => null,
+                'discovered' => 0,
+                'duplicates' => 0,
+                'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
+                'candidates' => [],
+            ];
+        }
+
+        $robotsCheck = $this->evaluateRobotsAccess($source->source_url);
+        if (!($robotsCheck['allowed'] ?? false)) {
+            return [
+                'status' => 'blocked',
+                'message' => $robotsCheck['message'] ?? 'Robots policy blocked this scrape source.',
+                'errors' => [$robotsCheck['message'] ?? 'Robots policy blocked this scrape source.'],
+                'robots' => $robotsCheck,
+                'http' => null,
+                'discovered' => 0,
+                'duplicates' => 0,
+                'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
+                'candidates' => [],
+            ];
+        }
+
+        try {
+            $htmlPayload = $this->fetchHtml($source->source_url);
+            $extractResult = $this->extractCandidatesWithDiagnostics($source, (string) ($htmlPayload['html'] ?? ''), $maxCandidates);
+            $candidates = $extractResult['candidates'];
+            $extractDiagnostics = $extractResult['diagnostics'];
+        } catch (\Throwable $exception) {
+            return [
+                'status' => 'error',
+                'message' => 'Scrape preview failed before candidate extraction.',
+                'errors' => [$exception->getMessage()],
+                'robots' => $robotsCheck,
+                'http' => $htmlPayload ?? null,
+                'discovered' => 0,
+                'duplicates' => 0,
+                'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
+                'candidates' => [],
+            ];
+        }
+
+        $duplicatesInDb = 0;
+        $preview = [];
+        foreach ($candidates as $candidate) {
+            $inDb = $this->candidateAlreadyExists($source, $candidate);
+            if ($inDb) {
+                $duplicatesInDb++;
+            }
+
+            if (count($preview) < self::PREVIEW_SAMPLE_LIMIT) {
+                $preview[] = [
+                    'name' => $candidate['name'] ?? null,
+                    'phone_normalized' => $candidate['phone_normalized'] ?? null,
+                    'email' => $candidate['email'] ?? null,
+                    'source_url' => $candidate['source_url'] ?? null,
+                    'result' => $inDb ? 'duplicate_in_db' : 'new_candidate',
+                ];
+            }
+        }
+
+        $quality = $this->buildQualitySummary($candidates, $duplicatesInDb, $extractDiagnostics);
+
+        return [
+            'status' => 'success',
+            'message' => 'Scrape preview completed successfully.',
+            'errors' => [],
+            'robots' => $robotsCheck,
+            'http' => [
+                'status' => $htmlPayload['status'] ?? null,
+                'content_type' => $htmlPayload['content_type'] ?? null,
+            ],
+            'discovered' => count($candidates),
+            'duplicates' => $duplicatesInDb,
+            'preview' => $preview,
+            'quality' => $quality,
+            'extract_diagnostics' => $extractDiagnostics,
+            'candidates' => $candidates,
+        ];
+    }
+
+    public function importFromPreviewCandidates(
+        Platform $platform,
+        User $actor,
+        array $sourceConfig,
+        array $candidates
+    ): array {
+        $source = $this->buildTransientSource($platform, $actor, $sourceConfig);
+        $errors = [];
+        $created = 0;
+        $duplicates = 0;
+        $skipped = 0;
+        $preview = [];
+
+        $normalizedCandidates = [];
+        foreach ($candidates as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $normalized = $this->normalizeCandidate($source, $candidate);
+            if ($normalized) {
+                $normalizedCandidates[] = $normalized;
+            }
+        }
+
+        foreach ($normalizedCandidates as $candidate) {
+            $candidatePreview = [
+                'name' => $candidate['name'] ?? null,
+                'phone_normalized' => $candidate['phone_normalized'] ?? null,
+                'email' => $candidate['email'] ?? null,
+                'source_url' => $candidate['source_url'] ?? null,
+            ];
+
+            if ($this->candidateAlreadyExists($source, $candidate)) {
+                $duplicates++;
+                if (count($preview) < self::PREVIEW_SAMPLE_LIMIT) {
+                    $candidatePreview['result'] = 'duplicate';
+                    $preview[] = $candidatePreview;
+                }
+                continue;
+            }
+
+            try {
+                $this->createLeadFromCandidate($source, $candidate, $actor);
+                $created++;
+                if (count($preview) < self::PREVIEW_SAMPLE_LIMIT) {
+                    $candidatePreview['result'] = 'created';
+                    $preview[] = $candidatePreview;
+                }
+            } catch (\Throwable $exception) {
+                $skipped++;
+                $errors[] = $exception->getMessage();
+                if (count($preview) < self::PREVIEW_SAMPLE_LIMIT) {
+                    $candidatePreview['result'] = 'error';
+                    $candidatePreview['error'] = mb_substr($exception->getMessage(), 0, 240);
+                    $preview[] = $candidatePreview;
+                }
+            }
+        }
+
+        $status = 'success';
+        if (count($errors) > 0 && ($created > 0 || $duplicates > 0)) {
+            $status = 'partial';
+        } elseif (count($errors) > 0) {
+            $status = 'error';
+        }
+
+        $quality = $this->buildQualitySummary($normalizedCandidates, $duplicates, [
+            'raw_total' => count($candidates),
+            'duplicates_in_scrape' => 0,
+            'discarded_invalid' => max(0, count($candidates) - count($normalizedCandidates)),
+            'capped' => 0,
+        ]);
+
+        return [
+            'status' => $status,
+            'message' => $status === 'success'
+                ? 'Scraped leads imported successfully.'
+                : ($status === 'partial' ? 'Scraped leads imported with warnings.' : 'Scraped lead import failed.'),
+            'errors' => $errors,
+            'discovered' => count($normalizedCandidates),
+            'created' => $created,
+            'duplicates' => $duplicates,
+            'skipped' => $skipped,
+            'preview' => $preview,
+            'quality' => $quality,
+        ];
     }
 
     public function runSource(ScraperSource $source, User $actor, bool $dryRun = true, int $maxCandidates = 50): array
@@ -53,6 +417,7 @@ class ScraperSourceService
                 'duplicates' => 0,
                 'skipped' => 0,
                 'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
             ]);
         }
 
@@ -68,6 +433,7 @@ class ScraperSourceService
                 'duplicates' => 0,
                 'skipped' => 0,
                 'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
             ]);
         }
 
@@ -84,14 +450,23 @@ class ScraperSourceService
                 'duplicates' => 0,
                 'skipped' => 0,
                 'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
             ]);
         }
 
         $errors = [];
+        $extractDiagnostics = [
+            'raw_total' => 0,
+            'duplicates_in_scrape' => 0,
+            'discarded_invalid' => 0,
+            'capped' => 0,
+        ];
 
         try {
             $htmlPayload = $this->fetchHtml($source->source_url);
-            $candidates = $this->extractCandidates($source, (string) ($htmlPayload['html'] ?? ''), $maxCandidates);
+            $extractResult = $this->extractCandidatesWithDiagnostics($source, (string) ($htmlPayload['html'] ?? ''), $maxCandidates);
+            $candidates = $extractResult['candidates'];
+            $extractDiagnostics = $extractResult['diagnostics'];
         } catch (\Throwable $exception) {
             $errors[] = $exception->getMessage();
 
@@ -107,6 +482,7 @@ class ScraperSourceService
                 'duplicates' => 0,
                 'skipped' => 0,
                 'preview' => [],
+                'quality' => $this->emptyQualitySummary(),
             ]);
         }
 
@@ -167,6 +543,8 @@ class ScraperSourceService
             $status = 'error';
         }
 
+        $quality = $this->buildQualitySummary($candidates, $duplicates, $extractDiagnostics);
+
         return $this->finalizeRun($run, $source, [
             'status' => $status,
             'dry_run' => $dryRun,
@@ -184,6 +562,8 @@ class ScraperSourceService
             'duplicates' => $duplicates,
             'skipped' => $skipped,
             'preview' => $preview,
+            'quality' => $quality,
+            'extract_diagnostics' => $extractDiagnostics,
         ]);
     }
 
@@ -223,6 +603,7 @@ class ScraperSourceService
                 'skipped' => $skipped,
                 'error_count' => count($errors),
                 'errors' => array_slice($errors, 0, 5),
+                'quality' => $summary['quality'] ?? null,
                 'completed_at' => $completedAt->toDateTimeString(),
             ],
         ])->save();
@@ -259,6 +640,11 @@ class ScraperSourceService
 
     private function extractCandidates(ScraperSource $source, string $html, int $maxCandidates): array
     {
+        return $this->extractCandidatesWithDiagnostics($source, $html, $maxCandidates)['candidates'];
+    }
+
+    private function extractCandidatesWithDiagnostics(ScraperSource $source, string $html, int $maxCandidates): array
+    {
         $dom = new DOMDocument('1.0', 'UTF-8');
         libxml_use_internal_errors(true);
         $dom->loadHTML($html, LIBXML_NOWARNING | LIBXML_NOERROR);
@@ -275,26 +661,47 @@ class ScraperSourceService
 
         $normalized = [];
         $seen = [];
+        $duplicatesInScrape = 0;
+        $discardedInvalid = 0;
+        $capped = 0;
+
         foreach ($rawCandidates as $candidate) {
             $cleaned = $this->normalizeCandidate($source, $candidate);
             if (!$cleaned) {
+                $discardedInvalid++;
                 continue;
             }
 
             $key = $this->candidateKey($source, $cleaned);
-            if ($key === '' || isset($seen[$key])) {
+            if ($key === '') {
+                $discardedInvalid++;
+                continue;
+            }
+
+            if (isset($seen[$key])) {
+                $duplicatesInScrape++;
                 continue;
             }
 
             $seen[$key] = true;
-            $normalized[] = $cleaned;
 
             if (count($normalized) >= $maxCandidates) {
-                break;
+                $capped++;
+                continue;
             }
+
+            $normalized[] = $cleaned;
         }
 
-        return $normalized;
+        return [
+            'candidates' => $normalized,
+            'diagnostics' => [
+                'raw_total' => count($rawCandidates),
+                'duplicates_in_scrape' => $duplicatesInScrape,
+                'discarded_invalid' => $discardedInvalid,
+                'capped' => $capped,
+            ],
+        ];
     }
 
     private function extractFromContactCards(ScraperSource $source, DOMXPath $xpath): array
@@ -508,6 +915,121 @@ class ScraperSourceService
         ]);
 
         return $lead;
+    }
+
+    private function buildTransientSource(Platform $platform, User $actor, array $sourceConfig): ScraperSource
+    {
+        $source = new ScraperSource();
+        $source->forceFill([
+            'platform_id' => (int) $platform->id,
+            'name' => mb_substr(trim((string) ($sourceConfig['name'] ?? ('Preset scrape: ' . $platform->name))), 0, 255),
+            'source_url' => mb_substr(trim((string) ($sourceConfig['source_url'] ?? '')), 0, 500),
+            'parser_profile' => in_array(($sourceConfig['parser_profile'] ?? null), self::PARSER_PROFILES, true)
+                ? (string) $sourceConfig['parser_profile']
+                : 'contact_cards',
+            'fetch_schedule' => in_array(($sourceConfig['fetch_schedule'] ?? null), self::FETCH_SCHEDULES, true)
+                ? (string) $sourceConfig['fetch_schedule']
+                : 'manual_only',
+            'dedupe_mode' => in_array(($sourceConfig['dedupe_mode'] ?? null), self::DEDUPE_MODES, true)
+                ? (string) $sourceConfig['dedupe_mode']
+                : 'phone_or_email',
+            'is_active' => array_key_exists('is_active', $sourceConfig) ? (bool) $sourceConfig['is_active'] : true,
+            'compliance_ack_robots' => array_key_exists('compliance_ack_robots', $sourceConfig) ? (bool) $sourceConfig['compliance_ack_robots'] : true,
+            'compliance_ack_tos' => array_key_exists('compliance_ack_tos', $sourceConfig) ? (bool) $sourceConfig['compliance_ack_tos'] : true,
+            'compliance_notes' => !empty($sourceConfig['compliance_notes']) ? trim((string) $sourceConfig['compliance_notes']) : null,
+            'parser_rules' => $this->normalizeParserRules((array) ($sourceConfig['parser_rules'] ?? [])),
+            'created_by' => (int) $actor->id,
+            'updated_by' => (int) $actor->id,
+        ]);
+
+        $source->setRelation('platform', $platform);
+
+        return $source;
+    }
+
+    private function emptyQualitySummary(): array
+    {
+        return [
+            'total_profiles' => 0,
+            'valid_contacts' => 0,
+            'missing_contacts' => 0,
+            'duplicates_in_scrape' => 0,
+            'duplicates_in_db' => 0,
+            'new_profiles' => 0,
+            'name_coverage_percent' => 0,
+            'phone_coverage_percent' => 0,
+            'email_coverage_percent' => 0,
+            'contact_coverage_percent' => 0,
+            'quality_score' => 0,
+            'quality_band' => 'low',
+            'discarded_invalid' => 0,
+            'capped' => 0,
+            'raw_profiles' => 0,
+        ];
+    }
+
+    private function buildQualitySummary(array $candidates, int $duplicatesInDb, array $extractDiagnostics): array
+    {
+        $total = count($candidates);
+        $withName = 0;
+        $withPhone = 0;
+        $withEmail = 0;
+        $withContact = 0;
+
+        foreach ($candidates as $candidate) {
+            $hasName = !empty($candidate['name']);
+            $hasPhone = !empty($candidate['phone_normalized']);
+            $hasEmail = !empty($candidate['email']);
+
+            if ($hasName) {
+                $withName++;
+            }
+            if ($hasPhone) {
+                $withPhone++;
+            }
+            if ($hasEmail) {
+                $withEmail++;
+            }
+            if ($hasPhone || $hasEmail) {
+                $withContact++;
+            }
+        }
+
+        $nameCoverage = $total > 0 ? (int) round(($withName / $total) * 100) : 0;
+        $phoneCoverage = $total > 0 ? (int) round(($withPhone / $total) * 100) : 0;
+        $emailCoverage = $total > 0 ? (int) round(($withEmail / $total) * 100) : 0;
+        $contactCoverage = $total > 0 ? (int) round(($withContact / $total) * 100) : 0;
+        $qualityScore = (int) round(
+            ($nameCoverage * 0.2)
+            + ($contactCoverage * 0.6)
+            + ($phoneCoverage * 0.1)
+            + ($emailCoverage * 0.1)
+        );
+
+        $qualityBand = 'low';
+        if ($qualityScore >= self::QUALITY_HIGH_THRESHOLD) {
+            $qualityBand = 'high';
+        } elseif ($qualityScore >= self::QUALITY_MEDIUM_THRESHOLD) {
+            $qualityBand = 'medium';
+        }
+
+        return [
+            'total_profiles' => $total,
+            'valid_contacts' => $withContact,
+            'missing_contacts' => max(0, $total - $withContact),
+            'duplicates_in_scrape' => (int) ($extractDiagnostics['duplicates_in_scrape'] ?? 0),
+            'duplicates_in_db' => max(0, $duplicatesInDb),
+            'new_profiles' => max(0, $total - $duplicatesInDb),
+            'name_coverage_percent' => $nameCoverage,
+            'phone_coverage_percent' => $phoneCoverage,
+            'email_coverage_percent' => $emailCoverage,
+            'contact_coverage_percent' => $contactCoverage,
+            'quality_score' => $qualityScore,
+            'quality_band' => $qualityBand,
+            'discarded_invalid' => (int) ($extractDiagnostics['discarded_invalid'] ?? 0),
+            'capped' => (int) ($extractDiagnostics['capped'] ?? 0),
+            'raw_profiles' => (int) ($extractDiagnostics['raw_total'] ?? $total),
+        ];
     }
 
     private function evaluateRobotsAccess(string $url): array

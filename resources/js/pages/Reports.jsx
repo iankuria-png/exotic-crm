@@ -10,8 +10,8 @@ function asNumber(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formatKes(value) {
-    return `KES ${asNumber(value).toLocaleString()}`;
+function formatCurrency(value, currency = 'KES') {
+    return `${currency} ${asNumber(value).toLocaleString()}`;
 }
 
 function percent(value, total) {
@@ -158,7 +158,7 @@ function FunnelFlow({ stages, totals }) {
     );
 }
 
-function OwnerPerformanceTable({ rows, totals }) {
+function OwnerPerformanceTable({ rows, totals, currency = 'KES' }) {
     if (!rows.length) {
         return <InsightEmptyState title="No owner performance data" message="No subscriptions were created in this reporting window." />;
     }
@@ -183,7 +183,7 @@ function OwnerPerformanceTable({ rows, totals }) {
                             <tr key={row.owner}>
                                 <td className="px-3 py-3">
                                     <p className="font-semibold text-slate-800">{row.owner}</p>
-                                    <p className="text-xs text-slate-500">{formatKes(row.avg_revenue_per_subscription)} avg / subscription</p>
+                                    <p className="text-xs text-slate-500">{formatCurrency(row.avg_revenue_per_subscription, currency)} avg / subscription</p>
                                 </td>
                                 <td className="px-3 py-3 text-slate-700">
                                     <p className="font-semibold">{asNumber(row.deals).toLocaleString()}</p>
@@ -195,7 +195,7 @@ function OwnerPerformanceTable({ rows, totals }) {
                                     </div>
                                     <p className="mt-1 text-xs text-slate-500">{share}% revenue share</p>
                                 </td>
-                                <td className="px-3 py-3 text-right font-semibold text-slate-800">{formatKes(row.revenue)}</td>
+                                <td className="px-3 py-3 text-right font-semibold text-slate-800">{formatCurrency(row.revenue, currency)}</td>
                             </tr>
                         );
                     })}
@@ -221,16 +221,28 @@ function ReportPanel({ title, subtitle, children }) {
 
 export default function Reports() {
     const toast = useToast();
+    const [platformFilter, setPlatformFilter] = useState('');
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [isExporting, setIsExporting] = useState(false);
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
+    const { data: integrationData } = useQuery({
+        queryKey: ['settings-integrations', 'reports-filter'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+    });
+    const platforms = integrationData?.platforms || [];
+    const selectedPlatform = platforms.find(
+        (platform) => String(platform.platform_id) === String(platformFilter),
+    ) || null;
+    const reportCurrency = selectedPlatform?.currency || 'KES';
+
     const { data, isLoading } = useQuery({
-        queryKey: ['reports-summary', fromDate, toDate],
+        queryKey: ['reports-summary', platformFilter, fromDate, toDate],
         queryFn: () =>
             api.get('/crm/reports/summary', {
                 params: {
+                    ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...(fromDate ? { from: fromDate } : {}),
                     ...(toDate ? { to: toDate } : {}),
                 },
@@ -253,9 +265,9 @@ export default function Reports() {
         () => (data?.revenue_trend || []).map((row) => ({
             label: row.label,
             value: asNumber(row.value),
-            formattedValue: formatKes(row.value),
+            formattedValue: formatCurrency(row.value, reportCurrency),
         })),
-        [data?.revenue_trend],
+        [data?.revenue_trend, reportCurrency],
     );
 
     const leadSources = useMemo(() => {
@@ -272,9 +284,9 @@ export default function Reports() {
         () => (data?.package_revenue || []).map((row) => ({
             label: row.label,
             value: asNumber(row.value),
-            formattedValue: formatKes(row.value),
+            formattedValue: formatCurrency(row.value, reportCurrency),
         })),
-        [data?.package_revenue],
+        [data?.package_revenue, reportCurrency],
     );
 
     const ownerRows = data?.owner_performance || [];
@@ -332,6 +344,20 @@ export default function Reports() {
                 subtitle={`Server-backed metrics for revenue, renewal health, lead funnel, and owner performance (${rangeLabel}).`}
                 actions={(
                     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2">
+                        <label className="text-xs font-medium text-slate-600" htmlFor="report-market">Market</label>
+                        <select
+                            id="report-market"
+                            value={platformFilter}
+                            onChange={(event) => setPlatformFilter(event.target.value)}
+                            className="crm-select w-auto min-w-[180px]"
+                        >
+                            <option value="">All accessible markets</option>
+                            {platforms.map((platform) => (
+                                <option key={platform.platform_id} value={platform.platform_id}>
+                                    {platform.platform_name}
+                                </option>
+                            ))}
+                        </select>
                         <label className="text-xs font-medium text-slate-600" htmlFor="report-from">From</label>
                         <input
                             id="report-from"
@@ -348,10 +374,11 @@ export default function Reports() {
                             onChange={(event) => setToDate(event.target.value)}
                             className="crm-input w-auto min-w-[150px]"
                         />
-                        {(fromDate || toDate) ? (
+                        {(platformFilter || fromDate || toDate) ? (
                             <button
                                 type="button"
                                 onClick={() => {
+                                    setPlatformFilter('');
                                     setFromDate('');
                                     setToDate('');
                                 }}
@@ -380,7 +407,7 @@ export default function Reports() {
             <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
                     label="Total Revenue"
-                    value={formatKes(kpis.total_revenue)}
+                    value={formatCurrency(kpis.total_revenue, reportCurrency)}
                     meta="selected reporting window"
                     tone="accent"
                 />
@@ -441,10 +468,10 @@ export default function Reports() {
                             {topOwner ? (
                                 <div className="rounded-lg border border-teal-100 bg-teal-50/70 px-3 py-2 text-sm text-teal-900">
                                     <span className="font-semibold">Top owner:</span>{' '}
-                                    {topOwner.owner} ({asNumber(topOwner.deals)} subscriptions, {formatKes(topOwner.revenue)})
+                                    {topOwner.owner} ({asNumber(topOwner.deals)} subscriptions, {formatCurrency(topOwner.revenue, reportCurrency)})
                                 </div>
                             ) : null}
-                            <OwnerPerformanceTable rows={ownerRows} totals={ownerTotals} />
+                            <OwnerPerformanceTable rows={ownerRows} totals={ownerTotals} currency={reportCurrency} />
                         </div>
                     </ReportPanel>
                 </div>

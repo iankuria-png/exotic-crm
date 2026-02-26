@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -7,12 +8,22 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { normalizePhone } from '../utils/phone';
 
 const STATUSES = ['new', 'contacted', 'qualified', 'converted', 'lost'];
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DEFAULT_LEAD_ARCHIVE_REASON = 'Lead archived from leads page';
 const DEFAULT_LEAD_DELETE_REASON = 'Lead deleted from leads page';
-const DEFAULT_SCRAPE_REASON = 'Scrape lead intake from leads page';
+const DEFAULT_SCRAPE_REASON = 'Scrape preview from leads page';
+const DEFAULT_SCRAPE_IMPORT_REASON = 'Import leads from scrape preview modal';
+const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
+const EMPTY_SCRAPE_RULES = {
+    row_selector: '',
+    name_selector: '',
+    phone_selector: '',
+    email_selector: '',
+    link_selector: '',
+};
 
 function nextLeadStage(currentStatus) {
     const currentIndex = STATUSES.indexOf(currentStatus);
@@ -22,22 +33,37 @@ function nextLeadStage(currentStatus) {
     return STATUSES[currentIndex + 1];
 }
 
-function normalizePhone(phone) {
-    if (!phone) return '';
-    const cleaned = String(phone).replace(/[^\d+]/g, '').replace(/^\+/, '');
-    if (cleaned.startsWith('0')) return `254${cleaned.slice(1)}`;
-    return cleaned;
+function normalizePlatformFilter(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') {
+        return '';
+    }
+
+    return /^\d+$/.test(raw) ? raw : '';
 }
 
 export default function Leads() {
     const queryClient = useQueryClient();
     const toast = useToast();
+    const [searchParams] = useSearchParams();
 
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
     const [ownerFilter, setOwnerFilter] = useState('');
+    const [platformFilter, setPlatformFilter] = useState(() => {
+        const requested = normalizePlatformFilter(searchParams.get('platform_id'));
+        if (requested) {
+            return requested;
+        }
+
+        if (typeof window === 'undefined') {
+            return '';
+        }
+
+        return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
+    });
     const [bulkTargetStatus, setBulkTargetStatus] = useState('contacted');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
 
@@ -45,8 +71,10 @@ export default function Leads() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
     const [showScrapeModal, setShowScrapeModal] = useState(false);
+    const [showScrapePreviewModal, setShowScrapePreviewModal] = useState(false);
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
     const [csvResult, setCsvResult] = useState(null);
+    const [scrapePreviewResult, setScrapePreviewResult] = useState(null);
     const [assignDialog, setAssignDialog] = useState({ lead: null, assigned_to: '', reason: 'Lead reassigned from leads page' });
     const [archiveDialog, setArchiveDialog] = useState({ lead: null, reason: DEFAULT_LEAD_ARCHIVE_REASON });
     const [deleteDialog, setDeleteDialog] = useState({ lead: null, reason: DEFAULT_LEAD_DELETE_REASON });
@@ -86,16 +114,17 @@ export default function Leads() {
     });
     const [scrapeForm, setScrapeForm] = useState({
         platform_id: '',
+        preset_key: '',
         source_url: '',
-        name: '',
-        phone_normalized: '',
-        email: '',
-        assigned_to: '',
+        parser_profile: 'contact_cards',
+        dedupe_mode: 'phone_or_email',
+        max_candidates: 50,
+        parser_rules: { ...EMPTY_SCRAPE_RULES },
         reason: DEFAULT_SCRAPE_REASON,
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['leads', page, search, statusFilter, ownerFilter],
+        queryKey: ['leads', page, search, statusFilter, ownerFilter, platformFilter],
         queryFn: () =>
             api.get('/crm/leads', {
                 params: {
@@ -104,6 +133,7 @@ export default function Leads() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(ownerFilter && { assigned_to: ownerFilter }),
+                    ...(platformFilter && { platform_id: Number(platformFilter) }),
                 },
             }).then((response) => response.data),
     });
@@ -114,6 +144,43 @@ export default function Leads() {
     });
 
     const platformOptions = integrationData?.platforms || [];
+    const preferredPlatformId = platformFilter
+        && platformOptions.some((platform) => String(platform.platform_id) === String(platformFilter))
+        ? String(platformFilter)
+        : (platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '');
+    const scrapePresets = integrationData?.scraper?.presets || [];
+    const selectedCreatePlatform = platformOptions.find(
+        (platform) => String(platform.platform_id) === String(createForm.platform_id),
+    ) || null;
+    const createPhonePrefix = selectedCreatePlatform?.phone_prefix || platformOptions[0]?.phone_prefix || '254';
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        if (platformFilter) {
+            window.localStorage.setItem(DASHBOARD_MARKET_STORAGE_KEY, platformFilter);
+            return;
+        }
+
+        window.localStorage.removeItem(DASHBOARD_MARKET_STORAGE_KEY);
+    }, [platformFilter]);
+
+    useEffect(() => {
+        if (!platformFilter || !platformOptions.length) {
+            return;
+        }
+
+        const platformStillAccessible = platformOptions.some(
+            (platform) => String(platform.platform_id) === String(platformFilter),
+        );
+
+        if (!platformStillAccessible) {
+            setPlatformFilter('');
+            setPage(1);
+        }
+    }, [platformFilter, platformOptions]);
 
     useEffect(() => {
         if (!showCreateModal) {
@@ -123,10 +190,10 @@ export default function Leads() {
         if (!createForm.platform_id && platformOptions.length > 0) {
             setCreateForm((current) => ({
                 ...current,
-                platform_id: String(platformOptions[0].platform_id),
+                platform_id: preferredPlatformId,
             }));
         }
-    }, [showCreateModal, platformOptions, createForm.platform_id]);
+    }, [showCreateModal, platformOptions, preferredPlatformId, createForm.platform_id]);
 
     useEffect(() => {
         if (!showCsvModal) {
@@ -136,23 +203,38 @@ export default function Leads() {
         if (!csvForm.platform_id && platformOptions.length > 0) {
             setCsvForm((current) => ({
                 ...current,
-                platform_id: String(platformOptions[0].platform_id),
+                platform_id: preferredPlatformId,
             }));
         }
-    }, [showCsvModal, platformOptions, csvForm.platform_id]);
+    }, [showCsvModal, platformOptions, preferredPlatformId, csvForm.platform_id]);
 
     useEffect(() => {
         if (!showScrapeModal) {
             return;
         }
 
-        if (!scrapeForm.platform_id && platformOptions.length > 0) {
-            setScrapeForm((current) => ({
-                ...current,
-                platform_id: String(platformOptions[0].platform_id),
-            }));
+        const firstSupportedPreset = scrapePresets.find((preset) => preset.status === 'supported') || scrapePresets[0];
+        const hasPlatform = !!scrapeForm.platform_id;
+        const hasPreset = !!scrapeForm.preset_key;
+
+        if (hasPlatform && hasPreset) {
+            return;
         }
-    }, [showScrapeModal, platformOptions, scrapeForm.platform_id]);
+
+        setScrapeForm((current) => ({
+            ...current,
+            platform_id: current.platform_id || preferredPlatformId,
+            preset_key: current.preset_key || (firstSupportedPreset?.key || ''),
+            source_url: current.source_url || (firstSupportedPreset?.source_url || ''),
+            parser_profile: current.parser_profile || (firstSupportedPreset?.configuration?.parser_profile || 'contact_cards'),
+            dedupe_mode: current.dedupe_mode || (firstSupportedPreset?.configuration?.dedupe_mode || 'phone_or_email'),
+            parser_rules: {
+                ...EMPTY_SCRAPE_RULES,
+                ...(firstSupportedPreset?.configuration?.parser_rules || {}),
+                ...(current.parser_rules || {}),
+            },
+        }));
+    }, [showScrapeModal, preferredPlatformId, scrapePresets, scrapeForm.platform_id, scrapeForm.preset_key]);
 
     const { data: createOwnersData, isLoading: createOwnersLoading } = useQuery({
         queryKey: ['settings-owners', 'lead-create', createForm.platform_id],
@@ -170,15 +252,6 @@ export default function Leads() {
                 params: { platform_id: Number(assignDialog.lead?.platform_id) },
             }).then((response) => response.data),
         enabled: !!assignDialog.lead?.platform_id,
-    });
-
-    const { data: scrapeOwnersData, isLoading: scrapeOwnersLoading } = useQuery({
-        queryKey: ['settings-owners', 'lead-scrape', scrapeForm.platform_id],
-        queryFn: () =>
-            api.get('/crm/settings/owners', {
-                params: { platform_id: Number(scrapeForm.platform_id) },
-            }).then((response) => response.data),
-        enabled: showScrapeModal && !!scrapeForm.platform_id,
     });
 
     const updateStatusMutation = useMutation({
@@ -358,7 +431,11 @@ export default function Leads() {
     });
 
     const importMutation = useMutation({
-        mutationFn: () => api.post('/crm/leads/import', { dry_run: false }).then((response) => response.data),
+        mutationFn: () =>
+            api.post('/crm/leads/import', {
+                dry_run: false,
+                ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+            }).then((response) => response.data),
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['leads'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
@@ -378,7 +455,7 @@ export default function Leads() {
             toast.success('Lead created successfully.');
             setShowCreateModal(false);
             setCreateForm({
-                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                platform_id: preferredPlatformId,
                 name: '',
                 phone_normalized: '',
                 email: '',
@@ -391,25 +468,57 @@ export default function Leads() {
         },
     });
 
-    const scrapeLeadMutation = useMutation({
-        mutationFn: (payload) => api.post('/crm/leads/scrape-entry', payload).then((response) => response.data),
+    const scrapePreviewMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/leads/scraper/preview', payload).then((response) => response.data),
+        onSuccess: (result) => {
+            setScrapePreviewResult(result);
+            setShowScrapePreviewModal(true);
+            const total = Number(result?.result?.quality?.total_profiles || result?.result?.discovered || 0);
+            toast.success(`Scrape preview complete: ${total} profiles reviewed.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Scrape preview failed.');
+        },
+    });
+
+    const scrapeCommitMutation = useMutation({
+        mutationFn: ({ previewId, reason }) => api.post(`/crm/leads/scraper/preview/${previewId}/commit`, {
+            reason,
+        }).then((response) => response.data),
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['leads'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setShowScrapePreviewModal(false);
             setShowScrapeModal(false);
+            setScrapePreviewResult(null);
             setScrapeForm({
-                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                platform_id: preferredPlatformId,
+                preset_key: '',
                 source_url: '',
-                name: '',
-                phone_normalized: '',
-                email: '',
-                assigned_to: '',
+                parser_profile: 'contact_cards',
+                dedupe_mode: 'phone_or_email',
+                max_candidates: 50,
+                parser_rules: { ...EMPTY_SCRAPE_RULES },
                 reason: DEFAULT_SCRAPE_REASON,
             });
-            toast.success(`Scrape intake created lead ${result?.lead?.name || ''}`.trim());
+            toast.success(
+                `Scrape import complete: ${Number(result?.result?.created || 0)} created, ${Number(result?.result?.duplicates || 0)} duplicates.`,
+            );
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Scrape intake failed.');
+            toast.error(error?.response?.data?.message || 'Failed to import scrape preview data.');
+        },
+    });
+
+    const scrapeDismissMutation = useMutation({
+        mutationFn: (previewId) => api.delete(`/crm/leads/scraper/preview/${previewId}`).then((response) => response.data),
+        onSuccess: () => {
+            setShowScrapePreviewModal(false);
+            setScrapePreviewResult(null);
+            toast.success('Scrape preview dismissed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to dismiss scrape preview.');
         },
     });
 
@@ -433,7 +542,7 @@ export default function Leads() {
             setShowCsvModal(false);
             setShowCsvConfirm(false);
             setCsvForm({
-                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                platform_id: preferredPlatformId,
                 has_header: true,
                 file: null,
                 reason: 'CSV lead upload from leads page',
@@ -471,10 +580,36 @@ export default function Leads() {
         setPage(1);
     };
 
+    const selectedScrapePreset = useMemo(
+        () => scrapePresets.find((preset) => preset.key === scrapeForm.preset_key) || null,
+        [scrapePresets, scrapeForm.preset_key],
+    );
+
+    const applyScrapePreset = (presetKey) => {
+        const preset = scrapePresets.find((entry) => entry.key === presetKey) || null;
+        setScrapeForm((current) => ({
+            ...current,
+            preset_key: presetKey,
+            source_url: preset?.source_url || current.source_url,
+            parser_profile: preset?.configuration?.parser_profile || 'contact_cards',
+            dedupe_mode: preset?.configuration?.dedupe_mode || 'phone_or_email',
+            parser_rules: {
+                ...EMPTY_SCRAPE_RULES,
+                ...(preset?.configuration?.parser_rules || {}),
+            },
+        }));
+    };
+
+    const scrapePreviewQuality = scrapePreviewResult?.result?.quality || {};
+    const scrapePreviewRows = scrapePreviewResult?.result?.preview || [];
+    const selectedPresetBlocked = selectedScrapePreset && selectedScrapePreset.status !== 'supported';
+
     const rows = data?.data || [];
     const owners = createOwnersData?.owners || [];
     const assignOwners = assignOwnersData?.owners || [];
-    const scrapeOwners = scrapeOwnersData?.owners || [];
+    const selectedLeadMarketName = platformFilter
+        ? (platformOptions.find((platform) => String(platform.platform_id) === String(platformFilter))?.platform_name || 'Selected market')
+        : 'All accessible markets';
     const selectedCsvPlatformName = platformOptions.find((platform) => String(platform.platform_id) === String(csvForm.platform_id))?.platform_name || 'Selected market';
     const selectedAssignOwner = assignOwners.find((owner) => String(owner.id) === String(assignDialog.assigned_to));
     const batchReconcilePreviewCount = batchReconcileDialog.mode === 'selected'
@@ -736,7 +871,7 @@ export default function Leads() {
                             onClick={() => setShowScrapeModal(true)}
                             className="crm-btn-secondary"
                         >
-                            Scrape lead
+                            Run scrape
                         </button>
                         <button
                             type="button"
@@ -790,6 +925,22 @@ export default function Leads() {
                     </form>
 
                     <select
+                        value={platformFilter}
+                        onChange={(event) => {
+                            setPlatformFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All markets</option>
+                        {platformOptions.map((platform) => (
+                            <option key={platform.platform_id} value={platform.platform_id}>
+                                {platform.platform_name}
+                            </option>
+                        ))}
+                    </select>
+
+                    <select
                         value={statusFilter}
                         onChange={(event) => {
                             setStatusFilter(event.target.value);
@@ -829,7 +980,7 @@ export default function Leads() {
                         ))}
                     </select>
 
-                    {(search || statusFilter || ownerFilter) ? (
+                    {(search || statusFilter || ownerFilter || platformFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -837,6 +988,7 @@ export default function Leads() {
                                 setSearchInput('');
                                 setStatusFilter('');
                                 setOwnerFilter('');
+                                setPlatformFilter('');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"
@@ -921,13 +1073,20 @@ export default function Leads() {
             <ConfirmDialog
                 open={showImportConfirm}
                 title="Sync Leads from WordPress"
-                message="This will import or refresh lead records from WordPress for markets you can access."
+                message={platformFilter
+                    ? `This will import or refresh lead records from WordPress for ${selectedLeadMarketName}.`
+                    : 'This will import or refresh lead records from WordPress for all markets you can access.'}
                 confirmLabel={importMutation.isPending ? 'Syncing...' : 'Start sync'}
                 onCancel={() => setShowImportConfirm(false)}
                 onConfirm={() => importMutation.mutate()}
                 confirmDisabled={importMutation.isPending}
                 isPending={importMutation.isPending}
-            />
+            >
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <p><span className="font-semibold text-slate-900">Market scope:</span> {selectedLeadMarketName}</p>
+                    <p className="mt-1 text-slate-500">Use the market filter above to limit sync/import to a single market.</p>
+                </div>
+            </ConfirmDialog>
 
             <ConfirmDialog
                 open={batchReconcileDialog.open}
@@ -1279,21 +1438,21 @@ export default function Leads() {
 
             {showScrapeModal ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowScrapeModal(false)}>
-                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
                         <header className="crm-panel-header">
                             <div>
-                                <h3 className="crm-panel-title">Scrape Lead Intake</h3>
-                                <p className="crm-panel-subtitle">Create a lead from an external source URL with controlled metadata.</p>
+                                <h3 className="crm-panel-title">Scrape Lead Sources</h3>
+                                <p className="crm-panel-subtitle">Select a website, auto-load parser presets, and run a quality preview before importing.</p>
                             </div>
                         </header>
 
-                        <div className="grid gap-3 p-4 md:grid-cols-2">
+                        <div className="grid gap-3 p-4 md:grid-cols-3">
                             <div className="md:col-span-2">
                                 <label htmlFor="scrape-market" className="mb-1 block text-sm font-medium text-slate-700">Market</label>
                                 <select
                                     id="scrape-market"
                                     value={scrapeForm.platform_id}
-                                    onChange={(event) => setScrapeForm((current) => ({ ...current, platform_id: event.target.value, assigned_to: '' }))}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, platform_id: event.target.value }))}
                                     className="crm-select w-full"
                                 >
                                     <option value="">Select market</option>
@@ -1302,6 +1461,53 @@ export default function Leads() {
                                             {platform.platform_name}
                                         </option>
                                     ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-max-candidates" className="mb-1 block text-sm font-medium text-slate-700">Max profiles</label>
+                                <input
+                                    id="scrape-max-candidates"
+                                    type="number"
+                                    min="1"
+                                    max="250"
+                                    value={scrapeForm.max_candidates}
+                                    onChange={(event) => setScrapeForm((current) => ({
+                                        ...current,
+                                        max_candidates: Number(event.target.value || 50),
+                                    }))}
+                                    className="crm-input"
+                                />
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label htmlFor="scrape-preset" className="mb-1 block text-sm font-medium text-slate-700">Website preset</label>
+                                <select
+                                    id="scrape-preset"
+                                    value={scrapeForm.preset_key}
+                                    onChange={(event) => applyScrapePreset(event.target.value)}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="">Select website</option>
+                                    {scrapePresets.map((preset) => (
+                                        <option key={preset.key} value={preset.key}>
+                                            {preset.name}
+                                            {preset.status !== 'supported' ? ' (blocked)' : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-parser-profile" className="mb-1 block text-sm font-medium text-slate-700">Parser profile</label>
+                                <select
+                                    id="scrape-parser-profile"
+                                    value={scrapeForm.parser_profile}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, parser_profile: event.target.value }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="contact_cards">contact_cards</option>
+                                    <option value="profile_links">profile_links</option>
                                 </select>
                             </div>
 
@@ -1318,57 +1524,108 @@ export default function Leads() {
                             </div>
 
                             <div>
-                                <label htmlFor="scrape-name" className="mb-1 block text-sm font-medium text-slate-700">Lead name (optional)</label>
-                                <input
-                                    id="scrape-name"
-                                    type="text"
-                                    value={scrapeForm.name}
-                                    onChange={(event) => setScrapeForm((current) => ({ ...current, name: event.target.value }))}
-                                    className="crm-input"
-                                    placeholder="Derived from URL if blank"
-                                />
-                            </div>
-
-                            <div>
-                                <label htmlFor="scrape-phone" className="mb-1 block text-sm font-medium text-slate-700">Phone (optional)</label>
-                                <input
-                                    id="scrape-phone"
-                                    type="text"
-                                    value={scrapeForm.phone_normalized}
-                                    onChange={(event) => setScrapeForm((current) => ({ ...current, phone_normalized: event.target.value }))}
-                                    className="crm-input"
-                                    placeholder="e.g. 254712345678"
-                                />
-                            </div>
-
-                            <div>
-                                <label htmlFor="scrape-email" className="mb-1 block text-sm font-medium text-slate-700">Email (optional)</label>
-                                <input
-                                    id="scrape-email"
-                                    type="email"
-                                    value={scrapeForm.email}
-                                    onChange={(event) => setScrapeForm((current) => ({ ...current, email: event.target.value }))}
-                                    className="crm-input"
-                                    placeholder="name@example.com"
-                                />
-                            </div>
-
-                            <div>
-                                <label htmlFor="scrape-owner" className="mb-1 block text-sm font-medium text-slate-700">Owner (optional)</label>
+                                <label htmlFor="scrape-dedupe-mode" className="mb-1 block text-sm font-medium text-slate-700">Dedupe mode</label>
                                 <select
-                                    id="scrape-owner"
-                                    value={scrapeForm.assigned_to}
-                                    onChange={(event) => setScrapeForm((current) => ({ ...current, assigned_to: event.target.value }))}
+                                    id="scrape-dedupe-mode"
+                                    value={scrapeForm.dedupe_mode}
+                                    onChange={(event) => setScrapeForm((current) => ({ ...current, dedupe_mode: event.target.value }))}
                                     className="crm-select w-full"
-                                    disabled={!scrapeForm.platform_id || scrapeOwnersLoading}
                                 >
-                                    <option value="">{scrapeOwnersLoading ? 'Loading owners...' : 'Auto-assign owner'}</option>
-                                    {scrapeOwners.map((owner) => (
-                                        <option key={owner.id} value={owner.id}>
-                                            {owner.name} ({owner.role_label || owner.role})
-                                        </option>
-                                    ))}
+                                    <option value="phone_or_email">phone_or_email</option>
+                                    <option value="phone_only">phone_only</option>
+                                    <option value="email_only">email_only</option>
+                                    <option value="source_url">source_url</option>
                                 </select>
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-row-selector" className="mb-1 block text-sm font-medium text-slate-700">Row selector</label>
+                                <input
+                                    id="scrape-row-selector"
+                                    type="text"
+                                    value={scrapeForm.parser_rules.row_selector}
+                                    onChange={(event) => setScrapeForm((current) => ({
+                                        ...current,
+                                        parser_rules: {
+                                            ...current.parser_rules,
+                                            row_selector: event.target.value,
+                                        },
+                                    }))}
+                                    className="crm-input"
+                                    placeholder=".profile-card"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-name-selector" className="mb-1 block text-sm font-medium text-slate-700">Name selector</label>
+                                <input
+                                    id="scrape-name-selector"
+                                    type="text"
+                                    value={scrapeForm.parser_rules.name_selector}
+                                    onChange={(event) => setScrapeForm((current) => ({
+                                        ...current,
+                                        parser_rules: {
+                                            ...current.parser_rules,
+                                            name_selector: event.target.value,
+                                        },
+                                    }))}
+                                    className="crm-input"
+                                    placeholder=".profile-name"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-phone-selector" className="mb-1 block text-sm font-medium text-slate-700">Phone selector</label>
+                                <input
+                                    id="scrape-phone-selector"
+                                    type="text"
+                                    value={scrapeForm.parser_rules.phone_selector}
+                                    onChange={(event) => setScrapeForm((current) => ({
+                                        ...current,
+                                        parser_rules: {
+                                            ...current.parser_rules,
+                                            phone_selector: event.target.value,
+                                        },
+                                    }))}
+                                    className="crm-input"
+                                    placeholder="a[href^='tel:']"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-email-selector" className="mb-1 block text-sm font-medium text-slate-700">Email selector</label>
+                                <input
+                                    id="scrape-email-selector"
+                                    type="text"
+                                    value={scrapeForm.parser_rules.email_selector}
+                                    onChange={(event) => setScrapeForm((current) => ({
+                                        ...current,
+                                        parser_rules: {
+                                            ...current.parser_rules,
+                                            email_selector: event.target.value,
+                                        },
+                                    }))}
+                                    className="crm-input"
+                                    placeholder="a[href^='mailto:']"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="scrape-link-selector" className="mb-1 block text-sm font-medium text-slate-700">Link selector</label>
+                                <input
+                                    id="scrape-link-selector"
+                                    type="text"
+                                    value={scrapeForm.parser_rules.link_selector}
+                                    onChange={(event) => setScrapeForm((current) => ({
+                                        ...current,
+                                        parser_rules: {
+                                            ...current.parser_rules,
+                                            link_selector: event.target.value,
+                                        },
+                                    }))}
+                                    className="crm-input"
+                                    placeholder=".profile-name a"
+                                />
                             </div>
 
                             <div className="md:col-span-2">
@@ -1381,10 +1638,20 @@ export default function Leads() {
                                     className="crm-input"
                                 />
                             </div>
+
+                            <div className="md:col-span-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                <p className="font-semibold text-slate-900">
+                                    Traffic: {selectedScrapePreset?.traffic_estimate_monthly ? Number(selectedScrapePreset.traffic_estimate_monthly).toLocaleString() : 'n/a'} / month
+                                </p>
+                                <p className="mt-1 capitalize">Band: {selectedScrapePreset?.traffic_band || 'unknown'}</p>
+                                <p className="mt-1">Host: {selectedScrapePreset?.host || 'n/a'}</p>
+                            </div>
                         </div>
 
                         <div className="mx-4 mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                            This is a controlled intake path. It records the source URL in audit/timeline and creates a lead in the standard pipeline.
+                            {selectedPresetBlocked
+                                ? (selectedScrapePreset?.blocked_reason || 'Selected preset is currently blocked for automation.')
+                                : (selectedScrapePreset?.notes || 'Run preview first to review duplicates and quality before importing leads.')}
                         </div>
 
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
@@ -1393,21 +1660,125 @@ export default function Leads() {
                             </button>
                             <button
                                 type="button"
-                                disabled={!scrapeForm.platform_id || !scrapeForm.source_url.trim() || !scrapeForm.reason.trim() || scrapeLeadMutation.isPending}
+                                disabled={!scrapeForm.platform_id
+                                    || !scrapeForm.source_url.trim()
+                                    || !scrapeForm.reason.trim()
+                                    || !!selectedPresetBlocked
+                                    || scrapePreviewMutation.isPending}
                                 onClick={() => {
-                                    scrapeLeadMutation.mutate({
+                                    scrapePreviewMutation.mutate({
                                         platform_id: Number(scrapeForm.platform_id),
+                                        preset_key: scrapeForm.preset_key || null,
                                         source_url: scrapeForm.source_url.trim(),
-                                        name: scrapeForm.name.trim() || null,
-                                        phone_normalized: normalizePhone(scrapeForm.phone_normalized.trim()) || null,
-                                        email: scrapeForm.email.trim() || null,
-                                        assigned_to: scrapeForm.assigned_to ? Number(scrapeForm.assigned_to) : null,
+                                        parser_profile: scrapeForm.parser_profile,
+                                        dedupe_mode: scrapeForm.dedupe_mode,
+                                        max_candidates: Number(scrapeForm.max_candidates || 50),
+                                        parser_rules: scrapeForm.parser_rules,
                                         reason: scrapeForm.reason.trim(),
                                     });
                                 }}
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                {scrapeLeadMutation.isPending ? 'Creating...' : 'Create scrape entry'}
+                                {scrapePreviewMutation.isPending ? 'Running preview...' : 'Run preview'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            {showScrapePreviewModal && scrapePreviewResult ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+                    onClick={() => {
+                        if (scrapePreviewResult?.preview_id) {
+                            scrapeDismissMutation.mutate(scrapePreviewResult.preview_id);
+                            return;
+                        }
+                        setShowScrapePreviewModal(false);
+                    }}
+                >
+                    <div className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Scrape Preview Results</h3>
+                                <p className="crm-panel-subtitle">
+                                    Review total profiles, duplicate risk, and contact quality before importing.
+                                </p>
+                            </div>
+                        </header>
+
+                        <div className="space-y-3 p-4">
+                            <div className="grid gap-2 sm:grid-cols-3">
+                                <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                                    Profiles: <span className="crm-mono font-semibold text-slate-900">{Number(scrapePreviewQuality.total_profiles || 0)}</span>
+                                </p>
+                                <p className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-700">
+                                    Valid contacts: <span className="crm-mono font-semibold">{Number(scrapePreviewQuality.valid_contacts || 0)}</span>
+                                </p>
+                                <p className="rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-700">
+                                    Missing contacts: <span className="crm-mono font-semibold">{Number(scrapePreviewQuality.missing_contacts || 0)}</span>
+                                </p>
+                                <p className="rounded-md border border-rose-200 bg-rose-50/70 px-3 py-2 text-xs text-rose-700">
+                                    Duplicates in DB: <span className="crm-mono font-semibold">{Number(scrapePreviewQuality.duplicates_in_db || 0)}</span>
+                                </p>
+                                <p className="rounded-md border border-orange-200 bg-orange-50/70 px-3 py-2 text-xs text-orange-700">
+                                    Duplicates in scrape: <span className="crm-mono font-semibold">{Number(scrapePreviewQuality.duplicates_in_scrape || 0)}</span>
+                                </p>
+                                <p className="rounded-md border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-700">
+                                    Quality score: <span className="crm-mono font-semibold">{Number(scrapePreviewQuality.quality_score || 0)}</span> ({scrapePreviewQuality.quality_band || 'low'})
+                                </p>
+                            </div>
+
+                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                <p><span className="font-semibold text-slate-900">Website:</span> {scrapePreviewResult?.preset?.name || 'Custom source'}</p>
+                                <p className="mt-1"><span className="font-semibold text-slate-900">URL:</span> {scrapePreviewResult?.configuration?.source_url || 'n/a'}</p>
+                                <p className="mt-1"><span className="font-semibold text-slate-900">Preview expires:</span> {scrapePreviewResult?.expires_at ? new Date(scrapePreviewResult.expires_at).toLocaleString() : 'n/a'}</p>
+                            </div>
+
+                            <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-slate-200 bg-white p-3">
+                                {scrapePreviewRows.length === 0 ? (
+                                    <p className="text-xs text-slate-500">No sample rows available.</p>
+                                ) : scrapePreviewRows.map((row, index) => (
+                                    <div key={`${row.source_url || row.email || row.phone_normalized || index}`} className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs">
+                                        <p className="font-semibold text-slate-900">{row.name || 'Unnamed profile'}</p>
+                                        <p className="mt-0.5 text-slate-600">{row.phone_normalized || row.email || 'No contact detail'}</p>
+                                        <p className="mt-0.5 truncate text-slate-500">{row.source_url || 'No source URL'}</p>
+                                        <p className={`mt-1 font-semibold uppercase tracking-[0.08em] ${row.result === 'duplicate_in_db' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                                            {row.result === 'duplicate_in_db' ? 'Duplicate in DB' : 'New candidate'}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                disabled={scrapeDismissMutation.isPending || scrapeCommitMutation.isPending}
+                                onClick={() => {
+                                    if (scrapePreviewResult?.preview_id) {
+                                        scrapeDismissMutation.mutate(scrapePreviewResult.preview_id);
+                                        return;
+                                    }
+                                    setShowScrapePreviewModal(false);
+                                    setScrapePreviewResult(null);
+                                }}
+                            >
+                                {scrapeDismissMutation.isPending ? 'Dismissing...' : 'Dismiss (Delete)'}
+                            </button>
+                            <button
+                                type="button"
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={!scrapePreviewResult?.preview_id || scrapeDismissMutation.isPending || scrapeCommitMutation.isPending}
+                                onClick={() => {
+                                    scrapeCommitMutation.mutate({
+                                        previewId: scrapePreviewResult.preview_id,
+                                        reason: scrapeForm.reason.trim() || DEFAULT_SCRAPE_IMPORT_REASON,
+                                    });
+                                }}
+                            >
+                                {scrapeCommitMutation.isPending ? 'Adding leads...' : 'Add Data to Leads'}
                             </button>
                         </footer>
                     </div>
@@ -1462,7 +1833,7 @@ export default function Leads() {
                                     value={createForm.phone_normalized}
                                     onChange={(event) => setCreateForm((current) => ({ ...current, phone_normalized: event.target.value }))}
                                     className="crm-input"
-                                    placeholder="e.g. 254712345678"
+                                    placeholder={`e.g. ${createPhonePrefix}712345678`}
                                 />
                             </div>
 
@@ -1523,7 +1894,7 @@ export default function Leads() {
                                     createMutation.mutate({
                                         platform_id: Number(createForm.platform_id),
                                         name: createForm.name.trim(),
-                                        phone_normalized: normalizePhone(createForm.phone_normalized.trim()),
+                                        phone_normalized: normalizePhone(createForm.phone_normalized.trim(), createPhonePrefix),
                                         email: createForm.email.trim() || null,
                                         source: createForm.source,
                                         assigned_to: createForm.assigned_to ? Number(createForm.assigned_to) : null,

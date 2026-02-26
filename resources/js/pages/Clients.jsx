@@ -9,19 +9,23 @@ import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import { useToast } from '../components/ToastProvider';
+import { normalizePhone } from '../utils/phone';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
-
-function normalizePhone(phone) {
-    if (!phone) return '';
-    const cleaned = String(phone).replace(/[^\d+]/g, '').replace(/^\+/, '');
-    if (cleaned.startsWith('0')) return `254${cleaned.slice(1)}`;
-    return cleaned;
-}
+const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
 function percentage(part, total) {
     if (!total) return 0;
     return Math.round((Number(part || 0) / Number(total)) * 100);
+}
+
+function normalizePlatformFilter(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') {
+        return '';
+    }
+
+    return /^\d+$/.test(raw) ? raw : '';
 }
 
 export default function Clients() {
@@ -47,6 +51,18 @@ export default function Clients() {
     const [verifiedFilter, setVerifiedFilter] = useState(() => {
         const requested = (searchParams.get('verified') || '').trim();
         return allowedVerifiedFilters.has(requested) ? requested : '';
+    });
+    const [platformFilter, setPlatformFilter] = useState(() => {
+        const requested = normalizePlatformFilter(searchParams.get('platform_id'));
+        if (requested) {
+            return requested;
+        }
+
+        if (typeof window === 'undefined') {
+            return '';
+        }
+
+        return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
 
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -78,7 +94,7 @@ export default function Clients() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, search, statusFilter, planFilter, verifiedFilter],
+        queryKey: ['clients', page, search, statusFilter, planFilter, verifiedFilter, platformFilter],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
@@ -88,6 +104,7 @@ export default function Clients() {
                     ...(statusFilter && { status: statusFilter }),
                     ...(planFilter && { plan: planFilter }),
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
+                    ...(platformFilter && { platform_id: Number(platformFilter) }),
                 },
             }).then((response) => response.data),
     });
@@ -98,6 +115,42 @@ export default function Clients() {
     });
 
     const platformOptions = integrationData?.platforms || [];
+    const preferredPlatformId = platformFilter
+        && platformOptions.some((platform) => String(platform.platform_id) === String(platformFilter))
+        ? String(platformFilter)
+        : (platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '');
+    const selectedCreatePlatform = platformOptions.find(
+        (platform) => String(platform.platform_id) === String(createForm.platform_id),
+    ) || null;
+    const createPhonePrefix = selectedCreatePlatform?.phone_prefix || platformOptions[0]?.phone_prefix || '254';
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        if (platformFilter) {
+            window.localStorage.setItem(DASHBOARD_MARKET_STORAGE_KEY, platformFilter);
+            return;
+        }
+
+        window.localStorage.removeItem(DASHBOARD_MARKET_STORAGE_KEY);
+    }, [platformFilter]);
+
+    useEffect(() => {
+        if (!platformFilter || !platformOptions.length) {
+            return;
+        }
+
+        const platformStillAccessible = platformOptions.some(
+            (platform) => String(platform.platform_id) === String(platformFilter),
+        );
+
+        if (!platformStillAccessible) {
+            setPlatformFilter('');
+            setPage(1);
+        }
+    }, [platformFilter, platformOptions]);
 
     useEffect(() => {
         if (!showCreateModal) {
@@ -107,10 +160,10 @@ export default function Clients() {
         if (!createForm.platform_id && platformOptions.length > 0) {
             setCreateForm((current) => ({
                 ...current,
-                platform_id: String(platformOptions[0].platform_id),
+                platform_id: preferredPlatformId,
             }));
         }
-    }, [showCreateModal, platformOptions, createForm.platform_id]);
+    }, [showCreateModal, platformOptions, preferredPlatformId, createForm.platform_id]);
 
     useEffect(() => {
         if (!showCsvModal) {
@@ -120,10 +173,10 @@ export default function Clients() {
         if (!csvForm.platform_id && platformOptions.length > 0) {
             setCsvForm((current) => ({
                 ...current,
-                platform_id: String(platformOptions[0].platform_id),
+                platform_id: preferredPlatformId,
             }));
         }
-    }, [showCsvModal, platformOptions, csvForm.platform_id]);
+    }, [showCsvModal, platformOptions, preferredPlatformId, csvForm.platform_id]);
 
     const { data: ownersData, isLoading: ownersLoading } = useQuery({
         queryKey: ['settings-owners', 'client-create', createForm.platform_id],
@@ -141,7 +194,7 @@ export default function Clients() {
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setShowCreateModal(false);
             setCreateForm({
-                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                platform_id: preferredPlatformId,
                 name: '',
                 phone_normalized: '',
                 email: '',
@@ -191,7 +244,7 @@ export default function Clients() {
             setShowCsvModal(false);
             setShowCsvConfirm(false);
             setCsvForm({
-                platform_id: platformOptions.length > 0 ? String(platformOptions[0].platform_id) : '',
+                platform_id: preferredPlatformId,
                 has_header: true,
                 file: null,
                 reason: 'CSV client upload from clients page',
@@ -464,6 +517,22 @@ export default function Clients() {
                     </form>
 
                     <select
+                        value={platformFilter}
+                        onChange={(event) => {
+                            setPlatformFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All markets</option>
+                        {platformOptions.map((platform) => (
+                            <option key={platform.platform_id} value={platform.platform_id}>
+                                {platform.platform_name}
+                            </option>
+                        ))}
+                    </select>
+
+                    <select
                         value={statusFilter}
                         onChange={(event) => {
                             setStatusFilter(event.target.value);
@@ -505,7 +574,7 @@ export default function Clients() {
                         <option value="0">Not verified</option>
                     </select>
 
-                    {(search || statusFilter || planFilter || verifiedFilter !== '') ? (
+                    {(search || statusFilter || planFilter || verifiedFilter !== '' || platformFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -514,6 +583,7 @@ export default function Clients() {
                                 setStatusFilter('');
                                 setPlanFilter('');
                                 setVerifiedFilter('');
+                                setPlatformFilter('');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"
@@ -695,7 +765,7 @@ export default function Clients() {
                                     value={createForm.phone_normalized}
                                     onChange={(event) => setCreateForm((current) => ({ ...current, phone_normalized: event.target.value }))}
                                     className="crm-input"
-                                    placeholder="e.g. 254712345678"
+                                    placeholder={`e.g. ${createPhonePrefix}712345678`}
                                 />
                             </div>
 
@@ -813,7 +883,7 @@ export default function Clients() {
                                     createMutation.mutate({
                                         platform_id: Number(createForm.platform_id),
                                         name: createForm.name.trim(),
-                                        phone_normalized: normalizePhone(createForm.phone_normalized.trim()),
+                                        phone_normalized: normalizePhone(createForm.phone_normalized.trim(), createPhonePrefix),
                                         email: createForm.email.trim() || null,
                                         city: createForm.city.trim() || null,
                                         profile_status: createForm.profile_status,

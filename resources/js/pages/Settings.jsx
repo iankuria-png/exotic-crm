@@ -415,11 +415,20 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
     const createPlatformMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/settings/integrations/platforms', payload).then((response) => response.data),
         onSuccess: (response) => {
+            const createdPlatformName = response?.platform?.platform_name || response?.platform?.name || 'new market';
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
             setCreateOpen(false);
             setCreateForm(defaultPlatformForm());
             setSelectedPlatformId(response?.platform?.platform_id || null);
-            toast.success('Market integration profile created.');
+            setSyncForm((current) => ({
+                ...current,
+                scope: 'clients',
+                mode: 'full',
+                dry_run: false,
+                per_page: 100,
+                reason: `Initial full client sync for ${createdPlatformName}`,
+            }));
+            toast.success('Market integration profile created. Run initial full sync to onboard records.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to create market profile.');
@@ -710,6 +719,11 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
     ];
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
+    const showInitialFullSyncCta = Boolean(
+        selectedPlatform
+        && selectedHasCredentials
+        && !selectedPlatform.sync?.last_synced_at,
+    );
     const activeScraperSources = scraperSources.filter((source) => source.is_active).length;
     const scraperBlockedOrFailed = scraperSources.filter((source) => ['blocked', 'error'].includes(source.last_run_status)).length;
     const selectedScraperRules = scraperEditor?.parser_rules || defaultScraperRules();
@@ -721,6 +735,21 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         { id: 'sms', label: 'SMS Routing', hint: smsProviderForm.enabled ? 'Enabled' : 'Disabled' },
         { id: 'scraper', label: 'Scraper', hint: `${scraperSources.length} sources` },
     ];
+    const openInitialFullSync = () => {
+        if (!selectedPlatform) {
+            return;
+        }
+
+        setSyncForm((current) => ({
+            ...current,
+            scope: 'clients',
+            mode: 'full',
+            dry_run: false,
+            per_page: 100,
+            reason: `Initial full client sync for ${selectedPlatform.platform_name}`,
+        }));
+        setSyncConfirmOpen(true);
+    };
 
     return (
         <div className="space-y-4">
@@ -1252,6 +1281,20 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                 <section className="rounded-lg border border-slate-200 bg-white p-3">
                                     <h4 className="text-sm font-semibold text-slate-900">Manual Sync</h4>
                                     <p className="text-xs text-slate-500">Run scoped sync jobs without leaving settings.</p>
+                                    {showInitialFullSyncCta ? (
+                                        <div className="mt-3 rounded-md border border-teal-200 bg-teal-50/70 p-3">
+                                            <p className="text-xs font-semibold text-teal-800">New market onboarding</p>
+                                            <p className="mt-1 text-xs text-teal-700">Recommended first step: run a full clients sync to import all profiles before sales starts working this market.</p>
+                                            <button
+                                                type="button"
+                                                onClick={openInitialFullSync}
+                                                disabled={runSyncMutation.isPending}
+                                                className="mt-2 rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                Run initial full sync
+                                            </button>
+                                        </div>
+                                    ) : null}
                                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                                         <select
                                             value={syncForm.scope}
@@ -1870,6 +1913,9 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                 <input type="checkbox" checked={createForm.is_active} onChange={(event) => setCreateForm((current) => ({ ...current, is_active: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
                                 Market is active
                             </label>
+                            <p className="md:col-span-2 rounded-md border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-700">
+                                After creating the market, use the "Run initial full sync" CTA in Manual Sync to import all client records.
+                            </p>
                         </div>
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
                             <button type="button" onClick={() => setCreateOpen(false)} className="crm-btn-secondary">Cancel</button>

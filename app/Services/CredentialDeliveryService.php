@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\ClientCredentialDispatch;
 use App\Models\Platform;
+use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -101,9 +102,12 @@ class CredentialDeliveryService
             $recipientEmail = null;
         }
 
+        $client->loadMissing('platform');
+        $phonePrefix = (string) ($client->platform?->phone_prefix ?: '254');
+
         $recipientPhone = isset($payload['recipient_phone'])
-            ? $this->normalizePhone((string) $payload['recipient_phone'])
-            : $this->normalizePhone((string) ($client->phone_normalized ?? ''));
+            ? $this->normalizePhone((string) $payload['recipient_phone'], $phonePrefix)
+            : $this->normalizePhone((string) ($client->phone_normalized ?? ''), $phonePrefix);
         if ($recipientPhone === '') {
             $recipientPhone = null;
         }
@@ -519,17 +523,9 @@ class CredentialDeliveryService
         };
     }
 
-    private function normalizePhone(?string $phone): ?string
+    private function normalizePhone(?string $phone, string $prefix = '254'): ?string
     {
-        if (!$phone) {
-            return null;
-        }
-
-        $normalized = preg_replace('/[^\d+]/', '', $phone) ?? '';
-        $normalized = ltrim($normalized, '+');
-        if (str_starts_with($normalized, '0')) {
-            $normalized = '254' . substr($normalized, 1);
-        }
+        $normalized = PhoneNormalizer::normalize($phone, $prefix) ?? '';
 
         if ($normalized === '' || !preg_match('/^\d{10,15}$/', $normalized)) {
             return null;

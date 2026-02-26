@@ -343,6 +343,7 @@ export default function ClientDetail() {
         queryKey: ['client', id],
         queryFn: () => api.get(`/crm/clients/${id}`).then((r) => r.data),
     });
+    const platformPhonePrefix = client?.platform?.phone_prefix || '254';
 
     const { data: meData } = useQuery({
         queryKey: ['me'],
@@ -1454,7 +1455,7 @@ export default function ClientDetail() {
                                                 value={updatePhoneValue}
                                                 onChange={(event) => setUpdatePhoneValue(event.target.value)}
                                                 className="crm-input"
-                                                placeholder="2547XXXXXXXX"
+                                                placeholder={`e.g. ${platformPhonePrefix}712345678`}
                                             />
                                         </div>
                                     </>
@@ -1531,6 +1532,7 @@ export default function ClientDetail() {
 }
 
 function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
+    const platformCurrency = client?.platform?.currency_code || 'KES';
     const [form, setForm] = useState({
         client_id: client.id,
         product_id: '',
@@ -1565,7 +1567,7 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
                             <option value="">Select a product...</option>
                             {products?.map((product) => (
                                 <option key={product.id} value={product.id}>
-                                    {product.name} - {formatCurrency(product.monthly_price, 'KES')}/mo
+                                    {product.name} - {formatCurrency(product.monthly_price, platformCurrency)}/mo
                                 </option>
                             ))}
                         </select>

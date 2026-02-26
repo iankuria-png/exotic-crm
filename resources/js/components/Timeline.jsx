@@ -13,10 +13,11 @@ const eventTones = {
 
 function formatEventDescription(event) {
     const content = event.content || {};
+    const currency = content.currency || 'KES';
 
     switch (event.event_type) {
         case 'deal_created':
-            return `Subscription created: ${content.plan_type || ''} (${content.duration || ''}) KES ${content.amount || 0}`;
+            return `Subscription created: ${content.plan_type || ''} (${content.duration || ''}) ${currency} ${content.amount || 0}`;
         case 'deal_activated':
             return `Subscription activated, expires ${content.expires_at ? new Date(content.expires_at).toLocaleDateString() : ''}`;
         case 'deal_extended':
@@ -28,7 +29,7 @@ function formatEventDescription(event) {
         case 'note_added':
             return `${content.note_type || 'Note'} note added${content.has_follow_up ? ' with follow-up' : ''}`;
         case 'payment_received':
-            return `Payment received: KES ${content.amount || 0}`;
+            return `Payment received: ${currency} ${content.amount || 0}`;
         case 'status_changed':
             return `Status changed from ${content.from || '?'} to ${content.to || '?'}`;
         default:

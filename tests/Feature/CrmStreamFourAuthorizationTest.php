@@ -1165,6 +1165,140 @@ CSV;
         $this->assertGreaterThanOrEqual(3, ScraperRun::query()->where('scraper_source_id', $source->id)->count());
     }
 
+    public function test_settings_integrations_includes_scraper_presets_catalog(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/settings/integrations');
+
+        $response->assertOk()
+            ->assertJsonPath('scraper.presets.0.key', 'massagerepublic_nairobi')
+            ->assertJsonFragment([
+                'key' => 'bedescorts_nairobi',
+                'status' => 'supported',
+            ])
+            ->assertJsonFragment([
+                'key' => 'nairobihot_nairobi',
+                'status' => 'blocked',
+            ]);
+    }
+
+    public function test_sales_user_can_preview_and_commit_scrape_results_with_quality_metrics(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+
+        Lead::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Existing Alice',
+            'phone_normalized' => '254712333444',
+            'email' => 'existing-alice@example.test',
+            'source' => 'outbound',
+            'status' => 'new',
+        ]);
+
+        Http::fake([
+            'https://www.bedescorts.com/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200, ['content-type' => 'text/plain']),
+            'https://www.bedescorts.com/escorts/kenya/nairobi/' => Http::response(
+                <<<'HTML'
+<html>
+<body>
+  <article class="girl">
+    <h2 class="girl-name">Alice One</h2>
+    <div class="thumbwrapper"><a href="/profiles/alice-one">Profile</a></div>
+    <a class="inicslab-phone-link" href="tel:0712333444">Call</a>
+  </article>
+  <article class="girl">
+    <h2 class="girl-name">Bella Two</h2>
+    <div class="thumbwrapper"><a href="/profiles/bella-two">Profile</a></div>
+    <a class="inicslab-phone-link" href="tel:0712555666">Call</a>
+  </article>
+  <article class="girl">
+    <h2 class="girl-name">Bella Two Clone</h2>
+    <div class="thumbwrapper"><a href="/profiles/bella-two-clone">Profile</a></div>
+    <a class="inicslab-phone-link" href="tel:0712555666">Call</a>
+  </article>
+</body>
+</html>
+HTML,
+                200,
+                ['content-type' => 'text/html; charset=utf-8']
+            ),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $previewResponse = $this->postJson('/api/crm/leads/scraper/preview', [
+            'platform_id' => $platform->id,
+            'preset_key' => 'bedescorts_nairobi',
+            'max_candidates' => 50,
+            'reason' => 'Scrape preview before import',
+        ]);
+
+        $previewResponse->assertOk()
+            ->assertJsonPath('result.status', 'success')
+            ->assertJsonPath('result.quality.total_profiles', 2)
+            ->assertJsonPath('result.quality.duplicates_in_scrape', 1)
+            ->assertJsonPath('result.quality.duplicates_in_db', 1);
+
+        $previewId = (string) $previewResponse->json('preview_id');
+        $this->assertNotSame('', $previewId);
+
+        $commitResponse = $this->postJson("/api/crm/leads/scraper/preview/{$previewId}/commit", [
+            'reason' => 'Import previewed leads into pipeline',
+        ]);
+
+        $commitResponse->assertOk()
+            ->assertJsonPath('result.status', 'success')
+            ->assertJsonPath('result.created', 1)
+            ->assertJsonPath('result.duplicates', 1);
+
+        $this->assertSame(2, Lead::query()->where('platform_id', $platform->id)->count());
+
+        $expiredResponse = $this->postJson("/api/crm/leads/scraper/preview/{$previewId}/commit", [
+            'reason' => 'Try import again',
+        ]);
+        $expiredResponse->assertStatus(404);
+    }
+
+    public function test_sales_user_can_dismiss_scrape_preview_without_import(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+
+        Http::fake([
+            'https://massagerepublic.com/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200, ['content-type' => 'text/plain']),
+            'https://massagerepublic.com/female-escorts-in-nairobi' => Http::response(
+                '<html><body><ul><li class="listing-li"><h2><a class="nostyle-link" href="/profiles/one">One</a></h2></li></ul></body></html>',
+                200,
+                ['content-type' => 'text/html']
+            ),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $previewResponse = $this->postJson('/api/crm/leads/scraper/preview', [
+            'platform_id' => $platform->id,
+            'preset_key' => 'massagerepublic_nairobi',
+            'max_candidates' => 10,
+            'reason' => 'Preview then dismiss',
+        ]);
+        $previewResponse->assertOk();
+
+        $previewId = (string) $previewResponse->json('preview_id');
+        $dismissResponse = $this->deleteJson("/api/crm/leads/scraper/preview/{$previewId}");
+        $dismissResponse->assertOk()
+            ->assertJsonPath('dismissed', true);
+
+        $commitResponse = $this->postJson("/api/crm/leads/scraper/preview/{$previewId}/commit", [
+            'reason' => 'Should fail after dismiss',
+        ]);
+        $commitResponse->assertStatus(404);
+    }
+
     private function createUser(string $role = 'sales', array $assignedMarketIds = []): User
     {
         return User::query()->create([

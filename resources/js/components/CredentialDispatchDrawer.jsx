@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { useToast } from './ToastProvider';
+import { normalizePhone } from '../utils/phone';
 
 const METHOD_OPTIONS = [
     {
@@ -35,13 +36,6 @@ const statusTone = {
     partial: 'bg-orange-50 text-orange-700 ring-orange-200',
     failed: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
-
-function normalizePhone(phone) {
-    if (!phone) return '';
-    const cleaned = String(phone).replace(/[^\d+]/g, '').replace(/^\+/, '');
-    if (cleaned.startsWith('0')) return `254${cleaned.slice(1)}`;
-    return cleaned;
-}
 
 function shortHash(value) {
     let hash = 0;
@@ -99,6 +93,7 @@ export default function CredentialDispatchDrawer({
     }, [open, client, defaultReason]);
 
     const supportsTemporaryPassword = Number(client?.wp_user_id || 0) > 0;
+    const phonePrefix = client?.platform?.phone_prefix || '254';
 
     useEffect(() => {
         if (!supportsTemporaryPassword && form.method === 'temporary_password') {
@@ -172,7 +167,7 @@ export default function CredentialDispatchDrawer({
         Boolean(client?.id)
         && form.reason.trim().length > 0
         && (!requiresEmailNow || form.recipient_email.trim().length > 0)
-        && (!requiresPhoneNow || normalizePhone(form.recipient_phone).length > 0)
+        && (!requiresPhoneNow || normalizePhone(form.recipient_phone, phonePrefix).length > 0)
         && (form.method !== 'temporary_password' || supportsTemporaryPassword)
         && !sendMutation.isPending;
 
@@ -332,9 +327,9 @@ export default function CredentialDispatchDrawer({
                                 value={form.recipient_phone}
                                 onChange={(event) => setForm((current) => ({ ...current, recipient_phone: event.target.value }))}
                                 className="crm-input"
-                                placeholder="2547XXXXXXXX"
+                                placeholder={`e.g. ${phonePrefix}712345678`}
                             />
-                            {requiresPhoneNow && !normalizePhone(form.recipient_phone) ? (
+                            {requiresPhoneNow && !normalizePhone(form.recipient_phone, phonePrefix) ? (
                                 <p className="mt-1 text-[11px] text-rose-600">Required for selected channel when sending now.</p>
                             ) : null}
                         </div>
@@ -371,7 +366,7 @@ export default function CredentialDispatchDrawer({
                             disabled={!canSubmit}
                             onClick={() => {
                                 const normalizedEmail = form.recipient_email.trim() || null;
-                                const normalizedPhone = normalizePhone(form.recipient_phone.trim()) || null;
+                                const normalizedPhone = normalizePhone(form.recipient_phone.trim(), phonePrefix) || null;
                                 const keySeed = `${client.id}|${form.method}|${form.channel}|${form.timing}|${normalizedEmail || ''}|${normalizedPhone || ''}|${form.reason.trim()}`;
                                 sendMutation.mutate({
                                     method: form.method,
@@ -448,7 +443,7 @@ export default function CredentialDispatchDrawer({
                                                 disabled={retryMutation.isPending}
                                                 onClick={() => {
                                                     const retryEmail = form.recipient_email.trim() || row.recipient_email || null;
-                                                    const retryPhone = normalizePhone(form.recipient_phone.trim()) || row.recipient_phone || null;
+                                                    const retryPhone = normalizePhone(form.recipient_phone.trim(), phonePrefix) || row.recipient_phone || null;
                                                     const retryMethod = row.method || 'setup_link';
                                                     const keySeed = `${client.id}|retry|${row.id}|${retryMethod}|${row.channel}|${retryEmail || ''}|${retryPhone || ''}`;
                                                     retryMutation.mutate({

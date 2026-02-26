@@ -11,17 +11,26 @@ use App\Services\AuditService;
 use App\Services\LeadAssignmentService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
+use App\Services\ScraperSourceService;
 use App\Support\CrmAuditAction;
+use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class LeadController extends Controller
 {
+    private const SCRAPE_PREVIEW_TTL_MINUTES = 30;
+    private const SCRAPE_PREVIEW_CACHE_PREFIX = 'lead_scrape_preview:';
+
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly LeadImportService $leadImportService,
         private readonly LeadAssignmentService $leadAssignmentService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly ScraperSourceService $scraperSourceService
     ) {
     }
 
@@ -200,6 +209,226 @@ class LeadController extends Controller
             'source_url' => $sourceUrl,
             'source_host' => $host,
         ], 201);
+    }
+
+    public function scrapePreview(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|exists:platforms,id',
+            'preset_key' => 'nullable|string|max:100',
+            'name' => 'nullable|string|max:255',
+            'source_url' => 'nullable|url|max:500',
+            'parser_profile' => ['nullable', Rule::in(ScraperSourceService::PARSER_PROFILES)],
+            'dedupe_mode' => ['nullable', Rule::in(ScraperSourceService::DEDUPE_MODES)],
+            'max_candidates' => 'nullable|integer|min:1|max:250',
+            'parser_rules' => 'nullable|array',
+            'parser_rules.row_selector' => 'nullable|string|max:255',
+            'parser_rules.name_selector' => 'nullable|string|max:255',
+            'parser_rules.phone_selector' => 'nullable|string|max:255',
+            'parser_rules.email_selector' => 'nullable|string|max:255',
+            'parser_rules.link_selector' => 'nullable|string|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this lead market.'
+        );
+
+        $platform = Platform::query()->findOrFail($platformId);
+
+        $preset = null;
+        if (!empty($validated['preset_key'])) {
+            $preset = $this->scraperSourceService->competitorPresetByKey((string) $validated['preset_key']);
+            if (!$preset) {
+                return response()->json([
+                    'message' => 'Unknown scraper website preset selected.',
+                ], 422);
+            }
+
+            if (($preset['status'] ?? 'supported') !== 'supported') {
+                return response()->json([
+                    'message' => $preset['blocked_reason'] ?? 'Selected website is currently blocked for automated scraping.',
+                    'preset' => $preset,
+                ], 422);
+            }
+        }
+
+        $presetConfig = is_array($preset['configuration'] ?? null) ? $preset['configuration'] : [];
+        $mergedParserRules = array_merge(
+            is_array($presetConfig['parser_rules'] ?? null) ? $presetConfig['parser_rules'] : [],
+            is_array($validated['parser_rules'] ?? null) ? $validated['parser_rules'] : []
+        );
+        $sourceUrl = trim((string) ($validated['source_url'] ?? ($preset['source_url'] ?? '')));
+        if ($sourceUrl === '') {
+            return response()->json([
+                'message' => 'source_url is required when no preset source URL is available.',
+            ], 422);
+        }
+
+        $resolvedConfig = [
+            'name' => trim((string) ($validated['name'] ?? ($preset['name'] ?? 'Leads page scrape run'))),
+            'source_url' => $sourceUrl,
+            'parser_profile' => $validated['parser_profile'] ?? ($presetConfig['parser_profile'] ?? 'contact_cards'),
+            'fetch_schedule' => 'manual_only',
+            'dedupe_mode' => $validated['dedupe_mode'] ?? ($presetConfig['dedupe_mode'] ?? 'phone_or_email'),
+            'is_active' => true,
+            'compliance_ack_robots' => true,
+            'compliance_ack_tos' => true,
+            'compliance_notes' => !empty($preset['notes']) ? mb_substr((string) $preset['notes'], 0, 500) : null,
+            'parser_rules' => $this->scraperSourceService->normalizeParserRules($mergedParserRules),
+        ];
+
+        $maxCandidates = (int) ($validated['max_candidates'] ?? 50);
+        $previewResult = $this->scraperSourceService->previewSourceConfig(
+            $platform,
+            $request->user(),
+            $resolvedConfig,
+            $maxCandidates
+        );
+
+        $status = (string) ($previewResult['status'] ?? 'error');
+        $statusCode = in_array($status, ['blocked', 'error'], true) ? 422 : 200;
+
+        $previewId = null;
+        $expiresAt = null;
+        if ($statusCode === 200) {
+            $previewId = (string) Str::uuid();
+            $expiresAt = now()->addMinutes(self::SCRAPE_PREVIEW_TTL_MINUTES);
+            Cache::put(
+                $this->scrapePreviewCacheKey($previewId),
+                [
+                    'preview_id' => $previewId,
+                    'platform_id' => $platformId,
+                    'actor_id' => (int) $request->user()->id,
+                    'preset_key' => $preset['key'] ?? null,
+                    'source_config' => $resolvedConfig,
+                    'candidates' => $previewResult['candidates'] ?? [],
+                    'quality' => $previewResult['quality'] ?? null,
+                    'generated_at' => now()->toDateTimeString(),
+                    'expires_at' => $expiresAt->toDateTimeString(),
+                ],
+                $expiresAt
+            );
+        }
+
+        return response()->json([
+            'preview_id' => $previewId,
+            'expires_at' => $expiresAt?->toDateTimeString(),
+            'preset' => $preset,
+            'configuration' => $resolvedConfig,
+            'result' => [
+                'status' => $status,
+                'message' => $previewResult['message'] ?? null,
+                'errors' => $previewResult['errors'] ?? [],
+                'robots' => $previewResult['robots'] ?? null,
+                'http' => $previewResult['http'] ?? null,
+                'discovered' => (int) ($previewResult['discovered'] ?? 0),
+                'duplicates' => (int) ($previewResult['duplicates'] ?? 0),
+                'preview' => is_array($previewResult['preview'] ?? null) ? $previewResult['preview'] : [],
+                'quality' => is_array($previewResult['quality'] ?? null)
+                    ? $previewResult['quality']
+                    : [],
+            ],
+        ], $statusCode);
+    }
+
+    public function commitScrapePreview(Request $request, string $previewId)
+    {
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $preview = Cache::get($this->scrapePreviewCacheKey($previewId));
+        if (!is_array($preview)) {
+            return response()->json([
+                'message' => 'Scrape preview session not found or expired. Run preview again.',
+            ], 404);
+        }
+
+        if ((int) ($preview['actor_id'] ?? 0) !== (int) $request->user()->id) {
+            return response()->json([
+                'message' => 'This scrape preview belongs to another user.',
+            ], 403);
+        }
+
+        $platformId = (int) ($preview['platform_id'] ?? 0);
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this lead market.'
+        );
+
+        $platform = Platform::query()->findOrFail($platformId);
+        $importResult = $this->scraperSourceService->importFromPreviewCandidates(
+            $platform,
+            $request->user(),
+            (array) ($preview['source_config'] ?? []),
+            (array) ($preview['candidates'] ?? [])
+        );
+
+        Cache::forget($this->scrapePreviewCacheKey($previewId));
+
+        $this->auditService->fromRequest(
+            $request,
+            $platformId,
+            CrmAuditAction::SCRAPER_RUN,
+            'scrape_preview',
+            0,
+            null,
+            [
+                'preview_id' => $previewId,
+                'preset_key' => $preview['preset_key'] ?? null,
+                'status' => $importResult['status'] ?? 'error',
+                'discovered' => (int) ($importResult['discovered'] ?? 0),
+                'created' => (int) ($importResult['created'] ?? 0),
+                'duplicates' => (int) ($importResult['duplicates'] ?? 0),
+                'skipped' => (int) ($importResult['skipped'] ?? 0),
+            ],
+            $validated['reason'] ?? 'Imported leads from scrape preview modal'
+        );
+
+        $statusCode = in_array(($importResult['status'] ?? ''), ['error'], true) ? 422 : 200;
+
+        return response()->json([
+            'preview_id' => $previewId,
+            'result' => $importResult,
+        ], $statusCode);
+    }
+
+    public function dismissScrapePreview(Request $request, string $previewId)
+    {
+        $preview = Cache::get($this->scrapePreviewCacheKey($previewId));
+        if (!is_array($preview)) {
+            return response()->json([
+                'dismissed' => true,
+                'preview_id' => $previewId,
+            ]);
+        }
+
+        if ((int) ($preview['actor_id'] ?? 0) !== (int) $request->user()->id) {
+            return response()->json([
+                'message' => 'This scrape preview belongs to another user.',
+            ], 403);
+        }
+
+        $platformId = (int) ($preview['platform_id'] ?? 0);
+        if ($platformId > 0) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                $platformId,
+                'You do not have access to this lead market.'
+            );
+        }
+
+        Cache::forget($this->scrapePreviewCacheKey($previewId));
+
+        return response()->json([
+            'dismissed' => true,
+            'preview_id' => $previewId,
+        ]);
     }
 
     public function uploadCsv(Request $request)
@@ -1055,11 +1284,12 @@ class LeadController extends Controller
             ],
             $assignedTo
         );
+        $phonePrefix = (string) (Platform::query()->whereKey($platformId)->value('phone_prefix') ?: '254');
 
         $lead = Lead::create([
             'platform_id' => $platformId,
             'name' => $name,
-            'phone_normalized' => $this->normalizePhone($payload['phone_normalized'] ?? null),
+            'phone_normalized' => PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix),
             'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
             'source_url' => !empty($payload['source_url']) ? mb_substr(trim((string) $payload['source_url']), 0, 500) : null,
             'source' => $source,
@@ -1101,23 +1331,9 @@ class LeadController extends Controller
         return $lead;
     }
 
-    private function normalizePhone(?string $phone): ?string
+    private function scrapePreviewCacheKey(string $previewId): string
     {
-        if (!$phone) {
-            return null;
-        }
-
-        $normalized = preg_replace('/[^\d+]/', '', $phone);
-        if (!$normalized) {
-            return null;
-        }
-
-        $normalized = ltrim($normalized, '+');
-        if (str_starts_with($normalized, '0')) {
-            $normalized = '254' . substr($normalized, 1);
-        }
-
-        return $normalized ?: null;
+        return self::SCRAPE_PREVIEW_CACHE_PREFIX . trim($previewId);
     }
 
     private function parseCsvRows(string $path, bool $hasHeader): array

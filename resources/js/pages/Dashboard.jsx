@@ -222,6 +222,18 @@ export default function Dashboard() {
         (platform) => String(platform.platform_id) === String(platformFilter),
     ) || null;
     const selectedCurrency = selectedPlatform?.currency || 'KES';
+    const withMarketScope = (path) => {
+        if (!platformFilter) {
+            return path;
+        }
+
+        const [pathname, search = ''] = path.split('?');
+        const params = new URLSearchParams(search);
+        params.set('platform_id', platformFilter);
+        const query = params.toString();
+
+        return query ? `${pathname}?${query}` : pathname;
+    };
     const defaultWindowFrom = data?.window?.default_from || data?.filters?.from || '';
     const defaultWindowTo = data?.window?.default_to || data?.filters?.to || '';
 
@@ -310,7 +322,7 @@ export default function Dashboard() {
             subHint: revenueDeltaLabel || 'No previous window baseline',
             accentDot: 'bg-teal-600',
             hintClass: 'text-teal-700',
-            onClick: () => navigate('/payments?status=completed'),
+            onClick: () => navigate(withMarketScope('/payments?status=completed')),
         },
         {
             key: 'clients',
@@ -319,7 +331,7 @@ export default function Dashboard() {
             hint: `${Math.round(activeCoverage)}% coverage of ${totalClients.toLocaleString()} records`,
             accentDot: 'bg-slate-400',
             hintClass: 'text-slate-600',
-            onClick: () => navigate('/clients?status=publish'),
+            onClick: () => navigate(withMarketScope('/clients?status=publish')),
         },
         {
             key: 'recovery',
@@ -330,7 +342,7 @@ export default function Dashboard() {
                 : 'No payment recovery backlog',
             accentDot: paymentRecoveryQueueTotal > 0 ? 'bg-rose-500' : 'bg-slate-400',
             hintClass: paymentRecoveryQueueTotal > 0 ? 'text-rose-700' : 'text-slate-600',
-            onClick: () => navigate('/payments?status=recovery_queue'),
+            onClick: () => navigate(withMarketScope('/payments?status=recovery_queue')),
         },
         {
             key: 'renewals',
@@ -341,7 +353,7 @@ export default function Dashboard() {
                 : 'No renewals due in next 14 days',
             accentDot: renewalWorkload14d > 0 ? 'bg-amber-500' : 'bg-slate-400',
             hintClass: renewalWorkload14d > 0 ? 'text-amber-700' : 'text-emerald-700',
-            onClick: () => navigate('/deals?bucket=workload'),
+            onClick: () => navigate(withMarketScope('/deals?bucket=workload')),
         },
     ];
 

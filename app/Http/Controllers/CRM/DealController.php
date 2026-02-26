@@ -17,6 +17,7 @@ use App\Services\ClientSyncService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Support\CrmAuditAction;
+use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -900,7 +901,8 @@ class DealController extends Controller
     {
         $client->loadMissing('platform');
 
-        $phone = $this->normalizePhone($client->phone_normalized);
+        $phonePrefix = (string) ($client->platform?->phone_prefix ?: '254');
+        $phone = PhoneNormalizer::normalize($client->phone_normalized, $phonePrefix);
         if (!$phone) {
             return [
                 'success' => false,
@@ -1136,21 +1138,6 @@ class DealController extends Controller
 
         $path = config('services.payment_link.path', '/pay');
         return $baseUrl . $path;
-    }
-
-    private function normalizePhone(?string $phone): ?string
-    {
-        if (!$phone) {
-            return null;
-        }
-
-        $phone = preg_replace('/[^\d+]/', '', $phone);
-        $phone = ltrim((string) $phone, '+');
-        if (str_starts_with($phone, '0')) {
-            $phone = '254' . substr($phone, 1);
-        }
-
-        return $phone ?: null;
     }
 
     /**
