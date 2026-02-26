@@ -21,6 +21,12 @@ class CredentialDeliveryService
     public function createDispatch(Client $client, array $payload, int $actorId): ClientCredentialDispatch
     {
         $normalized = $this->normalizePayload($client, $payload);
+        $idempotencyKey = (string) data_get($normalized['payload'], 'idempotency_key', '');
+
+        $existing = $this->findRecentIdempotentDispatch($client, $idempotencyKey);
+        if ($existing) {
+            return $existing;
+        }
 
         $dispatch = ClientCredentialDispatch::create([
             'client_id' => (int) $client->id,
@@ -117,9 +123,23 @@ class CredentialDeliveryService
             $reason = 'Client credential dispatch from CRM';
         }
 
+        $idempotencyKey = trim((string) ($payload['idempotency_key'] ?? ''));
+        if ($idempotencyKey === '') {
+            $idempotencyKey = $this->buildIdempotencyKey([
+                'client_id' => (int) $client->id,
+                'method' => $method,
+                'channel' => $channel,
+                'timing' => $timing,
+                'recipient_email' => (string) ($recipientEmail ?? ''),
+                'recipient_phone' => (string) ($recipientPhone ?? ''),
+                'reason' => $reason,
+            ]);
+        }
+
         $dispatchPayload = [
             'reason' => $reason,
             'source' => (string) ($payload['source'] ?? 'crm'),
+            'idempotency_key' => $idempotencyKey,
             'recommended' => [
                 'method' => 'setup_link',
                 'channel' => 'both',
@@ -168,6 +188,16 @@ class CredentialDeliveryService
         }
 
         $messageBundle = $this->buildMessageBundle($client, $platform, $normalized['method'], $temporaryPassword);
+        if (
+            $normalized['method'] === 'setup_link'
+            && empty($messageBundle['setup_url'])
+            && empty($messageBundle['login_url'])
+            && empty($messageBundle['profile_url'])
+        ) {
+            throw new \InvalidArgumentException(
+                'No WordPress login or profile URL is configured for this market. Use temporary password or configure platform domain.'
+            );
+        }
 
         if (in_array('email', $requestedChannels, true)) {
             if (!$normalized['recipient_email']) {
@@ -366,6 +396,29 @@ class CredentialDeliveryService
         ];
     }
 
+    private function findRecentIdempotentDispatch(Client $client, string $idempotencyKey): ?ClientCredentialDispatch
+    {
+        if ($idempotencyKey === '') {
+            return null;
+        }
+
+        $recent = ClientCredentialDispatch::query()
+            ->where('client_id', (int) $client->id)
+            ->where('platform_id', (int) $client->platform_id)
+            ->where('created_at', '>=', now()->subSeconds(45))
+            ->orderByDesc('id')
+            ->limit(12)
+            ->get();
+
+        foreach ($recent as $dispatch) {
+            if ((string) data_get($dispatch->payload, 'idempotency_key', '') === $idempotencyKey) {
+                return $dispatch;
+            }
+        }
+
+        return null;
+    }
+
     private function setWordPressPassword(Platform $platform, int $wpUserId, string $temporaryPassword): void
     {
         if ($wpUserId <= 0) {
@@ -482,5 +535,15 @@ class CredentialDeliveryService
     {
         $length = max(10, $length);
         return Str::random($length);
+    }
+
+    private function buildIdempotencyKey(array $context): string
+    {
+        $encoded = json_encode($context);
+        if (!is_string($encoded)) {
+            $encoded = serialize($context);
+        }
+
+        return hash('sha256', $encoded);
     }
 }

@@ -1034,6 +1034,7 @@ class ClientController extends Controller
             'recipient_email' => 'nullable|email|max:255',
             'recipient_phone' => 'nullable|string|max:30',
             'temporary_password' => 'nullable|string|min:8|max:100',
+            'idempotency_key' => 'nullable|string|max:120',
             'reason' => 'required|string|max:500',
             'source' => 'nullable|string|max:100',
         ]);
@@ -1123,8 +1124,16 @@ class ClientController extends Controller
             'recipient_email' => 'nullable|email|max:255',
             'recipient_phone' => 'nullable|string|max:30',
             'temporary_password' => 'nullable|string|min:8|max:100',
+            'idempotency_key' => 'nullable|string|max:120',
+            'force' => 'nullable|boolean',
             'reason' => 'required|string|max:500',
         ]);
+
+        if ((string) $dispatch->status === 'sent' && !((bool) ($validated['force'] ?? false))) {
+            return response()->json([
+                'message' => 'Credentials were already delivered. Set force=true to resend intentionally.',
+            ], 409);
+        }
 
         try {
             $dispatch = $this->credentialDeliveryService->retryDispatch(

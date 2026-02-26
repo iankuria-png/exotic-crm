@@ -41,6 +41,23 @@ function normalizePhone(phone) {
     return cleaned;
 }
 
+function shortHash(value) {
+    let hash = 0;
+    const input = String(value || '');
+    for (let i = 0; i < input.length; i += 1) {
+        hash = ((hash << 5) - hash) + input.charCodeAt(i);
+        hash |= 0;
+    }
+    return Math.abs(hash).toString(36);
+}
+
+function toneClassForFeedback(tone) {
+    if (tone === 'success') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+    if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800';
+    if (tone === 'danger') return 'border-rose-200 bg-rose-50 text-rose-800';
+    return 'border-slate-200 bg-slate-50 text-slate-700';
+}
+
 export default function CredentialDispatchDrawer({
     open,
     onClose,
@@ -60,12 +77,14 @@ export default function CredentialDispatchDrawer({
         temporary_password: '',
         reason: defaultReason,
     });
+    const [dispatchFeedback, setDispatchFeedback] = useState(null);
 
     useEffect(() => {
         if (!open || !client) {
             return;
         }
 
+        setDispatchFeedback(null);
         setForm({
             method: 'setup_link',
             channel: 'both',
@@ -76,6 +95,14 @@ export default function CredentialDispatchDrawer({
             reason: defaultReason,
         });
     }, [open, client, defaultReason]);
+
+    const supportsTemporaryPassword = Number(client?.wp_user_id || 0) > 0;
+
+    useEffect(() => {
+        if (!supportsTemporaryPassword && form.method === 'temporary_password') {
+            setForm((current) => ({ ...current, method: 'setup_link', temporary_password: '' }));
+        }
+    }, [form.method, supportsTemporaryPassword]);
 
     const dispatchHistoryQuery = useQuery({
         queryKey: ['client-credential-dispatches', client?.id],
@@ -91,6 +118,7 @@ export default function CredentialDispatchDrawer({
             queryClient.invalidateQueries({ queryKey: ['client-credential-dispatches', client?.id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', client?.id] });
             queryClient.invalidateQueries({ queryKey: ['client', client?.id] });
+            setDispatchFeedback(result?.recommendation || null);
 
             const status = result?.dispatch?.status;
             if (status === 'sent') {
@@ -117,9 +145,10 @@ export default function CredentialDispatchDrawer({
             `/crm/clients/${client.id}/credentials/dispatches/${dispatchId}/retry`,
             payload,
         ).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['client-credential-dispatches', client?.id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', client?.id] });
+            setDispatchFeedback(result?.recommendation || null);
             toast.success('Credential dispatch retried.');
         },
         onError: (error) => {
@@ -142,6 +171,7 @@ export default function CredentialDispatchDrawer({
         && form.reason.trim().length > 0
         && (!requiresEmailNow || form.recipient_email.trim().length > 0)
         && (!requiresPhoneNow || normalizePhone(form.recipient_phone).length > 0)
+        && (form.method !== 'temporary_password' || supportsTemporaryPassword)
         && !sendMutation.isPending;
 
     if (!open || !client) {
@@ -188,17 +218,23 @@ export default function CredentialDispatchDrawer({
                                     key={option.key}
                                     type="button"
                                     onClick={() => setForm((current) => ({ ...current, method: option.key }))}
+                                    disabled={option.key === 'temporary_password' && !supportsTemporaryPassword}
                                     className={`w-full rounded-md border px-3 py-2 text-left transition ${
                                         form.method === option.key
                                             ? 'border-teal-300 bg-teal-50'
                                             : 'border-slate-200 bg-white hover:bg-slate-50'
-                                    }`}
+                                    } ${(option.key === 'temporary_password' && !supportsTemporaryPassword) ? 'cursor-not-allowed opacity-60' : ''}`}
                                 >
                                     <p className="text-sm font-semibold text-slate-900">{option.label}</p>
                                     <p className="mt-0.5 text-xs text-slate-600">{option.description}</p>
                                 </button>
                             ))}
                         </div>
+                        {!supportsTemporaryPassword ? (
+                            <p className="mt-1 text-[11px] text-amber-700">
+                                Temporary password requires a linked WordPress user ID. Use setup link for this client.
+                            </p>
+                        ) : null}
                     </section>
 
                     <section className="grid gap-3 md:grid-cols-2">
@@ -304,17 +340,21 @@ export default function CredentialDispatchDrawer({
                             type="button"
                             disabled={!canSubmit}
                             onClick={() => {
+                                const normalizedEmail = form.recipient_email.trim() || null;
+                                const normalizedPhone = normalizePhone(form.recipient_phone.trim()) || null;
+                                const keySeed = `${client.id}|${form.method}|${form.channel}|${form.timing}|${normalizedEmail || ''}|${normalizedPhone || ''}|${form.reason.trim()}`;
                                 sendMutation.mutate({
                                     method: form.method,
                                     channel: form.channel,
                                     timing: form.timing,
-                                    recipient_email: form.recipient_email.trim() || null,
-                                    recipient_phone: normalizePhone(form.recipient_phone.trim()) || null,
+                                    recipient_email: normalizedEmail,
+                                    recipient_phone: normalizedPhone,
                                     temporary_password: form.method === 'temporary_password'
                                         ? (form.temporary_password.trim() || null)
                                         : null,
                                     reason: form.reason.trim(),
                                     source: defaultSource,
+                                    idempotency_key: `cred-${client.id}-${shortHash(keySeed)}`,
                                 });
                             }}
                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -326,6 +366,17 @@ export default function CredentialDispatchDrawer({
                                     : 'Send credentials'}
                         </button>
                     </footer>
+
+                    <p className="text-[11px] text-slate-500">
+                        Duplicate submits with the same payload are deduplicated for 45 seconds to prevent accidental double-send.
+                    </p>
+
+                    {dispatchFeedback ? (
+                        <section className={`rounded-md border px-3 py-2 text-xs ${toneClassForFeedback(dispatchFeedback.tone)}`}>
+                            <p className="font-semibold">{dispatchFeedback.label}</p>
+                            <p className="mt-0.5">{dispatchFeedback.cta}</p>
+                        </section>
+                    ) : null}
 
                     <section className="border-t border-slate-200 pt-4">
                         <div className="flex items-center justify-between gap-2">
@@ -366,15 +417,20 @@ export default function CredentialDispatchDrawer({
                                                 type="button"
                                                 disabled={retryMutation.isPending}
                                                 onClick={() => {
+                                                    const retryEmail = form.recipient_email.trim() || row.recipient_email || null;
+                                                    const retryPhone = normalizePhone(form.recipient_phone.trim()) || row.recipient_phone || null;
+                                                    const retryMethod = row.method || 'setup_link';
+                                                    const keySeed = `${client.id}|retry|${row.id}|${retryMethod}|${row.channel}|${retryEmail || ''}|${retryPhone || ''}`;
                                                     retryMutation.mutate({
                                                         dispatchId: row.id,
                                                         payload: {
-                                                            recipient_email: form.recipient_email.trim() || null,
-                                                            recipient_phone: normalizePhone(form.recipient_phone.trim()) || null,
-                                                            temporary_password: form.method === 'temporary_password'
+                                                            recipient_email: retryEmail,
+                                                            recipient_phone: retryPhone,
+                                                            temporary_password: retryMethod === 'temporary_password'
                                                                 ? (form.temporary_password.trim() || null)
                                                                 : null,
                                                             reason: `Retry credential dispatch #${row.id} from CRM drawer`,
+                                                            idempotency_key: `cred-${client.id}-${shortHash(keySeed)}`,
                                                         },
                                                     });
                                                 }}
