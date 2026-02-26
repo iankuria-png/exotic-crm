@@ -11,7 +11,11 @@ import { useToast } from '../components/ToastProvider';
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
 function formatCurrency(amount, currency = 'KES') {
-    return `${currency} ${Number(amount || 0).toLocaleString()}`;
+    if (amount === null || amount === undefined || amount === '') {
+        return '—';
+    }
+
+    return `${currency} ${Number(amount).toLocaleString()}`;
 }
 
 function normalizePlatformFilter(value) {
@@ -370,12 +374,36 @@ export default function Deals() {
         {
             key: 'amount',
             label: 'Amount',
-            render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, row.currency || 'KES')}</span>,
+            render: (row) => (
+                <div className="flex items-center gap-1.5">
+                    <span className={`text-sm font-semibold ${row.amount === null || row.amount === undefined || row.amount === '' ? 'text-slate-400' : 'text-slate-900'}`}>
+                        {formatCurrency(row.amount, row.currency || 'KES')}
+                    </span>
+                    {row.amount_is_estimate ? (
+                        <span className="inline-flex items-center rounded-sm bg-slate-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ring-1 ring-inset ring-slate-200">
+                            Est.
+                        </span>
+                    ) : null}
+                </div>
+            ),
         },
         {
             key: 'duration',
             label: 'Duration',
-            render: (row) => <span className="text-sm capitalize text-slate-700">{row.duration}</span>,
+            render: (row) => (
+                <div className="flex items-center gap-1.5">
+                    {row.duration ? (
+                        <span className="text-sm capitalize text-slate-700">{row.duration}</span>
+                    ) : (
+                        <span className="text-sm text-slate-400">—</span>
+                    )}
+                    {row.duration_is_estimate ? (
+                        <span className="inline-flex items-center rounded-sm bg-slate-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ring-1 ring-inset ring-slate-200">
+                            Est.
+                        </span>
+                    ) : null}
+                </div>
+            ),
         },
         {
             key: 'status',

@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\Deal;
 use App\Models\Payment;
+use App\Models\Product;
 use App\Models\RenewalCampaign;
 use App\Models\RenewalRun;
 use App\Models\Template;
@@ -97,9 +98,13 @@ class RenewalService
             ->flip();
 
         $telemetryByKey = $this->buildTelemetryMap($dealIds, $clientIds);
+        $activeProductCatalog = Product::query()
+            ->where('is_active', true)
+            ->get(['id', 'name', 'monthly_price', 'biweekly_price', 'weekly_price', 'currency'])
+            ->keyBy(fn(Product $product) => strtolower((string) $product->name));
 
         $targets->setCollection(
-            $targetRows->map(function (Client $client) use ($paidDealIds, $telemetryByKey) {
+            $targetRows->map(function (Client $client) use ($paidDealIds, $telemetryByKey, $activeProductCatalog) {
                 $expiryDate = $this->resolveExpiryDate(
                     $client->deal_expires_at,
                     $client->escort_expire,
@@ -148,6 +153,18 @@ class RenewalService
                     }
                 }
 
+                $legacyEstimate = !$client->deal_id
+                    ? $this->estimateLegacySubscription(
+                        $inferredPlanType,
+                        $activeProductCatalog,
+                        (string) ($client->platform?->currency_code ?: 'KES')
+                    )
+                    : [
+                        'amount' => null,
+                        'duration' => null,
+                        'currency' => null,
+                    ];
+
                 return array_merge($record, [
                     'id' => $client->deal_id ? (int) $client->deal_id : ('virtual_' . $client->id),
                     'client_id' => $client->id,
@@ -156,9 +173,9 @@ class RenewalService
                     'origin_type' => $originType,
                     'payment_status' => $paymentStatus,
                     'plan_type' => $client->deal_plan_type ?? $inferredPlanType,
-                    'duration' => $client->deal_duration,
-                    'amount' => $client->deal_amount,
-                    'currency' => $client->deal_currency,
+                    'duration' => $client->deal_duration ?? $legacyEstimate['duration'],
+                    'amount' => $client->deal_amount ?? $legacyEstimate['amount'],
+                    'currency' => $client->deal_currency ?? $legacyEstimate['currency'],
                     'product' => $client->deal_id ? [
                         'id' => $client->deal_product_id,
                         'name' => $client->deal_product_name ?: $client->activeDeal?->product?->name,
@@ -166,6 +183,8 @@ class RenewalService
                     'product_id' => $client->deal_product_id,
                     'inferred_plan_type' => $inferredPlanType,
                     'inferred_product_name' => $inferredProductName,
+                    'amount_is_estimate' => !$client->deal_id && $client->deal_amount === null && $legacyEstimate['amount'] !== null,
+                    'duration_is_estimate' => !$client->deal_id && $client->deal_duration === null && !empty($legacyEstimate['duration']),
                     'expires_at' => $expiryDate ? $expiryDate->toDateTimeString() : null,
                     'status' => $status,
                     'days_left' => $daysLeft,
@@ -278,6 +297,34 @@ class RenewalService
             'targets' => $targets,
             'campaigns' => $campaigns,
             'recent_runs' => $recentRuns,
+        ];
+    }
+
+    private function estimateLegacySubscription(?string $planType, Collection $activeProductCatalog, string $fallbackCurrency = 'KES'): array
+    {
+        if (empty($planType)) {
+            return [
+                'amount' => null,
+                'duration' => null,
+                'currency' => $fallbackCurrency,
+            ];
+        }
+
+        /** @var Product|null $product */
+        $product = $activeProductCatalog->get(strtolower($planType));
+
+        if (!$product) {
+            return [
+                'amount' => null,
+                'duration' => 'monthly',
+                'currency' => $fallbackCurrency,
+            ];
+        }
+
+        return [
+            'amount' => $product->monthly_price !== null ? (float) $product->monthly_price : null,
+            'duration' => 'monthly',
+            'currency' => $product->currency ?: $fallbackCurrency,
         ];
     }
 
