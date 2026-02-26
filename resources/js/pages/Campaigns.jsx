@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+
+const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
 function expiryTone(daysLeft) {
     if (daysLeft === null || daysLeft === undefined) return 'text-slate-500';
@@ -25,13 +27,35 @@ function bucketLabel(bucket) {
     return 'Unknown';
 }
 
+function normalizePlatformFilter(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') {
+        return '';
+    }
+
+    return /^\d+$/.test(raw) ? raw : '';
+}
+
 export default function Campaigns() {
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const [page, setPage] = useState(1);
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [bucketFilter, setBucketFilter] = useState('');
+    const [platformFilter, setPlatformFilter] = useState(() => {
+        const requested = normalizePlatformFilter(searchParams.get('platform_id'));
+        if (requested) {
+            return requested;
+        }
+
+        if (typeof window === 'undefined') {
+            return '';
+        }
+
+        return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
+    });
     const [activeDeal, setActiveDeal] = useState(null);
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
     const [feedback, setFeedback] = useState(null);
@@ -67,8 +91,15 @@ export default function Campaigns() {
     });
     const [runPreview, setRunPreview] = useState(null);
 
+    const { data: integrationData } = useQuery({
+        queryKey: ['settings-integrations', 'campaigns-filter'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+    });
+
+    const platformOptions = integrationData?.platforms || [];
+
     const { data, isLoading } = useQuery({
-        queryKey: ['renewals-overview', page, search, bucketFilter, perPage],
+        queryKey: ['renewals-overview', page, search, bucketFilter, platformFilter, perPage],
         queryFn: () =>
             api.get('/crm/renewals', {
                 params: {
@@ -76,6 +107,7 @@ export default function Campaigns() {
                     per_page: perPage,
                     ...(search ? { search } : {}),
                     ...(bucketFilter ? { bucket: bucketFilter } : {}),
+                    ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                 },
             }).then((response) => response.data),
     });
@@ -233,7 +265,8 @@ export default function Campaigns() {
                 })),
                 select_all: selectAll,
                 search,
-                bucket: bucketFilter
+                bucket: bucketFilter,
+                ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
             });
             return response.data;
         },
@@ -289,15 +322,6 @@ export default function Campaigns() {
     );
 
     const campaignOptions = data?.campaigns || [];
-    const platformOptions = useMemo(() => {
-        const byId = new Map();
-        (rows || []).forEach((row) => {
-            if (row?.client?.platform?.id) {
-                byId.set(row.client.platform.id, row.client.platform);
-            }
-        });
-        return Array.from(byId.values());
-    }, [rows]);
 
     const previewTargets = useMemo(
         () => (
@@ -326,6 +350,51 @@ export default function Campaigns() {
         }
     }, [campaignOptions, runConfig.campaign_ids.length]);
 
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        if (platformFilter) {
+            window.localStorage.setItem(DASHBOARD_MARKET_STORAGE_KEY, platformFilter);
+            return;
+        }
+
+        window.localStorage.removeItem(DASHBOARD_MARKET_STORAGE_KEY);
+    }, [platformFilter]);
+
+    useEffect(() => {
+        if (!platformFilter || !platformOptions.length) {
+            return;
+        }
+
+        const platformStillAccessible = platformOptions.some(
+            (platform) => String(platform.platform_id) === String(platformFilter),
+        );
+
+        if (!platformStillAccessible) {
+            setPlatformFilter('');
+            setPage(1);
+        }
+    }, [platformFilter, platformOptions]);
+
+    useEffect(() => {
+        if (!runConfig.platform_id || !platformOptions.length) {
+            return;
+        }
+
+        const platformStillAccessible = platformOptions.some(
+            (platform) => String(platform.platform_id) === String(runConfig.platform_id),
+        );
+
+        if (!platformStillAccessible) {
+            setRunConfig((current) => ({
+                ...current,
+                platform_id: '',
+            }));
+        }
+    }, [runConfig.platform_id, platformOptions]);
+
     const targetCountPreview = runScopePreview?.targets?.total ?? data?.targets?.total ?? 0;
 
     const openRunConfigDialog = () => {
@@ -334,6 +403,7 @@ export default function Campaigns() {
             ...current,
             search: search || current.search,
             bucket: bucketFilter || current.bucket,
+            platform_id: platformFilter || current.platform_id,
         }));
         setRunConfigOpen(true);
     };
@@ -611,6 +681,22 @@ export default function Campaigns() {
                     </form>
 
                     <select
+                        value={platformFilter}
+                        onChange={(event) => {
+                            setPlatformFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All markets</option>
+                        {platformOptions.map((platform) => (
+                            <option key={platform.platform_id} value={platform.platform_id}>
+                                {platform.platform_name}
+                            </option>
+                        ))}
+                    </select>
+
+                    <select
                         value={bucketFilter}
                         onChange={(event) => {
                             setBucketFilter(event.target.value);
@@ -643,13 +729,14 @@ export default function Campaigns() {
                         </select>
                     </div>
 
-                    {(search || bucketFilter) ? (
+                    {(search || bucketFilter || platformFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
                                 setSearch('');
                                 setSearchInput('');
                                 setBucketFilter('');
+                                setPlatformFilter('');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"
@@ -942,8 +1029,8 @@ export default function Campaigns() {
                                     >
                                         <option value="">All accessible markets</option>
                                         {platformOptions.map((platform) => (
-                                            <option key={platform.id} value={platform.id}>
-                                                {platform.name}
+                                            <option key={platform.platform_id} value={platform.platform_id}>
+                                                {platform.platform_name}
                                             </option>
                                         ))}
                                     </select>

@@ -7,22 +7,28 @@ import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { normalizePhone } from '../utils/phone';
+
+const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
 function formatCurrency(amount, currency = 'KES') {
     return `${currency} ${Number(amount || 0).toLocaleString()}`;
 }
 
-function normalizePhone(phone) {
-    if (!phone) return '';
-    const cleaned = String(phone).replace(/[^\d+]/g, '').replace(/^\+/, '');
-    if (cleaned.startsWith('0')) return `254${cleaned.slice(1)}`;
-    return cleaned;
+function normalizePlatformFilter(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') {
+        return '';
+    }
+
+    return /^\d+$/.test(raw) ? raw : '';
 }
 
 function candidateScore(payment, candidate) {
     let score = 45;
-    const paymentPhone = normalizePhone(payment?.phone);
-    const candidatePhone = normalizePhone(candidate?.phone_normalized);
+    const phonePrefix = payment?.platform?.phone_prefix || candidate?.platform?.phone_prefix || '254';
+    const paymentPhone = normalizePhone(payment?.phone, phonePrefix);
+    const candidatePhone = normalizePhone(candidate?.phone_normalized, phonePrefix);
 
     if (paymentPhone && candidatePhone && paymentPhone === candidatePhone) {
         score = 85;
@@ -139,6 +145,18 @@ export default function Payments() {
         const requested = (searchParams.get('matched') || '').trim();
         return allowedMatchFilters.has(requested) ? requested : '';
     });
+    const [platformFilter, setPlatformFilter] = useState(() => {
+        const requested = normalizePlatformFilter(searchParams.get('platform_id'));
+        if (requested) {
+            return requested;
+        }
+
+        if (typeof window === 'undefined') {
+            return '';
+        }
+
+        return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
+    });
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
@@ -168,8 +186,15 @@ export default function Payments() {
         reason: '',
     });
 
+    const { data: integrationData } = useQuery({
+        queryKey: ['settings-integrations', 'payments-filter'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+    });
+
+    const platformOptions = integrationData?.platforms || [];
+
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, search, statusFilter, matchFilter],
+        queryKey: ['payments', page, search, statusFilter, matchFilter, platformFilter],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -178,6 +203,7 @@ export default function Payments() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(matchFilter && { matched: matchFilter }),
+                    ...(platformFilter && { platform_id: Number(platformFilter) }),
                 },
             }).then((response) => response.data),
     });
@@ -557,6 +583,34 @@ export default function Payments() {
     ];
 
     useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        if (platformFilter) {
+            window.localStorage.setItem(DASHBOARD_MARKET_STORAGE_KEY, platformFilter);
+            return;
+        }
+
+        window.localStorage.removeItem(DASHBOARD_MARKET_STORAGE_KEY);
+    }, [platformFilter]);
+
+    useEffect(() => {
+        if (!platformFilter || !platformOptions.length) {
+            return;
+        }
+
+        const platformStillAccessible = platformOptions.some(
+            (platform) => String(platform.platform_id) === String(platformFilter),
+        );
+
+        if (!platformStillAccessible) {
+            setPlatformFilter('');
+            setPage(1);
+        }
+    }, [platformFilter, platformOptions]);
+
+    useEffect(() => {
         const listener = (event) => {
             const isConfirmShortcut = (event.ctrlKey || event.metaKey) && event.key === 'Enter';
             if (!isConfirmShortcut || selectedRows.length === 0) {
@@ -829,6 +883,22 @@ export default function Payments() {
                     </form>
 
                     <select
+                        value={platformFilter}
+                        onChange={(event) => {
+                            setPlatformFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All markets</option>
+                        {platformOptions.map((platform) => (
+                            <option key={platform.platform_id} value={platform.platform_id}>
+                                {platform.platform_name}
+                            </option>
+                        ))}
+                    </select>
+
+                    <select
                         value={statusFilter}
                         onChange={(event) => {
                             setStatusFilter(event.target.value);
@@ -858,7 +928,7 @@ export default function Payments() {
                         <option value="unmatched">Unmatched</option>
                     </select>
 
-                    {(search || statusFilter || matchFilter) ? (
+                    {(search || statusFilter || matchFilter || platformFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -866,6 +936,7 @@ export default function Payments() {
                                 setSearchInput('');
                                 setStatusFilter('');
                                 setMatchFilter('');
+                                setPlatformFilter('');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"

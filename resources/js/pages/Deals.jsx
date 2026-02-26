@@ -8,8 +8,19 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import { useToast } from '../components/ToastProvider';
 
+const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
+
 function formatCurrency(amount, currency = 'KES') {
     return `${currency} ${Number(amount || 0).toLocaleString()}`;
+}
+
+function normalizePlatformFilter(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') {
+        return '';
+    }
+
+    return /^\d+$/.test(raw) ? raw : '';
 }
 
 export default function Deals() {
@@ -25,6 +36,18 @@ export default function Deals() {
     const [statusFilter, setStatusFilter] = useState(() => {
         const requested = (searchParams.get('status') || '').trim();
         return allowedStatuses.has(requested) ? requested : '';
+    });
+    const [platformFilter, setPlatformFilter] = useState(() => {
+        const requested = normalizePlatformFilter(searchParams.get('platform_id'));
+        if (requested) {
+            return requested;
+        }
+
+        if (typeof window === 'undefined') {
+            return '';
+        }
+
+        return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
 
     const [dialog, setDialog] = useState({ type: null, deal: null });
@@ -48,7 +71,7 @@ export default function Deals() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['deals', page, search, statusFilter, bucket],
+        queryKey: ['deals', page, search, statusFilter, bucket, platformFilter],
         queryFn: () =>
             api.get('/crm/deals', {
                 params: {
@@ -57,9 +80,17 @@ export default function Deals() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     bucket,
+                    ...(platformFilter && { platform_id: Number(platformFilter) }),
                 },
             }).then((response) => response.data),
     });
+
+    const { data: integrationData } = useQuery({
+        queryKey: ['settings-integrations', 'deals-filter'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+    });
+
+    const platformOptions = integrationData?.platforms || [];
 
     const selectedDeal = dialog.deal;
     const selectedClientId = selectedDeal?.client?.id || selectedDeal?.client_id || null;
@@ -492,6 +523,34 @@ export default function Deals() {
         }
     }, [dialog.type, paymentMethod]);
 
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        if (platformFilter) {
+            window.localStorage.setItem(DASHBOARD_MARKET_STORAGE_KEY, platformFilter);
+            return;
+        }
+
+        window.localStorage.removeItem(DASHBOARD_MARKET_STORAGE_KEY);
+    }, [platformFilter]);
+
+    useEffect(() => {
+        if (!platformFilter || !platformOptions.length) {
+            return;
+        }
+
+        const platformStillAccessible = platformOptions.some(
+            (platform) => String(platform.platform_id) === String(platformFilter),
+        );
+
+        if (!platformStillAccessible) {
+            setPlatformFilter('');
+            setPage(1);
+        }
+    }, [platformFilter, platformOptions]);
+
     const needsPaymentVerification = ['activate', 'extend', 'renew'].includes(dialog.type || '');
     const requiresPaymentReference = needsPaymentVerification && paymentMethod === 'manual';
     const requiresApprovedBy = needsPaymentVerification && paymentMethod === 'free_trial';
@@ -563,6 +622,22 @@ export default function Deals() {
                     </form>
 
                     <select
+                        value={platformFilter}
+                        onChange={(event) => {
+                            setPlatformFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All markets</option>
+                        {platformOptions.map((platform) => (
+                            <option key={platform.platform_id} value={platform.platform_id}>
+                                {platform.platform_name}
+                            </option>
+                        ))}
+                    </select>
+
+                    <select
                         value={bucket}
                         onChange={(event) => {
                             setBucket(event.target.value);
@@ -599,7 +674,7 @@ export default function Deals() {
                         <option value="cancelled">Cancelled</option>
                     </select>
 
-                    {(search || statusFilter || bucket !== 'all') ? (
+                    {(search || statusFilter || bucket !== 'all' || platformFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -607,6 +682,7 @@ export default function Deals() {
                                 setSearchInput('');
                                 setStatusFilter('');
                                 setBucket('all');
+                                setPlatformFilter('');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"
