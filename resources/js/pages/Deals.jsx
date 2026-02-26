@@ -387,7 +387,32 @@ export default function Deals() {
             render: (row) => (
                 <div className="flex items-center gap-1.5">
                     {row.is_virtual ? (
-                        <span className="text-[11px] text-slate-500">Legacy record</span>
+                        <>
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (!row.client_id) return;
+                                    navigate(`/clients/${row.client_id}?tab=deals&action=new_subscription&source=legacy_row`);
+                                }}
+                                disabled={!row.client_id}
+                                className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Activate
+                            </button>
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (!row.client_id) return;
+                                    navigate(`/clients/${row.client_id}`);
+                                }}
+                                disabled={!row.client_id}
+                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Open profile
+                            </button>
+                        </>
                     ) : null}
 
                     {!row.is_virtual && row.status === 'pending' ? (
@@ -462,7 +487,7 @@ export default function Deals() {
     ];
 
     useEffect(() => {
-        if (dialog.type === 'extend' && !['manual', 'free_trial'].includes(paymentMethod)) {
+        if (dialog.type === 'extend' && !['manual', 'stk', 'link', 'free_trial'].includes(paymentMethod)) {
             setPaymentMethod('manual');
         }
     }, [dialog.type, paymentMethod]);
@@ -634,7 +659,7 @@ export default function Deals() {
                                     <p className="text-sm font-semibold text-slate-800">Payment Method</p>
                                     <div className="grid gap-2 sm:grid-cols-2">
                                         {(dialog.type === 'extend'
-                                            ? ['manual', 'free_trial']
+                                            ? ['manual', 'stk', 'link', 'free_trial']
                                             : ['manual', 'stk', 'link', 'free_trial']
                                         ).map((method) => (
                                             <button

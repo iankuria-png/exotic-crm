@@ -552,6 +552,21 @@ export default function ClientDetail() {
     }, [activeTab, requestedTab, tabs]);
 
     useEffect(() => {
+        const requestedAction = (searchParams.get('action') || '').toLowerCase();
+        if (requestedAction !== 'new_subscription') {
+            return;
+        }
+
+        setActiveTab('deals');
+        setShowDealModal(true);
+
+        const next = new URLSearchParams(searchParams);
+        next.set('tab', 'deals');
+        next.delete('action');
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
+
+    useEffect(() => {
         if (!wpProfileData?.wp_profile) {
             return;
         }
@@ -875,7 +890,16 @@ export default function ClientDetail() {
                                 ))}
                             </div>
                         ) : (
-                            <p className="text-sm text-slate-500">No subscriptions yet. Create one to get started.</p>
+                            <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-4">
+                                <p className="text-sm text-slate-600">No subscription records yet for this client.</p>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDealModal(true)}
+                                    className="mt-3 crm-btn-primary"
+                                >
+                                    Add subscription
+                                </button>
+                            </div>
                         )}
                     </div>
                 </section>
@@ -909,7 +933,16 @@ export default function ClientDetail() {
                             </div>
                         </section>
                     )) : (
-                        <section className="crm-surface p-8 text-center text-sm text-slate-500">No subscriptions yet.</section>
+                        <section className="crm-surface p-8 text-center">
+                            <p className="text-sm text-slate-600">No subscriptions yet for this client.</p>
+                            <button
+                                type="button"
+                                onClick={() => setShowDealModal(true)}
+                                className="mt-4 crm-btn-primary"
+                            >
+                                Add subscription
+                            </button>
+                        </section>
                     )}
                 </div>
             ) : null}

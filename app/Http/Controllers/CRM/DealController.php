@@ -545,7 +545,7 @@ class DealController extends Controller
         $validated = $request->validate([
             'additional_days' => 'required|integer|min:1|max:365',
             'reason' => 'required|string|max:500',
-            'payment_method' => 'required|in:manual,free_trial',
+            'payment_method' => 'required|in:manual,stk,link,free_trial',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'approved_by' => 'required_if:payment_method,free_trial|nullable|string|max:255',
         ]);
@@ -582,12 +582,22 @@ class DealController extends Controller
                     (string) $validated['payment_reference'],
                     (int) $request->user()->id
                 );
+            } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
+                $initiation = $this->initiatePaymentForDeal($deal, $client, $paymentMethod, $request);
+                if (!($initiation['success'] ?? false)) {
+                    throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
+                }
+
+                /** @var \App\Models\Payment|null $payment */
+                $payment = $initiation['payment'] ?? null;
             }
 
             $newExpiry = ($deal->expires_at ?? now())->copy()->addDays((int) $validated['additional_days']);
             $deal->update([
                 'expires_at' => $newExpiry,
-                'payment_id' => $payment?->id ?? $deal->payment_id,
+                'payment_id' => $paymentMethod === 'manual'
+                    ? ($payment?->id ?? $deal->payment_id)
+                    : $deal->payment_id,
                 'payment_reference' => $payment?->transaction_reference
                     ?? ($paymentMethod === 'manual' ? (string) $validated['payment_reference'] : $deal->payment_reference),
                 'is_free_trial' => $paymentMethod === 'free_trial' ? true : (bool) $deal->is_free_trial,
@@ -611,6 +621,7 @@ class DealController extends Controller
                     'payment_id' => $deal->payment_id,
                     'payment_reference' => $deal->payment_reference,
                     'payment_method' => $paymentMethod,
+                    'extension_payment_id' => $payment?->id,
                 ],
                 (string) $validated['reason']
             );
@@ -642,6 +653,7 @@ class DealController extends Controller
                     'additional_days' => (int) $validated['additional_days'],
                     'new_expires_at' => $newExpiry->toDateTimeString(),
                     'payment_method' => $paymentMethod,
+                    'extension_payment_id' => $payment?->id,
                 ],
                 'created_at' => now(),
             ]);
