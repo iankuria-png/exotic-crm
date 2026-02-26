@@ -41,6 +41,7 @@ final class CrmAuditAction
     public const PAYMENT_MANUAL_CLOSE = 'payment_manual_close';
     public const PAYMENT_IMPORT_PREVIEW = 'payment_import_preview';
     public const PAYMENT_IMPORT_COMMIT = 'payment_import_commit';
+    public const PAYMENT_REVIEW_STATE_UPDATE = 'payment_review_state_update';
     public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
     public const CLIENT_CREDENTIAL_SEND = 'client_credential_send';

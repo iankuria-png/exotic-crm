@@ -11,6 +11,14 @@ use Illuminate\Database\Eloquent\Builder;
 
 class PaymentMatchingService
 {
+    private PaymentReconciliationConfidenceService $confidenceService;
+
+    public function __construct(
+        ?PaymentReconciliationConfidenceService $confidenceService = null
+    ) {
+        $this->confidenceService = $confidenceService ?? new PaymentReconciliationConfidenceService();
+    }
+
     /**
      * Attempt to auto-match a payment to a client by phone + amount + platform.
      */
@@ -31,6 +39,11 @@ class PaymentMatchingService
 
         $phone = PhoneNormalizer::normalize($payment->phone, $prefix);
         if (!$phone) {
+            $payment->update([
+                'reconciliation_confidence' => 'low',
+                'reconciliation_state' => 'manual_review',
+            ]);
+
             return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No phone number'];
         }
 
@@ -39,10 +52,20 @@ class PaymentMatchingService
             ->get();
 
         if ($clients->isEmpty()) {
+            $payment->update([
+                'reconciliation_confidence' => 'low',
+                'reconciliation_state' => 'manual_review',
+            ]);
+
             return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No client with this phone'];
         }
 
         if ($clients->count() > 1) {
+            $payment->update([
+                'reconciliation_confidence' => 'medium',
+                'reconciliation_state' => 'manual_review',
+            ]);
+
             return [
                 'matched' => false,
                 'confidence' => 'auto_low',
@@ -60,6 +83,8 @@ class PaymentMatchingService
         $payment->update([
             'client_id' => $client->id,
             'match_confidence' => $amountMatches ? 'auto_high' : 'auto_low',
+            'reconciliation_confidence' => $amountMatches ? 'high' : 'medium',
+            'reconciliation_state' => $amountMatches ? 'resolved' : 'open',
         ]);
 
         return [
@@ -80,6 +105,8 @@ class PaymentMatchingService
             'match_confidence' => 'manual',
             'confirmed_by' => $confirmedBy,
             'confirmed_at' => now(),
+            'reconciliation_confidence' => $this->confidenceService->fromMatchConfidence('manual'),
+            'reconciliation_state' => 'resolved',
         ]);
 
         $payment = $payment->fresh();

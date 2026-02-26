@@ -130,6 +130,9 @@ function titleize(value) {
 export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'initiated', 'pending', 'failed', 'recovery_queue']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
+    const allowedSourceFilters = new Set(['gateway', 'excel_import']);
+    const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
+    const allowedReviewStateFilters = new Set(['open', 'manual_review', 'resolved']);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -144,6 +147,18 @@ export default function Payments() {
     const [matchFilter, setMatchFilter] = useState(() => {
         const requested = (searchParams.get('matched') || '').trim();
         return allowedMatchFilters.has(requested) ? requested : '';
+    });
+    const [sourceFilter, setSourceFilter] = useState(() => {
+        const requested = (searchParams.get('source') || '').trim();
+        return allowedSourceFilters.has(requested) ? requested : '';
+    });
+    const [confidenceFilter, setConfidenceFilter] = useState(() => {
+        const requested = (searchParams.get('match_confidence') || '').trim();
+        return allowedConfidenceFilters.has(requested) ? requested : '';
+    });
+    const [reviewStateFilter, setReviewStateFilter] = useState(() => {
+        const requested = (searchParams.get('review_state') || '').trim();
+        return allowedReviewStateFilters.has(requested) ? requested : '';
     });
     const [platformFilter, setPlatformFilter] = useState(() => {
         const requested = normalizePlatformFilter(searchParams.get('platform_id'));
@@ -194,7 +209,7 @@ export default function Payments() {
     const platformOptions = integrationData?.platforms || [];
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, search, statusFilter, matchFilter, platformFilter],
+        queryKey: ['payments', page, search, statusFilter, matchFilter, platformFilter, sourceFilter, confidenceFilter, reviewStateFilter],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -204,6 +219,9 @@ export default function Payments() {
                     ...(statusFilter && { status: statusFilter }),
                     ...(matchFilter && { matched: matchFilter }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
+                    ...(sourceFilter && { source: sourceFilter }),
+                    ...(confidenceFilter && { match_confidence: confidenceFilter }),
+                    ...(reviewStateFilter && { review_state: reviewStateFilter }),
                 },
             }).then((response) => response.data),
     });
@@ -407,6 +425,22 @@ export default function Payments() {
         },
     });
 
+    const reviewStateMutation = useMutation({
+        mutationFn: ({ paymentId, state, reason }) =>
+            api.post(`/crm/payments/${paymentId}/review-state`, {
+                state,
+                reason,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+            toast.success(variables.state === 'resolved' ? 'Payment review marked resolved.' : 'Payment moved to manual review.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Updating review state failed.');
+        },
+    });
+
     const handleSearch = (event) => {
         event.preventDefault();
         setSearch(searchInput.trim());
@@ -471,6 +505,15 @@ export default function Payments() {
         if (actionKey === 'manual_close') {
             closeDiagnostics();
             setManualCloseDialog({ open: true, payment: paymentRow, category: 'timeout', reason: '' });
+            return;
+        }
+
+        if (actionKey === 'manual_review') {
+            reviewStateMutation.mutate({
+                paymentId: paymentRow.id,
+                state: 'manual_review',
+                reason: 'Marked for manual review from diagnostics drawer',
+            });
             return;
         }
 
@@ -651,7 +694,12 @@ export default function Payments() {
         {
             key: 'match_confidence',
             label: 'Match',
-            render: (row) => row.match_confidence ? <StatusBadge status={row.match_confidence} /> : <span className="text-xs text-slate-400">—</span>,
+            render: (row) => row.reconciliation_confidence ? <StatusBadge status={row.reconciliation_confidence} /> : <span className="text-xs text-slate-400">—</span>,
+        },
+        {
+            key: 'review_state',
+            label: 'Review',
+            render: (row) => row.reconciliation_state ? <StatusBadge status={row.reconciliation_state} /> : <span className="text-xs text-slate-400">—</span>,
         },
         {
             key: 'client',
@@ -745,11 +793,45 @@ export default function Payments() {
                                 <button
                                     onClick={(event) => {
                                         event.stopPropagation();
+                                        if (row.reconciliation_confidence !== 'high') {
+                                            toast.warning('Subscription creation is limited to high-confidence reconciled payments.');
+                                            return;
+                                        }
                                         setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
                                     }}
                                     className="rounded-md border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                                 >
                                     Create Sub
+                                </button>
+                            )}
+                            {row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review' && (
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        reviewStateMutation.mutate({
+                                            paymentId: row.id,
+                                            state: 'manual_review',
+                                            reason: 'Marked for manual review from payment queue',
+                                        });
+                                    }}
+                                    className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                                >
+                                    Mark review
+                                </button>
+                            )}
+                            {row.reconciliation_state === 'manual_review' && (
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        reviewStateMutation.mutate({
+                                            paymentId: row.id,
+                                            state: 'resolved',
+                                            reason: 'Manual review resolved from payment queue',
+                                        });
+                                    }}
+                                    className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                                >
+                                    Resolve review
                                 </button>
                             )}
                             {row.client_id ? (
@@ -928,7 +1010,48 @@ export default function Payments() {
                         <option value="unmatched">Unmatched</option>
                     </select>
 
-                    {(search || statusFilter || matchFilter || platformFilter) ? (
+                    <select
+                        value={sourceFilter}
+                        onChange={(event) => {
+                            setSourceFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All sources</option>
+                        <option value="gateway">Gateway/API</option>
+                        <option value="excel_import">Excel import</option>
+                    </select>
+
+                    <select
+                        value={confidenceFilter}
+                        onChange={(event) => {
+                            setConfidenceFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All confidence</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                    </select>
+
+                    <select
+                        value={reviewStateFilter}
+                        onChange={(event) => {
+                            setReviewStateFilter(event.target.value);
+                            setPage(1);
+                        }}
+                        className="crm-select"
+                    >
+                        <option value="">All review states</option>
+                        <option value="open">Open</option>
+                        <option value="manual_review">Manual review</option>
+                        <option value="resolved">Resolved</option>
+                    </select>
+
+                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || confidenceFilter || reviewStateFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -937,6 +1060,9 @@ export default function Payments() {
                                 setStatusFilter('');
                                 setMatchFilter('');
                                 setPlatformFilter('');
+                                setSourceFilter('');
+                                setConfidenceFilter('');
+                                setReviewStateFilter('');
                                 setPage(1);
                             }}
                             className="crm-btn-secondary px-3 py-2"

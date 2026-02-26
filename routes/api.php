@@ -116,6 +116,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/payments/{payment}/retry-stk', [PaymentQueueController::class, 'retryStk']);
     Route::post('/payments/{payment}/send-payment-link', [PaymentQueueController::class, 'sendPaymentLink']);
     Route::post('/payments/{payment}/manual-close', [PaymentQueueController::class, 'manualClose']);
+    Route::post('/payments/{payment}/review-state', [PaymentQueueController::class, 'updateReviewState']);
     Route::post('/payments/{payment}/create-subscription', [PaymentQueueController::class, 'createSubscription']);
     Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
 

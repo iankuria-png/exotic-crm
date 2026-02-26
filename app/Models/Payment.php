@@ -27,6 +27,8 @@ class Payment extends Model
         'source',
         'import_batch_id',
         'import_legacy_hash',
+        'reconciliation_confidence',
+        'reconciliation_state',
         'raw_payload',
         'duration',
         'start_date',

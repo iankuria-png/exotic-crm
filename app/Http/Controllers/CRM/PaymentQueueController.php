@@ -82,8 +82,21 @@ class PaymentQueueController extends Controller
             }
         }
 
-        if ($request->filled('match_confidence')) {
-            $query->where('match_confidence', $request->match_confidence);
+        if ($request->filled('source')) {
+            $query->where('source', $request->source);
+        }
+
+        $confidenceFilter = trim((string) $request->input('match_confidence', ''));
+        if ($confidenceFilter !== '') {
+            if (in_array($confidenceFilter, ['high', 'medium', 'low'], true)) {
+                $query->where('reconciliation_confidence', $confidenceFilter);
+            } else {
+                $query->where('match_confidence', $confidenceFilter);
+            }
+        }
+
+        if ($request->filled('review_state')) {
+            $query->where('reconciliation_state', $request->review_state);
         }
 
         $awaitingStatuses = ['initiated', 'pending'];
@@ -262,7 +275,8 @@ class PaymentQueueController extends Controller
 
         $canCreateSubscription = $payment->status === 'completed'
             && $payment->client_id
-            && !$payment->deal_id;
+            && !$payment->deal_id
+            && $this->resolveReconciliationConfidence($payment) === 'high';
 
         return response()->json([
             'payment' => $payment,
@@ -288,11 +302,19 @@ class PaymentQueueController extends Controller
             return response()->json(['message' => 'Payment is already linked to a subscription.'], 422);
         }
 
+        $reconciliationConfidence = $this->resolveReconciliationConfidence($payment);
+        if ($reconciliationConfidence !== 'high') {
+            return response()->json([
+                'message' => 'Subscription creation requires high-confidence reconciliation. Confirm the payment match first.',
+            ], 422);
+        }
+
         $service = new PaymentMatchingService();
         $beforeState = [
             'deal_id' => $payment->deal_id,
             'client_id' => $payment->client_id,
             'status' => $payment->status,
+            'reconciliation_confidence' => $reconciliationConfidence,
         ];
 
         $deal = $service->createDealFromPayment($payment, (int) $request->user()->id);
@@ -497,6 +519,7 @@ class PaymentQueueController extends Controller
                 CrmAuditAction::PAYMENT_MATCH_CONFIRM,
                 CrmAuditAction::PAYMENT_CREATE_SUBSCRIPTION,
                 CrmAuditAction::PAYMENT_MANUAL_CLOSE,
+                CrmAuditAction::PAYMENT_REVIEW_STATE_UPDATE,
             ])
             ->orderByDesc('id')
             ->limit(30)
@@ -592,6 +615,44 @@ class PaymentQueueController extends Controller
         ]);
     }
 
+    public function updateReviewState(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'state' => 'required|in:open,manual_review,resolved',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $beforeState = [
+            'reconciliation_state' => $payment->reconciliation_state,
+            'reconciliation_confidence' => $this->resolveReconciliationConfidence($payment),
+        ];
+
+        $payment->forceFill([
+            'reconciliation_state' => $validated['state'],
+        ])->save();
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_REVIEW_STATE_UPDATE,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'reconciliation_state' => $payment->reconciliation_state,
+                'reconciliation_confidence' => $this->resolveReconciliationConfidence($payment),
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'message' => 'Review state updated.',
+            'payment' => $payment->fresh(['platform', 'product', 'client']),
+        ]);
+    }
+
     public function manualClose(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
@@ -622,6 +683,7 @@ class PaymentQueueController extends Controller
 
         $payment->forceFill([
             'status' => 'failed',
+            'reconciliation_state' => 'resolved',
             'raw_payload' => $rawPayload,
         ])->save();
 
@@ -1051,6 +1113,13 @@ class PaymentQueueController extends Controller
         }
 
         if ($payment->status === 'completed' && $payment->client_id && !$payment->deal_id) {
+            if ($this->resolveReconciliationConfidence($payment) !== 'high') {
+                return [
+                    ['key' => 'manual_match', 'label' => 'Confirm reconciliation', 'description' => 'Resolve to high confidence before creating subscription.', 'recommended' => true],
+                    ['key' => 'manual_review', 'label' => 'Manual review', 'description' => 'Mark for review when identifiers are weak or conflicting.', 'recommended' => false],
+                ];
+            }
+
             return [
                 ['key' => 'create_subscription', 'label' => 'Create subscription', 'description' => 'Link this payment to a new active subscription.', 'recommended' => true],
             ];
@@ -1115,5 +1184,19 @@ class PaymentQueueController extends Controller
         if ($payment->platform_id && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $payment->platform_id)) {
             abort(403, 'You do not have access to this payment market.');
         }
+    }
+
+    private function resolveReconciliationConfidence(Payment $payment): string
+    {
+        $current = trim((string) ($payment->reconciliation_confidence ?? ''));
+        if (in_array($current, ['high', 'medium', 'low'], true)) {
+            return $current;
+        }
+
+        return match ($payment->match_confidence) {
+            'manual', 'auto_high' => 'high',
+            'auto_low' => 'medium',
+            default => 'low',
+        };
     }
 }

@@ -18,7 +18,8 @@ class PaymentImportService
     private const MAX_ROWS_PER_IMPORT = 5000;
 
     public function __construct(
-        private readonly PaymentImportParserService $parserService
+        private readonly PaymentImportParserService $parserService,
+        private readonly PaymentReconciliationConfidenceService $confidenceService
     ) {
     }
 
@@ -325,8 +326,16 @@ class PaymentImportService
                     'source' => 'excel_import',
                     'import_batch_id' => $lockedBatch->id,
                     'import_legacy_hash' => $legacyHash !== '' ? $legacyHash : null,
+                    'reconciliation_confidence' => $this->confidenceService->fromImportSuggestion(
+                        is_array($row->suggested_match) ? $row->suggested_match : null,
+                        $normalized
+                    ),
                     'raw_payload' => $rawPayload,
                 ];
+
+                $payload['reconciliation_state'] = $payload['reconciliation_confidence'] === 'low'
+                    ? 'manual_review'
+                    : 'open';
 
                 if (!empty($normalized['product_id']) && is_numeric($normalized['product_id'])) {
                     $payload['product_id'] = (int) $normalized['product_id'];

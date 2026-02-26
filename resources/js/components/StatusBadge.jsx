@@ -28,6 +28,12 @@ const statusStyles = {
     auto_low: 'bg-amber-50 text-amber-700 ring-amber-200',
     manual: 'bg-sky-50 text-sky-700 ring-sky-200',
     unmatched: 'bg-rose-50 text-rose-700 ring-rose-200',
+    high: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    medium: 'bg-amber-50 text-amber-700 ring-amber-200',
+    low: 'bg-rose-50 text-rose-700 ring-rose-200',
+    open: 'bg-slate-100 text-slate-600 ring-slate-200',
+    manual_review: 'bg-amber-50 text-amber-700 ring-amber-200',
+    resolved: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
 };
 
 const statusLabels = {
@@ -37,6 +43,7 @@ const statusLabels = {
     renewed: 'Renewed',
     auto_high: 'Auto (High)',
     auto_low: 'Auto (Low)',
+    manual_review: 'Manual Review',
 };
 
 export default function StatusBadge({ status }) {
