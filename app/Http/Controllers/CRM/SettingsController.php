@@ -1718,30 +1718,36 @@ class SettingsController extends Controller
         Product::query()->where('id', (int) $product->id)->update($updates);
     }
 
+    /**
+     * Only creates default BASIC/PREMIUM/VIP stubs for platforms that have ZERO products.
+     * Once a market has any products (e.g. from the dynamic catalog seed), this is a no-op.
+     */
     private function ensureDefaultPackagesForPlatform(Platform $platform): void
     {
-        $requiredNames = $this->requiredPackageNames();
-        $existingNames = Product::query()
+        $existingCount = Product::query()
             ->where('platform_id', (int) $platform->id)
-            ->get(['name'])
-            ->map(fn(Product $product) => $this->normalizePackageName((string) $product->name))
-            ->all();
-        $existingMap = array_flip($existingNames);
+            ->count();
+
+        if ($existingCount > 0) {
+            return;
+        }
+
+        $requiredNames = $this->requiredPackageNames();
         $currency = strtoupper((string) ($platform->currency_code ?: 'KES'));
 
         foreach ($requiredNames as $name) {
-            if (array_key_exists($name, $existingMap)) {
-                continue;
-            }
-
             Product::query()->create([
                 'platform_id' => (int) $platform->id,
                 'name' => $name,
+                'display_name' => ucfirst(strtolower($name)),
+                'slug' => strtolower($name),
+                'tier' => strtolower($name),
                 'weekly_price' => 0,
                 'biweekly_price' => 0,
                 'monthly_price' => 0,
                 'currency' => $currency,
                 'is_active' => false,
+                'sort_order' => match ($name) { 'BASIC' => 30, 'PREMIUM' => 20, 'VIP' => 10, default => 40 },
             ]);
         }
     }

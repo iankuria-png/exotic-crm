@@ -277,19 +277,13 @@ class DealController extends Controller
             return $freeTrialGuard;
         }
 
-        // Prefer explicit duration_days from request (set by dynamic catalog flow),
-        // otherwise fall back to legacy duration-based defaults
+        // Resolve duration days: explicit request param → ProductPrice lookup → legacy enum fallback
         $explicitDays = isset($validated['duration_days']) ? (int) $validated['duration_days'] : 0;
         if ($explicitDays > 0) {
             $durationDays = $explicitDays;
         } else {
-            $durationDays = match ($deal->duration) {
-                'weekly' => 7,
-                'biweekly' => 14,
-                'monthly' => 30,
-                'manual' => 30,
-                default => 30,
-            };
+            // Try to resolve from the deal's product + duration via product_prices table
+            $durationDays = $this->resolveDurationDaysFromCatalog($deal);
         }
         if ($durationDays < 1) {
             $durationDays = 30;
@@ -1365,6 +1359,42 @@ class DealController extends Controller
             '2_weeks' => 'biweekly',
             '1_month' => 'monthly',
             default => 'manual',
+        };
+    }
+
+    /**
+     * Look up duration_days from the product_prices table using deal's product + duration.
+     * Falls back to legacy enum-based defaults if no matching row is found.
+     */
+    private function resolveDurationDaysFromCatalog(Deal $deal): int
+    {
+        $legacyToDurationKey = [
+            'weekly' => '1_week',
+            'biweekly' => '2_weeks',
+            'monthly' => '1_month',
+        ];
+
+        $duration = (string) $deal->duration;
+        $durationKey = $legacyToDurationKey[$duration] ?? null;
+
+        if ($durationKey && $deal->product_id) {
+            $catalogDays = ProductPrice::query()
+                ->where('product_id', (int) $deal->product_id)
+                ->where('duration_key', $durationKey)
+                ->where('is_active', true)
+                ->value('duration_days');
+
+            if ($catalogDays && (int) $catalogDays > 0) {
+                return (int) $catalogDays;
+            }
+        }
+
+        return match ($duration) {
+            'weekly' => 7,
+            'biweekly' => 14,
+            'monthly' => 30,
+            'manual' => 30,
+            default => 30,
         };
     }
 }

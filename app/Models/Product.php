@@ -42,12 +42,8 @@ class Product extends Model
         return $this->currency . ' ' . number_format($this->weekly_price, 2);
     }
 
-    public function setMonthlyPriceAttribute($value)
-    {
-        $this->attributes['monthly_price'] = $value;
-        $this->attributes['biweekly_price'] = $value / 2;
-        $this->attributes['weekly_price'] = $value / 4;
-    }
+    // Note: Legacy auto-calculation mutator removed. With dynamic product_prices,
+    // weekly/biweekly/monthly are synced independently via syncLegacyPriceColumnsForProduct().
 
     public function platform()
     {
@@ -63,6 +59,7 @@ class Product extends Model
     {
         return $this->hasMany(ProductPrice::class)
             ->where('is_active', true)
+            ->where('price', '>', 0)
             ->orderBy('sort_order')
             ->orderBy('id');
     }
