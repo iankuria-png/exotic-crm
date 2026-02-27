@@ -95,6 +95,14 @@ export default function Deals() {
     });
 
     const platformOptions = integrationData?.platforms || [];
+    const selectedPlatformCurrency = useMemo(() => {
+        if (!platformFilter) {
+            return '';
+        }
+
+        const selected = platformOptions.find((platform) => String(platform.platform_id) === String(platformFilter));
+        return selected?.currency || '';
+    }, [platformFilter, platformOptions]);
 
     const selectedDeal = dialog.deal;
     const selectedClientId = selectedDeal?.client?.id || selectedDeal?.client_id || null;
@@ -384,7 +392,7 @@ export default function Deals() {
             render: (row) => (
                 <div className="flex items-center gap-1.5">
                     <span className={`text-sm font-semibold ${row.amount === null || row.amount === undefined || row.amount === '' ? 'text-slate-400' : 'text-slate-900'}`}>
-                        {formatCurrency(row.amount, row.currency || 'KES')}
+                        {formatCurrency(row.amount, row.currency || selectedPlatformCurrency || 'KES')}
                     </span>
                     {row.amount_is_estimate ? (
                         <span className="inline-flex items-center rounded-sm bg-slate-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ring-1 ring-inset ring-slate-200">

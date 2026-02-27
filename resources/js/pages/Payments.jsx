@@ -207,6 +207,16 @@ export default function Payments() {
     });
 
     const platformOptions = integrationData?.platforms || [];
+    const selectedPlatformCurrency = useMemo(() => {
+        if (!platformFilter) {
+            return '';
+        }
+
+        const selected = platformOptions.find((platform) => String(platform.platform_id) === String(platformFilter));
+        return selected?.currency || '';
+    }, [platformFilter, platformOptions]);
+
+    const resolveCurrency = (currencyCode) => currencyCode || selectedPlatformCurrency || 'KES';
 
     const { data, isLoading } = useQuery({
         queryKey: ['payments', page, search, statusFilter, matchFilter, platformFilter, sourceFilter, confidenceFilter, reviewStateFilter],
@@ -687,7 +697,7 @@ export default function Payments() {
         {
             key: 'amount',
             label: 'Amount',
-            render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, row.currency || 'KES')}</span>,
+            render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, resolveCurrency(row.currency))}</span>,
         },
         {
             key: 'product',
@@ -903,7 +913,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Awaiting Payment</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.awaitingCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.awaitingAmount)}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.awaitingAmount, resolveCurrency(null))}</p>
                     <p className="mt-1 text-xs text-slate-500">Initiated + pending transactions</p>
                 </button>
 
@@ -921,7 +931,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.confirmedAmount)}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.confirmedAmount, resolveCurrency(null))}</p>
                     <p className="mt-1 text-xs text-slate-500">Completed payments</p>
                 </button>
 
@@ -939,7 +949,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Unmatched Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.unmatchedCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.unmatchedAmount)}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.unmatchedAmount, resolveCurrency(null))}</p>
                     <p className="mt-1 text-xs text-slate-500">Completed, no client linked</p>
                 </button>
 
@@ -957,7 +967,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Failed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.failedCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.failedAmount)}</p>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.failedAmount, resolveCurrency(null))}</p>
                     <p className="mt-1 text-xs text-slate-500">Needs retry or follow-up</p>
                 </button>
             </section>
@@ -1147,7 +1157,7 @@ export default function Payments() {
                                         </article>
                                         <article className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                                             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Amount</p>
-                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatCurrency(diagnosticsData.payment?.amount, diagnosticsData.payment?.currency || 'KES')}</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatCurrency(diagnosticsData.payment?.amount, resolveCurrency(diagnosticsData.payment?.currency))}</p>
                                         </article>
                                     </section>
 
@@ -1256,7 +1266,7 @@ export default function Payments() {
                             <div>
                                 <h3 className="crm-panel-title">Manual Match</h3>
                                 <p className="crm-panel-subtitle">
-                                    Payment #{selectedPayment.id} • {selectedPayment.phone || 'No phone'} • {formatCurrency(selectedPayment.amount, selectedPayment.currency || 'KES')}
+                                    Payment #{selectedPayment.id} • {selectedPayment.phone || 'No phone'} • {formatCurrency(selectedPayment.amount, resolveCurrency(selectedPayment.currency))}
                                 </p>
                             </div>
                         </header>
@@ -1392,7 +1402,7 @@ export default function Payments() {
                 open={retryStkDialog.open && !!retryStkDialog.payment}
                 title="Retry STK push"
                 message={retryStkDialog.payment
-                    ? `Send another M-Pesa STK push for payment #${retryStkDialog.payment.id} (${formatCurrency(retryStkDialog.payment.amount, retryStkDialog.payment.currency || 'KES')} to ${retryStkDialog.payment.phone || 'customer'}).`
+                    ? `Send another M-Pesa STK push for payment #${retryStkDialog.payment.id} (${formatCurrency(retryStkDialog.payment.amount, resolveCurrency(retryStkDialog.payment.currency))} to ${retryStkDialog.payment.phone || 'customer'}).`
                     : ''}
                 confirmLabel="Send STK"
                 onCancel={() => setRetryStkDialog({ open: false, payment: null, reason: 'Retry STK from payment queue' })}
@@ -1422,7 +1432,7 @@ export default function Payments() {
                 open={sendLinkDialog.open && !!sendLinkDialog.payment}
                 title="Send payment link"
                 message={sendLinkDialog.payment
-                    ? `Send a payment page link by SMS for payment #${sendLinkDialog.payment.id} (${formatCurrency(sendLinkDialog.payment.amount, sendLinkDialog.payment.currency || 'KES')}).`
+                    ? `Send a payment page link by SMS for payment #${sendLinkDialog.payment.id} (${formatCurrency(sendLinkDialog.payment.amount, resolveCurrency(sendLinkDialog.payment.currency))}).`
                     : ''}
                 confirmLabel="Send SMS"
                 onCancel={() => setSendLinkDialog({ open: false, payment: null, channel: 'sms', provider: '', phone: '', reason: 'Send payment link from CRM' })}
@@ -1503,7 +1513,7 @@ export default function Payments() {
                 open={createSubDialog.open && !!createSubDialog.payment}
                 title="Create subscription"
                 message={createSubDialog.payment
-                    ? `Activate a subscription for payment #${createSubDialog.payment.id} (${formatCurrency(createSubDialog.payment.amount, createSubDialog.payment.currency || 'KES')}) matched to ${createSubDialog.payment.client?.name || 'client'}.`
+                    ? `Activate a subscription for payment #${createSubDialog.payment.id} (${formatCurrency(createSubDialog.payment.amount, resolveCurrency(createSubDialog.payment.currency))}) matched to ${createSubDialog.payment.client?.name || 'client'}.`
                     : ''}
                 confirmLabel="Create subscription"
                 onCancel={() => setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' })}
@@ -1533,7 +1543,7 @@ export default function Payments() {
                 open={manualCloseDialog.open && !!manualCloseDialog.payment}
                 title="Close pending payment manually"
                 message={manualCloseDialog.payment
-                    ? `Close payment #${manualCloseDialog.payment.id} (${formatCurrency(manualCloseDialog.payment.amount, manualCloseDialog.payment.currency || 'KES')}) and move it out of pending queue.`
+                    ? `Close payment #${manualCloseDialog.payment.id} (${formatCurrency(manualCloseDialog.payment.amount, resolveCurrency(manualCloseDialog.payment.currency))}) and move it out of pending queue.`
                     : ''}
                 confirmLabel="Close payment"
                 onCancel={() => setManualCloseDialog({ open: false, payment: null, category: 'timeout', reason: '' })}

@@ -1096,7 +1096,7 @@ class PaymentQueueController extends Controller
         }
 
         $amount = (float) $payment->amount;
-        $currency = $payment->currency ?? 'KES';
+        $currency = $payment->currency ?: ($platform->currency_code ?: 'KES');
         $message = sprintf(
             'Complete your payment of %s %s here: %s',
             $currency,
