@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Platform;
+use App\Models\Product;
 use App\Models\ScraperRun;
 use App\Models\ScraperSource;
 use App\Models\Template;
@@ -18,10 +19,12 @@ use App\Services\ScraperSourceService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class SettingsController extends Controller
 {
@@ -251,6 +254,17 @@ class SettingsController extends Controller
 
         $platform = Platform::query()->create($this->platformWritePayload($validated));
         $platform->refresh();
+        $this->ensureDefaultPackagesForPlatform($platform);
+
+        $activationDeferred = false;
+        $packageSetup = $this->platformPackageSetup($platform);
+        if ((bool) $platform->is_active && !$packageSetup['can_go_live']) {
+            $platform->forceFill([
+                'is_active' => false,
+            ])->save();
+            $platform->refresh();
+            $activationDeferred = true;
+        }
 
         $this->auditService->fromRequest(
             $request,
@@ -265,6 +279,8 @@ class SettingsController extends Controller
 
         return response()->json([
             'platform' => $this->serializePlatformIntegration($platform),
+            'activation_deferred' => $activationDeferred,
+            'package_setup' => $this->platformPackageSetup($platform),
         ], 201);
     }
 
@@ -302,7 +318,29 @@ class SettingsController extends Controller
         ]);
 
         $beforeState = $this->platformAuditState($platform);
-        $platform->fill($this->platformWritePayload($validated, true))->save();
+        $payload = $this->platformWritePayload($validated, true);
+        $wantsToBeActive = array_key_exists('is_active', $payload)
+            ? (bool) $payload['is_active']
+            : (bool) $platform->is_active;
+        $currencyUpdated = array_key_exists('currency_code', $payload);
+
+        DB::transaction(function () use ($platform, $payload, $wantsToBeActive, $currencyUpdated): void {
+            $platform->fill($payload)->save();
+            $platform->refresh();
+
+            if ($currencyUpdated) {
+                $this->syncPackageCurrenciesForPlatform($platform);
+            }
+
+            $this->ensureDefaultPackagesForPlatform($platform);
+            $packageSetup = $this->platformPackageSetup($platform);
+            if ($wantsToBeActive && !$packageSetup['can_go_live']) {
+                throw ValidationException::withMessages([
+                    'is_active' => 'Package setup is incomplete. Configure active Basic, Premium, and VIP prices before activating this market.',
+                ]);
+            }
+        });
+
         $platform->refresh();
 
         $this->auditService->fromRequest(
@@ -314,6 +352,122 @@ class SettingsController extends Controller
             $beforeState,
             $this->platformAuditState($platform),
             $validated['reason'] ?? 'Updated market integration profile from CRM settings'
+        );
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform),
+        ]);
+    }
+
+    public function updatePlatformPackages(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can update market package catalogs.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'packages' => 'required|array|min:3',
+            'packages.*.name' => 'required|string|max:32',
+            'packages.*.weekly_price' => 'required|numeric|min:0',
+            'packages.*.biweekly_price' => 'required|numeric|min:0',
+            'packages.*.monthly_price' => 'required|numeric|min:0',
+            'packages.*.is_active' => 'required|boolean',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $beforeState = [
+            'packages' => $this->platformPackageRows($platform),
+            'package_setup' => $this->platformPackageSetup($platform),
+        ];
+
+        DB::transaction(function () use ($platform, $validated): void {
+            $requiredNames = $this->requiredPackageNames();
+            $requiredSet = array_flip($requiredNames);
+            $currency = strtoupper((string) ($platform->currency_code ?: 'KES'));
+
+            $this->ensureDefaultPackagesForPlatform($platform);
+            $existing = Product::query()
+                ->where('platform_id', (int) $platform->id)
+                ->get()
+                ->keyBy(fn(Product $product) => $this->normalizePackageName((string) $product->name));
+
+            $seen = [];
+            foreach ($validated['packages'] as $row) {
+                $name = $this->normalizePackageName((string) ($row['name'] ?? ''));
+                if (!array_key_exists($name, $requiredSet)) {
+                    throw ValidationException::withMessages([
+                        'packages' => 'Only Basic, Premium, and VIP package rows are supported.',
+                    ]);
+                }
+
+                if (array_key_exists($name, $seen)) {
+                    throw ValidationException::withMessages([
+                        'packages' => "Duplicate {$name} row submitted. Submit each package once.",
+                    ]);
+                }
+
+                $weekly = (float) ($row['weekly_price'] ?? 0);
+                $biweekly = (float) ($row['biweekly_price'] ?? 0);
+                $monthly = (float) ($row['monthly_price'] ?? 0);
+                $isActive = (bool) ($row['is_active'] ?? false);
+
+                if ($isActive && ($weekly <= 0 || $biweekly <= 0 || $monthly <= 0)) {
+                    throw ValidationException::withMessages([
+                        'packages' => "{$name} cannot be active with zero pricing. Provide weekly, biweekly, and monthly prices greater than zero.",
+                    ]);
+                }
+
+                $product = $existing->get($name) ?? new Product();
+                $product->platform_id = (int) $platform->id;
+                $product->name = $name;
+                $product->weekly_price = $weekly;
+                $product->biweekly_price = $biweekly;
+                $product->monthly_price = $monthly;
+                $product->currency = $currency;
+                $product->is_active = $isActive;
+                $product->save();
+
+                $seen[$name] = true;
+            }
+
+            $missingNames = array_values(array_diff($requiredNames, array_keys($seen)));
+            if (!empty($missingNames)) {
+                throw ValidationException::withMessages([
+                    'packages' => 'Missing required package rows: ' . implode(', ', $missingNames) . '.',
+                ]);
+            }
+
+            $platform->refresh();
+            $packageSetup = $this->platformPackageSetup($platform);
+            if ((bool) $platform->is_active && !$packageSetup['can_go_live']) {
+                throw ValidationException::withMessages([
+                    'packages' => 'Cannot keep market active with incomplete package setup. Activate all required package prices first.',
+                ]);
+            }
+        });
+
+        $platform->refresh();
+        $afterState = [
+            'packages' => $this->platformPackageRows($platform),
+            'package_setup' => $this->platformPackageSetup($platform),
+        ];
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'platform',
+            (int) $platform->id,
+            $beforeState,
+            $afterState,
+            $validated['reason'] ?? 'Updated market package catalog from CRM settings'
         );
 
         return response()->json([
@@ -1319,8 +1473,123 @@ class SettingsController extends Controller
         ];
     }
 
+    private function requiredPackageNames(): array
+    {
+        return ['BASIC', 'PREMIUM', 'VIP'];
+    }
+
+    private function normalizePackageName(string $value): string
+    {
+        return strtoupper(trim($value));
+    }
+
+    private function ensureDefaultPackagesForPlatform(Platform $platform): void
+    {
+        $requiredNames = $this->requiredPackageNames();
+        $existingNames = Product::query()
+            ->where('platform_id', (int) $platform->id)
+            ->get(['name'])
+            ->map(fn(Product $product) => $this->normalizePackageName((string) $product->name))
+            ->all();
+        $existingMap = array_flip($existingNames);
+        $currency = strtoupper((string) ($platform->currency_code ?: 'KES'));
+
+        foreach ($requiredNames as $name) {
+            if (array_key_exists($name, $existingMap)) {
+                continue;
+            }
+
+            Product::query()->create([
+                'platform_id' => (int) $platform->id,
+                'name' => $name,
+                'weekly_price' => 0,
+                'biweekly_price' => 0,
+                'monthly_price' => 0,
+                'currency' => $currency,
+                'is_active' => false,
+            ]);
+        }
+    }
+
+    private function syncPackageCurrenciesForPlatform(Platform $platform): void
+    {
+        $currency = strtoupper((string) ($platform->currency_code ?: 'KES'));
+        Product::query()
+            ->where('platform_id', (int) $platform->id)
+            ->update(['currency' => $currency]);
+    }
+
+    private function platformPackageRows(Platform $platform): array
+    {
+        $this->ensureDefaultPackagesForPlatform($platform);
+        $rows = Product::query()
+            ->where('platform_id', (int) $platform->id)
+            ->get(['id', 'platform_id', 'name', 'weekly_price', 'biweekly_price', 'monthly_price', 'currency', 'is_active'])
+            ->keyBy(fn(Product $product) => $this->normalizePackageName((string) $product->name));
+
+        return collect($this->requiredPackageNames())
+            ->map(function (string $name) use ($rows, $platform): array {
+                /** @var Product|null $product */
+                $product = $rows->get($name);
+                $currency = strtoupper((string) ($platform->currency_code ?: ($product?->currency ?: 'KES')));
+
+                return [
+                    'id' => $product?->id ? (int) $product->id : null,
+                    'platform_id' => (int) $platform->id,
+                    'name' => $name,
+                    'plan_type' => strtolower($name),
+                    'weekly_price' => $product?->weekly_price !== null ? (float) $product->weekly_price : 0.0,
+                    'biweekly_price' => $product?->biweekly_price !== null ? (float) $product->biweekly_price : 0.0,
+                    'monthly_price' => $product?->monthly_price !== null ? (float) $product->monthly_price : 0.0,
+                    'currency' => $currency,
+                    'is_active' => (bool) ($product?->is_active ?? false),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function platformPackageSetup(Platform $platform, ?array $rows = null): array
+    {
+        $rows = collect($rows ?? $this->platformPackageRows($platform));
+        $missingRequirements = [];
+
+        foreach ($rows as $row) {
+            $pricesComplete = (float) $row['weekly_price'] > 0
+                && (float) $row['biweekly_price'] > 0
+                && (float) $row['monthly_price'] > 0;
+            $isActive = (bool) ($row['is_active'] ?? false);
+
+            if (!$isActive) {
+                $missingRequirements[] = [
+                    'name' => $row['name'],
+                    'label' => ucfirst(strtolower((string) $row['name'])),
+                    'reason' => 'inactive',
+                ];
+                continue;
+            }
+
+            if (!$pricesComplete) {
+                $missingRequirements[] = [
+                    'name' => $row['name'],
+                    'label' => ucfirst(strtolower((string) $row['name'])),
+                    'reason' => 'missing_price',
+                ];
+            }
+        }
+
+        return [
+            'status' => empty($missingRequirements) ? 'complete' : 'incomplete',
+            'can_go_live' => empty($missingRequirements),
+            'missing_requirements' => array_values($missingRequirements),
+            'currency' => strtoupper((string) ($platform->currency_code ?: 'KES')),
+        ];
+    }
+
     private function serializePlatformIntegration(Platform $platform): array
     {
+        $packageRows = $this->platformPackageRows($platform);
+        $packageSetup = $this->platformPackageSetup($platform, $packageRows);
         $hasWpCredentials = $this->platformHasWpCredentials($platform);
         $lastStatus = (string) ($platform->sync_last_status ?? 'unknown');
 
@@ -1357,6 +1626,8 @@ class SettingsController extends Controller
             'payment_link_providers' => is_array($platform->payment_link_providers)
                 ? $platform->payment_link_providers
                 : null,
+            'packages' => $packageRows,
+            'package_setup' => $packageSetup,
         ];
     }
 
@@ -1378,7 +1649,7 @@ class SettingsController extends Controller
         }
 
         if (!$isPatch) {
-            $payload['is_active'] = array_key_exists('is_active', $payload) ? (bool) $payload['is_active'] : true;
+            $payload['is_active'] = array_key_exists('is_active', $payload) ? (bool) $payload['is_active'] : false;
             $payload['phone_prefix'] = $payload['phone_prefix'] ?? '254';
             $payload['timezone'] = $payload['timezone'] ?? 'Africa/Nairobi';
             $payload['currency_code'] = $payload['currency_code'] ?? 'KES';

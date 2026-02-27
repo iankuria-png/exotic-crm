@@ -15,6 +15,7 @@ const baseTabs = [
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
 ];
+const requiredPackageNames = ['BASIC', 'PREMIUM', 'VIP'];
 
 function statusChip(status) {
     if (['connected', 'healthy', 'success'].includes(status)) return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
@@ -55,7 +56,7 @@ function defaultPlatformForm() {
         name: '',
         domain: '',
         country: '',
-        is_active: true,
+        is_active: false,
         wp_api_url: '',
         wp_api_user: '',
         wp_api_password: '',
@@ -63,6 +64,35 @@ function defaultPlatformForm() {
         timezone: 'Africa/Nairobi',
         phone_prefix: '254',
         support_chat_url: '',
+    };
+}
+
+function buildPackageEditor(platform) {
+    const currency = platform?.currency || 'KES';
+    const rows = Array.isArray(platform?.packages) ? platform.packages : [];
+    const byName = rows.reduce((acc, row) => {
+        const key = String(row?.name || '').toUpperCase();
+        if (!key) {
+            return acc;
+        }
+
+        acc[key] = row;
+        return acc;
+    }, {});
+
+    return {
+        reason: 'Updated market package catalog from settings workspace',
+        rows: requiredPackageNames.map((name) => {
+            const row = byName[name] || {};
+            return {
+                name,
+                weekly_price: Number(row.weekly_price || 0),
+                biweekly_price: Number(row.biweekly_price || 0),
+                monthly_price: Number(row.monthly_price || 0),
+                is_active: Boolean(row.is_active),
+            };
+        }),
+        currency,
     };
 }
 
@@ -287,6 +317,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
     });
     const [latestScraperRunResult, setLatestScraperRunResult] = useState(null);
     const [paymentLinkForm, setPaymentLinkForm] = useState(defaultPaymentLinkProviderForm());
+    const [packageEditor, setPackageEditor] = useState(null);
     const paymentLinkReadOnly = !canEditPaymentLinks;
 
     const { data, isLoading } = useQuery({
@@ -369,6 +400,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         setEditor(buildPlatformEditor(selectedPlatform));
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
         setPaymentLinkForm(buildPaymentLinkProviderForm(selectedPlatform));
+        setPackageEditor(buildPackageEditor(selectedPlatform));
     }, [selectedPlatformId, selectedPlatform]);
 
     useEffect(() => {
@@ -420,6 +452,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
             setCreateOpen(false);
             setCreateForm(defaultPlatformForm());
             setSelectedPlatformId(response?.platform?.platform_id || null);
+            setIntegrationArea('markets');
             setSyncForm((current) => ({
                 ...current,
                 scope: 'clients',
@@ -428,7 +461,11 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                 per_page: 100,
                 reason: `Initial full client sync for ${createdPlatformName}`,
             }));
-            toast.success('Market integration profile created. Run initial full sync to onboard records.');
+            toast.success(
+                response?.activation_deferred
+                    ? 'Market created in draft mode. Configure Basic/Premium/VIP packages, then activate and run initial full sync.'
+                    : 'Market integration profile created. Configure packages and run initial full sync to onboard records.'
+            );
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to create market profile.');
@@ -444,6 +481,18 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to update market profile.');
+        },
+    });
+
+    const savePackageCatalogMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}/packages`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setPackageEditor(buildPackageEditor(response?.platform || null));
+            toast.success('Market package catalog saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update market package catalog.');
         },
     });
 
@@ -704,9 +753,62 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         });
     };
 
+    const updatePackageRow = (packageName, field, value) => {
+        setPackageEditor((current) => {
+            if (!current) {
+                return current;
+            }
+
+            return {
+                ...current,
+                rows: current.rows.map((row) => {
+                    if (row.name !== packageName) {
+                        return row;
+                    }
+
+                    return {
+                        ...row,
+                        [field]: field === 'is_active' ? Boolean(value) : Number(value || 0),
+                    };
+                }),
+            };
+        });
+    };
+
+    const savePackageCatalog = () => {
+        if (!selectedPlatform || !packageEditor) {
+            return;
+        }
+
+        const invalidRow = packageEditor.rows.find((row) => (
+            row.is_active
+            && (Number(row.weekly_price) <= 0 || Number(row.biweekly_price) <= 0 || Number(row.monthly_price) <= 0)
+        ));
+
+        if (invalidRow) {
+            toast.error(`${invalidRow.name} cannot be active with zero pricing.`);
+            return;
+        }
+
+        savePackageCatalogMutation.mutate({
+            platformId: selectedPlatform.platform_id,
+            payload: {
+                packages: packageEditor.rows.map((row) => ({
+                    name: row.name,
+                    weekly_price: Number(row.weekly_price || 0),
+                    biweekly_price: Number(row.biweekly_price || 0),
+                    monthly_price: Number(row.monthly_price || 0),
+                    is_active: Boolean(row.is_active),
+                })),
+                reason: packageEditor.reason?.trim() || 'Updated market package catalog from settings workspace',
+            },
+        });
+    };
+
     const connectedServices = serviceRows.filter((item) => ['connected', 'healthy', 'success'].includes(item.status)).length;
     const wpReadyMarkets = platformRows.filter((item) => item.wp_sync?.credentials_ready).length;
     const syncErrors = platformRows.filter((item) => item.sync?.last_status === 'error').length;
+    const packageReadyMarkets = platformRows.filter((item) => item.package_setup?.can_go_live).length;
     const smsReady = smsProviderForm.active_provider === 'africastalking'
         ? Boolean(smsProviderForm.africastalking.username.trim()) && (smsProviderApiKeyConfigured || Boolean(smsProviderForm.africastalking.api_key.trim()))
         : Boolean(smsProviderForm.legacy_gateway.gateway_url.trim()) && Boolean(smsProviderForm.legacy_gateway.org_code.trim());
@@ -719,6 +821,8 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
     ];
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
+    const selectedPackageSetup = selectedPlatform?.package_setup || null;
+    const selectedPackagesReady = Boolean(selectedPackageSetup?.can_go_live);
     const showInitialFullSyncCta = Boolean(
         selectedPlatform
         && selectedHasCredentials
@@ -753,7 +857,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
 
     return (
         <div className="space-y-4">
-            <section className="grid gap-4 md:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-5">
                 <MetricCard
                     label="Connected Services"
                     value={connectedServices.toLocaleString()}
@@ -777,6 +881,12 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                     value={syncErrors.toLocaleString()}
                     meta="markets requiring intervention"
                     tone={syncErrors > 0 ? 'danger' : 'success'}
+                />
+                <MetricCard
+                    label="Packages Ready"
+                    value={packageReadyMarkets.toLocaleString()}
+                    meta="markets ready to go live"
+                    tone={packageReadyMarkets < platformRows.length ? 'warning' : 'success'}
                 />
             </section>
 
@@ -1088,6 +1198,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                             <div className="space-y-2">
                                 {platformRows.map((platform) => {
                                     const isSelected = platform.platform_id === selectedPlatformId;
+                                    const packageIncomplete = !platform.package_setup?.can_go_live;
                                     return (
                                         <button
                                             key={platform.platform_id}
@@ -1108,6 +1219,9 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                                 <span>Last sync: {formatDateTime(platform.sync?.last_synced_at)}</span>
                                                 <span className="font-medium">{(platform.sync?.last_status || 'unknown').replaceAll('_', ' ')}</span>
                                             </div>
+                                            <p className={`mt-1 text-xs ${packageIncomplete ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                                {packageIncomplete ? 'Package setup incomplete' : 'Package catalog ready'}
+                                            </p>
                                         </button>
                                     );
                                 })}
@@ -1192,10 +1306,16 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                                 type="checkbox"
                                                 checked={editor.is_active}
                                                 onChange={(event) => setEditor((current) => ({ ...current, is_active: event.target.checked }))}
+                                                disabled={!selectedPackagesReady && !editor.is_active}
                                                 className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
                                             />
                                             Market is active
                                         </label>
+                                        {!selectedPackagesReady ? (
+                                            <p className="md:col-span-2 text-xs text-amber-700">
+                                                Package setup is incomplete. Configure active Basic/Premium/VIP prices before turning this market live.
+                                            </p>
+                                        ) : null}
                                     </div>
 
                                     <div className="mt-3 flex justify-end">
@@ -1220,6 +1340,119 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             {updatePlatformMutation.isPending ? 'Saving...' : 'Save profile'}
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <section id="market-package-editor" className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-slate-900">Market Packages</h4>
+                                            <p className="text-xs text-slate-500">
+                                                Configure Basic, Premium, and VIP pricing for this market. Currency is fixed to
+                                                {' '}
+                                                <span className="font-semibold text-slate-700">{selectedPackageSetup?.currency || selectedPlatform.currency || 'KES'}</span>.
+                                            </p>
+                                        </div>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                                            selectedPackageSetup?.can_go_live
+                                                ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                                                : 'bg-amber-50 text-amber-700 ring-amber-200'
+                                        }`}>
+                                            {selectedPackageSetup?.can_go_live ? 'Package setup complete' : 'Package setup incomplete'}
+                                        </span>
+                                    </div>
+
+                                    {!selectedPackageSetup?.can_go_live ? (
+                                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                            <p className="font-semibold">Onboarding CTA: configure packages now</p>
+                                            <p className="mt-1">Enable and price all three plans before market activation and live sales onboarding.</p>
+                                            {Array.isArray(selectedPackageSetup?.missing_requirements) && selectedPackageSetup.missing_requirements.length > 0 ? (
+                                                <p className="mt-1">
+                                                    Missing:
+                                                    {' '}
+                                                    {selectedPackageSetup.missing_requirements.map((item) => `${item.label} (${item.reason.replaceAll('_', ' ')})`).join(', ')}
+                                                </p>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+
+                                    <div className="mt-3 overflow-x-auto">
+                                        <table className="min-w-full divide-y divide-slate-200 text-sm">
+                                            <thead className="bg-slate-50 text-xs uppercase tracking-[0.08em] text-slate-500">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left font-semibold">Package</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Weekly</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Biweekly</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Monthly</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Active</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100 bg-white">
+                                                {(packageEditor?.rows || []).map((row) => (
+                                                    <tr key={row.name}>
+                                                        <td className="px-3 py-2 font-semibold text-slate-900">{row.name}</td>
+                                                        <td className="px-3 py-2">
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.01"
+                                                                value={row.weekly_price}
+                                                                onChange={(event) => updatePackageRow(row.name, 'weekly_price', event.target.value)}
+                                                                className="crm-input w-28"
+                                                            />
+                                                        </td>
+                                                        <td className="px-3 py-2">
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.01"
+                                                                value={row.biweekly_price}
+                                                                onChange={(event) => updatePackageRow(row.name, 'biweekly_price', event.target.value)}
+                                                                className="crm-input w-28"
+                                                            />
+                                                        </td>
+                                                        <td className="px-3 py-2">
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.01"
+                                                                value={row.monthly_price}
+                                                                onChange={(event) => updatePackageRow(row.name, 'monthly_price', event.target.value)}
+                                                                className="crm-input w-28"
+                                                            />
+                                                        </td>
+                                                        <td className="px-3 py-2">
+                                                            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={row.is_active}
+                                                                    onChange={(event) => updatePackageRow(row.name, 'is_active', event.target.checked)}
+                                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                                />
+                                                                Active
+                                                            </label>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                                        <input
+                                            value={packageEditor?.reason || ''}
+                                            onChange={(event) => setPackageEditor((current) => (current ? { ...current, reason: event.target.value } : current))}
+                                            className="crm-input"
+                                            placeholder="Reason for package catalog update"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={savePackageCatalog}
+                                            disabled={savePackageCatalogMutation.isPending || !packageEditor?.reason?.trim()}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {savePackageCatalogMutation.isPending ? 'Saving...' : 'Save packages'}
                                         </button>
                                     </div>
                                 </section>
@@ -1914,7 +2147,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                 Market is active
                             </label>
                             <p className="md:col-span-2 rounded-md border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-700">
-                                After creating the market, use the "Run initial full sync" CTA in Manual Sync to import all client records.
+                                Onboarding flow: create market, configure Basic/Premium/VIP package pricing, activate market, then run initial full sync.
                             </p>
                         </div>
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
