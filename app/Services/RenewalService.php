@@ -258,6 +258,14 @@ class RenewalService
             });
         }
 
+        $inScopeBase = clone $summaryBase;
+        $this->applyBucketFilter($inScopeBase, 'all');
+
+        $inScopeTotal = $inScopeBase
+            ->select('clients.id')
+            ->distinct()
+            ->count('clients.id');
+
         $nowTs = now()->timestamp;
         $dateExpr = $this->expiryDateExpr();
         $summaryRow = (clone $summaryBase)
@@ -287,6 +295,7 @@ class RenewalService
         $summaryRow = $summaryRow ?: (object) [];
 
         $summary = [
+            'in_scope_total' => (int) $inScopeTotal,
             'active_deals' => (int) ($summaryRow->active_deals ?? 0),
             'modern_active_count' => (int) ($summaryRow->modern_active_count ?? 0),
             'risk' => (int) ($summaryRow->risk ?? 0),

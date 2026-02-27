@@ -274,18 +274,20 @@ export default function Deals() {
         return { active: 0, modernActive: 0, legacyActive: 0, pending: 0, risk: 0, expired: 0, untracked: 0 };
     }, [data?.summary]);
 
+    const inScopeTotal = Number(data?.summary?.in_scope_total || data?.targets?.total || 0);
+
     const activeMetric = useMemo(() => {
-        if (bucket === 'active') return 'warehouse';
+        if (bucket === 'all' && statusFilter === '') return 'scope';
         if (bucket === 'risk') return 'risk';
         if (bucket === 'pending') return 'pipeline';
         if (bucket === 'expired') return 'expired';
         if (bucket === 'untracked') return 'untracked';
         return '';
-    }, [bucket]);
+    }, [bucket, statusFilter]);
 
     const applyMetricFilter = (metricKey) => {
         const metricBucketMap = {
-            warehouse: 'active',
+            scope: 'all',
             risk: 'risk',
             pipeline: 'pending',
             expired: 'expired',
@@ -596,17 +598,19 @@ export default function Deals() {
         <div className="space-y-4">
             <PageHeader
                 title="Subscriptions"
-                subtitle={data?.targets?.total ? `${summary.active.toLocaleString()} active records out of ${data.targets.total.toLocaleString()} total targets in scope` : 'Subscription activation and lifecycle management'}
+                subtitle={inScopeTotal
+                    ? `${summary.active.toLocaleString()} active records across ${inScopeTotal.toLocaleString()} in-scope profiles`
+                    : 'Subscription activation and lifecycle management'}
             />
 
             <section className="grid gap-4 md:grid-cols-5">
                 <MetricCard
-                    label="Active Warehouse"
-                    value={`${summary.active.toLocaleString()} / ${data?.targets?.total?.toLocaleString() || 0}`}
-                    meta={`${summary.modernActive} Modern + ${summary.legacyActive} Legacy`}
-                    tone="success"
-                    onClick={() => applyMetricFilter('warehouse')}
-                    active={activeMetric === 'warehouse'}
+                    label="In Scope (All Types)"
+                    value={inScopeTotal.toLocaleString()}
+                    meta={`${summary.modernActive.toLocaleString()} modern active | ${summary.legacyActive.toLocaleString()} legacy active | ${summary.untracked.toLocaleString()} untracked`}
+                    tone="slate"
+                    onClick={() => applyMetricFilter('scope')}
+                    active={activeMetric === 'scope'}
                 />
                 <MetricCard
                     label="Immediate Risk"
