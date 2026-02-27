@@ -412,6 +412,7 @@ export default function ClientDetail() {
             api.post('/crm/deals', {
                 ...deal,
                 product_id: Number(deal.product_id),
+                product_price_id: deal.product_price_id ? Number(deal.product_price_id) : undefined,
             }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
@@ -1726,14 +1727,30 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
     const [form, setForm] = useState({
         client_id: client.id,
         product_id: '',
-        plan_type: 'basic',
-        duration: 'monthly',
+        product_price_id: '',
     });
+
+    const selectedProduct = products?.find((p) => String(p.id) === String(form.product_id));
+    const availablePrices = selectedProduct?.active_prices || [];
+    const selectedPrice = availablePrices.find((p) => String(p.id) === String(form.product_price_id));
+
+    const handleProductChange = (e) => {
+        const productId = e.target.value;
+        const product = products?.find((p) => String(p.id) === String(productId));
+        const prices = product?.active_prices || [];
+        setForm({
+            ...form,
+            product_id: productId,
+            product_price_id: prices.length === 1 ? String(prices[0].id) : '',
+        });
+    };
 
     const handleSubmit = (e) => {
         e.preventDefault();
         onSubmit(form);
     };
+
+    const canSubmit = form.product_id && form.product_price_id && !isPending;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={onClose}>
@@ -1747,53 +1764,59 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
 
                 <form onSubmit={handleSubmit} className="space-y-4 p-4">
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">Product</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">Package</label>
                         <select
                             value={form.product_id}
-                            onChange={(e) => setForm({ ...form, product_id: e.target.value })}
+                            onChange={handleProductChange}
                             required
                             className="crm-select w-full"
                         >
-                            <option value="">Select a product...</option>
+                            <option value="">Select a package...</option>
                             {products?.map((product) => (
                                 <option key={product.id} value={product.id}>
-                                    {product.name} - {formatCurrency(product.monthly_price, platformCurrency)}/mo
+                                    {product.display_name || product.name}
                                 </option>
                             ))}
                         </select>
                     </div>
 
-                    <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">Plan Type</label>
-                        <select
-                            value={form.plan_type}
-                            onChange={(e) => setForm({ ...form, plan_type: e.target.value })}
-                            className="crm-select w-full"
-                        >
-                            <option value="basic">Basic</option>
-                            <option value="premium">Premium</option>
-                            <option value="vip">VIP</option>
-                        </select>
-                    </div>
+                    {form.product_id && availablePrices.length > 0 ? (
+                        <div>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">Duration &amp; Price</label>
+                            <select
+                                value={form.product_price_id}
+                                onChange={(e) => setForm({ ...form, product_price_id: e.target.value })}
+                                required
+                                className="crm-select w-full"
+                            >
+                                <option value="">Select a duration...</option>
+                                {availablePrices.map((price) => (
+                                    <option key={price.id} value={price.id}>
+                                        {price.duration_label} — {formatCurrency(price.price, price.currency || platformCurrency)}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    ) : form.product_id ? (
+                        <p className="text-sm text-amber-600">No active pricing options for this package.</p>
+                    ) : null}
 
-                    <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">Duration</label>
-                        <select
-                            value={form.duration}
-                            onChange={(e) => setForm({ ...form, duration: e.target.value })}
-                            className="crm-select w-full"
-                        >
-                            <option value="weekly">Weekly</option>
-                            <option value="biweekly">Biweekly</option>
-                            <option value="monthly">Monthly</option>
-                        </select>
-                    </div>
+                    {selectedPrice ? (
+                        <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                            <span className="font-medium">{selectedProduct?.display_name || selectedProduct?.name}</span>
+                            {' · '}
+                            {selectedPrice.duration_label}
+                            {' · '}
+                            <span className="font-semibold text-slate-900">{formatCurrency(selectedPrice.price, selectedPrice.currency || platformCurrency)}</span>
+                            {selectedPrice.duration_days ? <span className="text-slate-400"> ({selectedPrice.duration_days} days)</span> : null}
+                        </div>
+                    ) : null}
 
                     {error ? <p className="text-sm text-rose-700">Failed to create subscription. {error.response?.data?.message || 'Please try again.'}</p> : null}
 
                     <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
                         <button type="button" onClick={onClose} className="crm-btn-secondary">Cancel</button>
-                        <button type="submit" disabled={!form.product_id || isPending} className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50">
+                        <button type="submit" disabled={!canSubmit} className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50">
                             {isPending ? 'Creating...' : 'Create subscription'}
                         </button>
                     </div>
