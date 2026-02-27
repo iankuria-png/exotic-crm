@@ -599,7 +599,7 @@ export default function Deals() {
             <PageHeader
                 title="Subscriptions"
                 subtitle={inScopeTotal
-                    ? `${inScopeTotal.toLocaleString()} in-scope profiles • ${summary.active.toLocaleString()} active subscriptions`
+                    ? `${inScopeTotal.toLocaleString()} in-scope profiles`
                     : 'Subscription activation and lifecycle management'}
             />
 
