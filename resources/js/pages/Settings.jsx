@@ -15,7 +15,15 @@ const baseTabs = [
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
 ];
-const requiredPackageNames = ['BASIC', 'PREMIUM', 'VIP'];
+const defaultDurationOptions = [
+    { key: '1_week', label: '1 Week', days: 7 },
+    { key: '2_weeks', label: '2 Weeks', days: 14 },
+    { key: '1_month', label: '1 Month', days: 30 },
+    { key: '2_months', label: '2 Months', days: 60 },
+    { key: '3_months', label: '3 Months', days: 90 },
+    { key: '6_months', label: '6 Months', days: 180 },
+    { key: '1_year', label: '1 Year', days: 365 },
+];
 
 function statusChip(status) {
     if (['connected', 'healthy', 'success'].includes(status)) return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
@@ -69,31 +77,51 @@ function defaultPlatformForm() {
 
 function buildPackageEditor(platform) {
     const currency = platform?.currency || 'KES';
-    const rows = Array.isArray(platform?.packages) ? platform.packages : [];
-    const byName = rows.reduce((acc, row) => {
-        const key = String(row?.name || '').toUpperCase();
-        if (!key) {
-            return acc;
-        }
+    const serverRows = Array.isArray(platform?.packages) ? platform.packages : [];
 
-        acc[key] = row;
-        return acc;
-    }, {});
+    const rows = serverRows.map((row) => ({
+        id: row.id || null,
+        name: row.name || '',
+        display_name: row.display_name || '',
+        tier: row.tier || 'custom',
+        sort_order: Number(row.sort_order || 0),
+        is_active: Boolean(row.is_active),
+        is_archived: Boolean(row.is_archived),
+        prices: Array.isArray(row.prices) && row.prices.length > 0
+            ? row.prices.map((p) => ({
+                id: p.id || null,
+                duration_key: p.duration_key,
+                duration_label: p.duration_label,
+                duration_days: p.duration_days,
+                price: Number(p.price || 0),
+                is_active: Boolean(p.is_active),
+                sort_order: Number(p.sort_order || 0),
+            }))
+            : [],
+    }));
 
     return {
         reason: 'Updated market package catalog from settings workspace',
-        rows: requiredPackageNames.map((name) => {
-            const row = byName[name] || {};
-            return {
-                name,
-                weekly_price: Number(row.weekly_price || 0),
-                biweekly_price: Number(row.biweekly_price || 0),
-                monthly_price: Number(row.monthly_price || 0),
-                is_active: Boolean(row.is_active),
-            };
-        }),
+        rows,
         currency,
     };
+}
+
+function newPackageRow(sortOrder = 0) {
+    return {
+        id: null,
+        name: '',
+        display_name: '',
+        tier: 'custom',
+        sort_order: sortOrder,
+        is_active: true,
+        is_archived: false,
+        prices: [{ id: null, duration_key: '1_month', duration_label: '1 Month', duration_days: 30, price: 0, is_active: true, sort_order: 10 }],
+    };
+}
+
+function newPriceRow(sortOrder = 0) {
+    return { id: null, duration_key: '', duration_label: '', duration_days: 30, price: 0, is_active: true, sort_order: sortOrder };
 }
 
 function smsProviderLabel(providerId) {
@@ -463,7 +491,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
             }));
             toast.success(
                 response?.activation_deferred
-                    ? 'Market created in draft mode. Configure Basic/Premium/VIP packages, then activate and run initial full sync.'
+                    ? 'Market created in draft mode. Configure packages and pricing, then activate and run initial full sync.'
                     : 'Market integration profile created. Configure packages and run initial full sync to onboard records.'
             );
         },
@@ -753,52 +781,139 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         });
     };
 
-    const updatePackageRow = (packageName, field, value) => {
+    const updatePackageRow = (rowIndex, field, value) => {
         setPackageEditor((current) => {
-            if (!current) {
-                return current;
-            }
-
+            if (!current) return current;
             return {
                 ...current,
-                rows: current.rows.map((row) => {
-                    if (row.name !== packageName) {
-                        return row;
-                    }
+                rows: current.rows.map((row, i) => {
+                    if (i !== rowIndex) return row;
+                    if (field === 'is_active') return { ...row, is_active: Boolean(value) };
+                    return { ...row, [field]: value };
+                }),
+            };
+        });
+    };
 
+    const updatePriceRow = (rowIndex, priceIndex, field, value) => {
+        setPackageEditor((current) => {
+            if (!current) return current;
+            return {
+                ...current,
+                rows: current.rows.map((row, i) => {
+                    if (i !== rowIndex) return row;
                     return {
                         ...row,
-                        [field]: field === 'is_active' ? Boolean(value) : Number(value || 0),
+                        prices: row.prices.map((price, j) => {
+                            if (j !== priceIndex) return price;
+                            if (field === 'duration_key') {
+                                const preset = defaultDurationOptions.find((d) => d.key === value);
+                                return {
+                                    ...price,
+                                    duration_key: value,
+                                    duration_label: preset ? preset.label : price.duration_label,
+                                    duration_days: preset ? preset.days : price.duration_days,
+                                };
+                            }
+                            if (field === 'price') return { ...price, price: Number(value || 0) };
+                            if (field === 'is_active') return { ...price, is_active: Boolean(value) };
+                            return { ...price, [field]: value };
+                        }),
                     };
                 }),
             };
         });
     };
 
+    const addPackageRow = () => {
+        setPackageEditor((current) => {
+            if (!current) return current;
+            const maxSort = current.rows.reduce((max, r) => Math.max(max, r.sort_order || 0), 0);
+            return { ...current, rows: [...current.rows, newPackageRow(maxSort + 10)] };
+        });
+    };
+
+    const removePackageRow = (rowIndex) => {
+        setPackageEditor((current) => {
+            if (!current) return current;
+            return { ...current, rows: current.rows.filter((_, i) => i !== rowIndex) };
+        });
+    };
+
+    const addPriceRow = (rowIndex) => {
+        setPackageEditor((current) => {
+            if (!current) return current;
+            return {
+                ...current,
+                rows: current.rows.map((row, i) => {
+                    if (i !== rowIndex) return row;
+                    const maxSort = row.prices.reduce((max, p) => Math.max(max, p.sort_order || 0), 0);
+                    return { ...row, prices: [...row.prices, newPriceRow(maxSort + 10)] };
+                }),
+            };
+        });
+    };
+
+    const removePriceRow = (rowIndex, priceIndex) => {
+        setPackageEditor((current) => {
+            if (!current) return current;
+            return {
+                ...current,
+                rows: current.rows.map((row, i) => {
+                    if (i !== rowIndex) return row;
+                    return { ...row, prices: row.prices.filter((_, j) => j !== priceIndex) };
+                }),
+            };
+        });
+    };
+
     const savePackageCatalog = () => {
-        if (!selectedPlatform || !packageEditor) {
-            return;
+        if (!selectedPlatform || !packageEditor) return;
+
+        const rows = packageEditor.rows.filter((r) => r.name.trim());
+
+        for (const row of rows) {
+            if (row.is_active) {
+                const hasActivePrice = row.prices.some((p) => p.is_active && Number(p.price) > 0 && p.duration_key);
+                if (!hasActivePrice) {
+                    toast.error(`${row.name || 'Unnamed package'} is active but has no priced duration. Add at least one active price > 0.`);
+                    return;
+                }
+            }
+
+            for (const price of row.prices) {
+                if (!price.duration_key) {
+                    toast.error(`${row.name || 'Unnamed package'} has a duration row without a key. Select a duration or remove the row.`);
+                    return;
+                }
+            }
         }
 
-        const invalidRow = packageEditor.rows.find((row) => (
-            row.is_active
-            && (Number(row.weekly_price) <= 0 || Number(row.biweekly_price) <= 0 || Number(row.monthly_price) <= 0)
-        ));
-
-        if (invalidRow) {
-            toast.error(`${invalidRow.name} cannot be active with zero pricing.`);
+        if (rows.length === 0) {
+            toast.error('Add at least one package before saving.');
             return;
         }
 
         savePackageCatalogMutation.mutate({
             platformId: selectedPlatform.platform_id,
             payload: {
-                packages: packageEditor.rows.map((row) => ({
-                    name: row.name,
-                    weekly_price: Number(row.weekly_price || 0),
-                    biweekly_price: Number(row.biweekly_price || 0),
-                    monthly_price: Number(row.monthly_price || 0),
+                packages: rows.map((row) => ({
+                    id: row.id || undefined,
+                    name: row.name.trim().toUpperCase(),
+                    display_name: row.display_name.trim() || undefined,
+                    tier: row.tier || undefined,
+                    sort_order: row.sort_order,
                     is_active: Boolean(row.is_active),
+                    is_archived: Boolean(row.is_archived),
+                    prices: row.prices.map((p) => ({
+                        id: p.id || undefined,
+                        duration_key: p.duration_key,
+                        duration_label: p.duration_label || p.duration_key.replace(/_/g, ' '),
+                        duration_days: p.duration_days || 30,
+                        price: Number(p.price || 0),
+                        is_active: Boolean(p.is_active),
+                        sort_order: p.sort_order,
+                    })),
                 })),
                 reason: packageEditor.reason?.trim() || 'Updated market package catalog from settings workspace',
             },
@@ -1313,7 +1428,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                         </label>
                                         {!selectedPackagesReady ? (
                                             <p className="md:col-span-2 text-xs text-amber-700">
-                                                Package setup is incomplete. Configure active Basic/Premium/VIP prices before turning this market live.
+                                                Package setup is incomplete. Configure at least one active package with pricing before activating this market.
                                             </p>
                                         ) : null}
                                     </div>
@@ -1349,7 +1464,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                         <div>
                                             <h4 className="text-sm font-semibold text-slate-900">Market Packages</h4>
                                             <p className="text-xs text-slate-500">
-                                                Configure Basic, Premium, and VIP pricing for this market. Currency is fixed to
+                                                Configure packages and duration pricing for this market. Currency:
                                                 {' '}
                                                 <span className="font-semibold text-slate-700">{selectedPackageSetup?.currency || selectedPlatform.currency || 'KES'}</span>.
                                             </p>
@@ -1365,79 +1480,145 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
 
                                     {!selectedPackageSetup?.can_go_live ? (
                                         <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                                            <p className="font-semibold">Onboarding CTA: configure packages now</p>
-                                            <p className="mt-1">Enable and price all three plans before market activation and live sales onboarding.</p>
-                                            {Array.isArray(selectedPackageSetup?.missing_requirements) && selectedPackageSetup.missing_requirements.length > 0 ? (
-                                                <p className="mt-1">
-                                                    Missing:
-                                                    {' '}
-                                                    {selectedPackageSetup.missing_requirements.map((item) => `${item.label} (${item.reason.replaceAll('_', ' ')})`).join(', ')}
-                                                </p>
-                                            ) : null}
+                                            <p className="font-semibold">Configure at least one active package with a priced duration to activate this market.</p>
                                         </div>
                                     ) : null}
 
-                                    <div className="mt-3 overflow-x-auto">
-                                        <table className="min-w-full divide-y divide-slate-200 text-sm">
-                                            <thead className="bg-slate-50 text-xs uppercase tracking-[0.08em] text-slate-500">
-                                                <tr>
-                                                    <th className="px-3 py-2 text-left font-semibold">Package</th>
-                                                    <th className="px-3 py-2 text-left font-semibold">Weekly</th>
-                                                    <th className="px-3 py-2 text-left font-semibold">Biweekly</th>
-                                                    <th className="px-3 py-2 text-left font-semibold">Monthly</th>
-                                                    <th className="px-3 py-2 text-left font-semibold">Active</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-100 bg-white">
-                                                {(packageEditor?.rows || []).map((row) => (
-                                                    <tr key={row.name}>
-                                                        <td className="px-3 py-2 font-semibold text-slate-900">{row.name}</td>
-                                                        <td className="px-3 py-2">
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.01"
-                                                                value={row.weekly_price}
-                                                                onChange={(event) => updatePackageRow(row.name, 'weekly_price', event.target.value)}
-                                                                className="crm-input w-28"
-                                                            />
-                                                        </td>
-                                                        <td className="px-3 py-2">
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.01"
-                                                                value={row.biweekly_price}
-                                                                onChange={(event) => updatePackageRow(row.name, 'biweekly_price', event.target.value)}
-                                                                className="crm-input w-28"
-                                                            />
-                                                        </td>
-                                                        <td className="px-3 py-2">
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="0.01"
-                                                                value={row.monthly_price}
-                                                                onChange={(event) => updatePackageRow(row.name, 'monthly_price', event.target.value)}
-                                                                className="crm-input w-28"
-                                                            />
-                                                        </td>
-                                                        <td className="px-3 py-2">
-                                                            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={row.is_active}
-                                                                    onChange={(event) => updatePackageRow(row.name, 'is_active', event.target.checked)}
-                                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                                />
-                                                                Active
-                                                            </label>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                                    <div className="mt-3 space-y-3">
+                                        {(packageEditor?.rows || []).map((row, rowIndex) => (
+                                            <div key={row.id || `new-${rowIndex}`} className={`rounded-md border p-3 ${row.is_active ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50'}`}>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={row.name}
+                                                        onChange={(e) => updatePackageRow(rowIndex, 'name', e.target.value.toUpperCase())}
+                                                        placeholder="PACKAGE NAME"
+                                                        className="crm-input w-40 font-semibold uppercase"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        value={row.display_name}
+                                                        onChange={(e) => updatePackageRow(rowIndex, 'display_name', e.target.value)}
+                                                        placeholder="Display name"
+                                                        className="crm-input w-40"
+                                                    />
+                                                    <select
+                                                        value={row.tier}
+                                                        onChange={(e) => updatePackageRow(rowIndex, 'tier', e.target.value)}
+                                                        className="crm-select w-28"
+                                                    >
+                                                        <option value="basic">Basic</option>
+                                                        <option value="premium">Premium</option>
+                                                        <option value="vip">VIP</option>
+                                                        <option value="vvip">VVIP</option>
+                                                        <option value="custom">Custom</option>
+                                                    </select>
+                                                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={row.is_active}
+                                                            onChange={(e) => updatePackageRow(rowIndex, 'is_active', e.target.checked)}
+                                                            className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                        />
+                                                        Active
+                                                    </label>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => removePackageRow(rowIndex)}
+                                                        className="ml-auto text-xs text-rose-500 hover:text-rose-700"
+                                                        title="Remove package"
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </div>
+
+                                                <div className="mt-2">
+                                                    <table className="w-full text-xs">
+                                                        <thead>
+                                                            <tr className="text-left text-slate-400 uppercase tracking-wider">
+                                                                <th className="px-1 py-1 font-medium">Duration</th>
+                                                                <th className="px-1 py-1 font-medium">Days</th>
+                                                                <th className="px-1 py-1 font-medium">Price ({selectedPackageSetup?.currency || 'KES'})</th>
+                                                                <th className="px-1 py-1 font-medium">On</th>
+                                                                <th className="px-1 py-1 font-medium"></th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {row.prices.map((price, priceIndex) => (
+                                                                <tr key={price.id || `price-${priceIndex}`}>
+                                                                    <td className="px-1 py-1">
+                                                                        <select
+                                                                            value={price.duration_key}
+                                                                            onChange={(e) => updatePriceRow(rowIndex, priceIndex, 'duration_key', e.target.value)}
+                                                                            className="crm-select w-full text-xs"
+                                                                        >
+                                                                            <option value="">Select...</option>
+                                                                            {defaultDurationOptions.map((d) => (
+                                                                                <option key={d.key} value={d.key}>{d.label}</option>
+                                                                            ))}
+                                                                        </select>
+                                                                    </td>
+                                                                    <td className="px-1 py-1">
+                                                                        <input
+                                                                            type="number"
+                                                                            min="1"
+                                                                            max="365"
+                                                                            value={price.duration_days}
+                                                                            onChange={(e) => updatePriceRow(rowIndex, priceIndex, 'duration_days', Number(e.target.value || 30))}
+                                                                            className="crm-input w-16 text-xs"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-1 py-1">
+                                                                        <input
+                                                                            type="number"
+                                                                            min="0"
+                                                                            step="1"
+                                                                            value={price.price}
+                                                                            onChange={(e) => updatePriceRow(rowIndex, priceIndex, 'price', e.target.value)}
+                                                                            className="crm-input w-24 text-xs"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-1 py-1">
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={price.is_active}
+                                                                            onChange={(e) => updatePriceRow(rowIndex, priceIndex, 'is_active', e.target.checked)}
+                                                                            className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-1 py-1">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => removePriceRow(rowIndex, priceIndex)}
+                                                                            className="text-rose-400 hover:text-rose-600"
+                                                                            title="Remove duration"
+                                                                        >
+                                                                            x
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addPriceRow(rowIndex)}
+                                                        className="mt-1 text-xs text-teal-600 hover:text-teal-800"
+                                                    >
+                                                        + Add duration
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
                                     </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={addPackageRow}
+                                        className="mt-3 w-full rounded-md border border-dashed border-slate-300 py-2 text-xs text-slate-500 hover:border-teal-300 hover:text-teal-700"
+                                    >
+                                        + Add package
+                                    </button>
 
                                     <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
                                         <input
@@ -2147,7 +2328,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                 Market is active
                             </label>
                             <p className="md:col-span-2 rounded-md border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-700">
-                                Onboarding flow: create market, configure Basic/Premium/VIP package pricing, activate market, then run initial full sync.
+                                Onboarding flow: create market, configure package pricing, activate market, then run initial full sync.
                             </p>
                         </div>
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
