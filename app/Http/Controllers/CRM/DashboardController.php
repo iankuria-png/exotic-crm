@@ -235,14 +235,16 @@ class DashboardController extends Controller
             'You do not have access to this market products catalog.'
         );
 
-        return response()->json(
-            Product::query()
-                ->where('platform_id', $requestedPlatformId)
-                ->where('is_active', true)
-                ->orderByRaw('FIELD(UPPER(name), "BASIC", "PREMIUM", "VIP")')
-                ->orderBy('name')
-                ->get()
-        );
+        $products = Product::query()
+            ->where('platform_id', $requestedPlatformId)
+            ->where('is_active', true)
+            ->where('is_archived', false)
+            ->with(['activePrices'])
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get();
+
+        return response()->json($products);
     }
 
     private function resolveOldestDashboardRecordAt(?array $platformIds): ?Carbon

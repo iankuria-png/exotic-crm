@@ -8,6 +8,7 @@ use App\Models\Deal;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Product;
+use App\Models\ProductPrice;
 use App\Models\Template;
 use App\Models\TimelineEvent;
 use App\Models\Platform;
@@ -76,13 +77,14 @@ class DealController extends Controller
 
         $validated = $request->validate([
             'product_id' => 'sometimes|exists:products,id',
+            'product_price_id' => 'nullable|exists:product_prices,id',
             'duration' => 'sometimes|in:weekly,biweekly,monthly,manual',
             'status' => 'sometimes|in:pending,awaiting_payment,paid,active,expired,cancelled,renewed',
         ]);
 
         $before = $deal->only(['product_id', 'plan_type', 'duration', 'status', 'amount']);
 
-        if (array_key_exists('product_id', $validated) || array_key_exists('duration', $validated)) {
+        if (array_key_exists('product_id', $validated) || array_key_exists('duration', $validated) || array_key_exists('product_price_id', $validated)) {
             $productId = (int) ($validated['product_id'] ?? $deal->product_id);
             if ($productId <= 0) {
                 throw ValidationException::withMessages([
@@ -90,13 +92,23 @@ class DealController extends Controller
                 ]);
             }
 
-            $duration = $validated['duration'] ?? $deal->duration;
             $product = $this->resolveScopedProduct($productId, (int) $deal->platform_id);
-
             $validated['product_id'] = $product->id;
             $validated['plan_type'] = $this->derivePlanTypeFromProduct($product);
-            $validated['amount'] = $this->resolveAmountForDuration($product, (string) $duration);
+
+            $productPriceId = isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null;
+            $priceRow = $productPriceId ? $this->resolveScopedProductPrice($productPriceId, $product) : null;
+
+            if ($priceRow) {
+                $validated['amount'] = (float) $priceRow->price;
+                $validated['duration'] = $this->mapDurationKeyToLegacy($priceRow->duration_key);
+            } else {
+                $duration = $validated['duration'] ?? $deal->duration;
+                $validated['amount'] = $this->resolveAmountForDuration($product, (string) $duration);
+            }
+
             $validated['currency'] = $product->currency ?: ($deal->platform?->currency_code ?: $deal->currency ?: 'KES');
+            unset($validated['product_price_id']);
         }
 
         $deal->update($validated);
@@ -160,7 +172,8 @@ class DealController extends Controller
         $validated = $request->validate([
             'client_id' => 'required|exists:clients,id',
             'product_id' => 'required|exists:products,id',
-            'duration' => 'required|in:weekly,biweekly,monthly,manual',
+            'product_price_id' => 'nullable|exists:product_prices,id',
+            'duration' => 'nullable|in:weekly,biweekly,monthly,manual',
             'lead_id' => 'nullable|exists:leads,id',
         ]);
 
@@ -173,7 +186,20 @@ class DealController extends Controller
 
         $product = $this->resolveScopedProduct((int) $validated['product_id'], (int) $client->platform_id);
         $planType = $this->derivePlanTypeFromProduct($product);
-        $amount = $this->resolveAmountForDuration($product, (string) $validated['duration']);
+
+        // Resolve amount and duration from product_price_id if provided, otherwise fall back to legacy
+        $productPriceId = isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null;
+        $priceRow = $productPriceId ? $this->resolveScopedProductPrice($productPriceId, $product) : null;
+
+        if ($priceRow) {
+            $amount = (float) $priceRow->price;
+            $duration = $this->mapDurationKeyToLegacy($priceRow->duration_key);
+            $durationDays = $priceRow->duration_days;
+        } else {
+            $duration = $validated['duration'] ?? 'monthly';
+            $amount = $this->resolveAmountForDuration($product, $duration);
+            $durationDays = null;
+        }
 
         $deal = Deal::create([
             'platform_id' => $client->platform_id,
@@ -183,7 +209,7 @@ class DealController extends Controller
             'plan_type' => $planType,
             'amount' => $amount,
             'currency' => $product->currency ?: ($client->platform->currency_code ?? 'KES'),
-            'duration' => $validated['duration'],
+            'duration' => $duration,
             'status' => 'pending',
             'assigned_to' => $request->user()->id,
         ]);
@@ -198,6 +224,8 @@ class DealController extends Controller
                 'plan_type' => $deal->plan_type,
                 'duration' => $deal->duration,
                 'amount' => $deal->amount,
+                'product_price_id' => $productPriceId,
+                'duration_days' => $durationDays,
             ],
             'created_at' => now(),
         ]);
@@ -249,13 +277,20 @@ class DealController extends Controller
             return $freeTrialGuard;
         }
 
-        $durationDays = match ($deal->duration) {
-            'weekly' => 7,
-            'biweekly' => 14,
-            'monthly' => 30,
-            'manual' => (int) ($validated['duration_days'] ?? 30),
-            default => 30,
-        };
+        // Prefer explicit duration_days from request (set by dynamic catalog flow),
+        // otherwise fall back to legacy duration-based defaults
+        $explicitDays = isset($validated['duration_days']) ? (int) $validated['duration_days'] : 0;
+        if ($explicitDays > 0) {
+            $durationDays = $explicitDays;
+        } else {
+            $durationDays = match ($deal->duration) {
+                'weekly' => 7,
+                'biweekly' => 14,
+                'monthly' => 30,
+                'manual' => 30,
+                default => 30,
+            };
+        }
         if ($durationDays < 1) {
             $durationDays = 30;
         }
@@ -1275,11 +1310,19 @@ class DealController extends Controller
 
     private function derivePlanTypeFromProduct(Product $product): string
     {
+        // Use tier field if set by dynamic catalog
+        $tier = strtolower(trim((string) ($product->tier ?? '')));
+        if (in_array($tier, ['basic', 'premium', 'vip', 'vvip'], true)) {
+            return $tier;
+        }
+
         $name = strtolower((string) $product->name);
+        if (str_contains($name, 'vvip')) {
+            return 'vvip';
+        }
         if (str_contains($name, 'vip')) {
             return 'vip';
         }
-
         if (str_contains($name, 'premium')) {
             return 'premium';
         }
@@ -1295,6 +1338,33 @@ class DealController extends Controller
             'monthly' => $product->monthly_price ?? 0,
             'manual' => 0,
             default => 0,
+        };
+    }
+
+    private function resolveScopedProductPrice(int $productPriceId, Product $product): ProductPrice
+    {
+        $priceRow = ProductPrice::query()
+            ->where('id', $productPriceId)
+            ->where('product_id', (int) $product->id)
+            ->where('is_active', true)
+            ->first();
+
+        if (!$priceRow) {
+            throw ValidationException::withMessages([
+                'product_price_id' => 'The selected pricing option is not available for this package.',
+            ]);
+        }
+
+        return $priceRow;
+    }
+
+    private function mapDurationKeyToLegacy(string $durationKey): string
+    {
+        return match ($durationKey) {
+            '1_week' => 'weekly',
+            '2_weeks' => 'biweekly',
+            '1_month' => 'monthly',
+            default => 'manual',
         };
     }
 }

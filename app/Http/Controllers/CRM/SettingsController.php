@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Models\ProductPrice;
 use App\Models\ScraperRun;
 use App\Models\ScraperSource;
 use App\Models\Template;
@@ -336,7 +337,7 @@ class SettingsController extends Controller
             $packageSetup = $this->platformPackageSetup($platform);
             if ($wantsToBeActive && !$packageSetup['can_go_live']) {
                 throw ValidationException::withMessages([
-                    'is_active' => 'Package setup is incomplete. Configure active Basic, Premium, and VIP prices before activating this market.',
+                    'is_active' => 'Package setup is incomplete. Configure at least one active priced package before activating this market.',
                 ]);
             }
         });
@@ -373,12 +374,26 @@ class SettingsController extends Controller
         );
 
         $validated = $request->validate([
-            'packages' => 'required|array|min:3',
-            'packages.*.name' => 'required|string|max:32',
-            'packages.*.weekly_price' => 'required|numeric|min:0',
-            'packages.*.biweekly_price' => 'required|numeric|min:0',
-            'packages.*.monthly_price' => 'required|numeric|min:0',
+            'packages' => 'required|array|min:1|max:50',
+            'packages.*.id' => 'nullable|integer',
+            'packages.*.name' => 'required|string|max:64',
+            'packages.*.display_name' => 'nullable|string|max:64',
+            'packages.*.slug' => 'nullable|string|max:80',
+            'packages.*.tier' => 'nullable|string|max:32',
+            'packages.*.sort_order' => 'nullable|integer|min:0|max:10000',
             'packages.*.is_active' => 'required|boolean',
+            'packages.*.is_archived' => 'nullable|boolean',
+            'packages.*.weekly_price' => 'nullable|numeric|min:0',
+            'packages.*.biweekly_price' => 'nullable|numeric|min:0',
+            'packages.*.monthly_price' => 'nullable|numeric|min:0',
+            'packages.*.prices' => 'nullable|array|min:1|max:20',
+            'packages.*.prices.*.id' => 'nullable|integer',
+            'packages.*.prices.*.duration_key' => 'required_with:packages.*.prices|string|max:50',
+            'packages.*.prices.*.duration_label' => 'required_with:packages.*.prices|string|max:120',
+            'packages.*.prices.*.duration_days' => 'nullable|integer|min:1|max:365',
+            'packages.*.prices.*.price' => 'required_with:packages.*.prices|numeric|min:0',
+            'packages.*.prices.*.is_active' => 'required_with:packages.*.prices|boolean',
+            'packages.*.prices.*.sort_order' => 'nullable|integer|min:0|max:10000',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -388,67 +403,118 @@ class SettingsController extends Controller
         ];
 
         DB::transaction(function () use ($platform, $validated): void {
-            $requiredNames = $this->requiredPackageNames();
-            $requiredSet = array_flip($requiredNames);
             $currency = strtoupper((string) ($platform->currency_code ?: 'KES'));
 
-            $this->ensureDefaultPackagesForPlatform($platform);
             $existing = Product::query()
                 ->where('platform_id', (int) $platform->id)
+                ->with('prices')
                 ->get()
-                ->keyBy(fn(Product $product) => $this->normalizePackageName((string) $product->name));
+                ->keyBy(fn(Product $product) => (int) $product->id);
 
             $seen = [];
+            $seenSlugs = [];
+            $touchedProductIds = [];
+
             foreach ($validated['packages'] as $row) {
                 $name = $this->normalizePackageName((string) ($row['name'] ?? ''));
-                if (!array_key_exists($name, $requiredSet)) {
-                    throw ValidationException::withMessages([
-                        'packages' => 'Only Basic, Premium, and VIP package rows are supported.',
-                    ]);
-                }
+                $displayName = trim((string) ($row['display_name'] ?? ''));
+                $displayName = $displayName !== '' ? $displayName : Str::title(strtolower($name));
+                $isArchived = (bool) ($row['is_archived'] ?? false);
+                $isActive = !$isArchived && (bool) ($row['is_active'] ?? false);
 
                 if (array_key_exists($name, $seen)) {
                     throw ValidationException::withMessages([
-                        'packages' => "Duplicate {$name} row submitted. Submit each package once.",
+                        'packages' => "Duplicate package name '{$name}' submitted. Submit each package once.",
                     ]);
                 }
 
-                $weekly = (float) ($row['weekly_price'] ?? 0);
-                $biweekly = (float) ($row['biweekly_price'] ?? 0);
-                $monthly = (float) ($row['monthly_price'] ?? 0);
-                $isActive = (bool) ($row['is_active'] ?? false);
+                $rowSlug = trim((string) ($row['slug'] ?? ''));
+                $slug = Str::slug($rowSlug !== '' ? $rowSlug : $name, '_');
+                if ($slug === '') {
+                    $slug = 'package';
+                }
+                $baseSlug = $slug;
+                $slugSuffix = 2;
+                while (array_key_exists($slug, $seenSlugs)) {
+                    $slug = $baseSlug . '_' . $slugSuffix;
+                    $slugSuffix++;
+                }
+                $seenSlugs[$slug] = true;
 
-                if ($isActive && ($weekly <= 0 || $biweekly <= 0 || $monthly <= 0)) {
+                $priceRows = $this->normalizeSubmittedPriceRows($row, $currency, $isActive);
+                $activePricedDurations = collect($priceRows)
+                    ->filter(fn(array $price) => (bool) $price['is_active'] && (float) $price['price'] > 0);
+
+                if ($isActive && $activePricedDurations->isEmpty()) {
                     throw ValidationException::withMessages([
-                        'packages' => "{$name} cannot be active with zero pricing. Provide weekly, biweekly, and monthly prices greater than zero.",
+                        'packages' => "{$name} cannot be active without at least one active duration price greater than zero.",
                     ]);
                 }
 
-                $product = $existing->get($name) ?? new Product();
+                $productId = (int) ($row['id'] ?? 0);
+                $product = $productId > 0 ? $existing->get($productId) : null;
+
+                if ($productId > 0 && !$product) {
+                    throw ValidationException::withMessages([
+                        'packages' => "Package row id {$productId} does not belong to this market.",
+                    ]);
+                }
+
+                if (!$product) {
+                    $product = Product::query()
+                        ->where('platform_id', (int) $platform->id)
+                        ->where(function ($query) use ($name, $slug): void {
+                            $query->whereRaw('UPPER(name) = ?', [$name])
+                                ->orWhere('slug', $slug);
+                        })
+                        ->first();
+                }
+
+                $product = $product ?? new Product();
                 $product->platform_id = (int) $platform->id;
                 $product->name = $name;
-                $product->weekly_price = $weekly;
-                $product->biweekly_price = $biweekly;
-                $product->monthly_price = $monthly;
+                $product->display_name = $displayName;
+                $product->slug = $slug;
+                $product->tier = $this->normalizePackageTier((string) ($row['tier'] ?? ''), $name);
+                $product->sort_order = (int) ($row['sort_order'] ?? ((count($touchedProductIds) + 1) * 10));
                 $product->currency = $currency;
                 $product->is_active = $isActive;
+                $product->is_archived = $isArchived;
                 $product->save();
 
+                $this->syncProductPriceRows($product, $priceRows, $currency);
+                $this->syncLegacyPriceColumnsForProduct($product, $priceRows);
+
+                $touchedProductIds[] = (int) $product->id;
                 $seen[$name] = true;
             }
 
-            $missingNames = array_values(array_diff($requiredNames, array_keys($seen)));
-            if (!empty($missingNames)) {
-                throw ValidationException::withMessages([
-                    'packages' => 'Missing required package rows: ' . implode(', ', $missingNames) . '.',
+            Product::query()
+                ->where('platform_id', (int) $platform->id)
+                ->when(
+                    !empty($touchedProductIds),
+                    fn($query) => $query->whereNotIn('id', $touchedProductIds)
+                )
+                ->update([
+                    'is_active' => false,
+                    'is_archived' => true,
                 ]);
+
+            if (!empty($touchedProductIds)) {
+                ProductPrice::query()
+                    ->whereIn('product_id', Product::query()
+                        ->where('platform_id', (int) $platform->id)
+                        ->whereNotIn('id', $touchedProductIds)
+                        ->pluck('id')
+                        ->all())
+                    ->update(['is_active' => false]);
             }
 
             $platform->refresh();
             $packageSetup = $this->platformPackageSetup($platform);
             if ((bool) $platform->is_active && !$packageSetup['can_go_live']) {
                 throw ValidationException::withMessages([
-                    'packages' => 'Cannot keep market active with incomplete package setup. Activate all required package prices first.',
+                    'packages' => 'Cannot keep market active with incomplete package setup. Configure at least one active priced package first.',
                 ]);
             }
         });
@@ -1483,6 +1549,175 @@ class SettingsController extends Controller
         return strtoupper(trim($value));
     }
 
+    private function normalizePackageTier(string $tier, string $name): string
+    {
+        $tier = strtolower(trim($tier));
+        if (in_array($tier, ['basic', 'premium', 'vip', 'vvip', 'custom'], true)) {
+            return $tier;
+        }
+
+        $slug = strtolower(trim($name));
+        if (str_contains($slug, 'vvip')) {
+            return 'vvip';
+        }
+        if (str_contains($slug, 'vip')) {
+            return 'vip';
+        }
+        if (str_contains($slug, 'premium')) {
+            return 'premium';
+        }
+        if (str_contains($slug, 'basic')) {
+            return 'basic';
+        }
+
+        return 'custom';
+    }
+
+    /**
+     * Normalize submitted price rows from either legacy 3-tier format or new flexible prices array.
+     *
+     * @return array<int, array{duration_key: string, duration_label: string, duration_days: int, price: float, currency: string, is_active: bool, sort_order: int, id: int|null}>
+     */
+    private function normalizeSubmittedPriceRows(array $row, string $currency, bool $isActive): array
+    {
+        if (!empty($row['prices']) && is_array($row['prices'])) {
+            $normalized = [];
+            foreach ($row['prices'] as $priceRow) {
+                $durationKey = trim((string) ($priceRow['duration_key'] ?? ''));
+                if ($durationKey === '') {
+                    continue;
+                }
+
+                $normalized[] = [
+                    'id' => isset($priceRow['id']) ? (int) $priceRow['id'] : null,
+                    'duration_key' => $durationKey,
+                    'duration_label' => trim((string) ($priceRow['duration_label'] ?? ucwords(str_replace('_', ' ', $durationKey)))),
+                    'duration_days' => isset($priceRow['duration_days']) ? (int) $priceRow['duration_days'] : $this->inferDurationDays($durationKey),
+                    'price' => (float) ($priceRow['price'] ?? 0),
+                    'currency' => $currency,
+                    'is_active' => (bool) ($priceRow['is_active'] ?? $isActive),
+                    'sort_order' => (int) ($priceRow['sort_order'] ?? 0),
+                ];
+            }
+
+            return $normalized;
+        }
+
+        // Legacy 3-tier format fallback
+        $legacyMap = [
+            ['key' => '1_week', 'label' => '1 Week', 'days' => 7, 'field' => 'weekly_price', 'sort' => 10],
+            ['key' => '2_weeks', 'label' => '2 Weeks', 'days' => 14, 'field' => 'biweekly_price', 'sort' => 20],
+            ['key' => '1_month', 'label' => '1 Month', 'days' => 30, 'field' => 'monthly_price', 'sort' => 30],
+        ];
+
+        $normalized = [];
+        foreach ($legacyMap as $entry) {
+            $price = (float) ($row[$entry['field']] ?? 0);
+            $normalized[] = [
+                'id' => null,
+                'duration_key' => $entry['key'],
+                'duration_label' => $entry['label'],
+                'duration_days' => $entry['days'],
+                'price' => $price,
+                'currency' => $currency,
+                'is_active' => $price > 0 && $isActive,
+                'sort_order' => $entry['sort'],
+            ];
+        }
+
+        return $normalized;
+    }
+
+    private function inferDurationDays(string $durationKey): int
+    {
+        $map = [
+            '1_week' => 7,
+            '2_weeks' => 14,
+            '3_weeks' => 21,
+            '1_month' => 30,
+            '2_months' => 60,
+            '3_months' => 90,
+            '6_months' => 180,
+            '1_year' => 365,
+        ];
+
+        return $map[$durationKey] ?? 30;
+    }
+
+    private function syncProductPriceRows(Product $product, array $priceRows, string $currency): void
+    {
+        $touchedIds = [];
+        $existingByKey = ProductPrice::query()
+            ->where('product_id', (int) $product->id)
+            ->get()
+            ->keyBy('duration_key');
+
+        foreach ($priceRows as $priceRow) {
+            $durationKey = (string) $priceRow['duration_key'];
+            $existing = $existingByKey->get($durationKey);
+
+            if ($existing) {
+                $existing->update([
+                    'duration_label' => $priceRow['duration_label'],
+                    'duration_days' => $priceRow['duration_days'],
+                    'price' => $priceRow['price'],
+                    'currency' => $currency,
+                    'is_active' => (bool) $priceRow['is_active'],
+                    'sort_order' => $priceRow['sort_order'],
+                ]);
+                $touchedIds[] = (int) $existing->id;
+            } else {
+                $newPrice = ProductPrice::create([
+                    'product_id' => (int) $product->id,
+                    'duration_key' => $durationKey,
+                    'duration_label' => $priceRow['duration_label'],
+                    'duration_days' => $priceRow['duration_days'],
+                    'price' => $priceRow['price'],
+                    'currency' => $currency,
+                    'is_active' => (bool) $priceRow['is_active'],
+                    'sort_order' => $priceRow['sort_order'],
+                ]);
+                $touchedIds[] = (int) $newPrice->id;
+            }
+        }
+
+        // Remove price rows that were not submitted (soft-remove by deactivating, not deleting, to preserve history)
+        if (!empty($touchedIds)) {
+            ProductPrice::query()
+                ->where('product_id', (int) $product->id)
+                ->whereNotIn('id', $touchedIds)
+                ->update(['is_active' => false]);
+        }
+    }
+
+    /**
+     * Mirror active price rows back to legacy weekly/biweekly/monthly columns for backward compatibility.
+     */
+    private function syncLegacyPriceColumnsForProduct(Product $product, array $priceRows): void
+    {
+        $legacyMap = [
+            '1_week' => 'weekly_price',
+            '2_weeks' => 'biweekly_price',
+            '1_month' => 'monthly_price',
+        ];
+
+        $updates = [
+            'weekly_price' => 0,
+            'biweekly_price' => 0,
+            'monthly_price' => 0,
+        ];
+
+        foreach ($priceRows as $priceRow) {
+            $key = $priceRow['duration_key'] ?? '';
+            if (isset($legacyMap[$key]) && (bool) ($priceRow['is_active'] ?? false)) {
+                $updates[$legacyMap[$key]] = (float) ($priceRow['price'] ?? 0);
+            }
+        }
+
+        // Direct DB update to avoid the Product mutator that auto-calculates
+        Product::query()->where('id', (int) $product->id)->update($updates);
+    }
+
     private function ensureDefaultPackagesForPlatform(Platform $platform): void
     {
         $requiredNames = $this->requiredPackageNames();
@@ -1521,67 +1756,114 @@ class SettingsController extends Controller
 
     private function platformPackageRows(Platform $platform): array
     {
-        $this->ensureDefaultPackagesForPlatform($platform);
-        $rows = Product::query()
+        $currency = strtoupper((string) ($platform->currency_code ?: 'KES'));
+
+        $products = Product::query()
             ->where('platform_id', (int) $platform->id)
-            ->get(['id', 'platform_id', 'name', 'weekly_price', 'biweekly_price', 'monthly_price', 'currency', 'is_active'])
-            ->keyBy(fn(Product $product) => $this->normalizePackageName((string) $product->name));
+            ->where('is_archived', false)
+            ->with('prices')
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get();
 
-        return collect($this->requiredPackageNames())
-            ->map(function (string $name) use ($rows, $platform): array {
-                /** @var Product|null $product */
-                $product = $rows->get($name);
-                $currency = strtoupper((string) ($platform->currency_code ?: ($product?->currency ?: 'KES')));
+        if ($products->isEmpty()) {
+            // Ensure legacy platforms still get default rows for backward compatibility
+            $this->ensureDefaultPackagesForPlatform($platform);
+            $products = Product::query()
+                ->where('platform_id', (int) $platform->id)
+                ->where('is_archived', false)
+                ->with('prices')
+                ->orderBy('sort_order')
+                ->orderBy('name')
+                ->get();
+        }
 
-                return [
-                    'id' => $product?->id ? (int) $product->id : null,
-                    'platform_id' => (int) $platform->id,
-                    'name' => $name,
-                    'plan_type' => strtolower($name),
-                    'weekly_price' => $product?->weekly_price !== null ? (float) $product->weekly_price : 0.0,
-                    'biweekly_price' => $product?->biweekly_price !== null ? (float) $product->biweekly_price : 0.0,
-                    'monthly_price' => $product?->monthly_price !== null ? (float) $product->monthly_price : 0.0,
-                    'currency' => $currency,
-                    'is_active' => (bool) ($product?->is_active ?? false),
-                ];
-            })
-            ->values()
-            ->all();
+        return $products->map(function (Product $product) use ($currency): array {
+            $productCurrency = strtoupper((string) ($product->currency ?: $currency));
+
+            $prices = $product->prices
+                ->sortBy('sort_order')
+                ->values()
+                ->map(fn(ProductPrice $price) => [
+                    'id' => (int) $price->id,
+                    'duration_key' => $price->duration_key,
+                    'duration_label' => $price->duration_label,
+                    'duration_days' => $price->duration_days,
+                    'price' => (float) $price->price,
+                    'currency' => strtoupper((string) ($price->currency ?: $productCurrency)),
+                    'is_active' => (bool) $price->is_active,
+                    'sort_order' => (int) $price->sort_order,
+                ])
+                ->all();
+
+            return [
+                'id' => (int) $product->id,
+                'platform_id' => (int) $product->platform_id,
+                'name' => $this->normalizePackageName((string) $product->name),
+                'display_name' => $product->display_name ?: Str::title(strtolower((string) $product->name)),
+                'slug' => $product->slug,
+                'tier' => $product->tier ?: 'custom',
+                'plan_type' => strtolower((string) $product->name),
+                'weekly_price' => $product->weekly_price !== null ? (float) $product->weekly_price : 0.0,
+                'biweekly_price' => $product->biweekly_price !== null ? (float) $product->biweekly_price : 0.0,
+                'monthly_price' => $product->monthly_price !== null ? (float) $product->monthly_price : 0.0,
+                'currency' => $productCurrency,
+                'is_active' => (bool) $product->is_active,
+                'is_archived' => (bool) $product->is_archived,
+                'sort_order' => (int) $product->sort_order,
+                'prices' => $prices,
+            ];
+        })->values()->all();
     }
 
     private function platformPackageSetup(Platform $platform, ?array $rows = null): array
     {
         $rows = collect($rows ?? $this->platformPackageRows($platform));
-        $missingRequirements = [];
 
+        // Dynamic catalog rule: market can go live if it has at least one active package
+        // with at least one active duration price > 0
+        $hasActivePricedPackage = $rows->contains(function (array $row): bool {
+            if (!(bool) ($row['is_active'] ?? false)) {
+                return false;
+            }
+
+            $prices = $row['prices'] ?? [];
+            if (empty($prices)) {
+                // Fallback: check legacy columns
+                return (float) ($row['weekly_price'] ?? 0) > 0
+                    || (float) ($row['biweekly_price'] ?? 0) > 0
+                    || (float) ($row['monthly_price'] ?? 0) > 0;
+            }
+
+            return collect($prices)->contains(fn(array $price) => (bool) ($price['is_active'] ?? false) && (float) ($price['price'] ?? 0) > 0);
+        });
+
+        $warnings = [];
         foreach ($rows as $row) {
-            $pricesComplete = (float) $row['weekly_price'] > 0
-                && (float) $row['biweekly_price'] > 0
-                && (float) $row['monthly_price'] > 0;
             $isActive = (bool) ($row['is_active'] ?? false);
-
             if (!$isActive) {
-                $missingRequirements[] = [
-                    'name' => $row['name'],
-                    'label' => ucfirst(strtolower((string) $row['name'])),
-                    'reason' => 'inactive',
-                ];
                 continue;
             }
 
-            if (!$pricesComplete) {
-                $missingRequirements[] = [
+            $prices = $row['prices'] ?? [];
+            $hasActivePrice = !empty($prices)
+                ? collect($prices)->contains(fn(array $p) => (bool) ($p['is_active'] ?? false) && (float) ($p['price'] ?? 0) > 0)
+                : ((float) ($row['weekly_price'] ?? 0) > 0 || (float) ($row['biweekly_price'] ?? 0) > 0 || (float) ($row['monthly_price'] ?? 0) > 0);
+
+            if (!$hasActivePrice) {
+                $warnings[] = [
                     'name' => $row['name'],
-                    'label' => ucfirst(strtolower((string) $row['name'])),
-                    'reason' => 'missing_price',
+                    'label' => $row['display_name'] ?? ucfirst(strtolower((string) $row['name'])),
+                    'reason' => 'active_but_no_priced_duration',
                 ];
             }
         }
 
         return [
-            'status' => empty($missingRequirements) ? 'complete' : 'incomplete',
-            'can_go_live' => empty($missingRequirements),
-            'missing_requirements' => array_values($missingRequirements),
+            'status' => $hasActivePricedPackage ? 'complete' : 'incomplete',
+            'can_go_live' => $hasActivePricedPackage,
+            'missing_requirements' => $hasActivePricedPackage ? [] : [['name' => '*', 'label' => 'Any package', 'reason' => 'no_active_priced_package']],
+            'warnings' => $warnings,
             'currency' => strtoupper((string) ($platform->currency_code ?: 'KES')),
         ];
     }
