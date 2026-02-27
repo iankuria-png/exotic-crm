@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 class DealController extends Controller
 {
@@ -75,7 +76,6 @@ class DealController extends Controller
 
         $validated = $request->validate([
             'product_id' => 'sometimes|exists:products,id',
-            'plan_type' => 'sometimes|in:basic,premium,vip',
             'duration' => 'sometimes|in:weekly,biweekly,monthly,manual',
             'status' => 'sometimes|in:pending,awaiting_payment,paid,active,expired,cancelled,renewed',
         ]);
@@ -83,16 +83,20 @@ class DealController extends Controller
         $before = $deal->only(['product_id', 'plan_type', 'duration', 'status', 'amount']);
 
         if (array_key_exists('product_id', $validated) || array_key_exists('duration', $validated)) {
-            $productId = $validated['product_id'] ?? $deal->product_id;
-            $duration = $validated['duration'] ?? $deal->duration;
-            $product = Product::findOrFail($productId);
+            $productId = (int) ($validated['product_id'] ?? $deal->product_id);
+            if ($productId <= 0) {
+                throw ValidationException::withMessages([
+                    'product_id' => 'A product is required to update subscription pricing.',
+                ]);
+            }
 
-            $validated['amount'] = match ($duration) {
-                'weekly' => $product->weekly_price,
-                'biweekly' => $product->biweekly_price,
-                'monthly' => $product->monthly_price,
-                'manual' => 0,
-            };
+            $duration = $validated['duration'] ?? $deal->duration;
+            $product = $this->resolveScopedProduct($productId, (int) $deal->platform_id);
+
+            $validated['product_id'] = $product->id;
+            $validated['plan_type'] = $this->derivePlanTypeFromProduct($product);
+            $validated['amount'] = $this->resolveAmountForDuration($product, (string) $duration);
+            $validated['currency'] = $product->currency ?: ($deal->platform?->currency_code ?: $deal->currency ?: 'KES');
         }
 
         $deal->update($validated);
@@ -156,7 +160,6 @@ class DealController extends Controller
         $validated = $request->validate([
             'client_id' => 'required|exists:clients,id',
             'product_id' => 'required|exists:products,id',
-            'plan_type' => 'required|in:basic,premium,vip',
             'duration' => 'required|in:weekly,biweekly,monthly,manual',
             'lead_id' => 'nullable|exists:leads,id',
         ]);
@@ -168,23 +171,18 @@ class DealController extends Controller
             'You do not have access to this client market.'
         );
 
-        $product = Product::findOrFail($validated['product_id']);
-
-        $amount = match ($validated['duration']) {
-            'weekly' => $product->weekly_price,
-            'biweekly' => $product->biweekly_price,
-            'monthly' => $product->monthly_price,
-            'manual' => 0,
-        };
+        $product = $this->resolveScopedProduct((int) $validated['product_id'], (int) $client->platform_id);
+        $planType = $this->derivePlanTypeFromProduct($product);
+        $amount = $this->resolveAmountForDuration($product, (string) $validated['duration']);
 
         $deal = Deal::create([
             'platform_id' => $client->platform_id,
             'client_id' => $client->id,
             'lead_id' => $validated['lead_id'] ?? null,
             'product_id' => $product->id,
-            'plan_type' => $validated['plan_type'],
+            'plan_type' => $planType,
             'amount' => $amount,
-            'currency' => $client->platform->currency_code ?? 'KES',
+            'currency' => $product->currency ?: ($client->platform->currency_code ?? 'KES'),
             'duration' => $validated['duration'],
             'status' => 'pending',
             'assigned_to' => $request->user()->id,
@@ -1261,5 +1259,42 @@ class DealController extends Controller
             (int) $deal->platform_id,
             'You do not have access to this deal market.'
         );
+    }
+
+    private function resolveScopedProduct(int $productId, int $platformId): Product
+    {
+        $product = Product::query()->findOrFail($productId);
+        if ((int) ($product->platform_id ?? 0) !== $platformId) {
+            throw ValidationException::withMessages([
+                'product_id' => 'Selected product does not belong to this market.',
+            ]);
+        }
+
+        return $product;
+    }
+
+    private function derivePlanTypeFromProduct(Product $product): string
+    {
+        $name = strtolower((string) $product->name);
+        if (str_contains($name, 'vip')) {
+            return 'vip';
+        }
+
+        if (str_contains($name, 'premium')) {
+            return 'premium';
+        }
+
+        return 'basic';
+    }
+
+    private function resolveAmountForDuration(Product $product, string $duration): float
+    {
+        return (float) match ($duration) {
+            'weekly' => $product->weekly_price ?? 0,
+            'biweekly' => $product->biweekly_price ?? 0,
+            'monthly' => $product->monthly_price ?? 0,
+            'manual' => 0,
+            default => 0,
+        };
     }
 }

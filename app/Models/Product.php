@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Product extends Model
 {
     protected $fillable = [
+        'platform_id',
         'name',
         'monthly_price',
         'biweekly_price',
@@ -40,9 +41,9 @@ class Product extends Model
         $this->attributes['biweekly_price'] = $value / 2;
         $this->attributes['weekly_price'] = $value / 4;
     }
-    public function platforms()
+    public function platform()
     {
-        return $this->hasMany(Platform::class);
+        return $this->belongsTo(Platform::class);
     }
 
 }

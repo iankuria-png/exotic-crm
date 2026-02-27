@@ -224,7 +224,25 @@ class DashboardController extends Controller
 
     public function products()
     {
-        return response()->json(Product::where('is_active', true)->get());
+        $validated = request()->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+        ]);
+
+        $requestedPlatformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            request()->user(),
+            $requestedPlatformId,
+            'You do not have access to this market products catalog.'
+        );
+
+        return response()->json(
+            Product::query()
+                ->where('platform_id', $requestedPlatformId)
+                ->where('is_active', true)
+                ->orderByRaw('FIELD(UPPER(name), "BASIC", "PREMIUM", "VIP")')
+                ->orderBy('name')
+                ->get()
+        );
     }
 
     private function resolveOldestDashboardRecordAt(?array $platformIds): ?Carbon

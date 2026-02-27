@@ -353,6 +353,7 @@ export default function ClientDetail() {
         queryFn: () => api.get(`/crm/clients/${id}`).then((r) => r.data),
     });
     const platformPhonePrefix = client?.platform?.phone_prefix || '254';
+    const clientPlatformId = Number(client?.platform_id || client?.platform?.id || 0);
 
     const { data: meData } = useQuery({
         queryKey: ['me'],
@@ -366,8 +367,9 @@ export default function ClientDetail() {
     });
 
     const { data: products } = useQuery({
-        queryKey: ['products'],
-        queryFn: () => api.get('/crm/products').then((r) => r.data),
+        queryKey: ['products', clientPlatformId],
+        queryFn: () => api.get('/crm/products', { params: { platform_id: clientPlatformId } }).then((r) => r.data),
+        enabled: clientPlatformId > 0,
     });
 
     const { data: wpProfileData } = useQuery({

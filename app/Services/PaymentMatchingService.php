@@ -77,7 +77,12 @@ class PaymentMatchingService
         $client = $clients->first();
 
         // Check if amount matches a product price
-        $product = $this->matchProductByAmount($payment->amount, $payment->product_id);
+        $product = $this->matchProductByAmount(
+            (float) $payment->amount,
+            $payment->product_id ? (int) $payment->product_id : null,
+            $payment->platform_id ? (int) $payment->platform_id : null,
+            $payment->currency
+        );
         $amountMatches = $product !== null;
 
         $payment->update([
@@ -176,17 +181,36 @@ class PaymentMatchingService
         return $results;
     }
 
-    private function matchProductByAmount(float $amount, ?int $productId): ?Product
+    private function matchProductByAmount(
+        float $amount,
+        ?int $productId,
+        ?int $platformId = null,
+        ?string $currency = null
+    ): ?Product
     {
         if ($productId) {
             $product = Product::find($productId);
-            if ($product)
+            if ($product && ($platformId === null || (int) $product->platform_id === $platformId)) {
                 return $product;
+            }
         }
 
-        return Product::where('monthly_price', $amount)
-            ->orWhere('biweekly_price', $amount)
-            ->orWhere('weekly_price', $amount)
+        return Product::query()
+            ->where('is_active', true)
+            ->when(
+                !empty($platformId),
+                fn(Builder $builder) => $builder->where('platform_id', (int) $platformId)
+            )
+            ->when(
+                !empty($currency),
+                fn(Builder $builder) => $builder->whereRaw('UPPER(currency) = ?', [strtoupper((string) $currency)])
+            )
+            ->where(function (Builder $builder) use ($amount): void {
+                $builder
+                    ->where('monthly_price', $amount)
+                    ->orWhere('biweekly_price', $amount)
+                    ->orWhere('weekly_price', $amount);
+            })
             ->first();
     }
 
@@ -205,9 +229,21 @@ class PaymentMatchingService
             throw new \InvalidArgumentException('Payment is already linked to a subscription.');
         }
 
+        $payment->loadMissing('platform');
+        $platformId = (int) $payment->platform_id;
+
         $product = $payment->product_id ? Product::find($payment->product_id) : null;
+        if ($product && $platformId > 0 && (int) $product->platform_id !== $platformId) {
+            $product = null;
+        }
+
         if (!$product) {
-            $product = $this->matchProductByAmount((float) $payment->amount, null);
+            $product = $this->matchProductByAmount(
+                (float) $payment->amount,
+                null,
+                $platformId > 0 ? $platformId : null,
+                $payment->currency
+            );
         }
 
         // Determine duration from product pricing tier match
@@ -228,14 +264,7 @@ class PaymentMatchingService
             default => 30,
         };
 
-        $planType = 'basic';
-        if ($product) {
-            $nameLower = strtolower($product->name);
-            if (str_contains($nameLower, 'vip'))
-                $planType = 'vip';
-            elseif (str_contains($nameLower, 'premium'))
-                $planType = 'premium';
-        }
+        $planType = $this->resolvePlanTypeFromProduct($product);
 
         $deal = Deal::create([
             'platform_id' => (int) $payment->platform_id,
@@ -244,7 +273,7 @@ class PaymentMatchingService
             'product_id' => $product?->id,
             'plan_type' => $planType,
             'amount' => (float) $payment->amount,
-            'currency' => $payment->currency ?? 'KES',
+            'currency' => $product?->currency ?: ($payment->currency ?: ($payment->platform?->currency_code ?: 'KES')),
             'duration' => $duration,
             'status' => 'active',
             'activated_at' => now(),
@@ -255,5 +284,22 @@ class PaymentMatchingService
         $payment->update(['deal_id' => $deal->id]);
 
         return $deal;
+    }
+
+    private function resolvePlanTypeFromProduct(?Product $product): string
+    {
+        if (!$product) {
+            return 'basic';
+        }
+
+        $nameLower = strtolower((string) $product->name);
+        if (str_contains($nameLower, 'vip')) {
+            return 'vip';
+        }
+        if (str_contains($nameLower, 'premium')) {
+            return 'premium';
+        }
+
+        return 'basic';
     }
 }

@@ -109,13 +109,24 @@ class RenewalService
             ->flip();
 
         $telemetryByKey = $this->buildTelemetryMap($dealIds, $clientIds);
-        $activeProductCatalog = Product::query()
+        $platformIdsForCatalog = $targetRows->pluck('platform_id')
+            ->filter(fn($id) => !empty($id))
+            ->map(fn($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $activeProductCatalogByPlatform = Product::query()
             ->where('is_active', true)
-            ->get(['id', 'name', 'monthly_price', 'biweekly_price', 'weekly_price', 'currency'])
-            ->keyBy(fn(Product $product) => strtolower((string) $product->name));
+            ->when(
+                $platformIdsForCatalog->isNotEmpty(),
+                fn(Builder $builder) => $builder->whereIn('platform_id', $platformIdsForCatalog->all())
+            )
+            ->get(['id', 'platform_id', 'name', 'monthly_price', 'biweekly_price', 'weekly_price', 'currency'])
+            ->groupBy(fn(Product $product) => (int) $product->platform_id)
+            ->map(fn(Collection $products) => $products->keyBy(fn(Product $product) => strtolower((string) $product->name)));
 
         $targets->setCollection(
-            $targetRows->map(function (Client $client) use ($paidDealIds, $telemetryByKey, $activeProductCatalog) {
+            $targetRows->map(function (Client $client) use ($paidDealIds, $telemetryByKey, $activeProductCatalogByPlatform) {
                 $expiryDate = $this->resolveExpiryDate(
                     $client->deal_expires_at,
                     $client->escort_expire,
@@ -158,9 +169,10 @@ class RenewalService
                 $record = $client->toArray();
                 $inferredPlanType = null;
                 $inferredProductName = null;
+                $platformProductCatalog = $activeProductCatalogByPlatform->get((int) $client->platform_id, collect());
 
                 if (!$client->deal_id) {
-                    if ((bool) $client->premium && (bool) $client->featured) {
+                    if ((bool) $client->featured) {
                         $inferredPlanType = 'vip';
                         $inferredProductName = 'VIP';
                     } elseif ((bool) $client->premium) {
@@ -175,7 +187,7 @@ class RenewalService
                 $legacyEstimate = !$client->deal_id
                     ? $this->estimateLegacySubscription(
                         $inferredPlanType,
-                        $activeProductCatalog,
+                        $platformProductCatalog,
                         (string) ($client->platform?->currency_code ?: 'KES')
                     )
                     : [
