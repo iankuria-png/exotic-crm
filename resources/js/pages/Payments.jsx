@@ -182,6 +182,8 @@ export default function Payments() {
     const [queueAutoMatchDialog, setQueueAutoMatchDialog] = useState({
         open: false,
         reason: 'Batch auto-match from payment queue',
+        preview: null,
+        step: 'reason', // 'reason' | 'preview'
     });
     const [retryStkDialog, setRetryStkDialog] = useState({ open: false, payment: null, reason: 'Retry STK from payment queue' });
     const [sendLinkDialog, setSendLinkDialog] = useState({
@@ -291,6 +293,21 @@ export default function Payments() {
         },
     });
 
+    const batchMatchDryRunMutation = useMutation({
+        mutationFn: (reason) =>
+            api.post('/crm/payments/batch-match', {
+                reason,
+                dry_run: true,
+            }).then((response) => response.data),
+        onSuccess: (result) => {
+            setQueueAutoMatchDialog((d) => ({ ...d, preview: result, step: 'preview' }));
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Auto-match preview failed.');
+            setQueueAutoMatchDialog((d) => ({ ...d, open: false }));
+        },
+    });
+
     const batchMatchMutation = useMutation({
         mutationFn: (reason) =>
             api.post('/crm/payments/batch-match', {
@@ -298,7 +315,7 @@ export default function Payments() {
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
-            setQueueAutoMatchDialog({ open: false, reason: 'Batch auto-match from payment queue' });
+            setQueueAutoMatchDialog({ open: false, reason: 'Batch auto-match from payment queue', preview: null, step: 'reason' });
             toast.success('Queue auto-match completed.');
         },
         onError: (error) => {
@@ -888,7 +905,7 @@ export default function Payments() {
                             Download import template
                         </button>
                         <button
-                            onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue' })}
+                            onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue', preview: null, step: 'reason' })}
                             disabled={batchMatchMutation.isPending}
                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                         >
@@ -1380,22 +1397,70 @@ export default function Payments() {
 
             <ConfirmDialog
                 open={queueAutoMatchDialog.open}
-                title="Auto-match Review Queue"
-                message="This runs auto-match on unmatched completed payments in your accessible markets."
-                confirmLabel="Run auto-match"
-                onCancel={() => setQueueAutoMatchDialog({ open: false, reason: 'Batch auto-match from payment queue' })}
-                onConfirm={() => batchMatchMutation.mutate(queueAutoMatchDialog.reason.trim())}
-                confirmDisabled={!queueAutoMatchDialog.reason.trim() || batchMatchMutation.isPending}
-                isPending={batchMatchMutation.isPending}
+                title={queueAutoMatchDialog.step === 'preview' ? 'Auto-match Preview' : 'Auto-match Review Queue'}
+                message={
+                    queueAutoMatchDialog.step === 'preview' && queueAutoMatchDialog.preview
+                        ? `${queueAutoMatchDialog.preview.matched} high-confidence, ${queueAutoMatchDialog.preview.low_confidence} low-confidence, ${queueAutoMatchDialog.preview.unmatched} unmatched.`
+                        : 'Enter a reason and preview matches before applying.'
+                }
+                confirmLabel={queueAutoMatchDialog.step === 'preview' ? 'Apply Matches' : 'Preview Matches'}
+                onCancel={() => setQueueAutoMatchDialog({ open: false, reason: 'Batch auto-match from payment queue', preview: null, step: 'reason' })}
+                onConfirm={() => {
+                    if (queueAutoMatchDialog.step === 'reason') {
+                        batchMatchDryRunMutation.mutate(queueAutoMatchDialog.reason.trim());
+                    } else {
+                        batchMatchMutation.mutate(queueAutoMatchDialog.reason.trim());
+                    }
+                }}
+                confirmDisabled={
+                    !queueAutoMatchDialog.reason.trim()
+                    || batchMatchMutation.isPending
+                    || batchMatchDryRunMutation.isPending
+                    || (queueAutoMatchDialog.step === 'preview' && queueAutoMatchDialog.preview && queueAutoMatchDialog.preview.matched === 0 && queueAutoMatchDialog.preview.low_confidence === 0)
+                }
+                isPending={batchMatchMutation.isPending || batchMatchDryRunMutation.isPending}
             >
-                <label htmlFor="queue-auto-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
-                <textarea
-                    id="queue-auto-reason"
-                    rows={3}
-                    value={queueAutoMatchDialog.reason}
-                    onChange={(event) => setQueueAutoMatchDialog((current) => ({ ...current, reason: event.target.value }))}
-                    className="crm-input"
-                />
+                {queueAutoMatchDialog.step === 'reason' ? (
+                    <>
+                        <label htmlFor="queue-auto-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                        <textarea
+                            id="queue-auto-reason"
+                            rows={3}
+                            value={queueAutoMatchDialog.reason}
+                            onChange={(event) => setQueueAutoMatchDialog((current) => ({ ...current, reason: event.target.value }))}
+                            className="crm-input"
+                        />
+                    </>
+                ) : queueAutoMatchDialog.preview?.proposals?.length ? (
+                    <div className="max-h-56 overflow-y-auto rounded border border-slate-200">
+                        <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-slate-50">
+                                <tr>
+                                    <th className="px-2 py-1.5 text-left font-medium text-slate-600">Phone</th>
+                                    <th className="px-2 py-1.5 text-left font-medium text-slate-600">Amount</th>
+                                    <th className="px-2 py-1.5 text-left font-medium text-slate-600">Client</th>
+                                    <th className="px-2 py-1.5 text-left font-medium text-slate-600">Confidence</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {queueAutoMatchDialog.preview.proposals.map((p) => (
+                                    <tr key={p.payment_id}>
+                                        <td className="px-2 py-1.5 text-slate-800">{p.payment_phone || '—'}</td>
+                                        <td className="px-2 py-1.5 text-slate-600">{p.payment_amount}</td>
+                                        <td className="px-2 py-1.5 text-slate-800">{p.client_name || '—'}</td>
+                                        <td className="px-2 py-1.5">
+                                            <span className={p.confidence === 'auto_high' ? 'text-emerald-700' : 'text-amber-600'}>
+                                                {p.confidence === 'auto_high' ? 'High' : 'Low'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    <p className="text-sm text-slate-500">No matchable payments found.</p>
+                )}
             </ConfirmDialog>
 
             <ConfirmDialog

@@ -348,6 +348,7 @@ class PaymentQueueController extends Controller
         $validated = $request->validate([
             'platform_id' => 'nullable|exists:platforms,id',
             'reason' => 'required|string|max:500',
+            'dry_run' => 'nullable|boolean',
         ]);
 
         $platformId = !empty($validated['platform_id']) ? (int) $validated['platform_id'] : null;
@@ -360,8 +361,30 @@ class PaymentQueueController extends Controller
         }
 
         $service = new PaymentMatchingService();
+        $dryRun = (bool) ($validated['dry_run'] ?? false);
 
         $accessiblePlatformIds = null;
+
+        if ($dryRun) {
+            if ($platformId !== null) {
+                $results = $service->dryRunBatchMatch($platformId);
+            } else {
+                $accessiblePlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+                if (is_array($accessiblePlatformIds)) {
+                    if (empty($accessiblePlatformIds)) {
+                        return response()->json([
+                            'message' => 'No accessible markets available for batch matching.',
+                        ], 422);
+                    }
+                    $results = $service->dryRunBatchMatchForPlatforms($accessiblePlatformIds);
+                } else {
+                    $results = $service->dryRunBatchMatch();
+                }
+            }
+
+            $results['dry_run'] = true;
+            return response()->json($results);
+        }
 
         if ($platformId !== null) {
             $results = $service->batchMatch($platformId);

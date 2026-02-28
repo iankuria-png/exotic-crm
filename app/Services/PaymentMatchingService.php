@@ -181,6 +181,122 @@ class PaymentMatchingService
         return $results;
     }
 
+    /**
+     * Dry-run: evaluate a match without writing to the database.
+     */
+    public function dryRunMatchPayment(Payment $payment, ?string $prefix = null): array
+    {
+        if ($payment->client_id) {
+            return [
+                'matched' => true,
+                'confidence' => 'already_matched',
+                'payment_id' => $payment->id,
+                'client_id' => $payment->client_id,
+            ];
+        }
+
+        if ($prefix === null) {
+            $payment->loadMissing('platform');
+            $prefix = (string) ($payment->platform?->phone_prefix ?: '254');
+        }
+
+        $phone = PhoneNormalizer::normalize($payment->phone, $prefix);
+        if (!$phone) {
+            return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No phone number', 'payment_id' => $payment->id];
+        }
+
+        $clients = Client::where('platform_id', $payment->platform_id)
+            ->where('phone_normalized', $phone)
+            ->get();
+
+        if ($clients->isEmpty()) {
+            return ['matched' => false, 'confidence' => 'unmatched', 'reason' => 'No client with this phone', 'payment_id' => $payment->id];
+        }
+
+        if ($clients->count() > 1) {
+            return [
+                'matched' => false,
+                'confidence' => 'auto_low',
+                'reason' => 'Multiple clients share this phone number',
+                'payment_id' => $payment->id,
+                'payment_phone' => $payment->phone,
+                'payment_amount' => $payment->amount,
+                'payment_currency' => $payment->currency,
+            ];
+        }
+
+        $client = $clients->first();
+        $product = $this->matchProductByAmount(
+            (float) $payment->amount,
+            $payment->product_id ? (int) $payment->product_id : null,
+            $payment->platform_id ? (int) $payment->platform_id : null,
+            $payment->currency
+        );
+
+        return [
+            'matched' => true,
+            'confidence' => $product ? 'auto_high' : 'auto_low',
+            'payment_id' => $payment->id,
+            'payment_phone' => $payment->phone,
+            'payment_amount' => $payment->amount,
+            'payment_currency' => $payment->currency,
+            'client_id' => $client->id,
+            'client_name' => $client->name,
+            'product_id' => $product?->id,
+            'product_name' => $product?->name,
+        ];
+    }
+
+    public function dryRunBatchMatch(?int $platformId = null): array
+    {
+        $query = Payment::whereNull('client_id')
+            ->where('status', 'completed');
+
+        if ($platformId) {
+            $query->where('platform_id', $platformId);
+        }
+
+        return $this->runDryRunBatchMatch($query);
+    }
+
+    public function dryRunBatchMatchForPlatforms(array $platformIds): array
+    {
+        if (empty($platformIds)) {
+            return ['matched' => 0, 'unmatched' => 0, 'low_confidence' => 0, 'proposals' => []];
+        }
+
+        $query = Payment::query()
+            ->whereNull('client_id')
+            ->where('status', 'completed')
+            ->whereIn('platform_id', array_values(array_unique(array_map('intval', $platformIds))));
+
+        return $this->runDryRunBatchMatch($query);
+    }
+
+    private function runDryRunBatchMatch(\Illuminate\Database\Eloquent\Builder $query): array
+    {
+        $payments = $query->with('platform:id,phone_prefix')->get();
+        $results = ['matched' => 0, 'unmatched' => 0, 'low_confidence' => 0, 'proposals' => []];
+
+        foreach ($payments as $payment) {
+            $prefix = (string) ($payment->platform?->phone_prefix ?: '254');
+            $result = $this->dryRunMatchPayment($payment, $prefix);
+            if ($result['matched'] && $result['confidence'] === 'auto_high') {
+                $results['matched']++;
+                $results['proposals'][] = $result;
+            } elseif ($result['matched'] && $result['confidence'] === 'auto_low') {
+                $results['low_confidence']++;
+                $results['proposals'][] = $result;
+            } else {
+                $results['unmatched']++;
+            }
+        }
+
+        $results['proposals'] = array_slice($results['proposals'], 0, 100);
+
+        return $results;
+    }
+
     private function matchProductByAmount(
         float $amount,
         ?int $productId,
