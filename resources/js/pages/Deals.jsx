@@ -6,6 +6,7 @@ import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -68,6 +69,12 @@ export default function Deals() {
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
     const [notificationMessage, setNotificationMessage] = useState('');
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
+    const [bulkDeactivateDialog, setBulkDeactivateDialog] = useState({
+        open: false,
+        selection: [],
+        reason: 'Bulk deactivation from subscriptions page',
+        notifyClient: false,
+    });
 
     const [bucket, setBucket] = useState(() => {
         const requested = (searchParams.get('bucket') || 'all').trim();
@@ -227,17 +234,16 @@ export default function Deals() {
         },
     });
 
-    const bulkActivateMutation = useMutation({
-        mutationFn: async (rowsSelection) => {
-            const targets = rowsSelection.filter((row) => row.status === 'pending');
-            const skipped = rowsSelection.length - targets.length;
+    const bulkDeactivateMutation = useMutation({
+        mutationFn: async ({ selection, reason, notifyClient }) => {
+            const targets = selection.filter((row) => row.status === 'active' || row.status === 'expired');
+            const skipped = selection.length - targets.length;
 
             const results = await Promise.allSettled(
                 targets.map((row) =>
-                    api.post(`/crm/deals/${row.id}/activate`, {
-                        reason: 'Bulk activation from subscriptions page',
-                        payment_method: 'free_trial',
-                        approved_by: 'Bulk activation',
+                    api.post(`/crm/deals/${row.id}/deactivate`, {
+                        reason,
+                        notify_client: notifyClient,
                     }),
                 ),
             );
@@ -245,17 +251,21 @@ export default function Deals() {
             const success = results.filter((result) => result.status === 'fulfilled').length;
             const failed = results.length - success;
 
-            return { total: rowsSelection.length, success, failed, skipped };
+            return { total: selection.length, success, failed, skipped };
         },
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setClearSelectionKey((value) => value + 1);
+            setBulkDeactivateDialog((d) => ({ ...d, open: false, selection: [] }));
             if (result.failed > 0) {
-                toast.warning(`Bulk activate completed with issues: ${result.success}/${result.total} succeeded.`);
+                toast.warning(`Bulk deactivate: ${result.success}/${result.total} succeeded.`);
                 return;
             }
-            toast.success(`Bulk activate processed ${result.success}/${result.total}.`);
+            toast.success(`Bulk deactivate: ${result.success}/${result.total} processed.`);
+        },
+        onError: () => {
+            toast.error('Bulk deactivation failed.');
         },
     });
 
@@ -540,12 +550,17 @@ export default function Deals() {
 
     const bulkActions = [
         {
-            key: 'bulk-activate',
-            label: 'Activate pending selected',
-            loadingLabel: 'Activating...',
-            variant: 'primary',
-            onClick: async (rowsSelection) => {
-                await bulkActivateMutation.mutateAsync(rowsSelection);
+            key: 'bulk-deactivate',
+            label: 'Deactivate selected',
+            loadingLabel: 'Preparing...',
+            variant: 'danger',
+            onClick: (rowsSelection) => {
+                setBulkDeactivateDialog({
+                    open: true,
+                    selection: rowsSelection,
+                    reason: 'Bulk deactivation from subscriptions page',
+                    notifyClient: false,
+                });
             },
         },
         {
@@ -1065,6 +1080,34 @@ export default function Deals() {
                     </div>
                 </div>
             ) : null}
+
+            <ConfirmDialog
+                open={bulkDeactivateDialog.open}
+                title="Bulk Deactivate Subscriptions"
+                message={`This will deactivate ${bulkDeactivateDialog.selection.filter((r) => r.status === 'active' || r.status === 'expired').length} eligible subscription(s). WordPress profiles will be set to private.`}
+                confirmLabel="Deactivate"
+                tone="danger"
+                onCancel={() => setBulkDeactivateDialog((d) => ({ ...d, open: false }))}
+                onConfirm={() => bulkDeactivateMutation.mutate(bulkDeactivateDialog)}
+                confirmDisabled={!bulkDeactivateDialog.reason.trim() || bulkDeactivateMutation.isPending}
+                isPending={bulkDeactivateMutation.isPending}
+            >
+                <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                <textarea
+                    rows={2}
+                    value={bulkDeactivateDialog.reason}
+                    onChange={(e) => setBulkDeactivateDialog((d) => ({ ...d, reason: e.target.value }))}
+                    className="crm-input"
+                />
+                <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                        type="checkbox"
+                        checked={bulkDeactivateDialog.notifyClient}
+                        onChange={(e) => setBulkDeactivateDialog((d) => ({ ...d, notifyClient: e.target.checked }))}
+                    />
+                    Notify clients via SMS
+                </label>
+            </ConfirmDialog>
         </div>
     );
 }
