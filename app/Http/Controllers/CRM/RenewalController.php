@@ -209,6 +209,7 @@ class RenewalController extends Controller
             'search' => 'nullable|string|max:255',
             'bucket' => 'nullable|in:all,active,risk,pending,workload,stable,expired,lapsed,paused',
             'template_id' => 'nullable|integer|exists:templates,id',
+            'dry_run' => 'nullable|boolean',
         ]);
 
         $accessiblePlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
@@ -232,7 +233,8 @@ class RenewalController extends Controller
             (bool) ($validated['select_all'] ?? false),
             $filters,
             $validated['template_id'] ?? null,
-            $request->user()->id
+            $request->user()->id,
+            (bool) ($validated['dry_run'] ?? false)
         );
 
         return response()->json($result);

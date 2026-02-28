@@ -383,7 +383,7 @@ class RenewalService
         ];
     }
 
-    public function bulkRemind(array $selection, bool $selectAll = false, array $filters = [], ?int $templateId = null, ?int $actorId = null): array
+    public function bulkRemind(array $selection, bool $selectAll = false, array $filters = [], ?int $templateId = null, ?int $actorId = null, bool $dryRun = false): array
     {
         $targets = [];
 
@@ -455,6 +455,8 @@ class RenewalService
 
         $sent = 0;
         $failed = 0;
+        $errors = [];
+        $preview = [];
 
         foreach ($targets as $target) {
             try {
@@ -470,21 +472,63 @@ class RenewalService
                         ?? $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
                 }
 
+                if ($dryRun) {
+                    $paused = $this->isReminderPaused($deal);
+                    $template = $templateId
+                        ? Template::query()->where('id', $templateId)->where('channel', 'sms')->first()
+                        : $this->resolveDefaultRenewalTemplate($deal);
+                    $hasClient = $deal->client !== null;
+                    $canSend = $hasClient && $template !== null && !$paused;
+                    $skipReason = $paused ? 'paused' : (!$hasClient ? 'no_client' : ($template === null ? 'no_template' : null));
+
+                    $preview[] = [
+                        'deal_id' => $deal->id ?: null,
+                        'client_id' => $deal->client_id,
+                        'client_name' => $deal->client->name ?? 'Unknown',
+                        'phone' => $deal->client->phone_normalized ?? null,
+                        'can_send' => $canSend,
+                        'skip_reason' => $skipReason,
+                    ];
+                    continue;
+                }
+
                 $res = $this->sendManualReminder($deal, $templateId, $actorId);
                 if (!empty($res['success'])) {
                     $sent++;
                 } else {
                     $failed++;
+                    $errors[] = [
+                        'deal_id' => $target['deal_id'] ?? null,
+                        'client_id' => $target['client_id'] ?? $deal->client_id ?? null,
+                        'reason' => $res['reason'] ?? 'Unknown failure',
+                    ];
                 }
             } catch (\Exception $e) {
                 $failed++;
+                $errors[] = [
+                    'deal_id' => $target['deal_id'] ?? null,
+                    'client_id' => $target['client_id'] ?? null,
+                    'reason' => $e->getMessage(),
+                ];
             }
+        }
+
+        if ($dryRun) {
+            $sendable = count(array_filter($preview, fn($p) => $p['can_send']));
+            return [
+                'dry_run' => true,
+                'total' => count($preview),
+                'sendable' => $sendable,
+                'skipped' => count($preview) - $sendable,
+                'preview' => array_slice($preview, 0, 50),
+            ];
         }
 
         return [
             'total' => count($targets),
             'success' => $sent,
             'failed' => $failed,
+            'errors' => array_slice($errors, 0, 25),
         ];
     }
 

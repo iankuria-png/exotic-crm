@@ -6,6 +6,7 @@ import DataTable from '../components/DataTable';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
@@ -90,6 +91,12 @@ export default function Campaigns() {
         reason: 'Campaign run configured from campaigns page',
     });
     const [runPreview, setRunPreview] = useState(null);
+    const [bulkRemindDialog, setBulkRemindDialog] = useState({
+        open: false,
+        selection: [],
+        selectAll: false,
+        preview: null,
+    });
 
     const { data: integrationData } = useQuery({
         queryKey: ['settings-integrations', 'campaigns-filter'],
@@ -255,6 +262,34 @@ export default function Campaigns() {
         },
     });
 
+    const bulkRemindPreviewMutation = useMutation({
+        mutationFn: async ({ selection, selectAll }) => {
+            const response = await api.post('/crm/renewals/bulk-remind', {
+                selection: selectAll ? [] : selection.map(row => ({
+                    deal_id: row.id,
+                    client_id: row.client_id,
+                    expires_at: row.expires_at
+                })),
+                select_all: selectAll,
+                search,
+                bucket: bucketFilter,
+                ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                dry_run: true,
+            });
+            return response.data;
+        },
+        onSuccess: (result) => {
+            setBulkRemindDialog((d) => ({ ...d, preview: result }));
+        },
+        onError: (error) => {
+            setFeedback({
+                tone: 'warning',
+                text: error?.response?.data?.message || 'Reminder preview failed.',
+            });
+            setBulkRemindDialog((d) => ({ ...d, open: false }));
+        },
+    });
+
     const bulkRemindMutation = useMutation({
         mutationFn: async ({ selection, selectAll }) => {
             const response = await api.post('/crm/renewals/bulk-remind', {
@@ -274,9 +309,13 @@ export default function Campaigns() {
             queryClient.invalidateQueries({ queryKey: ['renewals-overview'] });
             setClearSelectionKey((value) => value + 1);
             setIsGlobalSelected(false);
+            setBulkRemindDialog((d) => ({ ...d, open: false }));
+            const errorSummary = result.errors?.length
+                ? ` Reasons: ${result.errors.slice(0, 3).map(e => e.reason).join('; ')}`
+                : '';
             setFeedback({
                 tone: result.failed > 0 ? 'warning' : 'success',
-                text: `Reminder batch complete: ${result.success}/${result.total}${result.failed ? ` (${result.failed} failed)` : ''}.`,
+                text: `Reminder batch: ${result.success}/${result.total} sent.${result.failed ? ` (${result.failed} failed)${errorSummary}` : ''}`,
             });
         },
         onError: (error) => {
@@ -585,12 +624,18 @@ export default function Campaigns() {
         {
             key: 'bulk-remind',
             label: isGlobalSelected ? `Send reminders to all ${data?.targets?.total || ''} matches` : 'Send reminder',
-            loadingLabel: 'Sending...',
+            loadingLabel: 'Preparing...',
             variant: 'primary',
-            onClick: async (rowsSelection) => {
-                await bulkRemindMutation.mutateAsync({
+            onClick: (rowsSelection) => {
+                setBulkRemindDialog({
+                    open: true,
                     selection: rowsSelection,
-                    selectAll: isGlobalSelected
+                    selectAll: isGlobalSelected,
+                    preview: null,
+                });
+                bulkRemindPreviewMutation.mutate({
+                    selection: rowsSelection,
+                    selectAll: isGlobalSelected,
                 });
             },
         },
@@ -1325,6 +1370,56 @@ export default function Campaigns() {
                     </div>
                 </div>
             ) : null}
+
+            <ConfirmDialog
+                open={bulkRemindDialog.open}
+                title="Bulk Send Reminders"
+                message={
+                    bulkRemindDialog.preview
+                        ? `${bulkRemindDialog.preview.sendable} of ${bulkRemindDialog.preview.total} target(s) can receive a reminder.${bulkRemindDialog.preview.skipped ? ` ${bulkRemindDialog.preview.skipped} will be skipped.` : ''}`
+                        : 'Loading preview...'
+                }
+                confirmLabel="Send Reminders"
+                tone="default"
+                onCancel={() => setBulkRemindDialog((d) => ({ ...d, open: false }))}
+                onConfirm={() => bulkRemindMutation.mutate({
+                    selection: bulkRemindDialog.selection,
+                    selectAll: bulkRemindDialog.selectAll,
+                })}
+                confirmDisabled={!bulkRemindDialog.preview || bulkRemindDialog.preview.sendable === 0 || bulkRemindMutation.isPending}
+                isPending={bulkRemindMutation.isPending}
+            >
+                {bulkRemindDialog.preview?.preview?.length ? (
+                    <div className="max-h-56 overflow-y-auto rounded border border-slate-200">
+                        <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-slate-50">
+                                <tr>
+                                    <th className="px-2 py-1.5 text-left font-medium text-slate-600">Client</th>
+                                    <th className="px-2 py-1.5 text-left font-medium text-slate-600">Phone</th>
+                                    <th className="px-2 py-1.5 text-left font-medium text-slate-600">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {bulkRemindDialog.preview.preview.map((item, idx) => (
+                                    <tr key={idx} className={item.can_send ? '' : 'bg-rose-50/50'}>
+                                        <td className="px-2 py-1.5 text-slate-800">{item.client_name}</td>
+                                        <td className="px-2 py-1.5 text-slate-600">{item.phone || '—'}</td>
+                                        <td className="px-2 py-1.5">
+                                            {item.can_send ? (
+                                                <span className="text-emerald-700">Ready</span>
+                                            ) : (
+                                                <span className="text-rose-600">{item.skip_reason || 'Cannot send'}</span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : bulkRemindPreviewMutation.isPending ? (
+                    <p className="text-sm text-slate-500">Resolving targets...</p>
+                ) : null}
+            </ConfirmDialog>
         </div>
     );
 }
