@@ -202,6 +202,16 @@ export default function Payments() {
         category: 'timeout',
         reason: '',
     });
+    const [importDialog, setImportDialog] = useState({
+        open: false,
+        step: 'upload', // 'upload' | 'preview' | 'committed'
+        file: null,
+        platformId: '',
+        reason: 'Payment import from CRM',
+        preview: null,
+        batchId: null,
+        commitResult: null,
+    });
 
     const { data: integrationData } = useQuery({
         queryKey: ['settings-integrations', 'payments-filter'],
@@ -467,6 +477,75 @@ export default function Payments() {
             toast.error(error?.response?.data?.message || 'Updating review state failed.');
         },
     });
+
+    const importPreviewMutation = useMutation({
+        mutationFn: async ({ file, platformId, reason }) => {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('platform_id', platformId);
+            formData.append('reason', reason);
+            formData.append('has_header', '1');
+            const response = await api.post('/crm/payments/import/preview', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            return response.data;
+        },
+        onSuccess: (result) => {
+            setImportDialog((d) => ({
+                ...d,
+                step: 'preview',
+                preview: result,
+                batchId: result.batch_id,
+            }));
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Import preview failed.');
+        },
+    });
+
+    const importCommitMutation = useMutation({
+        mutationFn: async ({ batchId, reason }) => {
+            const response = await api.post('/crm/payments/import/commit', {
+                batch_id: batchId,
+                reason,
+            });
+            return response.data;
+        },
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setImportDialog((d) => ({ ...d, step: 'committed', commitResult: result }));
+            toast.success('Payment import committed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Import commit failed.');
+        },
+    });
+
+    const handleImportConfirm = () => {
+        if (importDialog.step === 'upload') {
+            importPreviewMutation.mutate({
+                file: importDialog.file,
+                platformId: importDialog.platformId,
+                reason: importDialog.reason,
+            });
+        } else if (importDialog.step === 'preview') {
+            importCommitMutation.mutate({
+                batchId: importDialog.batchId,
+                reason: importDialog.reason,
+            });
+        } else {
+            setImportDialog({
+                open: false,
+                step: 'upload',
+                file: null,
+                platformId: '',
+                reason: 'Payment import from CRM',
+                preview: null,
+                batchId: null,
+                commitResult: null,
+            });
+        }
+    };
 
     const handleSearch = (event) => {
         event.preventDefault();
@@ -903,6 +982,22 @@ export default function Payments() {
                             className="crm-btn-secondary px-3 py-2"
                         >
                             Download import template
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setImportDialog({
+                                open: true,
+                                step: 'upload',
+                                file: null,
+                                platformId: platformFilter || '',
+                                reason: 'Payment import from CRM',
+                                preview: null,
+                                batchId: null,
+                                commitResult: null,
+                            })}
+                            className="crm-btn-secondary px-3 py-2"
+                        >
+                            Upload payments
                         </button>
                         <button
                             onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue', preview: null, step: 'reason' })}
@@ -1652,6 +1747,143 @@ export default function Payments() {
                         />
                     </div>
                 </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={importDialog.open}
+                title={
+                    importDialog.step === 'committed' ? 'Import Complete'
+                        : importDialog.step === 'preview' ? 'Import Preview'
+                            : 'Import Payments'
+                }
+                message={
+                    importDialog.step === 'committed' && importDialog.commitResult
+                        ? `${importDialog.commitResult.summary?.committed ?? 0} payment(s) imported successfully.`
+                        : importDialog.step === 'preview' && importDialog.preview
+                            ? `${importDialog.preview.summary?.valid ?? 0} valid, ${importDialog.preview.summary?.invalid ?? 0} invalid, ${importDialog.preview.summary?.duplicate ?? 0} duplicate out of ${importDialog.preview.summary?.total ?? 0} rows.`
+                            : 'Upload a CSV or XLSX file with payment records.'
+                }
+                confirmLabel={
+                    importDialog.step === 'committed' ? 'Close'
+                        : importDialog.step === 'preview' ? 'Commit Import'
+                            : 'Preview Import'
+                }
+                tone={importDialog.step === 'preview' ? 'warning' : 'default'}
+                onCancel={() => setImportDialog((d) => ({ ...d, open: false }))}
+                onConfirm={handleImportConfirm}
+                confirmDisabled={
+                    (importDialog.step === 'upload' && (!importDialog.file || !importDialog.platformId || !importDialog.reason.trim()))
+                    || (importDialog.step === 'preview' && (!importDialog.preview || (importDialog.preview.summary?.valid ?? 0) === 0))
+                    || importPreviewMutation.isPending
+                    || importCommitMutation.isPending
+                }
+                isPending={importPreviewMutation.isPending || importCommitMutation.isPending}
+            >
+                {importDialog.step === 'upload' ? (
+                    <div className="space-y-3">
+                        <div>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">Market</label>
+                            <select
+                                value={importDialog.platformId}
+                                onChange={(e) => setImportDialog((d) => ({ ...d, platformId: e.target.value }))}
+                                className="crm-input"
+                            >
+                                <option value="">Select market...</option>
+                                {platformOptions.map((p) => (
+                                    <option key={p.platform_id} value={p.platform_id}>{p.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">CSV / XLSX File</label>
+                            <input
+                                type="file"
+                                accept=".csv,.xlsx,.txt"
+                                onChange={(e) => setImportDialog((d) => ({ ...d, file: e.target.files?.[0] || null }))}
+                                className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                            />
+                        </div>
+                        <div>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                            <textarea
+                                rows={2}
+                                value={importDialog.reason}
+                                onChange={(e) => setImportDialog((d) => ({ ...d, reason: e.target.value }))}
+                                className="crm-input"
+                            />
+                        </div>
+                    </div>
+                ) : importDialog.step === 'preview' && importDialog.preview ? (
+                    <div className="space-y-3">
+                        <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                            <div className="rounded-md bg-slate-50 p-2">
+                                <p className="font-semibold text-slate-900">{importDialog.preview.summary?.total ?? 0}</p>
+                                <p className="text-slate-500">Total</p>
+                            </div>
+                            <div className="rounded-md bg-emerald-50 p-2">
+                                <p className="font-semibold text-emerald-700">{importDialog.preview.summary?.valid ?? 0}</p>
+                                <p className="text-emerald-600">Valid</p>
+                            </div>
+                            <div className="rounded-md bg-rose-50 p-2">
+                                <p className="font-semibold text-rose-700">{importDialog.preview.summary?.invalid ?? 0}</p>
+                                <p className="text-rose-600">Invalid</p>
+                            </div>
+                            <div className="rounded-md bg-amber-50 p-2">
+                                <p className="font-semibold text-amber-700">{importDialog.preview.summary?.duplicate ?? 0}</p>
+                                <p className="text-amber-600">Duplicate</p>
+                            </div>
+                        </div>
+                        {importDialog.preview.rows?.length ? (
+                            <div className="max-h-48 overflow-y-auto rounded border border-slate-200">
+                                <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-slate-50">
+                                        <tr>
+                                            <th className="px-2 py-1.5 text-left font-medium text-slate-600">#</th>
+                                            <th className="px-2 py-1.5 text-left font-medium text-slate-600">Phone</th>
+                                            <th className="px-2 py-1.5 text-left font-medium text-slate-600">Amount</th>
+                                            <th className="px-2 py-1.5 text-left font-medium text-slate-600">Reference</th>
+                                            <th className="px-2 py-1.5 text-left font-medium text-slate-600">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {importDialog.preview.rows.slice(0, 20).map((row) => (
+                                            <tr key={row.row_number} className={row.status === 'invalid' ? 'bg-rose-50/50' : row.status === 'duplicate' ? 'bg-amber-50/50' : ''}>
+                                                <td className="px-2 py-1.5 text-slate-500">{row.row_number}</td>
+                                                <td className="px-2 py-1.5 text-slate-800">{row.normalized_row?.phone || row.raw_row?.phone || '—'}</td>
+                                                <td className="px-2 py-1.5 text-slate-600">{row.normalized_row?.amount || row.raw_row?.amount || '—'}</td>
+                                                <td className="px-2 py-1.5 text-slate-600 truncate max-w-[120px]">{row.normalized_row?.transaction_reference || row.raw_row?.transaction_reference || '—'}</td>
+                                                <td className="px-2 py-1.5">
+                                                    <span className={
+                                                        row.status === 'valid' ? 'text-emerald-700'
+                                                            : row.status === 'invalid' ? 'text-rose-600'
+                                                                : row.status === 'duplicate' ? 'text-amber-600'
+                                                                    : 'text-slate-500'
+                                                    }>
+                                                        {row.status}
+                                                    </span>
+                                                    {row.validation_errors?.length ? (
+                                                        <span className="ml-1 text-rose-500" title={row.validation_errors.join(', ')}>
+                                                            ({row.validation_errors.length} error{row.validation_errors.length > 1 ? 's' : ''})
+                                                        </span>
+                                                    ) : null}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : null}
+                    </div>
+                ) : importDialog.step === 'committed' && importDialog.commitResult ? (
+                    <div className="text-sm text-slate-700">
+                        <p>Batch #{importDialog.batchId} has been committed.</p>
+                        {importDialog.commitResult.summary ? (
+                            <p className="mt-1 text-slate-500">
+                                Committed: {importDialog.commitResult.summary.committed ?? 0} / Skipped: {importDialog.commitResult.summary.skipped ?? 0}
+                            </p>
+                        ) : null}
+                    </div>
+                ) : null}
             </ConfirmDialog>
         </div>
     );
