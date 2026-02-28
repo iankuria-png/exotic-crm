@@ -321,6 +321,11 @@ export default function Campaigns() {
         [data?.campaigns],
     );
 
+    const applyMetricFilter = (bucket) => {
+        setBucketFilter((current) => (current === bucket ? '' : bucket));
+        setPage(1);
+    };
+
     const campaignOptions = data?.campaigns || [];
 
     const previewTargets = useMemo(
@@ -608,13 +613,13 @@ export default function Campaigns() {
             />
 
             <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-7">
-                <MetricCard label="At Risk (0-3 days)" value={summary.risk.toLocaleString()} meta="urgent outreach" tone="danger" />
-                <MetricCard label="Pending (4-14 days)" value={summary.pending.toLocaleString()} meta="scheduled reminders" tone="warning" />
+                <MetricCard label="At Risk (0-3 days)" value={summary.risk.toLocaleString()} meta="urgent outreach" tone="danger" onClick={() => applyMetricFilter('risk')} active={bucketFilter === 'risk'} />
+                <MetricCard label="Pending (4-14 days)" value={summary.pending.toLocaleString()} meta="scheduled reminders" tone="warning" onClick={() => applyMetricFilter('pending')} active={bucketFilter === 'pending'} />
                 <MetricCard label="Renewed This Month" value={summary.renewedThisMonth.toLocaleString()} meta="already extended" tone="success" />
-                <MetricCard label="Paused Reminders" value={summary.paused.toLocaleString()} meta="manual hold state" tone="warning" />
+                <MetricCard label="Paused Reminders" value={summary.paused.toLocaleString()} meta="manual hold state" tone="warning" onClick={() => applyMetricFilter('paused')} active={bucketFilter === 'paused'} />
                 <MetricCard label="Active Campaigns" value={activeCampaigns.toLocaleString()} meta="enabled automation rules" tone="accent" />
-                <MetricCard label="Recently Expired" value={summary.expired.toLocaleString()} meta="within 14 days" tone="danger" />
-                <MetricCard label="Lapsed" value={summary.lapsed.toLocaleString()} meta="expired > 14 days" tone="neutral" />
+                <MetricCard label="Recently Expired" value={summary.expired.toLocaleString()} meta="within 14 days" tone="danger" onClick={() => applyMetricFilter('expired')} active={bucketFilter === 'expired'} />
+                <MetricCard label="Lapsed" value={summary.lapsed.toLocaleString()} meta="expired > 14 days" tone="neutral" onClick={() => applyMetricFilter('lapsed')} active={bucketFilter === 'lapsed'} />
             </section>
 
             {lastRun ? (
