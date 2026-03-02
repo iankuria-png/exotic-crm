@@ -39,6 +39,7 @@ export default function Clients() {
     const [searchParams] = useSearchParams();
 
     const [page, setPage] = useState(1);
+    const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [statusFilter, setStatusFilter] = useState(() => {
@@ -95,12 +96,12 @@ export default function Clients() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, search, statusFilter, planFilter, verifiedFilter, platformFilter],
+        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, platformFilter],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
                     page,
-                    per_page: 25,
+                    per_page: perPage,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(planFilter && { plan: planFilter }),
@@ -646,6 +647,8 @@ export default function Clients() {
                 isLoading={isLoading}
                 emptyMessage="No clients found matching your filters."
                 compact
+                perPage={perPage}
+                onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
             />
 
             <ConfirmDialog

@@ -828,6 +828,8 @@ export default function Campaigns() {
                 bulkActions={bulkActions}
                 onSelectionChange={setSelectedRows}
                 clearSelectionKey={clearSelectionKey}
+                perPage={perPage}
+                onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
             />
 
             {activeDealRow ? (

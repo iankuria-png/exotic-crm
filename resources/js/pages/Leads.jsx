@@ -49,6 +49,7 @@ export default function Leads() {
     const [searchParams] = useSearchParams();
 
     const [page, setPage] = useState(1);
+    const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
@@ -125,12 +126,12 @@ export default function Leads() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['leads', page, search, statusFilter, ownerFilter, platformFilter],
+        queryKey: ['leads', page, perPage, search, statusFilter, ownerFilter, platformFilter],
         queryFn: () =>
             api.get('/crm/leads', {
                 params: {
                     page,
-                    per_page: 25,
+                    per_page: perPage,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(ownerFilter && { assigned_to: ownerFilter }),
@@ -1044,6 +1045,8 @@ export default function Leads() {
                 selectable
                 bulkActions={bulkActions}
                 clearSelectionKey={clearSelectionKey}
+                perPage={perPage}
+                onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
             />
 
             <ConfirmDialog

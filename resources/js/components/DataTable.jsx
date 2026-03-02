@@ -12,6 +12,8 @@ function defaultRowId(row, index, rowIdKey) {
     return index;
 }
 
+const DEFAULT_PER_PAGE_OPTIONS = [50, 100, 150];
+
 export default function DataTable({
     columns,
     data,
@@ -26,6 +28,9 @@ export default function DataTable({
     bulkActions = [],
     onSelectionChange,
     clearSelectionKey,
+    perPage,
+    onPerPageChange,
+    perPageOptions = DEFAULT_PER_PAGE_OPTIONS,
 }) {
     const rows = data || [];
     const { current_page, last_page, total, per_page } = pagination || {};
@@ -219,44 +224,67 @@ export default function DataTable({
                 </table>
             </div>
 
-            {pagination && last_page > 1 ? (
+            {pagination && total > 0 ? (
                 <div className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-sm text-slate-500">
-                        Showing {((current_page - 1) * per_page) + 1}–{Math.min(current_page * per_page, total)} of {total}
-                    </p>
-                    <div className="flex gap-1">
-                        <button
-                            onClick={() => onPageChange(current_page - 1)}
-                            disabled={current_page <= 1}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            Prev
-                        </button>
-                        {generatePageNumbers(current_page, last_page).map((page, index) =>
-                            page === '...' ? (
-                                <span key={`dots-${index}`} className="px-2 py-1 text-sm text-slate-400">...</span>
-                            ) : (
-                                <button
-                                    key={page}
-                                    onClick={() => onPageChange(page)}
-                                    className={`rounded-md border px-3 py-1 text-sm ${
-                                        page === current_page
-                                            ? 'border-teal-700 bg-teal-700 text-white'
-                                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                                    }`}
-                                >
-                                    {page}
-                                </button>
-                            ),
-                        )}
-                        <button
-                            onClick={() => onPageChange(current_page + 1)}
-                            disabled={current_page >= last_page}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            Next
-                        </button>
+                    <div className="flex items-center gap-4">
+                        {onPerPageChange ? (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-slate-500">Rows</span>
+                                <div className="relative">
+                                    <select
+                                        value={perPage || per_page}
+                                        onChange={(e) => onPerPageChange(Number(e.target.value))}
+                                        className="crm-select-enhanced py-1 pl-2 pr-7 text-xs"
+                                    >
+                                        {perPageOptions.map((n) => (
+                                            <option key={n} value={n}>{n}</option>
+                                        ))}
+                                    </select>
+                                    <svg className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                                    </svg>
+                                </div>
+                            </div>
+                        ) : null}
+                        <p className="text-xs text-slate-500">
+                            Showing {((current_page - 1) * per_page) + 1}&ndash;{Math.min(current_page * per_page, total)} of {total?.toLocaleString()}
+                        </p>
                     </div>
+                    {last_page > 1 ? (
+                        <div className="flex gap-1">
+                            <button
+                                onClick={() => onPageChange(current_page - 1)}
+                                disabled={current_page <= 1}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-1 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                Prev
+                            </button>
+                            {generatePageNumbers(current_page, last_page).map((page, index) =>
+                                page === '...' ? (
+                                    <span key={`dots-${index}`} className="px-2 py-1 text-sm text-slate-400">...</span>
+                                ) : (
+                                    <button
+                                        key={page}
+                                        onClick={() => onPageChange(page)}
+                                        className={`rounded-md border px-3 py-1 text-sm ${
+                                            page === current_page
+                                                ? 'border-teal-700 bg-teal-700 text-white'
+                                                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                                        }`}
+                                    >
+                                        {page}
+                                    </button>
+                                ),
+                            )}
+                            <button
+                                onClick={() => onPageChange(current_page + 1)}
+                                disabled={current_page >= last_page}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-1 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                Next
+                            </button>
+                        </div>
+                    ) : null}
                 </div>
             ) : null}
         </div>

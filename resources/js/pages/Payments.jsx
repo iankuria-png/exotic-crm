@@ -139,6 +139,7 @@ export default function Payments() {
     const [searchParams] = useSearchParams();
     const toast = useToast();
     const [page, setPage] = useState(1);
+    const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [statusFilter, setStatusFilter] = useState(() => {
@@ -233,12 +234,12 @@ export default function Payments() {
     const resolveCurrency = (currencyCode) => currencyCode || selectedPlatformCurrency || 'KES';
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, search, statusFilter, matchFilter, platformFilter, sourceFilter, confidenceFilter, reviewStateFilter],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, confidenceFilter, reviewStateFilter],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
                     page,
-                    per_page: 25,
+                    per_page: perPage,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(matchFilter && { matched: matchFilter }),
@@ -1235,6 +1236,8 @@ export default function Payments() {
                 bulkActions={bulkActions}
                 onSelectionChange={setSelectedRows}
                 clearSelectionKey={clearSelectionKey}
+                perPage={perPage}
+                onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
             />
 
             {diagnosticsDrawer.open ? (

@@ -37,6 +37,7 @@ export default function Deals() {
     const toast = useToast();
     const [searchParams] = useSearchParams();
     const [page, setPage] = useState(1);
+    const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [statusFilter, setStatusFilter] = useState(() => {
@@ -83,12 +84,12 @@ export default function Deals() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['deals', page, search, statusFilter, bucket, platformFilter],
+        queryKey: ['deals', page, perPage, search, statusFilter, bucket, platformFilter],
         queryFn: () =>
             api.get('/crm/deals', {
                 params: {
                     page,
-                    per_page: 25,
+                    per_page: perPage,
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     bucket,
@@ -776,6 +777,8 @@ export default function Deals() {
                 selectable
                 bulkActions={bulkActions}
                 clearSelectionKey={clearSelectionKey}
+                perPage={perPage}
+                onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
             />
 
             {selectedDeal ? (
