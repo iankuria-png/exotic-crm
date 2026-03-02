@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
+import FilterSelect from '../components/FilterSelect';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
@@ -498,81 +499,69 @@ export default function Clients() {
             <p className="px-1 text-xs text-slate-500">Click a metric card to segment the table. Click the same card again to clear.</p>
 
             <section className="crm-filter-row">
-                <div className="flex flex-wrap items-center gap-3">
-                    <form onSubmit={handleSearch} className="min-w-[240px] flex-1">
-                        <div className="relative">
-                            <input
-                                type="text"
-                                value={searchInput}
-                                onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search by name, phone, email, CRM ID, WP Post ID, or WP User ID..."
-                                className="crm-input pr-10"
-                            />
-                            <button type="submit" aria-label="Run client search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                </svg>
-                            </button>
+                <div className="flex flex-wrap items-end gap-3">
+                    <form onSubmit={handleSearch} className="min-w-[220px] flex-1">
+                        <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">Search</span>
+                            <div className="relative">
+                                <input
+                                    type="text"
+                                    value={searchInput}
+                                    onChange={(event) => setSearchInput(event.target.value)}
+                                    placeholder="Name, phone, email, or ID..."
+                                    className="crm-input pr-10"
+                                />
+                                <button type="submit" aria-label="Run client search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     </form>
 
-                    <select
+                    <FilterSelect
+                        label="Market"
                         value={platformFilter}
-                        onChange={(event) => {
-                            setPlatformFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All markets</option>
-                        {platformOptions.map((platform) => (
-                            <option key={platform.platform_id} value={platform.platform_id}>
-                                {platform.platform_name}
-                            </option>
-                        ))}
-                    </select>
+                        onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
+                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Status"
                         value={statusFilter}
-                        onChange={(event) => {
-                            setStatusFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All statuses</option>
-                        <option value="publish">Active</option>
-                        <option value="private">Inactive</option>
-                        <option value="draft">Draft</option>
-                        <option value="pending">Pending</option>
-                    </select>
+                        onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All statuses' },
+                            { value: 'publish', label: 'Active' },
+                            { value: 'private', label: 'Inactive' },
+                            { value: 'draft', label: 'Draft' },
+                            { value: 'pending', label: 'Pending' },
+                        ]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Plan"
                         value={planFilter}
-                        onChange={(event) => {
-                            setPlanFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All plans</option>
-                        <option value="premium">Premium</option>
-                        <option value="featured">Featured</option>
-                        <option value="basic">Basic</option>
-                    </select>
+                        onChange={(event) => { setPlanFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All plans' },
+                            { value: 'premium', label: 'Premium' },
+                            { value: 'featured', label: 'Featured' },
+                            { value: 'basic', label: 'Basic' },
+                        ]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Verified"
                         value={verifiedFilter}
-                        onChange={(event) => {
-                            setVerifiedFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All verification</option>
-                        <option value="1">Verified only</option>
-                        <option value="0">Not verified</option>
-                    </select>
+                        onChange={(event) => { setVerifiedFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All' },
+                            { value: '1', label: 'Verified only' },
+                            { value: '0', label: 'Not verified' },
+                        ]}
+                    />
 
                     {(search || statusFilter || planFilter || verifiedFilter !== '' || platformFilter) ? (
                         <button
@@ -586,13 +575,12 @@ export default function Clients() {
                                 setPlatformFilter('');
                                 setPage(1);
                             }}
-                            className="crm-btn-secondary px-3 py-2"
+                            className="mb-0.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
                         >
-                            Reset
+                            Reset all
                         </button>
                     ) : null}
                 </div>
-                <p className="mt-2 text-xs text-slate-500">Quick segments: Active, Premium, and Verified cards map to table filters. Numeric search supports CRM/WP IDs.</p>
             </section>
 
             {csvResult ? (

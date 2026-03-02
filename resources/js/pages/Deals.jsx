@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
+import FilterSelect from '../components/FilterSelect';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
@@ -681,78 +682,68 @@ export default function Deals() {
             <p className="px-1 text-xs text-slate-500">Click a metric card to filter this table. Click it again to clear.</p>
 
             <section className="crm-filter-row">
-                <div className="flex flex-wrap items-center gap-3">
-                    <form onSubmit={handleSearch} className="min-w-[240px] flex-1">
-                        <div className="relative">
-                            <input
-                                type="text"
-                                value={searchInput}
-                                onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search by client name or phone..."
-                                className="crm-input pr-10"
-                            />
-                            <button type="submit" aria-label="Run subscription search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                </svg>
-                            </button>
+                <div className="flex flex-wrap items-end gap-3">
+                    <form onSubmit={handleSearch} className="min-w-[220px] flex-1">
+                        <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">Search</span>
+                            <div className="relative">
+                                <input
+                                    type="text"
+                                    value={searchInput}
+                                    onChange={(event) => setSearchInput(event.target.value)}
+                                    placeholder="Client name or phone..."
+                                    className="crm-input pr-10"
+                                />
+                                <button type="submit" aria-label="Run subscription search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     </form>
 
-                    <select
+                    <FilterSelect
+                        label="Market"
                         value={platformFilter}
-                        onChange={(event) => {
-                            setPlatformFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All markets</option>
-                        {platformOptions.map((platform) => (
-                            <option key={platform.platform_id} value={platform.platform_id}>
-                                {platform.platform_name}
-                            </option>
-                        ))}
-                    </select>
+                        onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
+                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Bucket"
                         value={bucket}
-                        onChange={(event) => {
-                            setBucket(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="all">Unified View (Non-Lapsed)</option>
-                        <option value="active">Active Only</option>
-                        <option value="risk">At Risk (0-3d)</option>
-                        <option value="pending">Upcoming (4-14d)</option>
-                        <option value="workload">Renewal Workload (0-14d)</option>
-                        <option value="stable">Stable ({'>'}14d)</option>
-                        <option value="expired">Recently Expired</option>
-                        <option value="untracked">Untracked Active</option>
-                        <option value="lapsed">Lapsed (Legacy)</option>
-                        <option value="paused">Paused Reminders</option>
-                    </select>
+                        onChange={(event) => { setBucket(event.target.value); setPage(1); }}
+                        options={[
+                            { value: 'all', label: 'Unified (Non-Lapsed)' },
+                            { value: 'active', label: 'Active Only' },
+                            { value: 'risk', label: 'At Risk (0-3d)' },
+                            { value: 'pending', label: 'Upcoming (4-14d)' },
+                            { value: 'workload', label: 'Renewal (0-14d)' },
+                            { value: 'stable', label: 'Stable (>14d)' },
+                            { value: 'expired', label: 'Recently Expired' },
+                            { value: 'untracked', label: 'Untracked Active' },
+                            { value: 'lapsed', label: 'Lapsed (Legacy)' },
+                            { value: 'paused', label: 'Paused Reminders' },
+                        ]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Status"
                         value={statusFilter}
-                        onChange={(event) => {
-                            setStatusFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">Status Filter</option>
-                        <option value="pending">Pending</option>
-                        <option value="awaiting_payment">Awaiting payment</option>
-                        <option value="paid">Paid</option>
-                        <option value="active">Active</option>
-                        <option value="expired">Expired</option>
-                        <option value="untracked">Untracked</option>
-                        <option value="renewed">Renewed</option>
-                        <option value="cancelled">Cancelled</option>
-                    </select>
+                        onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All statuses' },
+                            { value: 'pending', label: 'Pending' },
+                            { value: 'awaiting_payment', label: 'Awaiting payment' },
+                            { value: 'paid', label: 'Paid' },
+                            { value: 'active', label: 'Active' },
+                            { value: 'expired', label: 'Expired' },
+                            { value: 'untracked', label: 'Untracked' },
+                            { value: 'renewed', label: 'Renewed' },
+                            { value: 'cancelled', label: 'Cancelled' },
+                        ]}
+                    />
 
                     {(search || statusFilter || bucket !== 'all' || platformFilter) ? (
                         <button
@@ -765,9 +756,9 @@ export default function Deals() {
                                 setPlatformFilter('');
                                 setPage(1);
                             }}
-                            className="crm-btn-secondary px-3 py-2"
+                            className="mb-0.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
                         >
-                            Reset
+                            Reset all
                         </button>
                     ) : null}
                 </div>

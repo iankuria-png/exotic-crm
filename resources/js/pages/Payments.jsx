@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
+import FilterSelect from '../components/FilterSelect';
 import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -172,6 +173,7 @@ export default function Payments() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
+    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || confidenceFilter || reviewStateFilter));
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
@@ -1084,111 +1086,108 @@ export default function Payments() {
                 </button>
             </section>
 
-            <section className="crm-filter-row">
-                <div className="flex flex-wrap items-center gap-3">
-                    <form onSubmit={handleSearch} className="min-w-[240px] flex-1">
-                        <div className="relative">
-                            <input
-                                type="text"
-                                value={searchInput}
-                                onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search by phone or reference..."
-                                className="crm-input pr-10"
-                            />
-                            <button type="submit" aria-label="Run payment search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                </svg>
-                            </button>
+            <section className="crm-filter-row space-y-3">
+                <div className="flex flex-wrap items-end gap-3">
+                    <form onSubmit={handleSearch} className="min-w-[220px] flex-1">
+                        <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">Search</span>
+                            <div className="relative">
+                                <input
+                                    type="text"
+                                    value={searchInput}
+                                    onChange={(event) => setSearchInput(event.target.value)}
+                                    placeholder="Phone or reference..."
+                                    className="crm-input pr-10"
+                                />
+                                <button type="submit" aria-label="Run payment search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     </form>
 
-                    <select
+                    <FilterSelect
+                        label="Market"
                         value={platformFilter}
-                        onChange={(event) => {
-                            setPlatformFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All markets</option>
-                        {platformOptions.map((platform) => (
-                            <option key={platform.platform_id} value={platform.platform_id}>
-                                {platform.platform_name}
-                            </option>
-                        ))}
-                    </select>
+                        onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
+                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Status"
                         value={statusFilter}
-                        onChange={(event) => {
-                            setStatusFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All Statuses</option>
-                        <option value="awaiting_payment">Awaiting payment (initiated + pending)</option>
-                        <option value="recovery_queue">Recovery queue (pending + failed + unmatched)</option>
-                        <option value="completed">Completed</option>
-                        <option value="initiated">Initiated</option>
-                        <option value="pending">Pending</option>
-                        <option value="failed">Failed</option>
-                    </select>
+                        onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All statuses' },
+                            { value: 'awaiting_payment', label: 'Awaiting payment' },
+                            { value: 'recovery_queue', label: 'Recovery queue' },
+                            { value: 'completed', label: 'Completed' },
+                            { value: 'initiated', label: 'Initiated' },
+                            { value: 'pending', label: 'Pending' },
+                            { value: 'failed', label: 'Failed' },
+                        ]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Match"
                         value={matchFilter}
-                        onChange={(event) => {
-                            setMatchFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All Matches</option>
-                        <option value="matched">Matched</option>
-                        <option value="unmatched">Unmatched</option>
-                    </select>
+                        onChange={(event) => { setMatchFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All' },
+                            { value: 'matched', label: 'Matched' },
+                            { value: 'unmatched', label: 'Unmatched' },
+                        ]}
+                    />
 
-                    <select
-                        value={sourceFilter}
-                        onChange={(event) => {
-                            setSourceFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All sources</option>
-                        <option value="gateway">Gateway/API</option>
-                        <option value="excel_import">Excel import</option>
-                    </select>
+                    {(sourceFilter || confidenceFilter || reviewStateFilter) || showAdvancedFilters ? (
+                        <>
+                            <FilterSelect
+                                label="Source"
+                                value={sourceFilter}
+                                onChange={(event) => { setSourceFilter(event.target.value); setPage(1); }}
+                                options={[
+                                    { value: '', label: 'All sources' },
+                                    { value: 'gateway', label: 'Gateway/API' },
+                                    { value: 'excel_import', label: 'Excel import' },
+                                ]}
+                            />
 
-                    <select
-                        value={confidenceFilter}
-                        onChange={(event) => {
-                            setConfidenceFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All confidence</option>
-                        <option value="high">High</option>
-                        <option value="medium">Medium</option>
-                        <option value="low">Low</option>
-                    </select>
+                            <FilterSelect
+                                label="Confidence"
+                                value={confidenceFilter}
+                                onChange={(event) => { setConfidenceFilter(event.target.value); setPage(1); }}
+                                options={[
+                                    { value: '', label: 'All' },
+                                    { value: 'high', label: 'High' },
+                                    { value: 'medium', label: 'Medium' },
+                                    { value: 'low', label: 'Low' },
+                                ]}
+                            />
 
-                    <select
-                        value={reviewStateFilter}
-                        onChange={(event) => {
-                            setReviewStateFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All review states</option>
-                        <option value="open">Open</option>
-                        <option value="manual_review">Manual review</option>
-                        <option value="resolved">Resolved</option>
-                    </select>
+                            <FilterSelect
+                                label="Review"
+                                value={reviewStateFilter}
+                                onChange={(event) => { setReviewStateFilter(event.target.value); setPage(1); }}
+                                options={[
+                                    { value: '', label: 'All states' },
+                                    { value: 'open', label: 'Open' },
+                                    { value: 'manual_review', label: 'Manual review' },
+                                    { value: 'resolved', label: 'Resolved' },
+                                ]}
+                            />
+                        </>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => setShowAdvancedFilters(true)}
+                            className="mb-0.5 flex items-center gap-1 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-medium text-slate-500 transition hover:border-slate-400 hover:text-slate-700"
+                        >
+                            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" /></svg>
+                            More filters
+                        </button>
+                    )}
 
                     {(search || statusFilter || matchFilter || platformFilter || sourceFilter || confidenceFilter || reviewStateFilter) ? (
                         <button
@@ -1202,25 +1201,25 @@ export default function Payments() {
                                 setSourceFilter('');
                                 setConfidenceFilter('');
                                 setReviewStateFilter('');
+                                setShowAdvancedFilters(false);
                                 setPage(1);
                             }}
-                            className="crm-btn-secondary px-3 py-2"
+                            className="mb-0.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
                         >
-                            Reset
+                            Reset all
                         </button>
                     ) : null}
                 </div>
 
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs text-slate-500">Bulk shortcut: press <span className="crm-mono">Ctrl/Cmd + Enter</span> to confirm selected rows.</p>
-                    <p className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2">
+                    <p className="text-xs text-slate-400">
+                        <span className="crm-mono">Ctrl/Cmd+Enter</span> to confirm selected &middot; Import fields: <span className="crm-mono">payment_date</span>, <span className="crm-mono">amount</span>, + identifier
+                    </p>
+                    <p className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                         <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                        Pending triage recommendation: send link within 1h, retry STK within 24h, escalate after 72h.
+                        Triage: link within 1h, retry STK within 24h, escalate after 72h
                     </p>
                 </div>
-                <p className="mt-2 text-xs text-slate-500">
-                    Import template fields: <span className="crm-mono">payment_date</span>, <span className="crm-mono">amount</span>, and one identifier (<span className="crm-mono">phone</span> or <span className="crm-mono">transaction_reference</span> or <span className="crm-mono">profile_url</span>).
-                </p>
             </section>
 
             <DataTable

@@ -68,6 +68,11 @@
         @apply inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300;
     }
 
+    .crm-select-enhanced {
+        @apply appearance-none rounded-lg border border-slate-300 bg-white py-2 pr-9 pl-3 text-sm text-slate-700 transition
+               focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100;
+    }
+
     .crm-filter-row {
         @apply rounded-xl border border-slate-200 bg-white p-3 shadow-sm;
     }

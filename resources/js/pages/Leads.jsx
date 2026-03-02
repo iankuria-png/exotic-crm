@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
+import FilterSelect from '../components/FilterSelect';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
@@ -905,80 +906,55 @@ export default function Leads() {
                 <MetricCard label="Lost" value={stats.lost.toLocaleString()} tone="danger" />
             </section>
 
-            <section className="crm-filter-row">
-                <div className="flex flex-wrap items-center gap-3">
-                    <form onSubmit={handleSearch} className="min-w-[240px] flex-1">
-                        <div className="relative">
-                            <input
-                                type="text"
-                                value={searchInput}
-                                onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Search leads by name, phone, or email..."
-                                className="crm-input pr-10"
-                            />
-                            <button type="submit" aria-label="Run lead search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                </svg>
-                            </button>
+            <section className="crm-filter-row space-y-3">
+                <div className="flex flex-wrap items-end gap-3">
+                    <form onSubmit={handleSearch} className="min-w-[220px] flex-1">
+                        <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">Search</span>
+                            <div className="relative">
+                                <input
+                                    type="text"
+                                    value={searchInput}
+                                    onChange={(event) => setSearchInput(event.target.value)}
+                                    placeholder="Name, phone, or email..."
+                                    className="crm-input pr-10"
+                                />
+                                <button type="submit" aria-label="Run lead search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     </form>
 
-                    <select
+                    <FilterSelect
+                        label="Market"
                         value={platformFilter}
-                        onChange={(event) => {
-                            setPlatformFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All markets</option>
-                        {platformOptions.map((platform) => (
-                            <option key={platform.platform_id} value={platform.platform_id}>
-                                {platform.platform_name}
-                            </option>
-                        ))}
-                    </select>
+                        onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
+                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Status"
                         value={statusFilter}
-                        onChange={(event) => {
-                            setStatusFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All statuses</option>
-                        {STATUSES.map((status) => (
-                            <option key={status} value={status} className="capitalize">
-                                {status}
-                            </option>
-                        ))}
-                    </select>
+                        onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
+                        options={[{ value: '', label: 'All statuses' }, ...STATUSES.map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Owner"
                         value={ownerFilter}
-                        onChange={(event) => {
-                            setOwnerFilter(event.target.value);
-                            setPage(1);
-                        }}
-                        className="crm-select"
-                    >
-                        <option value="">All owners</option>
-                        {ownerOptions.map(([ownerId, ownerName]) => (
-                            <option key={ownerId} value={ownerId}>{ownerName}</option>
-                        ))}
-                    </select>
+                        onChange={(event) => { setOwnerFilter(event.target.value); setPage(1); }}
+                        options={[{ value: '', label: 'All owners' }, ...ownerOptions.map(([id, name]) => ({ value: id, label: name }))]}
+                    />
 
-                    <select
+                    <FilterSelect
+                        label="Bulk target"
                         value={bulkTargetStatus}
                         onChange={(event) => setBulkTargetStatus(event.target.value)}
-                        className="crm-select"
-                    >
-                        {STATUSES.filter((status) => status !== 'lost').map((status) => (
-                            <option key={status} value={status}>Bulk target: {status}</option>
-                        ))}
-                    </select>
+                        options={STATUSES.filter((s) => s !== 'lost').map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))}
+                    />
 
                     {(search || statusFilter || ownerFilter || platformFilter) ? (
                         <button
@@ -991,15 +967,15 @@ export default function Leads() {
                                 setPlatformFilter('');
                                 setPage(1);
                             }}
-                            className="crm-btn-secondary px-3 py-2"
+                            className="mb-0.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
                         >
-                            Reset
+                            Reset all
                         </button>
                     ) : null}
                 </div>
 
-                <p className="mt-2 text-xs text-slate-500">
-                    “Sync from WordPress” imports registered profiles needing payment follow-up into this lead pipeline. Archive and delete actions always require a reason.
+                <p className="border-t border-slate-100 pt-2 text-xs text-slate-400">
+                    &ldquo;Sync from WordPress&rdquo; imports profiles needing payment follow-up. Archive and delete always require a reason.
                 </p>
             </section>
 
