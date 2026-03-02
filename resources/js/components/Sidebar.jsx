@@ -36,27 +36,21 @@ export default function Sidebar({ onClose }) {
 
     return (
         <div className="flex h-full flex-col border-r border-white/10 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-900 text-slate-100">
-            <div className="border-b border-white/10 px-4 py-4">
-                <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                        <div className="rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-white/10">
-                            <img src={brandLogo} alt="Exotic Online Advertising logo" className="h-8 w-auto object-contain" />
-                        </div>
-                        <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold tracking-tight text-white">ExoticCRM</p>
-                            <p className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-teal-200/75">Sales Operations</p>
-                        </div>
+            <div className="relative border-b border-white/10 px-4 py-4">
+                <div className="flex items-center justify-center">
+                    <div className="rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-white/10">
+                        <img src={brandLogo} alt="Exotic Online Advertising" className="h-8 w-auto object-contain" />
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 lg:hidden"
-                        aria-label="Close navigation"
-                    >
-                        <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                    </button>
                 </div>
+                <button
+                    onClick={onClose}
+                    className="absolute right-3 top-3 rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 lg:hidden"
+                    aria-label="Close navigation"
+                >
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
 
             <nav className="flex-1 overflow-y-auto px-3 py-4">
