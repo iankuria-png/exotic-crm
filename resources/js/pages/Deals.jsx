@@ -371,30 +371,39 @@ export default function Deals() {
             ),
         },
         {
-            key: 'plan_type',
-            label: 'Plan',
+            key: 'product_plan',
+            label: 'Product',
             render: (row) => {
-                const value = row.plan_type || row.inferred_plan_type || null;
-                if (!value) {
-                    return <span className="text-sm text-slate-400">—</span>;
+                const productName = row.product?.name || row.inferred_product_name;
+                const planType = row.plan_type || row.inferred_plan_type;
+                const isLegacy = !row.plan_type && !!row.inferred_plan_type;
+
+                if (productName) {
+                    return (
+                        <div>
+                            <span className="text-sm text-slate-700">{productName}</span>
+                            {planType && planType.toLowerCase() !== productName.toLowerCase() ? (
+                                <p className="text-[11px] capitalize text-slate-400">{planType}</p>
+                            ) : null}
+                        </div>
+                    );
                 }
 
-                return (
-                    <span className="inline-flex items-center gap-1 text-sm text-slate-700">
-                        <span className="capitalize">{value}</span>
-                        {!row.plan_type && row.inferred_plan_type ? (
-                            <span className="inline-flex items-center rounded-sm bg-slate-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ring-1 ring-inset ring-slate-200">
-                                Legacy
-                            </span>
-                        ) : null}
-                    </span>
-                );
+                if (planType) {
+                    return (
+                        <span className="inline-flex items-center gap-1 text-sm text-slate-700">
+                            <span className="capitalize">{planType}</span>
+                            {isLegacy ? (
+                                <span className="inline-flex items-center rounded-sm bg-slate-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ring-1 ring-inset ring-slate-200">
+                                    Legacy
+                                </span>
+                            ) : null}
+                        </span>
+                    );
+                }
+
+                return <span className="text-sm text-slate-400">—</span>;
             },
-        },
-        {
-            key: 'product',
-            label: 'Product',
-            render: (row) => <span className="text-sm text-slate-700">{row.product?.name || row.inferred_product_name || '—'}</span>,
         },
         {
             key: 'amount',
