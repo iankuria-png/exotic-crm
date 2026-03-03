@@ -41,6 +41,34 @@ function formatBytes(bytes) {
     return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function toDateOrNull(value) {
+    if (!value) {
+        return null;
+    }
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDuration(totalSeconds) {
+    const seconds = Math.max(0, Math.round(totalSeconds));
+
+    if (seconds < 60) {
+        return `${seconds}s`;
+    }
+
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+
+    if (minutes < 60) {
+        return `${minutes}m ${remainingSeconds}s`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes}m`;
+}
+
 export default function UploadModal({ open, onClose, onCreated }) {
     const toast = useToast();
     const [file, setFile] = useState(null);
@@ -48,6 +76,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
     const [batchId, setBatchId] = useState(null);
     const [statusPayload, setStatusPayload] = useState(null);
     const [selectedDomain, setSelectedDomain] = useState(null);
+    const [now, setNow] = useState(Date.now());
 
     const limitsQuery = useQuery({
         enabled: open,
@@ -142,6 +171,18 @@ export default function UploadModal({ open, onClose, onCreated }) {
         return () => window.clearInterval(interval);
     }, [batchId, open]);
 
+    useEffect(() => {
+        if (!open) {
+            return undefined;
+        }
+
+        const interval = window.setInterval(() => {
+            setNow(Date.now());
+        }, 1000);
+
+        return () => window.clearInterval(interval);
+    }, [open]);
+
     const needsPresetDomains = useMemo(() => {
         const domains = new Set();
 
@@ -181,6 +222,55 @@ export default function UploadModal({ open, onClose, onCreated }) {
     const fileSizeText = file ? formatBytes(file.size) : 'n/a';
     const uploadLimitText = formatBytes(limitsQuery.data?.upload_max_bytes);
     const postLimitText = formatBytes(limitsQuery.data?.post_max_bytes);
+    const isInProgress = ['queued', 'processing', 'extracting'].includes(status);
+
+    const startedAt = toDateOrNull(statusPayload?.started_at)
+        || toDateOrNull(statusPayload?.queued_at)
+        || toDateOrNull(statusPayload?.created_at)
+        || toDateOrNull(statusPayload?.updated_at);
+    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((now - startedAt.getTime()) / 1000)) : null;
+    const totalItems = Number(statusPayload?.total_items || 0);
+    const profilesProcessed = Number(statusPayload?.profiles_processed || 0);
+    const sheetsParsed = Number(statusPayload?.sheets_parsed || 0);
+
+    let progressPercent = 0;
+    if (status === 'queued') {
+        progressPercent = 8;
+    } else if (status === 'processing') {
+        progressPercent = Math.min(58, 20 + sheetsParsed * 14);
+    } else if (status === 'extracting') {
+        if (totalItems > 0) {
+            const extractionRatio = Math.min(1, profilesProcessed / totalItems);
+            progressPercent = 58 + extractionRatio * 40;
+        } else {
+            progressPercent = 68;
+        }
+    } else if (status === 'ready') {
+        progressPercent = 100;
+    } else if (status === 'failed') {
+        progressPercent = 100;
+    }
+
+    let estimatedTotalSeconds = null;
+    if (status === 'queued') {
+        estimatedTotalSeconds = 150;
+    } else if (status === 'processing') {
+        estimatedTotalSeconds = 130 + (sheetsParsed * 10);
+    } else if (status === 'extracting') {
+        if (totalItems > 0) {
+            estimatedTotalSeconds = 95 + Math.ceil(totalItems * 0.35);
+        } else {
+            estimatedTotalSeconds = 180;
+        }
+    }
+
+    const etaSeconds = (elapsedSeconds !== null && estimatedTotalSeconds !== null)
+        ? Math.max(0, estimatedTotalSeconds - elapsedSeconds)
+        : null;
+    const etaLabel = etaSeconds !== null
+        ? (etaSeconds <= 8 ? 'Finishing shortly' : `~${formatDuration(etaSeconds)} remaining`)
+        : 'Estimating time remaining...';
+    const elapsedLabel = elapsedSeconds !== null ? formatDuration(elapsedSeconds) : null;
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
@@ -249,6 +339,32 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                     </button>
                                 </div>
                             </div>
+
+                            {isInProgress ? (
+                                <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900">
+                                        <div className="flex items-center gap-2 font-medium">
+                                            <span className="relative inline-flex h-2.5 w-2.5">
+                                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+                                                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-600" />
+                                            </span>
+                                            Parsing in progress
+                                        </div>
+                                        <span>{etaLabel}</span>
+                                    </div>
+                                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-emerald-100">
+                                        <div
+                                            className="h-full rounded-full bg-emerald-500 transition-all duration-500 ease-out"
+                                            style={{ width: `${Math.max(6, Math.min(100, progressPercent))}%` }}
+                                        />
+                                    </div>
+                                    {elapsedLabel ? (
+                                        <p className="mt-2 text-[11px] text-emerald-800/90">
+                                            Elapsed: {elapsedLabel}
+                                        </p>
+                                    ) : null}
+                                </div>
+                            ) : null}
 
                             <div className="mt-2 grid gap-2 text-xs text-slate-600 md:grid-cols-4">
                                 <p><span className="font-semibold text-slate-800">Sheets:</span> {statusPayload?.sheets_parsed || 0}</p>
@@ -332,7 +448,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
 
                 <footer className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
                     <p className="text-xs text-slate-500">
-                        {statusPayload?.dry_run
+                        {(statusPayload?.dry_run && status === 'ready')
                             ? 'Dry run complete. Upload again with dry-run disabled to create campaigns.'
                             : (canConfirm
                                 ? 'Processing complete. Confirm campaigns to unlock execute/schedule actions.'
