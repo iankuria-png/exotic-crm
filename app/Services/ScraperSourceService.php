@@ -700,10 +700,26 @@ class ScraperSourceService
             $rows = $this->queryCss($xpath, (string) $rules['row_selector']);
             foreach ($rows as $row) {
                 $text = $this->nodeText($row);
+                $phoneValue = $this->selectorText($xpath, $row, $rules['phone_selector'] ?? null);
+                if (!$phoneValue || !preg_match('/\d/', $phoneValue)) {
+                    $phoneValue = $this->extractHrefValueFromContext($xpath, $row, $rules['phone_selector'] ?? null, 'tel');
+                }
+                if (!$phoneValue) {
+                    $phoneValue = $this->extractPhoneFromText($text);
+                }
+
+                $emailValue = $this->selectorText($xpath, $row, $rules['email_selector'] ?? null);
+                if (!$emailValue || !str_contains($emailValue, '@')) {
+                    $emailValue = $this->extractHrefValueFromContext($xpath, $row, $rules['email_selector'] ?? null, 'mailto');
+                }
+                if (!$emailValue) {
+                    $emailValue = $this->extractEmailFromText($text);
+                }
+
                 $candidates[] = [
                     'name' => $this->selectorText($xpath, $row, $rules['name_selector'] ?? null) ?: $this->extractNameFromText($text),
-                    'phone_normalized' => $this->selectorText($xpath, $row, $rules['phone_selector'] ?? null) ?: $this->extractPhoneFromText($text),
-                    'email' => $this->selectorText($xpath, $row, $rules['email_selector'] ?? null) ?: $this->extractEmailFromText($text),
+                    'phone_normalized' => $phoneValue,
+                    'email' => $emailValue,
                     'source_url' => $this->extractHrefFromContext($xpath, $row, $source->source_url, $rules['link_selector'] ?? null) ?: $source->source_url,
                 ];
             }
@@ -1262,6 +1278,38 @@ class ScraperSourceService
 
         $href = trim((string) ($node->attributes?->getNamedItem('href')?->nodeValue ?? ''));
         return $this->resolveUrl($baseUrl, $href);
+    }
+
+    private function extractHrefValueFromContext(
+        DOMXPath $xpath,
+        DOMNode $context,
+        ?string $selector,
+        string $scheme
+    ): ?string {
+        if (!$selector) {
+            return null;
+        }
+
+        $node = $this->queryCss($xpath, $selector, $context)[0] ?? null;
+        if (!$node) {
+            return null;
+        }
+
+        $href = trim((string) ($node->attributes?->getNamedItem('href')?->nodeValue ?? ''));
+        if ($href === '') {
+            return null;
+        }
+
+        $prefix = strtolower(trim($scheme)) . ':';
+        $lowerHref = strtolower($href);
+        if (!str_starts_with($lowerHref, $prefix)) {
+            return null;
+        }
+
+        $value = substr($href, strlen($prefix));
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
     }
 
     private function resolveUrl(string $baseUrl, string $href): ?string

@@ -229,6 +229,20 @@ return new class extends Migration
 
     private function indexExists(string $table, string $indexName): bool
     {
+        if (DB::getDriverName() === 'sqlite') {
+            $safeTable = str_replace("'", "''", $table);
+            $indexes = DB::select("PRAGMA index_list('{$safeTable}')");
+
+            foreach ($indexes as $index) {
+                $name = is_array($index) ? ($index['name'] ?? null) : ($index->name ?? null);
+                if ((string) $name === $indexName) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         $databaseName = DB::getDatabaseName();
         if (empty($databaseName)) {
             return false;

@@ -9,6 +9,8 @@ return new class extends Migration
 {
     public function up(): void
     {
+        $isSqlite = DB::getDriverName() === 'sqlite';
+
         if (!Schema::hasColumn('products', 'platform_id')) {
             Schema::table('products', function (Blueprint $table) {
                 $table->unsignedBigInteger('platform_id')->nullable()->after('id');
@@ -16,7 +18,11 @@ return new class extends Migration
         }
 
         if ($this->indexExists('products', 'products_name_unique')) {
-            DB::statement('ALTER TABLE products DROP INDEX products_name_unique');
+            if ($isSqlite) {
+                DB::statement('DROP INDEX IF EXISTS products_name_unique');
+            } else {
+                DB::statement('ALTER TABLE products DROP INDEX products_name_unique');
+            }
         }
 
         if (!$this->indexExists('products', 'products_platform_id_index')) {
@@ -45,7 +51,7 @@ return new class extends Migration
             });
         }
 
-        if (!$this->foreignKeyExists('products', 'products_platform_id_foreign')) {
+        if (!$isSqlite && !$this->foreignKeyExists('products', 'products_platform_id_foreign')) {
             Schema::table('products', function (Blueprint $table) {
                 $table->foreign('platform_id')
                     ->references('id')
@@ -95,6 +101,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::getDriverName() === 'sqlite') {
+            return;
+        }
+
         if ($this->foreignKeyExists('products', 'products_platform_id_foreign')) {
             Schema::table('products', function (Blueprint $table) {
                 $table->dropForeign('products_platform_id_foreign');
@@ -135,6 +145,20 @@ return new class extends Migration
 
     private function indexExists(string $table, string $indexName): bool
     {
+        if (DB::getDriverName() === 'sqlite') {
+            $safeTable = str_replace("'", "''", $table);
+            $indexes = DB::select("PRAGMA index_list('{$safeTable}')");
+
+            foreach ($indexes as $index) {
+                $name = is_array($index) ? ($index['name'] ?? null) : ($index->name ?? null);
+                if ((string) $name === $indexName) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         $databaseName = DB::getDatabaseName();
         if (empty($databaseName)) {
             return false;
@@ -149,6 +173,10 @@ return new class extends Migration
 
     private function foreignKeyExists(string $table, string $constraintName): bool
     {
+        if (DB::getDriverName() === 'sqlite') {
+            return false;
+        }
+
         $databaseName = DB::getDatabaseName();
         if (empty($databaseName)) {
             return false;

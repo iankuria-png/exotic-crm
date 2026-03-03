@@ -1,0 +1,332 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Jobs\ProcessPushUploadJob;
+use App\Jobs\SendPushNotificationJob;
+use App\Models\Client;
+use App\Models\Platform;
+use App\Models\PushCampaign;
+use App\Models\PushCampaignItem;
+use App\Models\PushSubscriberSnapshot;
+use App\Models\User;
+use App\Services\PushCampaign\ProfileExtractionService;
+use App\Services\PushCampaign\PushCampaignService;
+use Carbon\Carbon;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
+use Laravel\Sanctum\Sanctum;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use Tests\TestCase;
+
+class CrmPushCampaignTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_marketing_user_can_list_push_campaigns(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Kenya Push',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-1',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns');
+
+        $response->assertOk();
+        $response->assertJsonPath('data.0.id', $campaign->id);
+    }
+
+    public function test_sales_user_cannot_access_push_campaigns(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('sales', [$platform->id]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/push-campaigns')->assertStatus(403);
+    }
+
+    public function test_marketing_user_cannot_create_client(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/crm/clients', [
+            'platform_id' => $platform->id,
+            'name' => 'Restricted Client',
+        ])->assertStatus(403);
+    }
+
+    public function test_marketing_user_can_read_clients_list(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 1001,
+            'name' => 'Client One',
+            'phone_normalized' => '254700000001',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/clients')->assertOk();
+    }
+
+    public function test_push_upload_dispatches_background_job_and_returns_batch_id(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Queue::fake();
+        Cache::flush();
+
+        Sanctum::actingAs($user);
+
+        $file = UploadedFile::fake()->create('PUSH DOCUMENT 2026.xlsx', 32, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload', [
+            'file' => $file,
+        ]);
+
+        $response->assertStatus(202)->assertJsonStructure(['batch_id', 'status']);
+
+        Queue::assertPushed(ProcessPushUploadJob::class, 1);
+    }
+
+    public function test_dashboard_route_is_not_captured_by_wildcard_model_binding(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns/dashboard');
+
+        $response->assertOk();
+        $response->assertJsonStructure(['total_campaigns', 'pending_campaigns', 'sent_today', 'avg_click_rate']);
+    }
+
+    public function test_parser_handles_fill_down_dates_and_timezone_conversion(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya', 'Africa/Nairobi');
+        $service = app(ProfileExtractionService::class);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('KENYA');
+        $sheet->setCellValue('A1', 'DATE');
+        $sheet->setCellValue('B1', 'PROFILE URL');
+        $sheet->setCellValue('C1', '2026 MESSAGES');
+        $sheet->setCellValue('D1', 'TIME');
+
+        $sheet->setCellValue('A2', '7th January');
+        $sheet->setCellValue('B2', 'https://kenya.example/escort/a/');
+        $sheet->setCellValue('C2', 'Message one');
+        $sheet->setCellValue('D2', '10:00:00');
+
+        $sheet->setCellValue('A3', '');
+        $sheet->setCellValue('B3', 'https://kenya.example/escort/b/');
+        $sheet->setCellValue('C3', 'Message two');
+        $sheet->setCellValue('D3', '12:00:00');
+
+        $rows = $service->parseSheet($sheet, 'KENYA', 2026);
+
+        $this->assertCount(2, $rows);
+        $this->assertSame($platform->id, $rows[0]['platform_id']);
+        $this->assertSame('2026-01-07 07:00:00', Carbon::parse($rows[0]['scheduled_at'], 'UTC')->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-01-07 09:00:00', Carbon::parse($rows[1]['scheduled_at'], 'UTC')->format('Y-m-d H:i:s'));
+    }
+
+    public function test_sheet_alias_mapping_resolves_ivoire_to_ivory_coast(): void
+    {
+        $platform = $this->createPlatform('Ivory Coast', 'ivoire.example', 'Ivory Coast');
+        $service = app(ProfileExtractionService::class);
+
+        $resolved = $service->resolveSheetToPlatform('IVOIRE');
+
+        $this->assertNotNull($resolved);
+        $this->assertSame($platform->id, $resolved->id);
+    }
+
+    public function test_execute_campaign_only_queues_items_within_next_24_hours(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('admin', [$platform->id]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Timed campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-timed',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/a',
+            'custom_message' => 'A',
+            'scheduled_at' => now()->addHours(2),
+            'status' => 'pending',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/b',
+            'custom_message' => 'B',
+            'scheduled_at' => now()->addHours(30),
+            'status' => 'pending',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/c',
+            'custom_message' => 'C',
+            'scheduled_at' => now()->subHour(),
+            'status' => 'pending',
+        ]);
+
+        Queue::fake();
+
+        app(PushCampaignService::class)->executeCampaign($campaign, $user->id);
+
+        Queue::assertPushed(SendPushNotificationJob::class, 2);
+
+        $statuses = PushCampaignItem::query()
+            ->where('campaign_id', $campaign->id)
+            ->orderBy('id')
+            ->pluck('status')
+            ->all();
+
+        $this->assertSame(['scheduled', 'pending', 'scheduled'], $statuses);
+    }
+
+    public function test_dispatch_command_promotes_running_campaign_pending_items(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $this->createUser('admin', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Running campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => 1,
+            'upload_batch_id' => 'batch-running',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/a',
+            'custom_message' => 'A',
+            'scheduled_at' => now()->addHours(3),
+            'status' => 'pending',
+        ]);
+
+        Queue::fake();
+
+        $this->artisan('crm:dispatch-scheduled-pushes')->assertExitCode(0);
+
+        Queue::assertPushed(SendPushNotificationJob::class, 1);
+        $this->assertSame('scheduled', $item->fresh()->status);
+    }
+
+    public function test_subscribers_endpoint_is_platform_scoped(): void
+    {
+        $platformA = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platformB = $this->createPlatform('Uganda', 'uganda.example', 'Uganda');
+        $user = $this->createUser('marketing', [$platformA->id]);
+
+        PushSubscriberSnapshot::query()->create([
+            'platform_id' => $platformA->id,
+            'provider' => 'webpushr',
+            'total_subscribers' => 100,
+            'active_subscribers' => 80,
+            'snapshot_date' => now()->toDateString(),
+            'raw_response' => ['total' => 100, 'active' => 80],
+        ]);
+
+        PushSubscriberSnapshot::query()->create([
+            'platform_id' => $platformB->id,
+            'provider' => 'webpushr',
+            'total_subscribers' => 120,
+            'active_subscribers' => 90,
+            'snapshot_date' => now()->toDateString(),
+            'raw_response' => ['total' => 120, 'active' => 90],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns/subscribers');
+
+        $response->assertOk();
+        $items = $response->json('items');
+
+        $this->assertCount(1, $items);
+        $this->assertSame($platformA->id, $items[0]['platform_id']);
+    }
+
+    public function test_sub_admin_can_update_push_provider_config(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('sub_admin', [$platform->id]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->patchJson('/api/crm/settings/integrations/push-provider', [
+            'enabled' => true,
+            'default_provider' => 'webpushr',
+            'platforms' => [
+                (string) $platform->id => [
+                    'active_provider' => 'webpushr',
+                    'fallback_provider' => 'none',
+                    'webpushr' => [
+                        'api_key' => 'key-1',
+                        'auth_token' => 'token-1',
+                    ],
+                ],
+            ],
+            'reason' => 'Configure push routing for Kenya',
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath('push_provider.enabled', true);
+    }
+
+    private function createPlatform(string $name, string $domain, string $country, string $timezone = 'Africa/Nairobi'): Platform
+    {
+        return Platform::query()->create([
+            'name' => $name,
+            'domain' => $domain,
+            'country' => $country,
+            'timezone' => $timezone,
+            'phone_prefix' => '254',
+            'currency_code' => 'KES',
+            'is_active' => true,
+        ]);
+    }
+
+    private function createUser(string $role, array $assignedMarketIds = []): User
+    {
+        return User::query()->create([
+            'name' => ucfirst($role) . ' User',
+            'email' => strtolower($role) . Str::random(6) . '@example.test',
+            'password' => bcrypt('password'),
+            'role' => $role,
+            'assigned_market_ids' => $assignedMarketIds,
+            'status' => 'active',
+        ]);
+    }
+}
