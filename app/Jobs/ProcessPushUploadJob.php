@@ -54,6 +54,12 @@ class ProcessPushUploadJob implements ShouldQueue
         $reader = IOFactory::createReaderForFile($this->filePath);
         $reader->setReadDataOnly(true);
         $worksheetInfo = $reader->listWorksheetInfo($this->filePath);
+        $processableSheetNames = collect($worksheetInfo)
+            ->map(fn(array $meta): string => trim((string) ($meta['worksheetName'] ?? '')))
+            ->filter(fn(string $name): bool => $name !== '' && !$profileExtractionService->shouldSkipSheet($name))
+            ->values()
+            ->all();
+        $singleSheetUpload = count($processableSheetNames) === 1;
 
         $campaignsByPlatform = [];
         $campaignIds = [];
@@ -73,7 +79,11 @@ class ProcessPushUploadJob implements ShouldQueue
                 continue;
             }
 
-            $platform = $profileExtractionService->resolveSheetToPlatform($sheetName);
+            $platform = $profileExtractionService->resolvePlatformForSheet(
+                $sheetName,
+                $this->sourceFilename,
+                $singleSheetUpload
+            );
 
             if (!$platform) {
                 $unmappedSheets[] = $sheetName;

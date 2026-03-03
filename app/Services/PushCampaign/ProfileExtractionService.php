@@ -29,6 +29,20 @@ class ProfileExtractionService
         'INTERSTITIAL ADS',
         'INTERSTITIAL',
     ];
+    private const FILENAME_STOP_WORDS = [
+        'push',
+        'workbook',
+        'document',
+        'campaign',
+        'campaigns',
+        'sheet',
+        'sheets',
+        'upload',
+        'uploads',
+        'notification',
+        'notifications',
+        'country',
+    ];
 
     public function shouldSkipSheet(string $sheetName): bool
     {
@@ -147,6 +161,70 @@ class ProfileExtractionService
             $platform = Platform::query()
                 ->whereRaw('LOWER(name) LIKE ?', ['%' . $normalized . '%'])
                 ->orWhereRaw('LOWER(country) LIKE ?', ['%' . $normalized . '%'])
+                ->first();
+
+            if ($platform) {
+                return $platform;
+            }
+        }
+
+        return null;
+    }
+
+    public function resolvePlatformForSheet(string $sheetName, ?string $sourceFilename = null, bool $singleSheetUpload = false): ?Platform
+    {
+        $platform = $this->resolveSheetToPlatform($sheetName);
+        if ($platform) {
+            return $platform;
+        }
+
+        if (!$singleSheetUpload || !$sourceFilename) {
+            return null;
+        }
+
+        return $this->resolveFilenameToPlatform($sourceFilename);
+    }
+
+    public function resolveFilenameToPlatform(string $sourceFilename): ?Platform
+    {
+        $basename = pathinfo($sourceFilename, PATHINFO_FILENAME);
+        $normalized = trim((string) preg_replace('/[^a-z0-9]+/i', ' ', strtolower($basename)));
+
+        if ($normalized === '') {
+            return null;
+        }
+
+        $tokens = collect(preg_split('/\s+/', $normalized) ?: [])
+            ->map(fn($token) => trim((string) $token))
+            ->filter(fn($token) => $token !== '')
+            ->filter(fn($token) => !preg_match('/^\d+$/', $token))
+            ->filter(fn($token) => !in_array($token, self::FILENAME_STOP_WORDS, true))
+            ->values()
+            ->all();
+
+        $candidates = array_values(array_unique(array_filter(array_merge(
+            [$normalized],
+            [trim((string) implode(' ', $tokens))],
+            $tokens
+        ))));
+
+        foreach ($candidates as $candidate) {
+            $mapped = self::SHEET_ALIASES[strtoupper($candidate)] ?? $candidate;
+            $platform = Platform::query()
+                ->whereRaw('LOWER(name) = ?', [strtolower($mapped)])
+                ->orWhereRaw('LOWER(country) = ?', [strtolower($mapped)])
+                ->first();
+
+            if ($platform) {
+                return $platform;
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            $mapped = self::SHEET_ALIASES[strtoupper($candidate)] ?? $candidate;
+            $platform = Platform::query()
+                ->whereRaw('LOWER(name) LIKE ?', ['%' . strtolower($mapped) . '%'])
+                ->orWhereRaw('LOWER(country) LIKE ?', ['%' . strtolower($mapped) . '%'])
                 ->first();
 
             if ($platform) {

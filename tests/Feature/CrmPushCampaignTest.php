@@ -211,6 +211,19 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame($platform->id, $resolved->id);
     }
 
+    public function test_single_sheet_upload_can_resolve_platform_from_filename(): void
+    {
+        $platform = $this->createPlatform('Exotic Kenya', 'kenya.example', 'Kenya');
+        $service = app(ProfileExtractionService::class);
+
+        $resolved = $service->resolvePlatformForSheet('Sheet1', 'Kenya Push 2026.xlsx', true);
+        $this->assertNotNull($resolved);
+        $this->assertSame($platform->id, $resolved->id);
+
+        $notResolved = $service->resolvePlatformForSheet('Sheet1', 'Kenya Push 2026.xlsx', false);
+        $this->assertNull($notResolved);
+    }
+
     public function test_execute_campaign_only_queues_items_within_next_24_hours(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');

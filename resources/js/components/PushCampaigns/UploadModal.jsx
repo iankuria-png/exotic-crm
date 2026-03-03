@@ -188,7 +188,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
                 <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                     <div>
                         <h3 className="text-lg font-semibold text-slate-900">Upload Push Workbook</h3>
-                        <p className="text-xs text-slate-500">Upload `.xlsx` workbook and monitor parsing + extraction progress.</p>
+                        <p className="text-xs text-slate-500">Upload `.xlsx` workbook or a single-market `.xlsx` file and monitor parsing + extraction progress.</p>
                     </div>
                     <button type="button" onClick={onClose} className="crm-btn-secondary px-3 py-1.5">Close</button>
                 </header>
