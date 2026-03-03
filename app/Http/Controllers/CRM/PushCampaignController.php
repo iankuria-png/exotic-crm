@@ -23,6 +23,8 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class PushCampaignController extends Controller
 {
@@ -164,6 +166,133 @@ class PushCampaignController extends Controller
 
             return response()->json([
                 'message' => 'Failed to queue workbook processing.',
+                'error' => $exception->getMessage(),
+                'batch_id' => $batchId,
+            ], 500);
+        }
+
+        $statusPayload = $this->uploadBatchStatusService->get($batchId) ?? $initialStatus;
+
+        if ($processedInline) {
+            return response()->json([
+                'batch_id' => $batchId,
+                'status' => (string) ($statusPayload['status'] ?? 'ready'),
+                'dry_run' => $dryRun,
+                'processed_inline' => true,
+                'status_payload' => $statusPayload,
+            ]);
+        }
+
+        return response()->json([
+            'batch_id' => $batchId,
+            'status' => 'processing',
+            'dry_run' => $dryRun,
+            'processed_inline' => false,
+            'status_payload' => $initialStatus,
+        ], 202);
+    }
+
+    public function uploadPaste(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'content' => 'required|string',
+            'dry_run' => 'nullable|boolean',
+            'year' => 'nullable|integer|min:2000|max:2100',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this market.'
+        );
+
+        $platform = Platform::query()->findOrFail($platformId);
+        $dryRun = array_key_exists('dry_run', $validated) ? (bool) $validated['dry_run'] : true;
+        $year = (int) ($validated['year'] ?? now()->year);
+        $content = trim((string) ($validated['content'] ?? ''));
+
+        if ($content === '') {
+            return response()->json([
+                'message' => 'Paste content is empty. Paste tab-separated rows: Date, Profile URL, Message, Time.',
+            ], 422);
+        }
+
+        try {
+            $rows = $this->parsePasteRows($content);
+        } catch (\Illuminate\Http\Exceptions\HttpResponseException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Unable to parse pasted content. Paste tab-separated rows: Date, Profile URL, Message, Time.',
+                'error' => $exception->getMessage(),
+            ], 422);
+        }
+
+        $setupIssues = $this->pushUploadSetupIssues($dryRun);
+        if (!empty($setupIssues)) {
+            return response()->json([
+                'message' => 'Push upload setup is incomplete. Run CRM push migrations/setup first.',
+                'issues' => $setupIssues,
+            ], 503);
+        }
+
+        $batchId = (string) Str::uuid();
+        $storedPath = 'push-uploads/' . $batchId . '.xlsx';
+        $absolutePath = storage_path('app/' . $storedPath);
+        $sourceFilename = $this->sourceFilenameForPaste($platform, $year);
+
+        $this->writePasteWorkbook($absolutePath, $platform, $year, $rows);
+
+        $initialStatus = $this->uploadBatchStatusService->put($batchId, [
+            'batch_id' => $batchId,
+            'status' => 'queued',
+            'source_filename' => $sourceFilename,
+            'stored_path' => $storedPath,
+            'queued_at' => now()->toDateTimeString(),
+            'initiated_by' => (int) $request->user()->id,
+            'sheets_parsed' => 0,
+            'total_items' => 0,
+            'profiles_processed' => 0,
+            'campaign_ids' => [],
+            'unmapped_sheets' => [],
+            'dry_run' => $dryRun,
+            'year' => $year,
+            'paste_mode' => true,
+            'paste_rows' => count($rows),
+        ]);
+
+        $processedInline = false;
+
+        try {
+            $jobPayload = [
+                $batchId,
+                $absolutePath,
+                $sourceFilename,
+                (int) $request->user()->id,
+                $dryRun,
+            ];
+
+            if ($this->shouldProcessPasteInline(count($rows), $dryRun)) {
+                ProcessPushUploadJob::dispatchSync(...$jobPayload);
+                $processedInline = true;
+            } else {
+                ProcessPushUploadJob::dispatch(...$jobPayload);
+            }
+        } catch (\Throwable $exception) {
+            $this->uploadBatchStatusService->put($batchId, [
+                'batch_id' => $batchId,
+                'status' => 'failed',
+                'source_filename' => $sourceFilename,
+                'initiated_by' => (int) $request->user()->id,
+                'error' => $exception->getMessage(),
+                'dry_run' => $dryRun,
+                'updated_at' => now()->toDateTimeString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to queue pasted workbook processing.',
                 'error' => $exception->getMessage(),
                 'batch_id' => $batchId,
             ], 500);
@@ -1541,6 +1670,242 @@ class PushCampaignController extends Controller
         }
 
         return $estimatedRows > 0 && $estimatedRows <= $maxRows;
+    }
+
+    private function shouldProcessPasteInline(int $rowCount, bool $dryRun): bool
+    {
+        if (!$dryRun || $rowCount <= 0) {
+            return false;
+        }
+
+        $configuredMaxRows = config('services.push_campaigns.inline_dry_run_max_rows');
+        $maxRows = is_numeric($configuredMaxRows) ? (int) $configuredMaxRows : 2000;
+
+        if ($maxRows <= 0) {
+            return false;
+        }
+
+        return $rowCount <= $maxRows;
+    }
+
+    /**
+     * @return array<int, array{date:string,profile_url:string,message:string,time:string}>
+     */
+    private function parsePasteRows(string $content): array
+    {
+        $normalized = str_replace(["\r\n", "\r"], "\n", trim($content));
+        if ($normalized === '') {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'Paste content is empty. Paste tab-separated rows: Date, Profile URL, Message, Time.',
+            ], 422));
+        }
+
+        $rows = [];
+        $lines = explode("\n", $normalized);
+
+        foreach ($lines as $index => $line) {
+            $rawLine = trim($line);
+            if ($rawLine === '') {
+                continue;
+            }
+
+            $lineNumber = $index + 1;
+            $parsedColumns = str_getcsv($rawLine, "\t");
+            if (!is_array($parsedColumns)) {
+                $parsedColumns = explode("\t", $rawLine);
+            }
+
+            $columns = array_map(fn($value): string => trim((string) $value), $parsedColumns);
+            while (!empty($columns) && end($columns) === '') {
+                array_pop($columns);
+            }
+
+            if (count($columns) < 4) {
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                    'message' => sprintf(
+                        'Invalid paste format at line %d. Expected 4 tab-separated columns: Date, Profile URL, Message, Time.',
+                        $lineNumber
+                    ),
+                ], 422));
+            }
+
+            if (count($columns) > 4) {
+                $time = (string) array_pop($columns);
+                $date = (string) ($columns[0] ?? '');
+                $profileUrl = (string) ($columns[1] ?? '');
+                $message = trim(implode(' ', array_slice($columns, 2)));
+            } else {
+                $date = (string) ($columns[0] ?? '');
+                $profileUrl = (string) ($columns[1] ?? '');
+                $message = (string) ($columns[2] ?? '');
+                $time = (string) ($columns[3] ?? '');
+            }
+
+            $rows[] = [
+                'line' => $lineNumber,
+                'date' => trim($date),
+                'profile_url' => trim($profileUrl),
+                'message' => trim($message),
+                'time' => trim($time),
+            ];
+        }
+
+        if (empty($rows)) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'Paste content has no non-empty rows. Paste tab-separated rows: Date, Profile URL, Message, Time.',
+            ], 422));
+        }
+
+        if ($this->isPasteHeaderRow($rows[0])) {
+            array_shift($rows);
+        }
+
+        if (empty($rows)) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'Only header row detected. Paste at least one data row.',
+            ], 422));
+        }
+
+        $normalizedRows = [];
+        $lastDate = '';
+
+        foreach ($rows as $row) {
+            $lineNumber = (int) ($row['line'] ?? 0);
+            $date = trim((string) ($row['date'] ?? ''));
+            $profileUrl = trim((string) ($row['profile_url'] ?? ''));
+            $message = trim((string) ($row['message'] ?? ''));
+            $time = trim((string) ($row['time'] ?? ''));
+
+            if ($date !== '') {
+                $lastDate = $date;
+            }
+
+            if ($profileUrl === '' && $message === '' && $time === '') {
+                continue;
+            }
+
+            if ($profileUrl === '') {
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                    'message' => sprintf('Line %d is missing Profile URL. Expected columns: Date, Profile URL, Message, Time.', $lineNumber),
+                ], 422));
+            }
+
+            if ($message === '') {
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                    'message' => sprintf('Line %d is missing Message. Expected columns: Date, Profile URL, Message, Time.', $lineNumber),
+                ], 422));
+            }
+
+            if ($date === '' && $lastDate === '') {
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                    'message' => sprintf('Line %d requires a Date (or a previous row date to fill down).', $lineNumber),
+                ], 422));
+            }
+
+            $normalizedRows[] = [
+                'date' => $date,
+                'profile_url' => $profileUrl,
+                'message' => $message,
+                'time' => $time,
+            ];
+        }
+
+        if (empty($normalizedRows)) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'No valid data rows detected after validation. Check pasted columns and row values.',
+            ], 422));
+        }
+
+        return $normalizedRows;
+    }
+
+    /**
+     * @param array{date:string,profile_url:string,message:string,time:string}|array<string, mixed> $row
+     */
+    private function isPasteHeaderRow(array $row): bool
+    {
+        $normalizedDate = strtolower(trim((string) ($row['date'] ?? '')));
+        $normalizedUrl = strtolower(trim((string) ($row['profile_url'] ?? '')));
+        $normalizedMessage = strtolower(trim((string) ($row['message'] ?? '')));
+        $normalizedTime = strtolower(trim((string) ($row['time'] ?? '')));
+
+        $dateLike = str_contains($normalizedDate, 'date');
+        $urlLike = str_contains($normalizedUrl, 'url')
+            || str_contains($normalizedUrl, 'link')
+            || str_contains($normalizedUrl, 'profile');
+        $messageLike = str_contains($normalizedMessage, 'message');
+        $timeLike = str_contains($normalizedTime, 'time');
+
+        return $dateLike && $urlLike && $messageLike && $timeLike;
+    }
+
+    private function sourceFilenameForPaste(Platform $platform, int $year): string
+    {
+        $marketLabel = trim((string) ($platform->country ?: $platform->name ?: 'Market'));
+        $marketLabel = preg_replace('/\s+/', ' ', $marketLabel) ?? $marketLabel;
+        $marketLabel = trim((string) $marketLabel);
+        if ($marketLabel === '') {
+            $marketLabel = 'Market';
+        }
+
+        return sprintf('%s Push %d.xlsx', $marketLabel, $year);
+    }
+
+    private function worksheetTitleForPlatform(Platform $platform): string
+    {
+        $title = trim((string) ($platform->country ?: $platform->name ?: 'MARKET'));
+        $title = preg_replace('/[\\\\\\/\\?\\*\\[\\]:]/', ' ', $title) ?? $title;
+        $title = preg_replace('/\s+/', ' ', $title) ?? $title;
+        $title = trim((string) $title);
+
+        if ($title === '') {
+            $title = 'MARKET';
+        }
+
+        return substr($title, 0, 31);
+    }
+
+    /**
+     * @param array<int, array{date:string,profile_url:string,message:string,time:string}> $rows
+     */
+    private function writePasteWorkbook(string $absolutePath, Platform $platform, int $year, array $rows): void
+    {
+        $directory = dirname($absolutePath);
+        if (!is_dir($directory)) {
+            @mkdir($directory, 0775, true);
+        }
+
+        $spreadsheet = null;
+
+        try {
+            $spreadsheet = new Spreadsheet();
+            $sheet = $spreadsheet->getActiveSheet();
+            $sheet->setTitle($this->worksheetTitleForPlatform($platform));
+            $sheet->setCellValue('A1', 'DATE');
+            $sheet->setCellValue('B1', 'PROFILE URL');
+            $sheet->setCellValue('C1', sprintf('%d MESSAGES', $year));
+            $sheet->setCellValue('D1', 'TIME');
+
+            $rowNumber = 2;
+            foreach ($rows as $row) {
+                $sheet->setCellValue('A' . $rowNumber, $row['date']);
+                $sheet->setCellValue('B' . $rowNumber, $row['profile_url']);
+                $sheet->setCellValue('C' . $rowNumber, $row['message']);
+                $sheet->setCellValue('D' . $rowNumber, $row['time']);
+                $rowNumber++;
+            }
+
+            (new Xlsx($spreadsheet))->save($absolutePath);
+        } catch (\Throwable $exception) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'Failed to create workbook from pasted content.',
+                'error' => $exception->getMessage(),
+            ], 422));
+        } finally {
+            if ($spreadsheet instanceof Spreadsheet) {
+                $spreadsheet->disconnectWorksheets();
+            }
+        }
     }
 
     private function estimateWorkbookRows(string $filePath): ?int

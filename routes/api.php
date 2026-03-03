@@ -48,6 +48,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
         // Static routes
         Route::post('/upload', [PushCampaignController::class, 'upload']);
+        Route::post('/upload/paste', [PushCampaignController::class, 'uploadPaste']);
         Route::get('/upload/limits', [PushCampaignController::class, 'uploadLimits']);
         Route::get('/upload/queue', [PushCampaignController::class, 'uploadQueue']);
         Route::get('/upload/{batchId}/status', [PushCampaignController::class, 'uploadStatus']);
