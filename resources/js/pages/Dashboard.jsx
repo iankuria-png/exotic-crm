@@ -8,6 +8,7 @@ import QuickStatsWidget from '../components/dashboard/QuickStatsWidget';
 import RecentActivityWidget from '../components/dashboard/RecentActivityWidget';
 import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
+import { getCountryFlag } from '../utils/flags';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
@@ -439,10 +440,10 @@ export default function Dashboard() {
                                     onChange={(event) => setPlatformFilter(normalizePlatformFilter(event.target.value))}
                                     className="w-full border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none"
                                 >
-                                    <option value="">All accessible markets</option>
+                                    <option value="">{'\u{1F30D}'}  All accessible markets</option>
                                     {platforms.map((platform) => (
                                         <option key={platform.platform_id} value={platform.platform_id}>
-                                            {platform.platform_name}
+                                            {getCountryFlag(platform.country)}  {platform.platform_name}
                                         </option>
                                     ))}
                                 </select>

@@ -10,6 +10,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { flaggedPlatformLabel, platformOptionsWithFlags } from '../utils/flags';
 import { normalizePhone } from '../utils/phone';
 
 const STATUSES = ['new', 'contacted', 'qualified', 'converted', 'lost'];
@@ -904,7 +905,7 @@ export default function Leads() {
                         label="Market"
                         value={platformFilter}
                         onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
-                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                        options={platformOptionsWithFlags(platformOptions)}
                     />
 
                     <FilterSelect
@@ -1408,7 +1409,7 @@ export default function Leads() {
                                     <option value="">Select market</option>
                                     {platformOptions.map((platform) => (
                                         <option key={platform.platform_id} value={platform.platform_id}>
-                                            {platform.platform_name}
+                                            {flaggedPlatformLabel(platform)}
                                         </option>
                                     ))}
                                 </select>
@@ -1757,7 +1758,7 @@ export default function Leads() {
                                     <option value="">Select market</option>
                                     {platformOptions.map((platform) => (
                                         <option key={platform.platform_id} value={platform.platform_id}>
-                                            {platform.platform_name}
+                                            {flaggedPlatformLabel(platform)}
                                         </option>
                                     ))}
                                 </select>
@@ -1885,7 +1886,7 @@ export default function Leads() {
                                     <option value="">Select market</option>
                                     {platformOptions.map((platform) => (
                                         <option key={platform.platform_id} value={platform.platform_id}>
-                                            {platform.platform_name}
+                                            {flaggedPlatformLabel(platform)}
                                         </option>
                                     ))}
                                 </select>

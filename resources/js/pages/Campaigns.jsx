@@ -8,6 +8,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { flaggedPlatformLabel, platformOptionsWithFlags } from '../utils/flags';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
@@ -738,7 +739,7 @@ export default function Campaigns() {
                         label="Market"
                         value={platformFilter}
                         onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
-                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                        options={platformOptionsWithFlags(platformOptions)}
                     />
 
                     <FilterSelect
@@ -1063,10 +1064,10 @@ export default function Campaigns() {
                                         onChange={(event) => updateRunConfig({ platform_id: event.target.value })}
                                         className="crm-select"
                                     >
-                                        <option value="">All accessible markets</option>
+                                        <option value="">{'\u{1F30D}'}  All accessible markets</option>
                                         {platformOptions.map((platform) => (
                                             <option key={platform.platform_id} value={platform.platform_id}>
-                                                {platform.platform_name}
+                                                {flaggedPlatformLabel(platform)}
                                             </option>
                                         ))}
                                     </select>

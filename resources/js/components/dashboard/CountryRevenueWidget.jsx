@@ -1,18 +1,6 @@
 import React from 'react';
 import SectionFrame from '../SectionFrame';
-
-const COUNTRY_FLAGS = {
-    Kenya: '\u{1F1F0}\u{1F1EA}',
-    Tanzania: '\u{1F1F9}\u{1F1FF}',
-    Uganda: '\u{1F1FA}\u{1F1EC}',
-    Nigeria: '\u{1F1F3}\u{1F1EC}',
-    'South Africa': '\u{1F1FF}\u{1F1E6}',
-    Ghana: '\u{1F1EC}\u{1F1ED}',
-};
-
-function getFlag(country) {
-    return COUNTRY_FLAGS[country] || '\u{1F30D}';
-}
+import { getCountryFlag } from '../../utils/flags';
 
 function formatRevenue(amount, currency = 'KES') {
     return `${currency} ${Number(amount || 0).toLocaleString()}`;
@@ -90,7 +78,7 @@ export default function CountryRevenueWidget({ data = [], period = 'week', onPer
                             className="flex items-center justify-between gap-3 rounded-lg px-3 py-2.5 transition hover:bg-slate-50"
                         >
                             <div className="flex items-center gap-3">
-                                <span className="text-xl" aria-hidden="true">{getFlag(market.country)}</span>
+                                <span className="text-xl" aria-hidden="true">{getCountryFlag(market.country)}</span>
                                 <div>
                                     <p className="text-sm font-semibold text-slate-900">{market.country || market.name}</p>
                                     <p className="text-xs text-slate-500">{market.name}</p>

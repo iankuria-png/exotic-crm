@@ -10,6 +10,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { platformOptionsWithFlags } from '../utils/flags';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
@@ -665,7 +666,7 @@ export default function Deals() {
                         label="Market"
                         value={platformFilter}
                         onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
-                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                        options={platformOptionsWithFlags(platformOptions)}
                     />
 
                     <FilterSelect

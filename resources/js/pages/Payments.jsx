@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { flaggedPlatformLabel, platformOptionsWithFlags } from '../utils/flags';
 import { normalizePhone } from '../utils/phone';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -1029,7 +1030,7 @@ export default function Payments() {
                         label="Market"
                         value={platformFilter}
                         onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}
-                        options={[{ value: '', label: 'All markets' }, ...platformOptions.map((p) => ({ value: p.platform_id, label: p.platform_name }))]}
+                        options={platformOptionsWithFlags(platformOptions)}
                     />
 
                     <FilterSelect
@@ -1708,7 +1709,7 @@ export default function Payments() {
                             >
                                 <option value="">Select market...</option>
                                 {platformOptions.map((p) => (
-                                    <option key={p.platform_id} value={p.platform_id}>{p.name}</option>
+                                    <option key={p.platform_id} value={p.platform_id}>{flaggedPlatformLabel(p)}</option>
                                 ))}
                             </select>
                         </div>
