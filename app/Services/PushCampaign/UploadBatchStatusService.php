@@ -87,6 +87,22 @@ class UploadBatchStatusService
     /**
      * @return array<int, array<string, mixed>>
      */
+    public function listForUser(int $userId, int $limit = 20): array
+    {
+        return $this->recentForUser($userId, $limit);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function queueHealthSnapshot(): ?array
+    {
+        return $this->resolveQueueHealth(['status' => 'queued'], null);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     private function recentForUser(int $userId, int $limit): array
     {
         $batchIds = Cache::get(self::INDEX_KEY, []);

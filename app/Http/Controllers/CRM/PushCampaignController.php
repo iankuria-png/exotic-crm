@@ -19,6 +19,7 @@ use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -281,6 +282,141 @@ class PushCampaignController extends Controller
             ...$status,
             'queue' => $queueOverview,
             'campaigns' => $summaries,
+        ]);
+    }
+
+    public function uploadQueue(Request $request)
+    {
+        $validated = $request->validate([
+            'limit' => 'nullable|integer|min:1|max:50',
+        ]);
+
+        $limit = (int) ($validated['limit'] ?? 20);
+        $items = $this->uploadBatchStatusService->listForUser((int) $request->user()->id, $limit);
+        $health = $this->uploadBatchStatusService->queueHealthSnapshot();
+
+        $items = array_map(function (array $item): array {
+            $status = (string) ($item['status'] ?? 'queued');
+            return [
+                ...$item,
+                'can_cancel' => $status === 'queued',
+                'can_process_now' => $status === 'queued' && (bool) ($item['dry_run'] ?? false),
+            ];
+        }, $items);
+
+        return response()->json([
+            'items' => $items,
+            'health' => $health,
+        ]);
+    }
+
+    public function processQueuedUploadNow(Request $request, string $batchId)
+    {
+        $status = $this->uploadBatchStatusService->get($batchId);
+        if (!is_array($status)) {
+            return response()->json([
+                'message' => 'Upload batch not found or expired.',
+            ], 404);
+        }
+
+        $this->ensureUploadBatchAccess($request, $status);
+
+        if (($status['status'] ?? null) !== 'queued') {
+            return response()->json([
+                'message' => 'Only queued uploads can be processed immediately.',
+            ], 422);
+        }
+
+        if (!(bool) ($status['dry_run'] ?? false)) {
+            return response()->json([
+                'message' => 'Process now is available only for dry-run uploads.',
+            ], 422);
+        }
+
+        if (config('queue.default') !== 'database') {
+            return response()->json([
+                'message' => 'Process now requires database queue driver.',
+            ], 422);
+        }
+
+        $job = $this->findQueuedUploadJob($batchId);
+        if (!$job) {
+            return response()->json([
+                'message' => 'No queued job was found for this upload batch.',
+            ], 409);
+        }
+
+        $command = $this->decodeQueuedUploadCommand((string) $job->payload);
+        if (!$command instanceof ProcessPushUploadJob || $command->batchId !== $batchId) {
+            return response()->json([
+                'message' => 'Unable to decode queued upload job payload.',
+            ], 500);
+        }
+
+        DB::table('jobs')->where('id', (int) $job->id)->delete();
+
+        try {
+            ProcessPushUploadJob::dispatchSync(
+                $command->batchId,
+                $command->filePath,
+                $command->sourceFilename,
+                $command->userId,
+                (bool) $command->dryRun,
+            );
+        } catch (\Throwable $exception) {
+            $this->uploadBatchStatusService->put($batchId, [
+                'status' => 'failed',
+                'error' => $exception->getMessage(),
+                'updated_at' => now()->toDateTimeString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to process queued upload now.',
+                'error' => $exception->getMessage(),
+            ], 500);
+        }
+
+        return response()->json([
+            'message' => 'Dry-run processing completed.',
+            'status_payload' => $this->uploadBatchStatusService->get($batchId),
+        ]);
+    }
+
+    public function cancelQueuedUpload(Request $request, string $batchId)
+    {
+        $status = $this->uploadBatchStatusService->get($batchId);
+        if (!is_array($status)) {
+            return response()->json([
+                'message' => 'Upload batch not found or expired.',
+            ], 404);
+        }
+
+        $this->ensureUploadBatchAccess($request, $status);
+
+        if (($status['status'] ?? null) !== 'queued') {
+            return response()->json([
+                'message' => 'Only queued uploads can be cancelled.',
+            ], 422);
+        }
+
+        if (config('queue.default') === 'database') {
+            DB::table('jobs')
+                ->where('queue', 'default')
+                ->whereNull('reserved_at')
+                ->where('payload', 'like', '%ProcessPushUploadJob%')
+                ->where('payload', 'like', '%' . $batchId . '%')
+                ->delete();
+        }
+
+        $updated = $this->uploadBatchStatusService->put($batchId, [
+            'status' => 'cancelled',
+            'message' => 'Upload was cancelled by user.',
+            'updated_at' => now()->toDateTimeString(),
+        ]);
+
+        return response()->json([
+            'message' => 'Upload queue item cancelled.',
+            'status_payload' => $updated,
         ]);
     }
 
@@ -1165,6 +1301,57 @@ class PushCampaignController extends Controller
     private function batchCacheKey(string $batchId): string
     {
         return 'push_upload:' . $batchId;
+    }
+
+    /**
+     * @param array<string, mixed> $batch
+     */
+    private function ensureUploadBatchAccess(Request $request, array $batch): void
+    {
+        $ownerId = (int) ($batch['initiated_by'] ?? 0);
+        $userId = (int) $request->user()->id;
+        $role = (string) ($request->user()->role ?? '');
+
+        if ($ownerId > 0 && $ownerId !== $userId && !in_array($role, ['admin', 'sub_admin'], true)) {
+            abort(403, 'You do not have access to this upload batch.');
+        }
+    }
+
+    private function findQueuedUploadJob(string $batchId): ?object
+    {
+        if (config('queue.default') !== 'database') {
+            return null;
+        }
+
+        return DB::table('jobs')
+            ->select(['id', 'payload'])
+            ->where('queue', 'default')
+            ->whereNull('reserved_at')
+            ->where('payload', 'like', '%ProcessPushUploadJob%')
+            ->where('payload', 'like', '%' . $batchId . '%')
+            ->orderBy('id')
+            ->first();
+    }
+
+    private function decodeQueuedUploadCommand(string $payload): ?object
+    {
+        $decoded = json_decode($payload, true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $serializedCommand = (string) data_get($decoded, 'data.command', '');
+        if ($serializedCommand === '') {
+            return null;
+        }
+
+        try {
+            $command = @unserialize($serializedCommand, ['allowed_classes' => true]);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return is_object($command) ? $command : null;
     }
 
     private function shouldProcessInline(\Illuminate\Http\UploadedFile $file, bool $dryRun): bool

@@ -257,6 +257,134 @@ class CrmPushCampaignTest extends TestCase
             ->assertJsonPath('queue.recent.1.batch_id', 'batch-older');
     }
 
+    public function test_upload_queue_endpoint_lists_current_user_batches_with_actions(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $otherUser = $this->createUser('marketing', [$platform->id]);
+
+        /** @var UploadBatchStatusService $uploadBatchStatusService */
+        $uploadBatchStatusService = app(UploadBatchStatusService::class);
+        $uploadBatchStatusService->put('queue-a', [
+            'batch_id' => 'queue-a',
+            'status' => 'queued',
+            'source_filename' => 'Queue A.xlsx',
+            'queued_at' => now()->subMinutes(2)->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => true,
+        ]);
+        $uploadBatchStatusService->put('queue-b', [
+            'batch_id' => 'queue-b',
+            'status' => 'processing',
+            'source_filename' => 'Queue B.xlsx',
+            'queued_at' => now()->subMinute()->toDateTimeString(),
+            'started_at' => now()->subSeconds(30)->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => false,
+        ]);
+        $uploadBatchStatusService->put('queue-other', [
+            'batch_id' => 'queue-other',
+            'status' => 'queued',
+            'source_filename' => 'Other User.xlsx',
+            'queued_at' => now()->subMinutes(3)->toDateTimeString(),
+            'initiated_by' => $otherUser->id,
+            'dry_run' => true,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns/upload/queue');
+        $response->assertOk()
+            ->assertJsonCount(2, 'items')
+            ->assertJsonPath('items.0.batch_id', 'queue-b')
+            ->assertJsonPath('items.1.batch_id', 'queue-a')
+            ->assertJsonPath('items.1.can_cancel', true)
+            ->assertJsonPath('items.1.can_process_now', true)
+            ->assertJsonPath('items.0.can_cancel', false);
+    }
+
+    public function test_marketing_user_can_cancel_queued_upload_batch(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        config()->set('queue.default', 'database');
+        config()->set('services.push_campaigns.inline_dry_run_max_rows', 0);
+
+        Sanctum::actingAs($user);
+
+        $file = UploadedFile::fake()->create('PUSH DOCUMENT 2026.xlsx', 32, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        $uploadResponse = $this->postJson('/api/crm/push-campaigns/upload', [
+            'file' => $file,
+            'dry_run' => true,
+        ])->assertStatus(202);
+
+        $batchId = (string) $uploadResponse->json('batch_id');
+        $this->assertNotSame('', $batchId);
+        $this->assertGreaterThan(0, DB::table('jobs')->count());
+
+        $cancelResponse = $this->deleteJson('/api/crm/push-campaigns/upload/' . $batchId);
+        $cancelResponse->assertOk()
+            ->assertJsonPath('status_payload.status', 'cancelled');
+
+        $this->assertSame(0, DB::table('jobs')->count());
+    }
+
+    public function test_marketing_user_can_process_queued_dry_run_now(): void
+    {
+        $platform = $this->createPlatform('Exotic Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        config()->set('queue.default', 'database');
+        config()->set('services.push_campaigns.inline_dry_run_max_rows', 0);
+        Cache::flush();
+
+        Sanctum::actingAs($user);
+
+        $filePath = storage_path('framework/testing/process-now-' . Str::uuid() . '.xlsx');
+        @mkdir(dirname($filePath), 0777, true);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('KENYA');
+        $sheet->setCellValue('A1', 'DATE');
+        $sheet->setCellValue('B1', 'PROFILE URL');
+        $sheet->setCellValue('C1', '2026 MESSAGES');
+        $sheet->setCellValue('D1', 'TIME');
+        $sheet->setCellValue('A2', '7th January');
+        $sheet->setCellValue('B2', 'https://kenya.example/escort/a/');
+        $sheet->setCellValue('C2', 'Process now message');
+        $sheet->setCellValue('D2', '10:00:00');
+        (new Xlsx($spreadsheet))->save($filePath);
+        $spreadsheet->disconnectWorksheets();
+
+        $upload = new UploadedFile(
+            $filePath,
+            'Kenya Push 2026.xlsx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            null,
+            true
+        );
+
+        $uploadResponse = $this->postJson('/api/crm/push-campaigns/upload', [
+            'file' => $upload,
+            'dry_run' => true,
+        ])->assertStatus(202);
+
+        $batchId = (string) $uploadResponse->json('batch_id');
+        $this->assertGreaterThan(0, DB::table('jobs')->count());
+
+        $processNowResponse = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/process-now');
+        $processNowResponse->assertOk()
+            ->assertJsonPath('status_payload.status', 'ready')
+            ->assertJsonPath('status_payload.sheets_parsed', 1)
+            ->assertJsonPath('status_payload.total_items', 1);
+
+        $this->assertSame(0, DB::table('jobs')->count());
+
+        @unlink($filePath);
+    }
+
     public function test_dashboard_route_is_not_captured_by_wildcard_model_binding(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');

@@ -49,7 +49,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         // Static routes
         Route::post('/upload', [PushCampaignController::class, 'upload']);
         Route::get('/upload/limits', [PushCampaignController::class, 'uploadLimits']);
+        Route::get('/upload/queue', [PushCampaignController::class, 'uploadQueue']);
         Route::get('/upload/{batchId}/status', [PushCampaignController::class, 'uploadStatus']);
+        Route::post('/upload/{batchId}/process-now', [PushCampaignController::class, 'processQueuedUploadNow']);
+        Route::delete('/upload/{batchId}', [PushCampaignController::class, 'cancelQueuedUpload']);
         Route::get('/crm-profiles', [PushCampaignController::class, 'crmProfiles']);
         Route::post('/from-crm', [PushCampaignController::class, 'storeFromCrm']);
         Route::get('/dashboard', [PushCampaignController::class, 'dashboard']);

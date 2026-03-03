@@ -17,6 +17,7 @@ function statusLabel(status, dryRun = false) {
     if (status === 'queued') return 'Upload queued';
     if (status === 'processing') return 'Parsing sheets';
     if (status === 'extracting') return 'Extracting profiles';
+    if (status === 'cancelled') return 'Cancelled';
     if (status === 'ready' && dryRun) return 'Dry run complete';
     if (status === 'ready') return 'Ready for confirmation';
     if (status === 'failed') return 'Upload failed';
@@ -83,7 +84,7 @@ function formatDateTime(value) {
     }).format(parsed);
 }
 
-export default function UploadModal({ open, onClose, onCreated }) {
+export default function UploadModal({ open, onClose, onCreated, onQueueChanged }) {
     const toast = useToast();
     const [file, setFile] = useState(null);
     const [dryRun, setDryRun] = useState(false);
@@ -143,6 +144,35 @@ export default function UploadModal({ open, onClose, onCreated }) {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to confirm campaigns.');
+        },
+    });
+
+    const processNowMutation = useMutation({
+        mutationFn: (id) => api.post(`/crm/push-campaigns/upload/${id}/process-now`, {}).then((response) => response.data),
+        onSuccess: (response) => {
+            if (response?.status_payload) {
+                setStatusPayload(response.status_payload);
+            }
+            toast.success(response?.message || 'Queued upload processed.');
+            onQueueChanged?.();
+            onCreated?.();
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to process queued upload.');
+        },
+    });
+
+    const cancelQueuedUploadMutation = useMutation({
+        mutationFn: (id) => api.delete(`/crm/push-campaigns/upload/${id}`).then((response) => response.data),
+        onSuccess: (response) => {
+            if (response?.status_payload) {
+                setStatusPayload(response.status_payload);
+            }
+            toast.success(response?.message || 'Queued upload cancelled.');
+            onQueueChanged?.();
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to cancel queued upload.');
         },
     });
 
@@ -307,6 +337,11 @@ export default function UploadModal({ open, onClose, onCreated }) {
 
     const elapsedLabel = elapsedSeconds !== null ? formatDuration(elapsedSeconds) : null;
     const queueWaitLabel = queueWaitSeconds !== null ? formatDuration(queueWaitSeconds) : null;
+    const canProcessNow = status === 'queued'
+        && Boolean(statusPayload?.dry_run)
+        && workerLikelyOffline
+        && !processNowMutation.isPending;
+    const canCancelQueued = status === 'queued' && !cancelQueuedUploadMutation.isPending;
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
@@ -366,6 +401,26 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                     <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
                                         {statusLabel(status, Boolean(statusPayload?.dry_run))}
                                     </span>
+                                    {canProcessNow ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => processNowMutation.mutate(batchId)}
+                                            disabled={processNowMutation.isPending}
+                                            className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {processNowMutation.isPending ? 'Processing...' : 'Process now'}
+                                        </button>
+                                    ) : null}
+                                    {canCancelQueued ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => cancelQueuedUploadMutation.mutate(batchId)}
+                                            disabled={cancelQueuedUploadMutation.isPending}
+                                            className="crm-btn-secondary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {cancelQueuedUploadMutation.isPending ? 'Cancelling...' : 'Cancel queue'}
+                                        </button>
+                                    ) : null}
                                     <button
                                         type="button"
                                         onClick={() => refreshStatus(batchId)}
@@ -535,7 +590,9 @@ export default function UploadModal({ open, onClose, onCreated }) {
 
                 <footer className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
                     <p className="text-xs text-slate-500">
-                        {(statusPayload?.dry_run && status === 'ready')
+                        {status === 'cancelled'
+                            ? 'This upload was cancelled. Upload a file again to restart parsing.'
+                            : (statusPayload?.dry_run && status === 'ready')
                             ? 'Dry run complete. Upload again with dry-run disabled to create campaigns.'
                             : (canConfirm
                                 ? 'Processing complete. Confirm campaigns to unlock execute/schedule actions.'

@@ -13,6 +13,18 @@ function prettyStatus(status) {
     return (status || 'unknown').replaceAll('_', ' ');
 }
 
+function formatQueueDate(value) {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '—';
+    return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(parsed);
+}
+
 export default function PushCampaigns() {
     const toast = useToast();
     const queryClient = useQueryClient();
@@ -52,6 +64,14 @@ export default function PushCampaigns() {
         queryFn: () => api.get('/crm/push-campaigns/subscribers').then((response) => response.data),
     });
 
+    const queueQuery = useQuery({
+        queryKey: ['push-campaigns-upload-queue'],
+        queryFn: () => api.get('/crm/push-campaigns/upload/queue', {
+            params: { limit: 20 },
+        }).then((response) => response.data),
+        refetchInterval: 5000,
+    });
+
     const campaignsQuery = useQuery({
         queryKey: ['push-campaigns-list', page, perPage, statusFilter, platformFilter, search],
         queryFn: () => api.get('/crm/push-campaigns', {
@@ -87,8 +107,34 @@ export default function PushCampaigns() {
         },
     });
 
+    const cancelQueueMutation = useMutation({
+        mutationFn: (batchId) => api.delete(`/crm/push-campaigns/upload/${batchId}`).then((response) => response.data),
+        onSuccess: (response) => {
+            toast.success(response?.message || 'Queue item cancelled.');
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-upload-queue'] });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to cancel queue item.');
+        },
+    });
+
+    const processNowMutation = useMutation({
+        mutationFn: (batchId) => api.post(`/crm/push-campaigns/upload/${batchId}/process-now`, {}).then((response) => response.data),
+        onSuccess: (response) => {
+            toast.success(response?.message || 'Queued upload processed.');
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-upload-queue'] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to process queued upload.');
+        },
+    });
+
     const dashboard = dashboardQuery.data || {};
     const subscriberRows = subscribersQuery.data?.items || [];
+    const queueRows = queueQuery.data?.items || [];
+    const queueHealth = queueQuery.data?.health || null;
     const campaigns = campaignsQuery.data?.data || [];
     const pagination = campaignsQuery.data || null;
 
@@ -235,6 +281,87 @@ export default function PushCampaigns() {
             <section className="crm-surface overflow-hidden">
                 <header className="crm-panel-header">
                     <div>
+                        <h3 className="crm-panel-title">Upload Queue</h3>
+                        <p className="crm-panel-subtitle">Track pending workbook uploads and cancel queued items.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => queueQuery.refetch()}
+                        className="crm-btn-secondary"
+                    >
+                        Refresh queue
+                    </button>
+                </header>
+
+                {queueHealth?.worker_likely_offline ? (
+                    <p className="px-4 pb-2 text-xs text-rose-700">
+                        Queue worker appears offline. Start `php artisan queue:work` (or Horizon) to process queued uploads.
+                    </p>
+                ) : null}
+
+                <div className="overflow-auto px-4 pb-4">
+                    <table className="min-w-full text-xs">
+                        <thead>
+                            <tr className="border-b border-slate-200 text-left text-slate-500">
+                                <th className="px-2 py-2 font-medium">File</th>
+                                <th className="px-2 py-2 font-medium">Status</th>
+                                <th className="px-2 py-2 font-medium">Queued</th>
+                                <th className="px-2 py-2 font-medium">Updated</th>
+                                <th className="px-2 py-2 font-medium">Items</th>
+                                <th className="px-2 py-2 font-medium">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {queueRows.map((row) => (
+                                <tr key={row.batch_id} className="border-b border-slate-100">
+                                    <td className="max-w-[280px] truncate px-2 py-2 font-medium text-slate-700" title={row.source_filename}>
+                                        {row.source_filename}
+                                    </td>
+                                    <td className="px-2 py-2 text-slate-600">{prettyStatus(row.status)}</td>
+                                    <td className="px-2 py-2 text-slate-600">{formatQueueDate(row.queued_at)}</td>
+                                    <td className="px-2 py-2 text-slate-600">{formatQueueDate(row.updated_at || row.started_at)}</td>
+                                    <td className="px-2 py-2 text-slate-600">{(row.total_items || 0).toLocaleString()}</td>
+                                    <td className="px-2 py-2">
+                                        <div className="flex flex-wrap gap-2">
+                                            {row.can_process_now ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => processNowMutation.mutate(row.batch_id)}
+                                                    disabled={processNowMutation.isPending}
+                                                    className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {processNowMutation.isPending ? 'Processing...' : 'Process now'}
+                                                </button>
+                                            ) : null}
+                                            {row.can_cancel ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => cancelQueueMutation.mutate(row.batch_id)}
+                                                    disabled={cancelQueueMutation.isPending}
+                                                    className="crm-btn-secondary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {cancelQueueMutation.isPending ? 'Cancelling...' : 'Cancel'}
+                                                </button>
+                                            ) : (
+                                                <span className="text-slate-400">—</span>
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                            {!queueQuery.isLoading && queueRows.length === 0 ? (
+                                <tr>
+                                    <td colSpan={6} className="px-2 py-4 text-center text-slate-500">No upload queue items found.</td>
+                                </tr>
+                            ) : null}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="crm-surface overflow-hidden">
+                <header className="crm-panel-header">
+                    <div>
                         <h3 className="crm-panel-title">Subscriber Overview</h3>
                         <p className="crm-panel-subtitle">Per-market subscriber metrics and push setup visibility.</p>
                     </div>
@@ -291,7 +418,9 @@ export default function PushCampaigns() {
                 onCreated={() => {
                     queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
                     queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });
+                    queryClient.invalidateQueries({ queryKey: ['push-campaigns-upload-queue'] });
                 }}
+                onQueueChanged={() => queryClient.invalidateQueries({ queryKey: ['push-campaigns-upload-queue'] })}
             />
 
             <CrmEscortModal
