@@ -1360,9 +1360,8 @@ class PushCampaignController extends Controller
             return false;
         }
 
-        $defaultLocalRows = app()->environment('local') ? 30000 : 800;
         $configuredMaxRows = config('services.push_campaigns.inline_dry_run_max_rows');
-        $maxRows = is_numeric($configuredMaxRows) ? (int) $configuredMaxRows : $defaultLocalRows;
+        $maxRows = is_numeric($configuredMaxRows) ? (int) $configuredMaxRows : 2000;
         if ($maxRows <= 0) {
             return false;
         }

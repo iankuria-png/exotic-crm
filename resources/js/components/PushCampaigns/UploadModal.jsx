@@ -101,6 +101,11 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
     });
 
     const uploadMutation = useMutation({
+        onMutate: () => {
+            setBatchId(null);
+            setStatusPayload(null);
+            setSelectedDomain(null);
+        },
         mutationFn: (selectedFile) => {
             const uploadMaxBytes = Number(limitsQuery.data?.upload_max_bytes || 0);
             const postMaxBytes = Number(limitsQuery.data?.post_max_bytes || 0);
@@ -262,11 +267,15 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
     }
 
     const status = statusPayload?.status || null;
+    const showUploadingState = uploadMutation.isPending && !statusPayload;
+    const statusBadgeLabel = showUploadingState
+        ? 'Uploading workbook'
+        : statusLabel(status, Boolean(statusPayload?.dry_run));
     const canConfirm = Boolean(batchId) && status === 'ready' && !Boolean(statusPayload?.dry_run);
     const fileSizeText = file ? formatBytes(file.size) : 'n/a';
     const uploadLimitText = formatBytes(limitsQuery.data?.upload_max_bytes);
     const postLimitText = formatBytes(limitsQuery.data?.post_max_bytes);
-    const isInProgress = ['queued', 'processing', 'extracting'].includes(status);
+    const isInProgress = showUploadingState || ['queued', 'processing', 'extracting'].includes(status);
     const queue = statusPayload?.queue || null;
 
     const queuedAt = toDateOrNull(statusPayload?.queued_at);
@@ -291,7 +300,9 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
     const sheetCount = Number(statusPayload?.sheet_count || 0);
 
     let progressPercent = 0;
-    if (status === 'queued') {
+    if (showUploadingState) {
+        progressPercent = 14;
+    } else if (status === 'queued') {
         progressPercent = queuePosition ? Math.max(4, Math.min(18, 22 - queuePosition)) : 8;
     } else if (status === 'processing') {
         if (sheetCount > 0) {
@@ -313,7 +324,9 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
     }
 
     let etaLabel = null;
-    if (status === 'queued') {
+    if (showUploadingState) {
+        etaLabel = 'Sending file to server...';
+    } else if (status === 'queued') {
         if (workerLikelyOffline) {
             etaLabel = 'No active worker detected';
         } else {
@@ -393,13 +406,13 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
                         ) : null}
                     </section>
 
-                    {statusPayload ? (
+                    {(statusPayload || showUploadingState) ? (
                         <section className="rounded-lg border border-slate-200 bg-white p-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                                 <h4 className="text-sm font-semibold text-slate-900">Processing Status</h4>
                                 <div className="flex items-center gap-2">
                                     <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                                        {statusLabel(status, Boolean(statusPayload?.dry_run))}
+                                        {statusBadgeLabel}
                                     </span>
                                     {canProcessNow ? (
                                         <button
@@ -439,7 +452,9 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
                                                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
                                                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-600" />
                                             </span>
-                                            {status === 'queued' ? 'Waiting in upload queue' : 'Parsing in progress'}
+                                            {showUploadingState
+                                                ? 'Uploading workbook'
+                                                : (status === 'queued' ? 'Waiting in upload queue' : 'Parsing in progress')}
                                         </div>
                                         {etaLabel ? <span>{etaLabel}</span> : null}
                                     </div>
@@ -449,7 +464,11 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
                                             style={{ width: `${Math.max(6, Math.min(100, progressPercent))}%` }}
                                         />
                                     </div>
-                                    {status === 'queued' ? (
+                                    {showUploadingState ? (
+                                        <p className="mt-2 text-[11px] text-emerald-800/90">
+                                            Uploading and validating file format. Parsing progress will appear next.
+                                        </p>
+                                    ) : status === 'queued' ? (
                                         <p className="mt-2 text-[11px] text-emerald-800/90">
                                             {queuePosition ? `Position #${queuePosition}` : 'Queue position pending'}
                                             {queueWaitLabel ? ` • queued for ${queueWaitLabel}` : ''}
