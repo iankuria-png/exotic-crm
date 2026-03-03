@@ -30,6 +30,7 @@ class ProcessPushUploadJob implements ShouldQueue
         public readonly string $sourceFilename,
         public readonly int $userId,
         public readonly bool $dryRun = false,
+        public readonly bool $inlineExtraction = false,
     ) {
     }
 
@@ -258,6 +259,14 @@ class ProcessPushUploadJob implements ShouldQueue
                     : 'No valid data rows found in mapped sheets.',
                 'updated_at' => now()->toDateTimeString(),
             ]);
+            return;
+        }
+
+        if ($this->inlineExtraction) {
+            foreach ($campaignsByPlatform as $platformId => $campaign) {
+                ExtractPushProfilesJob::dispatchSync((int) $campaign->id, (int) $platformId, $this->batchId);
+            }
+
             return;
         }
 

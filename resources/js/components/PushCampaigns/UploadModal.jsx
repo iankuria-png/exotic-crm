@@ -545,6 +545,9 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged, 
                                 <p className="text-xs text-slate-600">
                                     Paste tab-delimited rows in this order: <span className="font-semibold">Date, Profile URL, Message, Time</span>. Header row is optional.
                                 </p>
+                                <p className="text-xs text-emerald-700">
+                                    Express mode: small pasted batches (up to 20 rows) process immediately without waiting in upload queue.
+                                </p>
                             </div>
                         )}
 
@@ -669,6 +672,12 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged, 
                             {(statusPayload?.message || '').trim() ? (
                                 <p className="mt-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-800">
                                     {statusPayload.message}
+                                </p>
+                            ) : null}
+
+                            {statusPayload?.express_mode ? (
+                                <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+                                    Express mode active for this batch.
                                 </p>
                             ) : null}
 

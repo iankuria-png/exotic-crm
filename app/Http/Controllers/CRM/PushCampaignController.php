@@ -28,6 +28,8 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class PushCampaignController extends Controller
 {
+    private const EXPRESS_PASTE_MAX_ROWS = 20;
+
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly PushCampaignService $pushCampaignService,
@@ -242,6 +244,7 @@ class PushCampaignController extends Controller
         $storedPath = 'push-uploads/' . $batchId . '.xlsx';
         $absolutePath = storage_path('app/' . $storedPath);
         $sourceFilename = $this->sourceFilenameForPaste($platform, $year);
+        $expressMode = !$dryRun && count($rows) <= self::EXPRESS_PASTE_MAX_ROWS;
 
         $this->writePasteWorkbook($absolutePath, $platform, $year, $rows);
 
@@ -261,6 +264,7 @@ class PushCampaignController extends Controller
             'year' => $year,
             'paste_mode' => true,
             'paste_rows' => count($rows),
+            'express_mode' => $expressMode,
         ]);
 
         $processedInline = false;
@@ -272,9 +276,10 @@ class PushCampaignController extends Controller
                 $sourceFilename,
                 (int) $request->user()->id,
                 $dryRun,
+                $expressMode,
             ];
 
-            if ($this->shouldProcessPasteInline(count($rows), $dryRun)) {
+            if ($this->shouldProcessPasteInline(count($rows), $dryRun, $expressMode)) {
                 ProcessPushUploadJob::dispatchSync(...$jobPayload);
                 $processedInline = true;
             } else {
@@ -641,14 +646,42 @@ class PushCampaignController extends Controller
             'dry_run' => false,
             'queued_at' => now()->toDateTimeString(),
             'message' => 'Creating campaigns from dry-run batch.',
+            'started_at' => null,
+            'processing_started_at' => null,
+            'profiles_processed' => 0,
             'updated_at' => now()->toDateTimeString(),
         ]);
+
+        $pasteMode = (bool) ($status['paste_mode'] ?? false);
+        $totalItems = (int) ($status['total_items'] ?? 0);
+        $expressMode = $pasteMode && $totalItems > 0 && $totalItems <= self::EXPRESS_PASTE_MAX_ROWS;
+
+        if ($expressMode) {
+            $updated = $this->uploadBatchStatusService->put($batchId, [
+                'express_mode' => true,
+            ]);
+
+            ProcessPushUploadJob::dispatchSync(
+                $batchId,
+                $absolutePath,
+                (string) ($status['source_filename'] ?? basename($absolutePath)),
+                (int) $request->user()->id,
+                false,
+                true,
+            );
+
+            return response()->json([
+                'message' => 'Express campaign creation completed from dry-run batch.',
+                'status_payload' => $this->uploadBatchStatusService->get($batchId),
+            ]);
+        }
 
         ProcessPushUploadJob::dispatch(
             $batchId,
             $absolutePath,
             (string) ($status['source_filename'] ?? basename($absolutePath)),
             (int) $request->user()->id,
+            false,
             false,
         );
 
@@ -1672,9 +1705,17 @@ class PushCampaignController extends Controller
         return $estimatedRows > 0 && $estimatedRows <= $maxRows;
     }
 
-    private function shouldProcessPasteInline(int $rowCount, bool $dryRun): bool
+    private function shouldProcessPasteInline(int $rowCount, bool $dryRun, bool $expressMode = false): bool
     {
-        if (!$dryRun || $rowCount <= 0) {
+        if ($rowCount <= 0) {
+            return false;
+        }
+
+        if ($expressMode) {
+            return true;
+        }
+
+        if (!$dryRun) {
             return false;
         }
 

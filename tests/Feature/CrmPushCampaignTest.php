@@ -437,7 +437,7 @@ class CrmPushCampaignTest extends TestCase
             ->assertJsonPath('data.4.batch_id', 'page-batch-10');
     }
 
-    public function test_paste_upload_endpoint_accepts_valid_tab_delimited_rows_and_dispatches_processing(): void
+    public function test_paste_upload_endpoint_queues_large_non_dry_run_payloads(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
         $user = $this->createUser('marketing', [$platform->id]);
@@ -446,11 +446,16 @@ class CrmPushCampaignTest extends TestCase
         config()->set('services.push_campaigns.inline_dry_run_max_rows', 0);
         Sanctum::actingAs($user);
 
-        $content = implode("\n", [
-            "Date\tProfile URL\tMessage\tTime",
-            "7th January\thttps://kenya.example/?p=1001\tHello Kenya\t10:00:00",
-            "\thttps://kenya.example/?p=1002\tHello Kenya 2\t12:00:00",
-        ]);
+        $lines = ["Date\tProfile URL\tMessage\tTime"];
+        for ($i = 1; $i <= 25; $i++) {
+            $lines[] = sprintf(
+                "7th January\thttps://kenya.example/?p=%d\tHello Kenya %d\t10:%02d:00",
+                1000 + $i,
+                $i,
+                $i % 60
+            );
+        }
+        $content = implode("\n", $lines);
 
         $response = $this->postJson('/api/crm/push-campaigns/upload/paste', [
             'platform_id' => $platform->id,
@@ -478,6 +483,35 @@ class CrmPushCampaignTest extends TestCase
                 && $job->dryRun === false
                 && str_contains($job->sourceFilename, 'Kenya Push 2026.xlsx');
         });
+    }
+
+    public function test_paste_upload_endpoint_processes_small_non_dry_run_payloads_in_express_mode(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        config()->set('queue.default', 'database');
+        Sanctum::actingAs($user);
+
+        $content = implode("\n", [
+            "Date\tProfile URL\tMessage\tTime",
+            "7th January\thttps://kenya.example/?p=1001\tHello Kenya\t10:00:00",
+            "\thttps://kenya.example/?p=1002\tHello Kenya 2\t12:00:00",
+        ]);
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload/paste', [
+            'platform_id' => $platform->id,
+            'content' => $content,
+            'dry_run' => false,
+            'year' => 2026,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('dry_run', false)
+            ->assertJsonPath('processed_inline', true)
+            ->assertJsonPath('status_payload.express_mode', true)
+            ->assertJsonPath('status_payload.status', 'ready');
+        $this->assertSame(0, DB::table('jobs')->count());
     }
 
     public function test_paste_upload_endpoint_rejects_invalid_content_shape_with_422(): void
@@ -633,6 +667,61 @@ class CrmPushCampaignTest extends TestCase
             return $job->batchId === $batchId
                 && $job->dryRun === false;
         });
+
+        @unlink($filePath);
+        @unlink(storage_path('app/' . $storageRelative));
+    }
+
+    public function test_marketing_user_can_express_create_campaigns_from_small_paste_dry_run_batch(): void
+    {
+        $platform = $this->createPlatform('Exotic Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        config()->set('queue.default', 'database');
+
+        Sanctum::actingAs($user);
+
+        $filePath = storage_path('framework/testing/create-from-paste-dry-run-' . Str::uuid() . '.xlsx');
+        @mkdir(dirname($filePath), 0777, true);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('KENYA');
+        $sheet->setCellValue('A1', 'DATE');
+        $sheet->setCellValue('B1', 'PROFILE URL');
+        $sheet->setCellValue('C1', '2026 MESSAGES');
+        $sheet->setCellValue('D1', 'TIME');
+        $sheet->setCellValue('A2', '7th January');
+        $sheet->setCellValue('B2', 'https://kenya.example/escort/a/');
+        $sheet->setCellValue('C2', 'Create from paste dry run');
+        $sheet->setCellValue('D2', '10:00:00');
+        (new Xlsx($spreadsheet))->save($filePath);
+        $spreadsheet->disconnectWorksheets();
+
+        $batchId = 'paste-dry-run-ready-batch';
+        $storageRelative = 'push-uploads/' . $batchId . '.xlsx';
+        @mkdir(dirname(storage_path('app/' . $storageRelative)), 0777, true);
+        copy($filePath, storage_path('app/' . $storageRelative));
+
+        app(UploadBatchStatusService::class)->put($batchId, [
+            'batch_id' => $batchId,
+            'status' => 'ready',
+            'source_filename' => 'Kenya Push 2026.xlsx',
+            'stored_path' => $storageRelative,
+            'queued_at' => now()->subMinutes(5)->toDateTimeString(),
+            'updated_at' => now()->subMinute()->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => true,
+            'paste_mode' => true,
+            'total_items' => 1,
+        ]);
+
+        config()->set('queue.default', 'database');
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/create-from-dry-run');
+        $response->assertOk()
+            ->assertJsonPath('status_payload.status', 'ready')
+            ->assertJsonPath('status_payload.express_mode', true);
+        $this->assertSame(0, DB::table('jobs')->count());
 
         @unlink($filePath);
         @unlink(storage_path('app/' . $storageRelative));
