@@ -5,13 +5,13 @@ namespace App\Jobs;
 use App\Models\PushCampaignItem;
 use App\Services\PushCampaign\ProfileExtractionService;
 use App\Services\PushCampaign\PushCampaignService;
+use App\Services\PushCampaign\UploadBatchStatusService;
 use App\Support\Spreadsheet\ChunkReadFilter;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
@@ -32,19 +32,25 @@ class ProcessPushUploadJob implements ShouldQueue
     ) {
     }
 
-    public function handle(ProfileExtractionService $profileExtractionService, PushCampaignService $pushCampaignService): void
+    public function handle(
+        ProfileExtractionService $profileExtractionService,
+        PushCampaignService $pushCampaignService,
+        UploadBatchStatusService $uploadBatchStatusService
+    ): void
     {
-        Cache::put($this->batchCacheKey(), [
+        $uploadBatchStatusService->put($this->batchId, [
             'batch_id' => $this->batchId,
             'status' => 'processing',
             'source_filename' => $this->sourceFilename,
             'started_at' => now()->toDateTimeString(),
+            'initiated_by' => $this->userId,
             'sheets_parsed' => 0,
             'total_items' => 0,
+            'profiles_processed' => 0,
             'campaign_ids' => [],
             'unmapped_sheets' => [],
             'dry_run' => $this->dryRun,
-        ], now()->addHours(12));
+        ]);
 
         if (!is_file($this->filePath)) {
             throw new \RuntimeException('Upload file not found: ' . $this->filePath);
@@ -182,7 +188,7 @@ class ProcessPushUploadJob implements ShouldQueue
 
             $sheetsParsed++;
 
-            Cache::put($this->batchCacheKey(), [
+            $uploadBatchStatusService->put($this->batchId, [
                 'batch_id' => $this->batchId,
                 'status' => 'processing',
                 'source_filename' => $this->sourceFilename,
@@ -195,11 +201,11 @@ class ProcessPushUploadJob implements ShouldQueue
                 'sheet_row_counts' => $sheetRowCounts,
                 'dry_run' => $this->dryRun,
                 'updated_at' => now()->toDateTimeString(),
-            ], now()->addHours(12));
+            ]);
         }
 
         if ($this->dryRun) {
-            Cache::put($this->batchCacheKey(), [
+            $uploadBatchStatusService->put($this->batchId, [
                 'batch_id' => $this->batchId,
                 'status' => 'ready',
                 'source_filename' => $this->sourceFilename,
@@ -213,13 +219,13 @@ class ProcessPushUploadJob implements ShouldQueue
                 'dry_run' => true,
                 'message' => 'Dry run complete. No campaigns were created.',
                 'updated_at' => now()->toDateTimeString(),
-            ], now()->addHours(12));
+            ]);
 
             return;
         }
 
         if (empty($campaignIds)) {
-            Cache::put($this->batchCacheKey(), [
+            $uploadBatchStatusService->put($this->batchId, [
                 'batch_id' => $this->batchId,
                 'status' => 'failed',
                 'source_filename' => $this->sourceFilename,
@@ -235,7 +241,7 @@ class ProcessPushUploadJob implements ShouldQueue
                     ? 'No mapped sheets found in upload file.'
                     : 'No valid data rows found in mapped sheets.',
                 'updated_at' => now()->toDateTimeString(),
-            ], now()->addHours(12));
+            ]);
             return;
         }
 
@@ -243,7 +249,7 @@ class ProcessPushUploadJob implements ShouldQueue
             ExtractPushProfilesJob::dispatch((int) $campaign->id, (int) $platformId, $this->batchId);
         }
 
-        Cache::put($this->batchCacheKey(), [
+        $uploadBatchStatusService->put($this->batchId, [
             'batch_id' => $this->batchId,
             'status' => 'extracting',
             'source_filename' => $this->sourceFilename,
@@ -255,7 +261,7 @@ class ProcessPushUploadJob implements ShouldQueue
             'sheet_row_counts' => $sheetRowCounts,
             'dry_run' => false,
             'updated_at' => now()->toDateTimeString(),
-        ], now()->addHours(12));
+        ]);
     }
 
     public function failed(\Throwable $exception): void
@@ -266,14 +272,15 @@ class ProcessPushUploadJob implements ShouldQueue
             'error' => $exception->getMessage(),
         ]);
 
-        Cache::put($this->batchCacheKey(), [
+        app(UploadBatchStatusService::class)->put($this->batchId, [
             'batch_id' => $this->batchId,
             'status' => 'failed',
             'source_filename' => $this->sourceFilename,
+            'initiated_by' => $this->userId,
             'error' => $exception->getMessage(),
             'dry_run' => $this->dryRun,
             'updated_at' => now()->toDateTimeString(),
-        ], now()->addHours(12));
+        ]);
     }
 
     private function extractYearFromFilename(string $sourceFilename): int
@@ -285,8 +292,4 @@ class ProcessPushUploadJob implements ShouldQueue
         return (int) now()->year;
     }
 
-    private function batchCacheKey(): string
-    {
-        return 'push_upload:' . $this->batchId;
-    }
 }

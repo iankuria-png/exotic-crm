@@ -13,6 +13,7 @@ use App\Models\ScraperProfilePreset;
 use App\Services\MarketAuthorizationService;
 use App\Services\PushCampaign\PushCampaignService;
 use App\Services\PushCampaign\SelectorDetectionService;
+use App\Services\PushCampaign\UploadBatchStatusService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
@@ -28,6 +29,7 @@ class PushCampaignController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly PushCampaignService $pushCampaignService,
         private readonly SelectorDetectionService $selectorDetectionService,
+        private readonly UploadBatchStatusService $uploadBatchStatusService,
         private readonly SubscriberSyncService $subscriberSyncService,
         private readonly PushProviderService $pushProviderService,
     ) {
@@ -116,18 +118,19 @@ class PushCampaignController extends Controller
         $extension = in_array($extension, ['xlsx', 'xls'], true) ? $extension : 'xlsx';
         $storedPath = $file->storeAs('push-uploads', $batchId . '.' . $extension);
 
-        Cache::put($this->batchCacheKey($batchId), [
+        $initialStatus = $this->uploadBatchStatusService->put($batchId, [
             'batch_id' => $batchId,
             'status' => 'queued',
             'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
             'queued_at' => now()->toDateTimeString(),
+            'initiated_by' => (int) $request->user()->id,
             'sheets_parsed' => 0,
             'total_items' => 0,
             'profiles_processed' => 0,
             'campaign_ids' => [],
             'unmapped_sheets' => [],
             'dry_run' => $dryRun,
-        ], now()->addHours(12));
+        ]);
 
         try {
             ProcessPushUploadJob::dispatch(
@@ -138,14 +141,15 @@ class PushCampaignController extends Controller
                 $dryRun,
             );
         } catch (\Throwable $exception) {
-            Cache::put($this->batchCacheKey($batchId), [
+            $this->uploadBatchStatusService->put($batchId, [
                 'batch_id' => $batchId,
                 'status' => 'failed',
                 'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
+                'initiated_by' => (int) $request->user()->id,
                 'error' => $exception->getMessage(),
                 'dry_run' => $dryRun,
                 'updated_at' => now()->toDateTimeString(),
-            ], now()->addHours(12));
+            ]);
 
             return response()->json([
                 'message' => 'Failed to queue workbook processing.',
@@ -158,6 +162,7 @@ class PushCampaignController extends Controller
             'batch_id' => $batchId,
             'status' => 'processing',
             'dry_run' => $dryRun,
+            'status_payload' => $initialStatus,
         ], 202);
     }
 
@@ -176,7 +181,7 @@ class PushCampaignController extends Controller
 
     public function uploadStatus(Request $request, string $batchId)
     {
-        $status = Cache::get($this->batchCacheKey($batchId));
+        $status = $this->uploadBatchStatusService->get($batchId);
 
         if (!is_array($status)) {
             return response()->json([
@@ -184,13 +189,21 @@ class PushCampaignController extends Controller
             ], 404);
         }
 
+        $queueOverview = $this->uploadBatchStatusService->queueOverviewForUser(
+            (int) $request->user()->id,
+            $batchId
+        );
+
         $campaignIds = collect((array) ($status['campaign_ids'] ?? []))
             ->map(fn($id) => (int) $id)
             ->filter(fn($id) => $id > 0)
             ->values();
 
         if ($campaignIds->isEmpty()) {
-            return response()->json($status);
+            return response()->json([
+                ...$status,
+                'queue' => $queueOverview,
+            ]);
         }
 
         $campaignsQuery = PushCampaign::query()
@@ -243,6 +256,7 @@ class PushCampaignController extends Controller
 
         return response()->json([
             ...$status,
+            'queue' => $queueOverview,
             'campaigns' => $summaries,
         ]);
     }

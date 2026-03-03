@@ -13,6 +13,7 @@ use App\Models\PushSubscriberSnapshot;
 use App\Models\User;
 use App\Services\PushCampaign\ProfileExtractionService;
 use App\Services\PushCampaign\PushCampaignService;
+use App\Services\PushCampaign\UploadBatchStatusService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
@@ -154,6 +155,53 @@ class CrmPushCampaignTest extends TestCase
             'upload_max_bytes',
             'post_max_bytes',
         ]);
+    }
+
+    public function test_upload_status_includes_queue_overview_for_current_user(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $otherUser = $this->createUser('marketing', [$platform->id]);
+
+        /** @var UploadBatchStatusService $uploadBatchStatusService */
+        $uploadBatchStatusService = app(UploadBatchStatusService::class);
+
+        $uploadBatchStatusService->put('batch-older', [
+            'batch_id' => 'batch-older',
+            'status' => 'queued',
+            'source_filename' => 'Older.xlsx',
+            'queued_at' => now()->subMinutes(8)->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => true,
+        ]);
+
+        $uploadBatchStatusService->put('batch-current', [
+            'batch_id' => 'batch-current',
+            'status' => 'queued',
+            'source_filename' => 'Current.xlsx',
+            'queued_at' => now()->subMinutes(1)->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => true,
+        ]);
+
+        $uploadBatchStatusService->put('batch-other-user', [
+            'batch_id' => 'batch-other-user',
+            'status' => 'queued',
+            'source_filename' => 'OtherUser.xlsx',
+            'queued_at' => now()->subMinutes(2)->toDateTimeString(),
+            'initiated_by' => $otherUser->id,
+            'dry_run' => true,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns/upload/batch-current/status');
+        $response->assertOk()
+            ->assertJsonPath('queue.ahead_count', 1)
+            ->assertJsonPath('queue.position', 2)
+            ->assertJsonCount(2, 'queue.recent')
+            ->assertJsonPath('queue.recent.0.batch_id', 'batch-current')
+            ->assertJsonPath('queue.recent.1.batch_id', 'batch-older');
     }
 
     public function test_dashboard_route_is_not_captured_by_wildcard_model_binding(): void

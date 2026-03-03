@@ -6,12 +6,12 @@ use App\Models\Platform;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Services\PushCampaign\ProfileExtractionService;
+use App\Services\PushCampaign\UploadBatchStatusService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class ExtractPushProfilesJob implements ShouldQueue
@@ -109,12 +109,8 @@ class ExtractPushProfilesJob implements ShouldQueue
             return;
         }
 
-        $key = 'push_upload:' . $batchId;
-        $current = Cache::get($key, []);
-
-        if (!is_array($current)) {
-            $current = [];
-        }
+        $uploadBatchStatusService = app(UploadBatchStatusService::class);
+        $current = $uploadBatchStatusService->get($batchId) ?? [];
 
         $campaignIds = array_values(array_filter(array_map('intval', (array) ($current['campaign_ids'] ?? []))));
         $allDone = false;
@@ -139,6 +135,6 @@ class ExtractPushProfilesJob implements ShouldQueue
             'updated_at' => now()->toDateTimeString(),
         ], $extra);
 
-        Cache::put($key, $payload, now()->addHours(12));
+        $uploadBatchStatusService->put($batchId, $payload);
     }
 }
