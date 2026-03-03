@@ -181,6 +181,20 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
         },
     });
 
+    const createFromDryRunMutation = useMutation({
+        mutationFn: (id) => api.post(`/crm/push-campaigns/upload/${id}/create-from-dry-run`, {}).then((response) => response.data),
+        onSuccess: (response) => {
+            if (response?.status_payload) {
+                setStatusPayload(response.status_payload);
+            }
+            toast.success(response?.message || 'Campaign creation queued from dry-run batch.');
+            onQueueChanged?.();
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to create campaigns from dry run.');
+        },
+    });
+
     const refreshStatus = async (id) => {
         if (!id) return;
 
@@ -355,6 +369,10 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
         && workerLikelyOffline
         && !processNowMutation.isPending;
     const canCancelQueued = status === 'queued' && !cancelQueuedUploadMutation.isPending;
+    const canCreateFromDryRun = status === 'ready'
+        && Boolean(statusPayload?.dry_run)
+        && totalItems > 0
+        && !createFromDryRunMutation.isPending;
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
@@ -432,6 +450,16 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
                                             className="crm-btn-secondary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             {cancelQueuedUploadMutation.isPending ? 'Cancelling...' : 'Cancel queue'}
+                                        </button>
+                                    ) : null}
+                                    {canCreateFromDryRun ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => createFromDryRunMutation.mutate(batchId)}
+                                            disabled={createFromDryRunMutation.isPending}
+                                            className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {createFromDryRunMutation.isPending ? 'Queuing...' : 'Create campaigns'}
                                         </button>
                                     ) : null}
                                     <button
@@ -612,7 +640,7 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
                         {status === 'cancelled'
                             ? 'This upload was cancelled. Upload a file again to restart parsing.'
                             : (statusPayload?.dry_run && status === 'ready')
-                            ? 'Dry run complete. Upload again with dry-run disabled to create campaigns.'
+                            ? 'Dry run complete. Click "Create campaigns" to run this batch without dry-run.'
                             : (canConfirm
                                 ? 'Processing complete. Confirm campaigns to unlock execute/schedule actions.'
                                 : 'Waiting for processing to finish before confirmation.')}

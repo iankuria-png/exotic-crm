@@ -282,6 +282,33 @@ class CrmPushCampaignTest extends TestCase
             'initiated_by' => $user->id,
             'dry_run' => false,
         ]);
+        $uploadBatchStatusService->put('queue-c', [
+            'batch_id' => 'queue-c',
+            'status' => 'ready',
+            'source_filename' => 'Queue C.xlsx',
+            'queued_at' => now()->subMinutes(4)->toDateTimeString(),
+            'updated_at' => now()->subMinutes(3)->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => true,
+            'total_items' => 255,
+        ]);
+        $uploadBatchStatusService->put('queue-d', [
+            'batch_id' => 'queue-d',
+            'status' => 'ready',
+            'source_filename' => 'Queue D.xlsx',
+            'queued_at' => now()->subMinutes(6)->toDateTimeString(),
+            'updated_at' => now()->subMinutes(5)->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => false,
+            'total_items' => 90,
+        ]);
+        PushCampaign::query()->create([
+            'name' => 'Queue D Campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'queue-d',
+        ]);
         $uploadBatchStatusService->put('queue-other', [
             'batch_id' => 'queue-other',
             'status' => 'queued',
@@ -295,12 +322,22 @@ class CrmPushCampaignTest extends TestCase
 
         $response = $this->getJson('/api/crm/push-campaigns/upload/queue');
         $response->assertOk()
-            ->assertJsonCount(2, 'items')
+            ->assertJsonCount(4, 'items')
             ->assertJsonPath('items.0.batch_id', 'queue-b')
             ->assertJsonPath('items.1.batch_id', 'queue-a')
             ->assertJsonPath('items.1.can_cancel', true)
             ->assertJsonPath('items.1.can_process_now', true)
             ->assertJsonPath('items.0.can_cancel', false);
+
+        $response->assertJsonFragment([
+            'batch_id' => 'queue-c',
+            'can_create_from_dry_run' => true,
+        ]);
+
+        $response->assertJsonFragment([
+            'batch_id' => 'queue-d',
+            'can_confirm' => true,
+        ]);
     }
 
     public function test_marketing_user_can_cancel_queued_upload_batch(): void
@@ -383,6 +420,99 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame(0, DB::table('jobs')->count());
 
         @unlink($filePath);
+    }
+
+    public function test_marketing_user_can_create_campaigns_from_ready_dry_run_batch(): void
+    {
+        $platform = $this->createPlatform('Exotic Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        config()->set('queue.default', 'database');
+
+        Sanctum::actingAs($user);
+
+        $filePath = storage_path('framework/testing/create-from-dry-run-' . Str::uuid() . '.xlsx');
+        @mkdir(dirname($filePath), 0777, true);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('KENYA');
+        $sheet->setCellValue('A1', 'DATE');
+        $sheet->setCellValue('B1', 'PROFILE URL');
+        $sheet->setCellValue('C1', '2026 MESSAGES');
+        $sheet->setCellValue('D1', 'TIME');
+        $sheet->setCellValue('A2', '7th January');
+        $sheet->setCellValue('B2', 'https://kenya.example/escort/a/');
+        $sheet->setCellValue('C2', 'Create from dry run');
+        $sheet->setCellValue('D2', '10:00:00');
+        (new Xlsx($spreadsheet))->save($filePath);
+        $spreadsheet->disconnectWorksheets();
+
+        $batchId = 'dry-run-ready-batch';
+        $storageRelative = 'push-uploads/' . $batchId . '.xlsx';
+        @mkdir(dirname(storage_path('app/' . $storageRelative)), 0777, true);
+        copy($filePath, storage_path('app/' . $storageRelative));
+
+        app(UploadBatchStatusService::class)->put($batchId, [
+            'batch_id' => $batchId,
+            'status' => 'ready',
+            'source_filename' => 'Kenya Push 2026.xlsx',
+            'stored_path' => $storageRelative,
+            'queued_at' => now()->subMinutes(5)->toDateTimeString(),
+            'updated_at' => now()->subMinute()->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => true,
+            'total_items' => 1,
+        ]);
+
+        Queue::fake();
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/create-from-dry-run');
+        $response->assertStatus(202)
+            ->assertJsonPath('status_payload.status', 'queued')
+            ->assertJsonPath('status_payload.dry_run', false);
+
+        Queue::assertPushed(ProcessPushUploadJob::class, function (ProcessPushUploadJob $job) use ($batchId): bool {
+            return $job->batchId === $batchId
+                && $job->dryRun === false;
+        });
+
+        @unlink($filePath);
+        @unlink(storage_path('app/' . $storageRelative));
+    }
+
+    public function test_marketing_user_can_confirm_ready_batch_from_upload_queue(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $batchId = 'confirm-queue-batch';
+        app(UploadBatchStatusService::class)->put($batchId, [
+            'batch_id' => $batchId,
+            'status' => 'ready',
+            'source_filename' => 'Kenya Push 2026.xlsx',
+            'queued_at' => now()->subMinutes(2)->toDateTimeString(),
+            'updated_at' => now()->subMinute()->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => false,
+            'total_items' => 1,
+        ]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Queue Confirm Campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => $batchId,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload/' . $batchId . '/confirm');
+        $response->assertOk()
+            ->assertJsonPath('confirmed_count', 1)
+            ->assertJsonPath('campaigns.0.id', $campaign->id);
+
+        $this->assertNotNull($campaign->fresh()->confirmed_at);
     }
 
     public function test_dashboard_route_is_not_captured_by_wildcard_model_binding(): void

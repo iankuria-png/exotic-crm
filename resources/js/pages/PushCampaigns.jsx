@@ -131,6 +131,33 @@ export default function PushCampaigns() {
         },
     });
 
+    const createFromDryRunMutation = useMutation({
+        mutationFn: (batchId) => api.post(`/crm/push-campaigns/upload/${batchId}/create-from-dry-run`, {}).then((response) => response.data),
+        onSuccess: (response) => {
+            toast.success(response?.message || 'Campaign creation queued from dry-run batch.');
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-upload-queue'] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to create campaigns from dry-run batch.');
+        },
+    });
+
+    const confirmQueueBatchMutation = useMutation({
+        mutationFn: (batchId) => api.post(`/crm/push-campaigns/upload/${batchId}/confirm`, {}).then((response) => response.data),
+        onSuccess: (response) => {
+            const count = Number(response?.confirmed_count || 0);
+            toast.success(`Confirmed ${count} campaign${count === 1 ? '' : 's'} for batch.`);
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-upload-queue'] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to confirm batch campaigns.');
+        },
+    });
+
     const dashboard = dashboardQuery.data || {};
     const subscriberRows = subscribersQuery.data?.items || [];
     const queueRows = queueQuery.data?.items || [];
@@ -282,7 +309,7 @@ export default function PushCampaigns() {
                 <header className="crm-panel-header">
                     <div>
                         <h3 className="crm-panel-title">Upload Queue</h3>
-                        <p className="crm-panel-subtitle">Track pending workbook uploads and cancel queued items.</p>
+                        <p className="crm-panel-subtitle">Track uploads, convert dry-runs into campaigns, and confirm ready batches.</p>
                     </div>
                     <button
                         type="button"
@@ -305,6 +332,7 @@ export default function PushCampaigns() {
                             <tr className="border-b border-slate-200 text-left text-slate-500">
                                 <th className="px-2 py-2 font-medium">File</th>
                                 <th className="px-2 py-2 font-medium">Status</th>
+                                <th className="px-2 py-2 font-medium">Mode</th>
                                 <th className="px-2 py-2 font-medium">Queued</th>
                                 <th className="px-2 py-2 font-medium">Updated</th>
                                 <th className="px-2 py-2 font-medium">Items</th>
@@ -318,6 +346,7 @@ export default function PushCampaigns() {
                                         {row.source_filename}
                                     </td>
                                     <td className="px-2 py-2 text-slate-600">{prettyStatus(row.status)}</td>
+                                    <td className="px-2 py-2 text-slate-600">{row.dry_run ? 'Dry run' : 'Create campaigns'}</td>
                                     <td className="px-2 py-2 text-slate-600">{formatQueueDate(row.queued_at)}</td>
                                     <td className="px-2 py-2 text-slate-600">{formatQueueDate(row.updated_at || row.started_at)}</td>
                                     <td className="px-2 py-2 text-slate-600">{(row.total_items || 0).toLocaleString()}</td>
@@ -333,6 +362,26 @@ export default function PushCampaigns() {
                                                     {processNowMutation.isPending ? 'Processing...' : 'Process now'}
                                                 </button>
                                             ) : null}
+                                            {row.can_create_from_dry_run ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => createFromDryRunMutation.mutate(row.batch_id)}
+                                                    disabled={createFromDryRunMutation.isPending}
+                                                    className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {createFromDryRunMutation.isPending ? 'Queuing...' : 'Create campaigns'}
+                                                </button>
+                                            ) : null}
+                                            {row.can_confirm ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => confirmQueueBatchMutation.mutate(row.batch_id)}
+                                                    disabled={confirmQueueBatchMutation.isPending}
+                                                    className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {confirmQueueBatchMutation.isPending ? 'Confirming...' : 'Confirm'}
+                                                </button>
+                                            ) : null}
                                             {row.can_cancel ? (
                                                 <button
                                                     type="button"
@@ -342,16 +391,17 @@ export default function PushCampaigns() {
                                                 >
                                                     {cancelQueueMutation.isPending ? 'Cancelling...' : 'Cancel'}
                                                 </button>
-                                            ) : (
+                                            ) : null}
+                                            {!row.can_process_now && !row.can_create_from_dry_run && !row.can_confirm && !row.can_cancel ? (
                                                 <span className="text-slate-400">—</span>
-                                            )}
+                                            ) : null}
                                         </div>
                                     </td>
                                 </tr>
                             ))}
                             {!queueQuery.isLoading && queueRows.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} className="px-2 py-4 text-center text-slate-500">No upload queue items found.</td>
+                                    <td colSpan={7} className="px-2 py-4 text-center text-slate-500">No upload queue items found.</td>
                                 </tr>
                             ) : null}
                         </tbody>

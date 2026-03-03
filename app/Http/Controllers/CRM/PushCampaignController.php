@@ -18,7 +18,6 @@ use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -124,6 +123,7 @@ class PushCampaignController extends Controller
             'batch_id' => $batchId,
             'status' => 'queued',
             'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
+            'stored_path' => (string) $storedPath,
             'queued_at' => now()->toDateTimeString(),
             'initiated_by' => (int) $request->user()->id,
             'sheets_parsed' => 0,
@@ -294,13 +294,36 @@ class PushCampaignController extends Controller
         $limit = (int) ($validated['limit'] ?? 20);
         $items = $this->uploadBatchStatusService->listForUser((int) $request->user()->id, $limit);
         $health = $this->uploadBatchStatusService->queueHealthSnapshot();
+        $batchIds = collect($items)->pluck('batch_id')->filter()->values()->all();
 
-        $items = array_map(function (array $item): array {
+        $campaignStatsQuery = PushCampaign::query()
+            ->selectRaw('upload_batch_id, count(*) as campaigns_count')
+            ->selectRaw('sum(case when confirmed_at is null then 1 else 0 end) as unconfirmed_count')
+            ->selectRaw("sum(case when status = 'processing' then 1 else 0 end) as processing_count")
+            ->whereIn('upload_batch_id', $batchIds)
+            ->groupBy('upload_batch_id');
+        $this->marketAuthorizationService->applyPlatformScope($campaignStatsQuery, $request->user());
+        $campaignStats = $campaignStatsQuery
+            ->get()
+            ->keyBy('upload_batch_id');
+
+        $items = array_map(function (array $item) use ($campaignStats): array {
             $status = (string) ($item['status'] ?? 'queued');
+            $dryRun = (bool) ($item['dry_run'] ?? false);
+            $batchId = (string) ($item['batch_id'] ?? '');
+            $stats = $batchId !== '' ? $campaignStats->get($batchId) : null;
+            $campaignCount = (int) ($stats?->campaigns_count ?? 0);
+            $unconfirmedCount = (int) ($stats?->unconfirmed_count ?? 0);
+            $processingCount = (int) ($stats?->processing_count ?? 0);
+
             return [
                 ...$item,
+                'campaign_count' => $campaignCount,
+                'unconfirmed_count' => $unconfirmedCount,
                 'can_cancel' => $status === 'queued',
-                'can_process_now' => $status === 'queued' && (bool) ($item['dry_run'] ?? false),
+                'can_process_now' => $status === 'queued' && $dryRun,
+                'can_create_from_dry_run' => $status === 'ready' && $dryRun && (int) ($item['total_items'] ?? 0) > 0,
+                'can_confirm' => $status === 'ready' && !$dryRun && $campaignCount > 0 && $unconfirmedCount > 0 && $processingCount === 0,
             ];
         }, $items);
 
@@ -418,6 +441,105 @@ class PushCampaignController extends Controller
             'message' => 'Upload queue item cancelled.',
             'status_payload' => $updated,
         ]);
+    }
+
+    public function createCampaignsFromDryRun(Request $request, string $batchId)
+    {
+        $status = $this->uploadBatchStatusService->get($batchId);
+        if (!is_array($status)) {
+            return response()->json([
+                'message' => 'Upload batch not found or expired.',
+            ], 404);
+        }
+
+        $this->ensureUploadBatchAccess($request, $status);
+
+        if (($status['status'] ?? null) !== 'ready' || !(bool) ($status['dry_run'] ?? false)) {
+            return response()->json([
+                'message' => 'Create campaigns is available only for ready dry-run batches.',
+            ], 422);
+        }
+
+        if ((int) ($status['total_items'] ?? 0) <= 0) {
+            return response()->json([
+                'message' => 'This dry-run batch has no valid rows to create campaigns.',
+            ], 422);
+        }
+
+        $setupIssues = $this->pushUploadSetupIssues(false);
+        if (!empty($setupIssues)) {
+            return response()->json([
+                'message' => 'Push upload setup is incomplete. Run CRM push migrations/setup first.',
+                'issues' => $setupIssues,
+            ], 503);
+        }
+
+        $existingCampaignCount = PushCampaign::query()
+            ->where('upload_batch_id', $batchId)
+            ->count();
+        if ($existingCampaignCount > 0) {
+            return response()->json([
+                'message' => 'Campaigns already exist for this batch.',
+            ], 422);
+        }
+
+        $storedPath = (string) ($status['stored_path'] ?? '');
+        if ($storedPath === '') {
+            $storedPath = $this->resolveStoredPathForBatch(
+                $batchId,
+                (string) ($status['source_filename'] ?? '')
+            );
+        }
+        if ($storedPath === '') {
+            return response()->json([
+                'message' => 'Stored upload file path is missing for this batch.',
+            ], 422);
+        }
+
+        $absolutePath = storage_path('app/' . ltrim($storedPath, '/'));
+        if (!is_file($absolutePath)) {
+            return response()->json([
+                'message' => 'Stored upload file no longer exists on disk.',
+            ], 422);
+        }
+
+        $updated = $this->uploadBatchStatusService->put($batchId, [
+            'status' => 'queued',
+            'dry_run' => false,
+            'queued_at' => now()->toDateTimeString(),
+            'message' => 'Creating campaigns from dry-run batch.',
+            'updated_at' => now()->toDateTimeString(),
+        ]);
+
+        ProcessPushUploadJob::dispatch(
+            $batchId,
+            $absolutePath,
+            (string) ($status['source_filename'] ?? basename($absolutePath)),
+            (int) $request->user()->id,
+            false,
+        );
+
+        return response()->json([
+            'message' => 'Campaign creation queued from dry-run batch.',
+            'status_payload' => $updated,
+        ], 202);
+    }
+
+    public function confirmQueuedBatch(Request $request, string $batchId)
+    {
+        $batchState = $this->uploadBatchStatusService->get($batchId);
+        if (is_array($batchState)) {
+            $this->ensureUploadBatchAccess($request, $batchState);
+        }
+
+        $payload = $this->confirmBatch(
+            $request,
+            $batchId,
+            [],
+            $batchState
+        );
+
+        return response()->json($payload);
     }
 
     public function crmProfiles(Request $request)
@@ -617,56 +739,14 @@ class PushCampaignController extends Controller
             'campaign_ids.*' => 'integer|exists:push_campaigns,id',
         ]);
 
-        $batchState = Cache::get($this->batchCacheKey((string) $validated['batch_id']));
-        if (is_array($batchState) && (bool) ($batchState['dry_run'] ?? false)) {
-            return response()->json([
-                'message' => 'This batch was uploaded in dry-run mode. Upload again without dry-run to create campaigns.',
-            ], 422);
-        }
-
-        $query = PushCampaign::query()
-            ->where('upload_batch_id', (string) $validated['batch_id']);
-
-        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
-
-        if (!empty($validated['campaign_ids'])) {
-            $query->whereIn('id', array_map('intval', $validated['campaign_ids']));
-        }
-
-        $campaigns = $query->get();
-
-        if ($campaigns->isEmpty()) {
-            return response()->json([
-                'message' => 'No campaigns found for the requested batch.',
-            ], 404);
-        }
-
-        $processingCount = $campaigns->where('status', 'processing')->count();
-        if ($processingCount > 0) {
-            return response()->json([
-                'message' => 'Upload processing is still in progress. Wait for extraction to finish before confirming.',
-            ], 422);
-        }
-
-        PushCampaign::query()
-            ->whereIn('id', $campaigns->pluck('id')->all())
-            ->whereNull('confirmed_at')
-            ->update([
-                'confirmed_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-        $confirmed = PushCampaign::query()
-            ->whereIn('id', $campaigns->pluck('id')->all())
-            ->with('platform:id,name,country')
-            ->orderBy('id')
-            ->get();
-
-        return response()->json([
-            'batch_id' => (string) $validated['batch_id'],
-            'confirmed_count' => $confirmed->count(),
-            'campaigns' => $confirmed,
-        ]);
+        return response()->json(
+            $this->confirmBatch(
+                $request,
+                (string) $validated['batch_id'],
+                array_map('intval', (array) ($validated['campaign_ids'] ?? [])),
+                $this->uploadBatchStatusService->get((string) $validated['batch_id']),
+            )
+        );
     }
 
     public function show(Request $request, PushCampaign $pushCampaign)
@@ -1298,9 +1378,67 @@ class PushCampaignController extends Controller
         );
     }
 
-    private function batchCacheKey(string $batchId): string
+    /**
+     * @param array<int, int> $campaignIds
+     * @param array<string, mixed>|null $batchState
+     * @return array<string, mixed>
+     */
+    private function confirmBatch(Request $request, string $batchId, array $campaignIds = [], ?array $batchState = null): array
     {
-        return 'push_upload:' . $batchId;
+        if (is_array($batchState) && (bool) ($batchState['dry_run'] ?? false)) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'This batch is in dry-run mode. Use "Create campaigns" first.',
+            ], 422));
+        }
+
+        $query = PushCampaign::query()
+            ->where('upload_batch_id', $batchId);
+
+        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+
+        if (!empty($campaignIds)) {
+            $query->whereIn('id', $campaignIds);
+        }
+
+        $campaigns = $query->get();
+
+        if ($campaigns->isEmpty()) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'No campaigns found for the requested batch.',
+            ], 404));
+        }
+
+        $processingCount = $campaigns->where('status', 'processing')->count();
+        if ($processingCount > 0) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'Upload processing is still in progress. Wait for extraction to finish before confirming.',
+            ], 422));
+        }
+
+        PushCampaign::query()
+            ->whereIn('id', $campaigns->pluck('id')->all())
+            ->whereNull('confirmed_at')
+            ->update([
+                'confirmed_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+        $confirmed = PushCampaign::query()
+            ->whereIn('id', $campaigns->pluck('id')->all())
+            ->with('platform:id,name,country')
+            ->orderBy('id')
+            ->get();
+
+        $this->uploadBatchStatusService->put($batchId, [
+            'confirmed_at' => now()->toDateTimeString(),
+            'updated_at' => now()->toDateTimeString(),
+        ]);
+
+        return [
+            'batch_id' => $batchId,
+            'confirmed_count' => $confirmed->count(),
+            'campaigns' => $confirmed,
+        ];
     }
 
     /**
@@ -1352,6 +1490,28 @@ class PushCampaignController extends Controller
         }
 
         return is_object($command) ? $command : null;
+    }
+
+    private function resolveStoredPathForBatch(string $batchId, string $sourceFilename = ''): string
+    {
+        $candidates = [];
+        $extension = strtolower(pathinfo($sourceFilename, PATHINFO_EXTENSION));
+
+        if (in_array($extension, ['xlsx', 'xls'], true)) {
+            $candidates[] = 'push-uploads/' . $batchId . '.' . $extension;
+        }
+
+        $candidates[] = 'push-uploads/' . $batchId . '.xlsx';
+        $candidates[] = 'push-uploads/' . $batchId . '.xls';
+        $candidates = array_values(array_unique($candidates));
+
+        foreach ($candidates as $candidate) {
+            if (is_file(storage_path('app/' . $candidate))) {
+                return $candidate;
+            }
+        }
+
+        return '';
     }
 
     private function shouldProcessInline(\Illuminate\Http\UploadedFile $file, bool $dryRun): bool
