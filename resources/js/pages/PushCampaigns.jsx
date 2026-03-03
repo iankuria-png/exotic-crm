@@ -37,6 +37,8 @@ export default function PushCampaigns() {
     const [uploadOpen, setUploadOpen] = useState(false);
     const [crmEscortOpen, setCrmEscortOpen] = useState(false);
     const [activeCampaignId, setActiveCampaignId] = useState(null);
+    const [queuePage, setQueuePage] = useState(1);
+    const [queuePerPage, setQueuePerPage] = useState(10);
 
     useEffect(() => {
         const handle = window.setTimeout(() => {
@@ -65,9 +67,12 @@ export default function PushCampaigns() {
     });
 
     const queueQuery = useQuery({
-        queryKey: ['push-campaigns-upload-queue'],
+        queryKey: ['push-campaigns-upload-queue', queuePage, queuePerPage],
         queryFn: () => api.get('/crm/push-campaigns/upload/queue', {
-            params: { limit: 20 },
+            params: {
+                page: queuePage,
+                per_page: queuePerPage,
+            },
         }).then((response) => response.data),
         refetchInterval: 5000,
     });
@@ -160,7 +165,7 @@ export default function PushCampaigns() {
 
     const dashboard = dashboardQuery.data || {};
     const subscriberRows = subscribersQuery.data?.items || [];
-    const queueRows = queueQuery.data?.items || [];
+    const queueRows = queueQuery.data?.data || queueQuery.data?.items || [];
     const queueHealth = queueQuery.data?.health || null;
     const campaigns = campaignsQuery.data?.data || [];
     const pagination = campaignsQuery.data || null;
@@ -211,6 +216,118 @@ export default function PushCampaigns() {
             render: (row) => row.created_at || '—',
         },
     ], []);
+
+    const queueColumns = useMemo(() => [
+        {
+            key: 'file',
+            label: 'File',
+            render: (row) => (
+                <span className="inline-block max-w-[260px] truncate align-middle" title={row.source_filename}>
+                    {row.source_filename || 'n/a'}
+                </span>
+            ),
+        },
+        {
+            key: 'status',
+            label: 'Status',
+            render: (row) => prettyStatus(row.status),
+        },
+        {
+            key: 'mode',
+            label: 'Mode',
+            render: (row) => (row.dry_run ? 'Dry run' : 'Create campaigns'),
+        },
+        {
+            key: 'queued',
+            label: 'Queued',
+            render: (row) => formatQueueDate(row.queued_at),
+        },
+        {
+            key: 'updated',
+            label: 'Updated',
+            render: (row) => formatQueueDate(row.updated_at || row.started_at),
+        },
+        {
+            key: 'items',
+            label: 'Items',
+            render: (row) => (row.total_items || 0).toLocaleString(),
+        },
+        {
+            key: 'action',
+            label: 'Action',
+            render: (row) => (
+                <div className="flex items-center gap-2">
+                    {row.can_process_now ? (
+                        <button
+                            type="button"
+                            onClick={() => processNowMutation.mutate(row.batch_id)}
+                            disabled={processNowMutation.isPending}
+                            className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {processNowMutation.isPending ? 'Processing...' : 'Process now'}
+                        </button>
+                    ) : null}
+                    {row.can_create_from_dry_run ? (
+                        <button
+                            type="button"
+                            onClick={() => createFromDryRunMutation.mutate(row.batch_id)}
+                            disabled={createFromDryRunMutation.isPending}
+                            className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {createFromDryRunMutation.isPending ? 'Queuing...' : 'Create campaigns'}
+                        </button>
+                    ) : null}
+                    {row.can_confirm ? (
+                        <button
+                            type="button"
+                            onClick={() => confirmQueueBatchMutation.mutate(row.batch_id)}
+                            disabled={confirmQueueBatchMutation.isPending}
+                            className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {confirmQueueBatchMutation.isPending ? 'Confirming...' : 'Confirm'}
+                        </button>
+                    ) : null}
+                    {row.can_cancel ? (
+                        <button
+                            type="button"
+                            onClick={() => cancelQueueMutation.mutate(row.batch_id)}
+                            disabled={cancelQueueMutation.isPending}
+                            className="crm-btn-secondary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {cancelQueueMutation.isPending ? 'Cancelling...' : 'Cancel'}
+                        </button>
+                    ) : null}
+                    {!row.can_process_now && !row.can_create_from_dry_run && !row.can_confirm && !row.can_cancel ? (
+                        <span className="text-slate-400">—</span>
+                    ) : null}
+                </div>
+            ),
+        },
+    ], [
+        cancelQueueMutation,
+        confirmQueueBatchMutation,
+        createFromDryRunMutation,
+        processNowMutation,
+    ]);
+
+    const queuePagination = useMemo(() => {
+        if (queueQuery.data?.current_page && queueQuery.data?.last_page) {
+            return {
+                current_page: Number(queueQuery.data.current_page),
+                last_page: Number(queueQuery.data.last_page),
+                per_page: Number(queueQuery.data.per_page || queuePerPage),
+                total: Number(queueQuery.data.total || 0),
+            };
+        }
+
+        const fallbackTotal = queueRows.length;
+        return {
+            current_page: 1,
+            last_page: 1,
+            per_page: queuePerPage,
+            total: fallbackTotal,
+        };
+    }, [queuePerPage, queueQuery.data, queueRows.length]);
 
     return (
         <div className="space-y-4">
@@ -308,110 +425,6 @@ export default function PushCampaigns() {
             <section className="crm-surface overflow-hidden">
                 <header className="crm-panel-header">
                     <div>
-                        <h3 className="crm-panel-title">Upload Queue</h3>
-                        <p className="crm-panel-subtitle">Track uploads, convert dry-runs into campaigns, and confirm ready batches.</p>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => queueQuery.refetch()}
-                        className="crm-btn-secondary"
-                    >
-                        Refresh queue
-                    </button>
-                </header>
-
-                {queueHealth?.worker_likely_offline ? (
-                    <p className="px-4 pb-2 text-xs text-rose-700">
-                        Queue worker appears offline. Start `php artisan queue:work` (or Horizon) to process queued uploads.
-                    </p>
-                ) : null}
-
-                <div className="overflow-auto px-4 pb-4">
-                    <table className="min-w-full text-xs">
-                        <thead>
-                            <tr className="border-b border-slate-200 text-left text-slate-500">
-                                <th className="px-2 py-2 font-medium">File</th>
-                                <th className="px-2 py-2 font-medium">Status</th>
-                                <th className="px-2 py-2 font-medium">Mode</th>
-                                <th className="px-2 py-2 font-medium">Queued</th>
-                                <th className="px-2 py-2 font-medium">Updated</th>
-                                <th className="px-2 py-2 font-medium">Items</th>
-                                <th className="px-2 py-2 font-medium">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {queueRows.map((row) => (
-                                <tr key={row.batch_id} className="border-b border-slate-100">
-                                    <td className="max-w-[280px] truncate px-2 py-2 font-medium text-slate-700" title={row.source_filename}>
-                                        {row.source_filename}
-                                    </td>
-                                    <td className="px-2 py-2 text-slate-600">{prettyStatus(row.status)}</td>
-                                    <td className="px-2 py-2 text-slate-600">{row.dry_run ? 'Dry run' : 'Create campaigns'}</td>
-                                    <td className="px-2 py-2 text-slate-600">{formatQueueDate(row.queued_at)}</td>
-                                    <td className="px-2 py-2 text-slate-600">{formatQueueDate(row.updated_at || row.started_at)}</td>
-                                    <td className="px-2 py-2 text-slate-600">{(row.total_items || 0).toLocaleString()}</td>
-                                    <td className="px-2 py-2">
-                                        <div className="flex flex-wrap gap-2">
-                                            {row.can_process_now ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => processNowMutation.mutate(row.batch_id)}
-                                                    disabled={processNowMutation.isPending}
-                                                    className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                                                >
-                                                    {processNowMutation.isPending ? 'Processing...' : 'Process now'}
-                                                </button>
-                                            ) : null}
-                                            {row.can_create_from_dry_run ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => createFromDryRunMutation.mutate(row.batch_id)}
-                                                    disabled={createFromDryRunMutation.isPending}
-                                                    className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                                                >
-                                                    {createFromDryRunMutation.isPending ? 'Queuing...' : 'Create campaigns'}
-                                                </button>
-                                            ) : null}
-                                            {row.can_confirm ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => confirmQueueBatchMutation.mutate(row.batch_id)}
-                                                    disabled={confirmQueueBatchMutation.isPending}
-                                                    className="crm-btn-primary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                                                >
-                                                    {confirmQueueBatchMutation.isPending ? 'Confirming...' : 'Confirm'}
-                                                </button>
-                                            ) : null}
-                                            {row.can_cancel ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => cancelQueueMutation.mutate(row.batch_id)}
-                                                    disabled={cancelQueueMutation.isPending}
-                                                    className="crm-btn-secondary px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                                                >
-                                                    {cancelQueueMutation.isPending ? 'Cancelling...' : 'Cancel'}
-                                                </button>
-                                            ) : null}
-                                            {!row.can_process_now && !row.can_create_from_dry_run && !row.can_confirm && !row.can_cancel ? (
-                                                <span className="text-slate-400">—</span>
-                                            ) : null}
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                            {!queueQuery.isLoading && queueRows.length === 0 ? (
-                                <tr>
-                                    <td colSpan={7} className="px-2 py-4 text-center text-slate-500">No upload queue items found.</td>
-                                </tr>
-                            ) : null}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <section className="crm-surface overflow-hidden">
-                <header className="crm-panel-header">
-                    <div>
                         <h3 className="crm-panel-title">Subscriber Overview</h3>
                         <p className="crm-panel-subtitle">Per-market subscriber metrics and push setup visibility.</p>
                     </div>
@@ -460,6 +473,43 @@ export default function PushCampaigns() {
                         </tbody>
                     </table>
                 </div>
+            </section>
+
+            <section className="space-y-2">
+                <div className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Upload Queue</h3>
+                        <p className="crm-panel-subtitle">Track uploads, convert dry-runs into campaigns, and confirm ready batches.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => queueQuery.refetch()}
+                        className="crm-btn-secondary"
+                    >
+                        Refresh queue
+                    </button>
+                </div>
+
+                {queueHealth?.worker_likely_offline ? (
+                    <p className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+                        Queue worker appears offline. Start `php artisan queue:work` (or Horizon) to process queued uploads.
+                    </p>
+                ) : null}
+
+                <DataTable
+                    columns={queueColumns}
+                    data={queueRows}
+                    pagination={queuePagination}
+                    isLoading={queueQuery.isLoading}
+                    onPageChange={setQueuePage}
+                    perPage={queuePerPage}
+                    onPerPageChange={(next) => {
+                        setQueuePerPage(next);
+                        setQueuePage(1);
+                    }}
+                    perPageOptions={[10, 25, 50]}
+                    emptyMessage="No upload queue items found."
+                />
             </section>
 
             <UploadModal
