@@ -49,6 +49,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         // Static routes
         Route::post('/upload', [PushCampaignController::class, 'upload']);
         Route::get('/upload/{batchId}/status', [PushCampaignController::class, 'uploadStatus']);
+        Route::get('/crm-profiles', [PushCampaignController::class, 'crmProfiles']);
+        Route::post('/from-crm', [PushCampaignController::class, 'storeFromCrm']);
         Route::get('/dashboard', [PushCampaignController::class, 'dashboard']);
         Route::get('/subscribers', [PushCampaignController::class, 'subscribers']);
         Route::post('/subscribers/sync', [PushCampaignController::class, 'syncSubscribers']);

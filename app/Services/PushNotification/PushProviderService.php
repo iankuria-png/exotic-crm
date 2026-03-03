@@ -128,14 +128,49 @@ class PushProviderService
      */
     public function getSubscriberCountForPlatform(int $platformId): ?array
     {
-        if ($platformId <= 0) {
+        $diagnostic = $this->debugSubscriberCountForPlatform($platformId);
+        if (!(bool) ($diagnostic['ok'] ?? false)) {
+            Log::warning('Push subscriber sync skipped', [
+                'platform_id' => $platformId,
+                'provider' => $diagnostic['provider'] ?? null,
+                'error' => $diagnostic['error'] ?? 'unknown',
+            ]);
+
             return null;
+        }
+
+        return [
+            'provider' => (string) ($diagnostic['provider'] ?? 'unknown'),
+            'total' => (int) ($diagnostic['total'] ?? 0),
+            'active' => (int) ($diagnostic['active'] ?? 0),
+        ];
+    }
+
+    /**
+     * @return array{ok:bool,provider:?string,total:int,active:int,error:?string}
+     */
+    public function debugSubscriberCountForPlatform(int $platformId): array
+    {
+        if ($platformId <= 0) {
+            return [
+                'ok' => false,
+                'provider' => null,
+                'total' => 0,
+                'active' => 0,
+                'error' => 'Invalid platform id.',
+            ];
         }
 
         $pushConfig = $this->resolvePushConfig();
 
         if (!(bool) ($pushConfig['enabled'] ?? false)) {
-            return null;
+            return [
+                'ok' => false,
+                'provider' => null,
+                'total' => 0,
+                'active' => 0,
+                'error' => 'Push routing is disabled.',
+            ];
         }
 
         $platformConfig = $this->resolvePlatformConfig($pushConfig, $platformId);
@@ -143,7 +178,13 @@ class PushProviderService
         $provider = $this->providers[$providerId] ?? null;
 
         if (!$provider) {
-            return null;
+            return [
+                'ok' => false,
+                'provider' => $providerId !== '' ? $providerId : null,
+                'total' => 0,
+                'active' => 0,
+                'error' => 'Unsupported provider configured.',
+            ];
         }
 
         $providerConfig = is_array($platformConfig[$providerId] ?? null)
@@ -151,29 +192,43 @@ class PushProviderService
             : [];
 
         if (!$provider->configured($providerConfig)) {
-            return null;
+            return [
+                'ok' => false,
+                'provider' => $providerId,
+                'total' => 0,
+                'active' => 0,
+                'error' => 'Provider credentials are incomplete.',
+            ];
         }
 
         try {
             $counts = $provider->getSubscriberCount($providerConfig);
         } catch (\Throwable $exception) {
-            Log::warning('Push subscriber sync failed for provider', [
+            return [
+                'ok' => false,
                 'provider' => $providerId,
-                'platform_id' => $platformId,
+                'total' => 0,
+                'active' => 0,
                 'error' => $exception->getMessage(),
-            ]);
-
-            return null;
+            ];
         }
 
         if (!$counts) {
-            return null;
+            return [
+                'ok' => false,
+                'provider' => $providerId,
+                'total' => 0,
+                'active' => 0,
+                'error' => 'Provider returned no subscriber data.',
+            ];
         }
 
         return [
+            'ok' => true,
             'provider' => $providerId,
             'total' => (int) ($counts['total'] ?? 0),
             'active' => (int) ($counts['active'] ?? 0),
+            'error' => null,
         ];
     }
 

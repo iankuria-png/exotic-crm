@@ -12,6 +12,8 @@ use App\Models\PushSubscriberSnapshot;
 use App\Models\User;
 use App\Services\PushCampaign\ProfileExtractionService;
 use App\Services\PushCampaign\PushCampaignService;
+use App\Services\PushNotification\PushProviderService;
+use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -302,6 +304,141 @@ class CrmPushCampaignTest extends TestCase
 
         $this->assertCount(1, $items);
         $this->assertSame($platformA->id, $items[0]['platform_id']);
+    }
+
+    public function test_marketing_user_can_list_crm_escort_profiles_for_selected_platform(): void
+    {
+        $platformA = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platformB = $this->createPlatform('Uganda', 'uganda.example', 'Uganda');
+        $user = $this->createUser('marketing', [$platformA->id]);
+
+        Client::query()->create([
+            'platform_id' => $platformA->id,
+            'wp_post_id' => 2001,
+            'name' => 'Escort Kenya',
+            'phone_normalized' => '254700100001',
+            'client_type' => 'escort',
+            'wp_profile_url' => 'https://kenya.example/escort/escort-kenya/',
+        ]);
+
+        Client::query()->create([
+            'platform_id' => $platformA->id,
+            'wp_post_id' => 2002,
+            'name' => 'Agency Kenya',
+            'phone_normalized' => '254700100002',
+            'client_type' => 'agency',
+        ]);
+
+        Client::query()->create([
+            'platform_id' => $platformB->id,
+            'wp_post_id' => 2003,
+            'name' => 'Escort Uganda',
+            'phone_normalized' => '256700100003',
+            'client_type' => 'escort',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns/crm-profiles?platform_id=' . $platformA->id);
+
+        $response->assertOk();
+        $items = $response->json('data');
+        $this->assertCount(1, $items);
+        $this->assertSame('Escort Kenya', $items[0]['name']);
+    }
+
+    public function test_marketing_user_can_create_campaign_from_selected_crm_escorts(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya', 'Africa/Nairobi');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $escortA = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 3001,
+            'name' => 'Escort A',
+            'phone_normalized' => '254700200001',
+            'client_type' => 'escort',
+            'main_image_url' => 'https://kenya.example/images/a.jpg',
+        ]);
+
+        $escortB = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 3002,
+            'name' => 'Escort B',
+            'phone_normalized' => '254700200002',
+            'client_type' => 'escort',
+            'main_image_url' => 'https://kenya.example/images/b.jpg',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/crm/push-campaigns/from-crm', [
+            'platform_id' => $platform->id,
+            'client_ids' => [$escortA->id, $escortB->id],
+            'message' => 'Tonight only. Message now.',
+            'campaign_name' => 'Kenya CRM Select',
+            'scheduled_at' => '2026-01-07 10:00:00',
+            'timezone' => 'Africa/Nairobi',
+        ]);
+
+        $response->assertStatus(201);
+        $response->assertJsonPath('created_items', 2);
+        $campaignId = (int) $response->json('campaign.id');
+        $this->assertGreaterThan(0, $campaignId);
+
+        $campaign = PushCampaign::query()->findOrFail($campaignId);
+        $this->assertSame('draft', $campaign->status);
+        $this->assertSame(2, (int) $campaign->total_items);
+
+        $items = PushCampaignItem::query()
+            ->where('campaign_id', $campaignId)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertCount(2, $items);
+        $this->assertEqualsCanonicalizing(
+            ['https://kenya.example/?p=3001', 'https://kenya.example/?p=3002'],
+            $items->pluck('profile_url')->all()
+        );
+        $this->assertSame('2026-01-07 07:00:00', optional($items->first()->scheduled_at)->setTimezone('UTC')->format('Y-m-d H:i:s'));
+    }
+
+    public function test_sync_subscribers_returns_diagnostics_for_single_market_when_provider_fails(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $this->mock(SubscriberSyncService::class, function ($mock) use ($platform): void {
+            $mock->shouldReceive('syncPlatform')
+                ->once()
+                ->withArgs(fn(Platform $input): bool => (int) $input->id === (int) $platform->id)
+                ->andReturn(null);
+        });
+
+        $this->mock(PushProviderService::class, function ($mock) use ($platform): void {
+            $mock->shouldReceive('debugSubscriberCountForPlatform')
+                ->once()
+                ->with((int) $platform->id)
+                ->andReturn([
+                    'ok' => false,
+                    'provider' => 'webpushr',
+                    'total' => 0,
+                    'active' => 0,
+                    'error' => 'Provider credentials are incomplete.',
+                ]);
+        });
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/crm/push-campaigns/subscribers/sync', [
+            'platform_id' => $platform->id,
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath('synced', 0);
+        $response->assertJsonPath('diagnostics.0.platform_id', $platform->id);
+        $response->assertJsonPath('diagnostics.0.provider', 'webpushr');
+        $response->assertJsonPath('message', 'Provider credentials are incomplete.');
     }
 
     public function test_sub_admin_can_update_push_provider_config(): void

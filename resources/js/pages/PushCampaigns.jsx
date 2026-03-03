@@ -6,6 +6,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import UploadModal from '../components/PushCampaigns/UploadModal';
 import CampaignDetail from '../components/PushCampaigns/CampaignDetail';
+import CrmEscortModal from '../components/PushCampaigns/CrmEscortModal';
 import { useToast } from '../components/ToastProvider';
 
 function prettyStatus(status) {
@@ -22,6 +23,7 @@ export default function PushCampaigns() {
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [uploadOpen, setUploadOpen] = useState(false);
+    const [crmEscortOpen, setCrmEscortOpen] = useState(false);
     const [activeCampaignId, setActiveCampaignId] = useState(null);
 
     useEffect(() => {
@@ -172,7 +174,7 @@ export default function PushCampaigns() {
             </section>
 
             <section className="crm-surface p-4">
-                <div className="grid gap-2 md:grid-cols-[1fr_180px_180px_auto]">
+                <div className="grid gap-2 md:grid-cols-[1fr_180px_180px_auto_auto]">
                     <input
                         value={searchInput}
                         onChange={(event) => setSearchInput(event.target.value)}
@@ -211,6 +213,9 @@ export default function PushCampaigns() {
                     </select>
                     <button type="button" onClick={() => setUploadOpen(true)} className="crm-btn-primary">
                         Upload workbook
+                    </button>
+                    <button type="button" onClick={() => setCrmEscortOpen(true)} className="crm-btn-secondary">
+                        Select CRM escorts
                     </button>
                 </div>
             </section>
@@ -283,6 +288,16 @@ export default function PushCampaigns() {
             <UploadModal
                 open={uploadOpen}
                 onClose={() => setUploadOpen(false)}
+                onCreated={() => {
+                    queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
+                    queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });
+                }}
+            />
+
+            <CrmEscortModal
+                open={crmEscortOpen}
+                onClose={() => setCrmEscortOpen(false)}
+                platformOptions={platformOptions}
                 onCreated={() => {
                     queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
                     queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });

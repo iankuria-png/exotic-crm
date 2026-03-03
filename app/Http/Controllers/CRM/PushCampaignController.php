@@ -4,6 +4,7 @@ namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessPushUploadJob;
+use App\Models\Client;
 use App\Models\Platform;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
@@ -12,6 +13,7 @@ use App\Models\ScraperProfilePreset;
 use App\Services\MarketAuthorizationService;
 use App\Services\PushCampaign\PushCampaignService;
 use App\Services\PushCampaign\SelectorDetectionService;
+use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -27,6 +29,7 @@ class PushCampaignController extends Controller
         private readonly PushCampaignService $pushCampaignService,
         private readonly SelectorDetectionService $selectorDetectionService,
         private readonly SubscriberSyncService $subscriberSyncService,
+        private readonly PushProviderService $pushProviderService,
     ) {
     }
 
@@ -86,6 +89,13 @@ class PushCampaignController extends Controller
 
     public function upload(Request $request)
     {
+        $uploadErrorCode = (int) data_get($_FILES, 'file.error', UPLOAD_ERR_OK);
+        if ($uploadErrorCode !== UPLOAD_ERR_OK) {
+            return response()->json([
+                'message' => $this->uploadErrorMessage($uploadErrorCode),
+            ], 422);
+        }
+
         $validated = $request->validate([
             'file' => 'required|file|mimes:xlsx,xls|max:51200',
             'dry_run' => 'nullable|boolean',
@@ -222,6 +232,187 @@ class PushCampaignController extends Controller
             ...$status,
             'campaigns' => $summaries,
         ]);
+    }
+
+    public function crmProfiles(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'search' => 'nullable|string|max:255',
+            'profile_status' => 'nullable|in:publish,private,draft,pending',
+            'per_page' => 'nullable|integer|min:10|max:100',
+        ]);
+
+        if (!empty($validated['platform_id'])) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                (int) $validated['platform_id'],
+                'You do not have access to this market.'
+            );
+        }
+
+        $query = Client::query()
+            ->with('platform:id,name,country,domain')
+            ->where('client_type', 'escort')
+            ->orderByDesc('id');
+
+        if (!empty($validated['platform_id'])) {
+            $query->where('platform_id', (int) $validated['platform_id']);
+        } else {
+            $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+            if (is_array($allowedPlatformIds)) {
+                $query->whereIn('platform_id', $allowedPlatformIds);
+            }
+        }
+
+        if (!empty($validated['search'])) {
+            $search = trim((string) $validated['search']);
+            $query->where(function ($builder) use ($search): void {
+                $builder->where('name', 'like', '%' . $search . '%')
+                    ->orWhere('phone_normalized', 'like', '%' . $search . '%')
+                    ->orWhere('email', 'like', '%' . $search . '%')
+                    ->orWhere('city', 'like', '%' . $search . '%');
+            });
+        }
+
+        if (!empty($validated['profile_status'])) {
+            $query->where('profile_status', (string) $validated['profile_status']);
+        }
+
+        $profiles = $query->paginate((int) ($validated['per_page'] ?? 25));
+        $profiles->through(function (Client $client): array {
+            return [
+                'id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'platform_name' => $client->platform?->name,
+                'platform_country' => $client->platform?->country,
+                'name' => $client->name,
+                'phone_normalized' => $client->phone_normalized,
+                'email' => $client->email,
+                'city' => $client->city,
+                'profile_status' => $client->profile_status,
+                'premium' => (bool) $client->premium,
+                'featured' => (bool) $client->featured,
+                'verified' => (bool) $client->verified,
+                'main_image_url' => $client->main_image_url,
+                'wp_post_id' => $client->wp_post_id ? (int) $client->wp_post_id : null,
+                'wp_profile_url' => $client->wp_profile_url,
+            ];
+        });
+
+        return response()->json($profiles);
+    }
+
+    public function storeFromCrm(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'client_ids' => 'required|array|min:1|max:500',
+            'client_ids.*' => 'integer|exists:clients,id',
+            'message' => 'required|string|max:255',
+            'campaign_name' => 'nullable|string|max:255',
+            'scheduled_at' => 'nullable|date',
+            'timezone' => 'nullable|string|max:64',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this market.'
+        );
+
+        $platform = Platform::query()->findOrFail($platformId);
+        $clientIds = collect((array) $validated['client_ids'])
+            ->map(fn($id) => (int) $id)
+            ->filter(fn($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $clients = Client::query()
+            ->where('platform_id', $platformId)
+            ->where('client_type', 'escort')
+            ->whereIn('id', $clientIds)
+            ->with('platform:id,name,country,domain')
+            ->get();
+
+        if ($clients->count() !== count($clientIds)) {
+            return response()->json([
+                'message' => 'One or more selected escorts are invalid for the selected market.',
+            ], 422);
+        }
+
+        $timezone = trim((string) ($validated['timezone'] ?? ($platform->timezone ?: config('app.timezone', 'UTC'))));
+        $scheduledAt = !empty($validated['scheduled_at'])
+            ? Carbon::parse((string) $validated['scheduled_at'], $timezone)->utc()
+            : null;
+
+        $campaign = PushCampaign::query()->create([
+            'name' => trim((string) ($validated['campaign_name'] ?? ($platform->name . ' CRM Escort Push - ' . now()->toDateString()))),
+            'platform_id' => $platformId,
+            'status' => 'draft',
+            'total_items' => 0,
+            'created_by' => (int) $request->user()->id,
+            'upload_batch_id' => (string) Str::uuid(),
+            'source_filename' => 'crm_selection',
+            'scheduled_at' => $scheduledAt,
+        ]);
+
+        $message = trim((string) $validated['message']);
+        $items = [];
+        $skippedClientIds = [];
+        $now = now();
+        $scheduledAtString = $scheduledAt?->toDateTimeString();
+        $dateLabel = $scheduledAt ? $scheduledAt->copy()->setTimezone($timezone)->toDateString() : null;
+
+        foreach ($clients as $client) {
+            $profileUrl = $this->resolveClientProfileUrl($client, $platform);
+            if (!$profileUrl) {
+                $skippedClientIds[] = (int) $client->id;
+                continue;
+            }
+
+            $items[] = [
+                'campaign_id' => (int) $campaign->id,
+                'client_id' => (int) $client->id,
+                'profile_url' => $profileUrl,
+                'wp_post_id' => $client->wp_post_id ? (int) $client->wp_post_id : null,
+                'profile_name' => $client->name,
+                'profile_phone' => $client->phone_normalized,
+                'profile_image_url' => $client->main_image_url,
+                'custom_message' => $message,
+                'scheduled_at' => $scheduledAtString,
+                'date_label' => $dateLabel,
+                'status' => 'pending',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (empty($items)) {
+            $campaign->delete();
+
+            return response()->json([
+                'message' => 'Selected escorts did not have resolvable profile URLs.',
+                'skipped_client_ids' => $skippedClientIds,
+            ], 422);
+        }
+
+        PushCampaignItem::query()->insert($items);
+
+        $campaign->forceFill([
+            'total_items' => count($items),
+            'status' => 'draft',
+        ])->save();
+
+        $campaign->load('platform:id,name,country');
+
+        return response()->json([
+            'campaign' => $campaign,
+            'created_items' => count($items),
+            'skipped_client_ids' => $skippedClientIds,
+        ], 201);
     }
 
     public function store(Request $request)
@@ -535,13 +726,22 @@ class PushCampaignController extends Controller
             );
 
             $result = $this->subscriberSyncService->syncPlatform($platform);
+            $diagnostic = null;
+            if (!$result) {
+                $diagnostic = $this->pushProviderService->debugSubscriberCountForPlatform((int) $platform->id);
+            }
 
             return response()->json([
                 'synced' => $result ? 1 : 0,
                 'results' => $result ? [$result] : [],
+                'diagnostics' => $diagnostic ? [[
+                    'platform_id' => (int) $platform->id,
+                    'provider' => $diagnostic['provider'] ?? null,
+                    'error' => $diagnostic['error'] ?? null,
+                ]] : [],
                 'message' => $result
                     ? 'Subscriber snapshot synced for selected market.'
-                    : 'No subscriber data returned. Verify provider credentials and active provider for this market.',
+                    : ((string) ($diagnostic['error'] ?? 'No subscriber data returned. Verify provider credentials and active provider for this market.')),
             ]);
         }
 
@@ -552,12 +752,51 @@ class PushCampaignController extends Controller
             $results = array_values(array_filter($results, static fn(array $row): bool => in_array((int) ($row['platform_id'] ?? 0), $allowedPlatformIds, true)));
         }
 
+        $resultPlatformIds = collect($results)
+            ->pluck('platform_id')
+            ->map(fn($id) => (int) $id)
+            ->filter(fn($id) => $id > 0)
+            ->values()
+            ->all();
+
+        $diagnostics = [];
+        $platformQuery = Platform::query()->where('is_active', true)->orderBy('id');
+        if (is_array($allowedPlatformIds)) {
+            $platformQuery->whereIn('id', $allowedPlatformIds);
+        }
+
+        foreach ($platformQuery->get(['id']) as $platform) {
+            $platformId = (int) $platform->id;
+            if (in_array($platformId, $resultPlatformIds, true)) {
+                continue;
+            }
+
+            $diagnostic = $this->pushProviderService->debugSubscriberCountForPlatform($platformId);
+            if (!(bool) ($diagnostic['ok'] ?? false)) {
+                $diagnostics[] = [
+                    'platform_id' => $platformId,
+                    'provider' => $diagnostic['provider'] ?? null,
+                    'error' => $diagnostic['error'] ?? null,
+                ];
+            }
+        }
+
+        $message = count($results) > 0
+            ? 'Subscriber snapshots synced successfully.'
+            : 'No subscriber snapshots were synced. Verify provider credentials and active provider mapping per market.';
+
+        if (count($results) === 0 && !empty($diagnostics)) {
+            $first = $diagnostics[0];
+            if (!empty($first['error'])) {
+                $message = (string) $first['error'];
+            }
+        }
+
         return response()->json([
             'synced' => count($results),
             'results' => $results,
-            'message' => count($results) > 0
-                ? 'Subscriber snapshots synced successfully.'
-                : 'No subscriber snapshots were synced. Verify provider credentials and active provider mapping per market.',
+            'diagnostics' => $diagnostics,
+            'message' => $message,
         ]);
     }
 
@@ -928,5 +1167,57 @@ class PushCampaignController extends Controller
         }
 
         return $normalized;
+    }
+
+    private function resolveClientProfileUrl(Client $client, Platform $platform): ?string
+    {
+        if (!empty($client->wp_profile_url)) {
+            return (string) $client->wp_profile_url;
+        }
+
+        $wpPostId = (int) ($client->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            return null;
+        }
+
+        $domain = trim((string) ($platform->domain ?? ''));
+        if ($domain === '') {
+            return null;
+        }
+
+        if (!preg_match('#^https?://#i', $domain)) {
+            $domain = 'https://' . $domain;
+        }
+
+        return rtrim($domain, '/') . '/?p=' . $wpPostId;
+    }
+
+    private function uploadErrorMessage(int $uploadErrorCode): string
+    {
+        if ($uploadErrorCode === UPLOAD_ERR_INI_SIZE || $uploadErrorCode === UPLOAD_ERR_FORM_SIZE) {
+            return sprintf(
+                'The uploaded workbook exceeds server upload limits (upload_max_filesize=%s, post_max_size=%s).',
+                (string) ini_get('upload_max_filesize'),
+                (string) ini_get('post_max_size')
+            );
+        }
+
+        if ($uploadErrorCode === UPLOAD_ERR_PARTIAL) {
+            return 'The workbook upload was interrupted before completion. Please retry.';
+        }
+
+        if ($uploadErrorCode === UPLOAD_ERR_NO_TMP_DIR) {
+            return 'Server upload temp directory is missing. Configure PHP upload_tmp_dir and retry.';
+        }
+
+        if ($uploadErrorCode === UPLOAD_ERR_CANT_WRITE) {
+            return 'Server could not write the uploaded workbook to disk. Check filesystem permissions.';
+        }
+
+        if ($uploadErrorCode === UPLOAD_ERR_EXTENSION) {
+            return 'A PHP extension blocked workbook upload. Check server upload extensions and retry.';
+        }
+
+        return 'The workbook failed to upload. Please retry.';
     }
 }
