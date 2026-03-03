@@ -302,6 +302,14 @@ class CrmPushCampaignTest extends TestCase
             'dry_run' => false,
             'total_items' => 90,
         ]);
+        $uploadBatchStatusService->put('queue-e', [
+            'batch_id' => 'queue-e',
+            'status' => 'queued',
+            'source_filename' => 'Queue E.xlsx',
+            'queued_at' => now()->subMinutes(7)->toDateTimeString(),
+            'initiated_by' => $user->id,
+            'dry_run' => false,
+        ]);
         PushCampaign::query()->create([
             'name' => 'Queue D Campaign',
             'platform_id' => $platform->id,
@@ -322,7 +330,7 @@ class CrmPushCampaignTest extends TestCase
 
         $response = $this->getJson('/api/crm/push-campaigns/upload/queue');
         $response->assertOk()
-            ->assertJsonCount(4, 'items')
+            ->assertJsonCount(5, 'items')
             ->assertJsonPath('items.0.batch_id', 'queue-b')
             ->assertJsonPath('items.1.batch_id', 'queue-a')
             ->assertJsonPath('items.1.can_cancel', true)
@@ -337,6 +345,11 @@ class CrmPushCampaignTest extends TestCase
         $response->assertJsonFragment([
             'batch_id' => 'queue-d',
             'can_confirm' => true,
+        ]);
+
+        $response->assertJsonFragment([
+            'batch_id' => 'queue-e',
+            'can_process_now' => true,
         ]);
     }
 

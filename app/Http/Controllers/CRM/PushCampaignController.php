@@ -321,7 +321,7 @@ class PushCampaignController extends Controller
                 'campaign_count' => $campaignCount,
                 'unconfirmed_count' => $unconfirmedCount,
                 'can_cancel' => $status === 'queued',
-                'can_process_now' => $status === 'queued' && $dryRun,
+                'can_process_now' => $status === 'queued',
                 'can_create_from_dry_run' => $status === 'ready' && $dryRun && (int) ($item['total_items'] ?? 0) > 0,
                 'can_confirm' => $status === 'ready' && !$dryRun && $campaignCount > 0 && $unconfirmedCount > 0 && $processingCount === 0,
             ];
@@ -347,12 +347,6 @@ class PushCampaignController extends Controller
         if (($status['status'] ?? null) !== 'queued') {
             return response()->json([
                 'message' => 'Only queued uploads can be processed immediately.',
-            ], 422);
-        }
-
-        if (!(bool) ($status['dry_run'] ?? false)) {
-            return response()->json([
-                'message' => 'Process now is available only for dry-run uploads.',
             ], 422);
         }
 
@@ -400,7 +394,7 @@ class PushCampaignController extends Controller
         }
 
         return response()->json([
-            'message' => 'Dry-run processing completed.',
+            'message' => 'Upload processing completed.',
             'status_payload' => $this->uploadBatchStatusService->get($batchId),
         ]);
     }

@@ -365,7 +365,6 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
     const elapsedLabel = elapsedSeconds !== null ? formatDuration(elapsedSeconds) : null;
     const queueWaitLabel = queueWaitSeconds !== null ? formatDuration(queueWaitSeconds) : null;
     const canProcessNow = status === 'queued'
-        && Boolean(statusPayload?.dry_run)
         && workerLikelyOffline
         && !processNowMutation.isPending;
     const canCancelQueued = status === 'queued' && !cancelQueuedUploadMutation.isPending;
