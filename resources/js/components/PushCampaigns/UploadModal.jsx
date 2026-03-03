@@ -69,6 +69,20 @@ function formatDuration(totalSeconds) {
     return `${hours}h ${remainingMinutes}m`;
 }
 
+function formatDateTime(value) {
+    const parsed = toDateOrNull(value);
+    if (!parsed) {
+        return '--';
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(parsed);
+}
+
 export default function UploadModal({ open, onClose, onCreated }) {
     const toast = useToast();
     const [file, setFile] = useState(null);
@@ -108,7 +122,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
         },
         onSuccess: (response) => {
             setBatchId(response?.batch_id || null);
-            setStatusPayload(response || null);
+            setStatusPayload(response?.status_payload || response || null);
             if (response?.dry_run) {
                 toast.success('Workbook uploaded for dry run. Parsing has started.');
             } else {
@@ -223,21 +237,36 @@ export default function UploadModal({ open, onClose, onCreated }) {
     const uploadLimitText = formatBytes(limitsQuery.data?.upload_max_bytes);
     const postLimitText = formatBytes(limitsQuery.data?.post_max_bytes);
     const isInProgress = ['queued', 'processing', 'extracting'].includes(status);
+    const queue = statusPayload?.queue || null;
 
+    const queuedAt = toDateOrNull(statusPayload?.queued_at);
     const startedAt = toDateOrNull(statusPayload?.started_at)
-        || toDateOrNull(statusPayload?.queued_at)
-        || toDateOrNull(statusPayload?.created_at)
-        || toDateOrNull(statusPayload?.updated_at);
-    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((now - startedAt.getTime()) / 1000)) : null;
+        || toDateOrNull(statusPayload?.processing_started_at);
+    const elapsedSeconds = (startedAt && (status === 'processing' || status === 'extracting'))
+        ? Math.max(0, Math.floor((now - startedAt.getTime()) / 1000))
+        : null;
     const totalItems = Number(statusPayload?.total_items || 0);
     const profilesProcessed = Number(statusPayload?.profiles_processed || 0);
     const sheetsParsed = Number(statusPayload?.sheets_parsed || 0);
+    const queueWaitSeconds = Number(queue?.wait_seconds || 0) > 0
+        ? Number(queue.wait_seconds || 0)
+        : (queuedAt && status === 'queued'
+            ? Math.max(0, Math.floor((now - queuedAt.getTime()) / 1000))
+            : null);
+    const queueAhead = Number(queue?.ahead_count || 0);
+    const queuePosition = Number(queue?.position || 0) || null;
+    const queueRecent = Array.isArray(queue?.recent) ? queue.recent : [];
+    const sheetCount = Number(statusPayload?.sheet_count || 0);
 
     let progressPercent = 0;
     if (status === 'queued') {
-        progressPercent = 8;
+        progressPercent = queuePosition ? Math.max(4, Math.min(18, 22 - queuePosition)) : 8;
     } else if (status === 'processing') {
-        progressPercent = Math.min(58, 20 + sheetsParsed * 14);
+        if (sheetCount > 0) {
+            progressPercent = 20 + (Math.min(1, sheetsParsed / sheetCount) * 38);
+        } else {
+            progressPercent = Math.min(58, 20 + sheetsParsed * 14);
+        }
     } else if (status === 'extracting') {
         if (totalItems > 0) {
             const extractionRatio = Math.min(1, profilesProcessed / totalItems);
@@ -251,26 +280,27 @@ export default function UploadModal({ open, onClose, onCreated }) {
         progressPercent = 100;
     }
 
-    let estimatedTotalSeconds = null;
+    let etaLabel = null;
     if (status === 'queued') {
-        estimatedTotalSeconds = 150;
-    } else if (status === 'processing') {
-        estimatedTotalSeconds = 130 + (sheetsParsed * 10);
-    } else if (status === 'extracting') {
-        if (totalItems > 0) {
-            estimatedTotalSeconds = 95 + Math.ceil(totalItems * 0.35);
-        } else {
-            estimatedTotalSeconds = 180;
+        etaLabel = queueAhead > 0
+            ? `${queueAhead} upload${queueAhead === 1 ? '' : 's'} ahead`
+            : 'Waiting for worker pickup';
+    } else if (status === 'extracting' && elapsedSeconds !== null && profilesProcessed > 0 && totalItems > profilesProcessed) {
+        const itemsPerSecond = profilesProcessed / Math.max(1, elapsedSeconds);
+        const remainingItems = totalItems - profilesProcessed;
+        const etaSeconds = Math.max(0, Math.ceil(remainingItems / Math.max(itemsPerSecond, 0.0001)));
+        etaLabel = etaSeconds <= 8 ? 'Finishing shortly' : `~${formatDuration(etaSeconds)} remaining`;
+    } else if (status === 'processing' && elapsedSeconds !== null && sheetCount > 0 && sheetsParsed > 0) {
+        const secondsPerSheet = elapsedSeconds / Math.max(1, sheetsParsed);
+        const remainingSheets = Math.max(0, sheetCount - sheetsParsed);
+        const etaSeconds = Math.max(0, Math.ceil(remainingSheets * secondsPerSheet));
+        if (etaSeconds > 0) {
+            etaLabel = `~${formatDuration(etaSeconds)} remaining`;
         }
     }
 
-    const etaSeconds = (elapsedSeconds !== null && estimatedTotalSeconds !== null)
-        ? Math.max(0, estimatedTotalSeconds - elapsedSeconds)
-        : null;
-    const etaLabel = etaSeconds !== null
-        ? (etaSeconds <= 8 ? 'Finishing shortly' : `~${formatDuration(etaSeconds)} remaining`)
-        : 'Estimating time remaining...';
     const elapsedLabel = elapsedSeconds !== null ? formatDuration(elapsedSeconds) : null;
+    const queueWaitLabel = queueWaitSeconds !== null ? formatDuration(queueWaitSeconds) : null;
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
@@ -348,9 +378,9 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
                                                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-600" />
                                             </span>
-                                            Parsing in progress
+                                            {status === 'queued' ? 'Waiting in upload queue' : 'Parsing in progress'}
                                         </div>
-                                        <span>{etaLabel}</span>
+                                        {etaLabel ? <span>{etaLabel}</span> : null}
                                     </div>
                                     <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-emerald-100">
                                         <div
@@ -358,11 +388,20 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                             style={{ width: `${Math.max(6, Math.min(100, progressPercent))}%` }}
                                         />
                                     </div>
-                                    {elapsedLabel ? (
+                                    {status === 'queued' ? (
+                                        <p className="mt-2 text-[11px] text-emerald-800/90">
+                                            {queuePosition ? `Position #${queuePosition}` : 'Queue position pending'}
+                                            {queueWaitLabel ? ` • queued for ${queueWaitLabel}` : ''}
+                                        </p>
+                                    ) : elapsedLabel ? (
                                         <p className="mt-2 text-[11px] text-emerald-800/90">
                                             Elapsed: {elapsedLabel}
                                         </p>
-                                    ) : null}
+                                    ) : (
+                                        <p className="mt-2 text-[11px] text-emerald-800/90">
+                                            Measuring processing speed...
+                                        </p>
+                                    )}
                                 </div>
                             ) : null}
 
@@ -389,6 +428,42 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                 <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
                                     Unmapped sheets: {(statusPayload.unmapped_sheets || []).join(', ')}
                                 </p>
+                            ) : null}
+
+                            {queueRecent.length > 0 ? (
+                                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2">
+                                    <div className="flex items-center justify-between">
+                                        <p className="text-xs font-semibold text-slate-800">Recent Upload Queue</p>
+                                        <p className="text-[11px] text-slate-500">active: {queue?.active_count || 0}</p>
+                                    </div>
+                                    <div className="mt-2 max-h-40 overflow-auto">
+                                        <table className="min-w-full text-xs">
+                                            <thead>
+                                                <tr className="text-left text-slate-500">
+                                                    <th className="px-2 py-1 font-medium">File</th>
+                                                    <th className="px-2 py-1 font-medium">Status</th>
+                                                    <th className="px-2 py-1 font-medium">Queued</th>
+                                                    <th className="px-2 py-1 font-medium">Updated</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {queueRecent.map((entry) => (
+                                                    <tr
+                                                        key={entry.batch_id}
+                                                        className={`border-t border-slate-200 ${entry.batch_id === batchId ? 'bg-emerald-50/70' : 'bg-white'}`}
+                                                    >
+                                                        <td className="max-w-[220px] truncate px-2 py-1" title={entry.source_filename}>
+                                                            {entry.source_filename}
+                                                        </td>
+                                                        <td className="px-2 py-1">{statusLabel(entry.status, Boolean(entry.dry_run))}</td>
+                                                        <td className="px-2 py-1">{formatDateTime(entry.queued_at)}</td>
+                                                        <td className="px-2 py-1">{formatDateTime(entry.updated_at || entry.started_at)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
                             ) : null}
                         </section>
                     ) : null}
