@@ -5,6 +5,7 @@ namespace App\Services\PushNotification;
 use Illuminate\Support\Arr;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
 
 class WebPushrProvider implements PushProviderInterface
 {
@@ -106,7 +107,18 @@ class WebPushrProvider implements PushProviderInterface
             ->get('https://api.webpushr.com/v1/site/subscriber_count');
 
         if (!$response->successful()) {
-            return null;
+            $raw = $response->json();
+            $body = is_array($raw) ? $raw : ['body' => $response->body()];
+            $description = trim((string) $this->firstValue($body, ['description', 'message', 'error'], ''));
+            if ($description === '') {
+                $description = trim((string) json_encode($body));
+            }
+
+            throw new RuntimeException(sprintf(
+                'WebPushr subscriber count request failed (%d): %s',
+                $response->status(),
+                $description !== '' ? $description : 'Unknown error'
+            ));
         }
 
         $raw = $response->json();

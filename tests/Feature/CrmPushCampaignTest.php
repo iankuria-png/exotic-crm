@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\ProcessPushUploadJob;
 use App\Jobs\SendPushNotificationJob;
 use App\Models\Client;
+use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
@@ -18,6 +19,7 @@ use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -439,6 +441,45 @@ class CrmPushCampaignTest extends TestCase
         $response->assertJsonPath('diagnostics.0.platform_id', $platform->id);
         $response->assertJsonPath('diagnostics.0.provider', 'webpushr');
         $response->assertJsonPath('message', 'Provider credentials are incomplete.');
+    }
+
+    public function test_provider_diagnostic_includes_webpushr_error_message(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => 'push_provider_config'],
+            [
+                'value' => [
+                    'enabled' => true,
+                    'default_provider' => 'webpushr',
+                    'platforms' => [
+                        (string) $platform->id => [
+                            'active_provider' => 'webpushr',
+                            'fallback_provider' => 'none',
+                            'webpushr' => [
+                                'api_key' => 'sample-key',
+                                'auth_token' => 'sample-token',
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+        );
+
+        Http::fake([
+            'https://api.webpushr.com/v1/site/subscriber_count' => Http::response([
+                'status' => 'failure',
+                'description' => 'Subscription expired',
+            ], 403),
+        ]);
+
+        $diagnostic = app(PushProviderService::class)->debugSubscriberCountForPlatform((int) $platform->id);
+
+        $this->assertFalse((bool) $diagnostic['ok']);
+        $this->assertSame('webpushr', $diagnostic['provider']);
+        $this->assertStringContainsString('403', (string) $diagnostic['error']);
+        $this->assertStringContainsString('Subscription expired', (string) $diagnostic['error']);
     }
 
     public function test_sub_admin_can_update_push_provider_config(): void
