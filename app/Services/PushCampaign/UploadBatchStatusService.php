@@ -93,6 +93,38 @@ class UploadBatchStatusService
     }
 
     /**
+     * @return array{
+     *     data:array<int, array<string, mixed>>,
+     *     current_page:int,
+     *     last_page:int,
+     *     per_page:int,
+     *     total:int,
+     *     from:int|null,
+     *     to:int|null
+     * }
+     */
+    public function paginateForUser(int $userId, int $page = 1, int $perPage = 10): array
+    {
+        $safePerPage = max(1, $perPage);
+        $all = $this->recentForUser($userId, self::INDEX_LIMIT);
+        $total = count($all);
+        $lastPage = max(1, (int) ceil($total / $safePerPage));
+        $currentPage = max(1, min($page, $lastPage));
+        $offset = ($currentPage - 1) * $safePerPage;
+        $rows = array_slice($all, $offset, $safePerPage);
+
+        return [
+            'data' => $rows,
+            'current_page' => $currentPage,
+            'last_page' => $lastPage,
+            'per_page' => $safePerPage,
+            'total' => $total,
+            'from' => empty($rows) ? null : ($offset + 1),
+            'to' => empty($rows) ? null : ($offset + count($rows)),
+        ];
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function queueHealthSnapshot(): ?array

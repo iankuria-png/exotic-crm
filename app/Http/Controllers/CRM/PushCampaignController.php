@@ -288,11 +288,14 @@ class PushCampaignController extends Controller
     public function uploadQueue(Request $request)
     {
         $validated = $request->validate([
-            'limit' => 'nullable|integer|min:1|max:50',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:50',
         ]);
 
-        $limit = (int) ($validated['limit'] ?? 20);
-        $items = $this->uploadBatchStatusService->listForUser((int) $request->user()->id, $limit);
+        $page = (int) ($validated['page'] ?? 1);
+        $perPage = (int) ($validated['per_page'] ?? 10);
+        $paginator = $this->uploadBatchStatusService->paginateForUser((int) $request->user()->id, $page, $perPage);
+        $items = $paginator['data'];
         $health = $this->uploadBatchStatusService->queueHealthSnapshot();
         $batchIds = collect($items)->pluck('batch_id')->filter()->values()->all();
 
@@ -307,7 +310,7 @@ class PushCampaignController extends Controller
             ->get()
             ->keyBy('upload_batch_id');
 
-        $items = array_map(function (array $item) use ($campaignStats): array {
+        $rows = array_map(function (array $item) use ($campaignStats): array {
             $status = (string) ($item['status'] ?? 'queued');
             $dryRun = (bool) ($item['dry_run'] ?? false);
             $batchId = (string) ($item['batch_id'] ?? '');
@@ -328,7 +331,14 @@ class PushCampaignController extends Controller
         }, $items);
 
         return response()->json([
-            'items' => $items,
+            'data' => $rows,
+            'items' => $rows,
+            'current_page' => (int) ($paginator['current_page'] ?? 1),
+            'last_page' => (int) ($paginator['last_page'] ?? 1),
+            'per_page' => (int) ($paginator['per_page'] ?? $perPage),
+            'total' => (int) ($paginator['total'] ?? count($rows)),
+            'from' => $paginator['from'] ?? null,
+            'to' => $paginator['to'] ?? null,
             'health' => $health,
         ]);
     }
