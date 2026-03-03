@@ -8,6 +8,7 @@ use App\Models\ScraperRun;
 use App\Models\ScraperSource;
 use App\Models\TimelineEvent;
 use App\Models\User;
+use App\Support\DomParserTrait;
 use DOMDocument;
 use DOMNode;
 use DOMXPath;
@@ -16,6 +17,14 @@ use Symfony\Component\CssSelector\CssSelectorConverter;
 
 class ScraperSourceService
 {
+    use DomParserTrait {
+        fetchHtml as private domFetchHtml;
+        queryCss as private domQueryCss;
+        nodeText as private domNodeText;
+        extractPhoneFromText as private domExtractPhoneFromText;
+        normalizePhone as private domNormalizePhone;
+    }
+
     public const PARSER_PROFILES = ['contact_cards', 'profile_links'];
     public const FETCH_SCHEDULES = ['manual_only', 'daily', 'weekly'];
     public const DEDUPE_MODES = ['phone_or_email', 'phone_only', 'email_only', 'source_url'];
@@ -613,29 +622,7 @@ class ScraperSourceService
 
     private function fetchHtml(string $url): array
     {
-        $response = Http::withHeaders([
-            'User-Agent' => self::SCRAPER_USER_AGENT,
-            'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1',
-        ])
-            ->connectTimeout(5)
-            ->timeout(20)
-            ->retry(2, 300)
-            ->get($url);
-
-        if (!$response->successful()) {
-            throw new \RuntimeException(sprintf('Source fetch failed with HTTP %s.', $response->status()));
-        }
-
-        $contentType = strtolower((string) $response->header('content-type', ''));
-        if ($contentType !== '' && !str_contains($contentType, 'text/html')) {
-            throw new \RuntimeException(sprintf('Source fetch returned unsupported content type: %s.', $contentType));
-        }
-
-        return [
-            'status' => $response->status(),
-            'content_type' => $contentType,
-            'html' => (string) $response->body(),
-        ];
+        return $this->domFetchHtml($url);
     }
 
     private function extractCandidates(ScraperSource $source, string $html, int $maxCandidates): array
@@ -1247,29 +1234,7 @@ class ScraperSourceService
 
     private function queryCss(DOMXPath $xpath, string $selector, ?DOMNode $context = null): array
     {
-        $selector = trim($selector);
-        if ($selector === '') {
-            return [];
-        }
-
-        try {
-            $expr = $this->cssSelectorConverter()->toXPath($selector);
-            $nodeList = $xpath->query($expr, $context);
-            if (!$nodeList) {
-                return [];
-            }
-
-            $nodes = [];
-            foreach ($nodeList as $node) {
-                if ($node instanceof DOMNode) {
-                    $nodes[] = $node;
-                }
-            }
-
-            return $nodes;
-        } catch (\Throwable) {
-            return [];
-        }
+        return $this->domQueryCss($xpath, $selector, $context);
     }
 
     private function selectorText(DOMXPath $xpath, DOMNode $context, ?string $selector): ?string
@@ -1341,22 +1306,12 @@ class ScraperSourceService
 
     private function nodeText(?DOMNode $node): string
     {
-        if (!$node) {
-            return '';
-        }
-
-        $text = trim((string) $node->textContent);
-        $text = preg_replace('/\s+/', ' ', $text) ?? '';
-        return trim($text);
+        return $this->domNodeText($node);
     }
 
     private function extractPhoneFromText(string $text): ?string
     {
-        if (preg_match('/(?:\+?\d[\d\-\s()]{7,}\d)/', $text, $match)) {
-            return $match[0];
-        }
-
-        return null;
+        return $this->domExtractPhoneFromText($text);
     }
 
     private function extractEmailFromText(string $text): ?string
@@ -1383,21 +1338,7 @@ class ScraperSourceService
 
     private function normalizePhone(?string $phone, string $prefix = '254'): ?string
     {
-        if (!$phone) {
-            return null;
-        }
-
-        $normalized = preg_replace('/[^\d+]/', '', $phone);
-        $normalized = ltrim((string) $normalized, '+');
-        if ($normalized === '') {
-            return null;
-        }
-
-        if (str_starts_with($normalized, '0')) {
-            $normalized = $prefix . substr($normalized, 1);
-        }
-
-        return preg_match('/^\d{10,15}$/', $normalized) ? $normalized : null;
+        return $this->domNormalizePhone($phone, $prefix);
     }
 
     private function normalizeEmail(?string $email): ?string
