@@ -515,6 +515,7 @@ export default function PushCampaigns() {
             <UploadModal
                 open={uploadOpen}
                 onClose={() => setUploadOpen(false)}
+                platformOptions={platformOptions}
                 onCreated={() => {
                     queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
                     queryClient.invalidateQueries({ queryKey: ['push-campaigns-dashboard'] });

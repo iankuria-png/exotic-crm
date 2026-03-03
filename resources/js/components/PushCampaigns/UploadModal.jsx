@@ -84,10 +84,14 @@ function formatDateTime(value) {
     }).format(parsed);
 }
 
-export default function UploadModal({ open, onClose, onCreated, onQueueChanged }) {
+export default function UploadModal({ open, onClose, onCreated, onQueueChanged, platformOptions = [] }) {
     const toast = useToast();
+    const [mode, setMode] = useState('file');
     const [file, setFile] = useState(null);
-    const [dryRun, setDryRun] = useState(false);
+    const [dryRun, setDryRun] = useState(true);
+    const [pastePlatformId, setPastePlatformId] = useState('');
+    const [pasteYear, setPasteYear] = useState(new Date().getFullYear());
+    const [pasteContent, setPasteContent] = useState('');
     const [batchId, setBatchId] = useState(null);
     const [statusPayload, setStatusPayload] = useState(null);
     const [selectedDomain, setSelectedDomain] = useState(null);
@@ -137,6 +141,46 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || error?.message || 'Upload failed.');
+        },
+    });
+
+    const pasteUploadMutation = useMutation({
+        onMutate: () => {
+            setBatchId(null);
+            setStatusPayload(null);
+            setSelectedDomain(null);
+        },
+        mutationFn: () => {
+            const platformId = Number(pastePlatformId || 0);
+            const year = Number(pasteYear || new Date().getFullYear());
+            const content = (pasteContent || '').trim();
+
+            if (!platformId) {
+                throw new Error('Select a market before pasting rows.');
+            }
+
+            if (!content) {
+                throw new Error('Paste content is empty. Paste tab-separated rows from Excel first.');
+            }
+
+            return api.post('/crm/push-campaigns/upload/paste', {
+                platform_id: platformId,
+                content,
+                dry_run: dryRun,
+                year,
+            }).then((response) => response.data);
+        },
+        onSuccess: (response) => {
+            setBatchId(response?.batch_id || null);
+            setStatusPayload(response?.status_payload || response || null);
+            if (response?.dry_run) {
+                toast.success('Pasted rows uploaded for dry run. Parsing has started.');
+            } else {
+                toast.success('Pasted rows uploaded. Parsing has started.');
+            }
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || error?.message || 'Paste upload failed.');
         },
     });
 
@@ -212,13 +256,31 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
 
     useEffect(() => {
         if (!open) {
+            setMode('file');
             setFile(null);
-            setDryRun(false);
+            setDryRun(true);
+            setPastePlatformId('');
+            setPasteYear(new Date().getFullYear());
+            setPasteContent('');
             setBatchId(null);
             setStatusPayload(null);
             setSelectedDomain(null);
         }
     }, [open]);
+
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+
+        if (!pastePlatformId && platformOptions.length > 0) {
+            const first = platformOptions[0];
+            const firstId = first?.platform_id || first?.id || '';
+            if (firstId) {
+                setPastePlatformId(String(firstId));
+            }
+        }
+    }, [open, pastePlatformId, platformOptions]);
 
     useEffect(() => {
         if (!open || !batchId) {
@@ -281,9 +343,9 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
     }
 
     const status = statusPayload?.status || null;
-    const showUploadingState = uploadMutation.isPending && !statusPayload;
+    const showUploadingState = (uploadMutation.isPending || pasteUploadMutation.isPending) && !statusPayload;
     const statusBadgeLabel = showUploadingState
-        ? 'Uploading workbook'
+        ? (mode === 'paste' ? 'Uploading pasted rows' : 'Uploading workbook')
         : statusLabel(status, Boolean(statusPayload?.dry_run));
     const canConfirm = Boolean(batchId) && status === 'ready' && !Boolean(statusPayload?.dry_run);
     const fileSizeText = file ? formatBytes(file.size) : 'n/a';
@@ -339,7 +401,7 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
 
     let etaLabel = null;
     if (showUploadingState) {
-        etaLabel = 'Sending file to server...';
+        etaLabel = mode === 'paste' ? 'Submitting pasted rows to server...' : 'Sending file to server...';
     } else if (status === 'queued') {
         if (workerLikelyOffline) {
             etaLabel = 'No active worker detected';
@@ -372,6 +434,7 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
         && Boolean(statusPayload?.dry_run)
         && totalItems > 0
         && !createFromDryRunMutation.isPending;
+    const isSubmittingUpload = uploadMutation.isPending || pasteUploadMutation.isPending;
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
@@ -386,35 +449,119 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged }
 
                 <div className="space-y-4 p-4">
                     <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-                            <input
-                                type="file"
-                                accept=".xlsx,.xls"
-                                onChange={(event) => setFile(event.target.files?.[0] || null)}
-                                className="crm-input"
-                                disabled={uploadMutation.isPending || Boolean(batchId)}
-                            />
+                        <div className="mb-3 inline-flex rounded-lg border border-slate-200 bg-white p-1">
                             <button
                                 type="button"
-                                onClick={() => file && uploadMutation.mutate(file)}
-                                disabled={!file || uploadMutation.isPending || Boolean(batchId)}
-                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={() => setMode('file')}
+                                disabled={Boolean(batchId) || isSubmittingUpload}
+                                className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                                    mode === 'file'
+                                        ? 'bg-teal-600 text-white'
+                                        : 'text-slate-600 hover:bg-slate-100'
+                                } disabled:cursor-not-allowed disabled:opacity-60`}
                             >
-                                {uploadMutation.isPending ? 'Uploading...' : 'Upload workbook'}
+                                Upload file
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setMode('paste')}
+                                disabled={Boolean(batchId) || isSubmittingUpload}
+                                className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                                    mode === 'paste'
+                                        ? 'bg-teal-600 text-white'
+                                        : 'text-slate-600 hover:bg-slate-100'
+                                } disabled:cursor-not-allowed disabled:opacity-60`}
+                            >
+                                Paste from Excel
                             </button>
                         </div>
+
+                        {mode === 'file' ? (
+                            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                                <input
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    onChange={(event) => setFile(event.target.files?.[0] || null)}
+                                    className="crm-input"
+                                    disabled={isSubmittingUpload || Boolean(batchId)}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => file && uploadMutation.mutate(file)}
+                                    disabled={!file || isSubmittingUpload || Boolean(batchId)}
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {uploadMutation.isPending ? 'Uploading...' : 'Upload workbook'}
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                <div className="grid gap-2 md:grid-cols-[1fr_120px_auto]">
+                                    <select
+                                        value={pastePlatformId}
+                                        onChange={(event) => setPastePlatformId(event.target.value)}
+                                        className="crm-select"
+                                        disabled={isSubmittingUpload || Boolean(batchId)}
+                                    >
+                                        <option value="">Select market</option>
+                                        {platformOptions.map((platform) => {
+                                            const id = platform?.platform_id || platform?.id;
+                                            const name = platform?.platform_name || platform?.name || 'Market';
+                                            if (!id) {
+                                                return null;
+                                            }
+
+                                            return (
+                                                <option key={id} value={id}>{name}</option>
+                                            );
+                                        })}
+                                    </select>
+                                    <input
+                                        type="number"
+                                        min="2000"
+                                        max="2100"
+                                        value={pasteYear}
+                                        onChange={(event) => setPasteYear(event.target.value)}
+                                        className="crm-input"
+                                        disabled={isSubmittingUpload || Boolean(batchId)}
+                                        placeholder="Year"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => pasteUploadMutation.mutate()}
+                                        disabled={!pastePlatformId || !(pasteContent || '').trim() || isSubmittingUpload || Boolean(batchId)}
+                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {pasteUploadMutation.isPending ? 'Uploading...' : 'Upload pasted rows'}
+                                    </button>
+                                </div>
+                                <textarea
+                                    value={pasteContent}
+                                    onChange={(event) => setPasteContent(event.target.value)}
+                                    className="crm-input min-h-[140px] font-mono text-xs leading-5"
+                                    disabled={isSubmittingUpload || Boolean(batchId)}
+                                    placeholder={'Date\tProfile URL\tMessage\tTime\n7th January\thttps://example.com/?p=123\tHello\t10:00:00'}
+                                />
+                                <p className="text-xs text-slate-600">
+                                    Paste tab-delimited rows in this order: <span className="font-semibold">Date, Profile URL, Message, Time</span>. Header row is optional.
+                                </p>
+                            </div>
+                        )}
+
                         <label className="mt-2 flex items-center gap-2 text-xs text-slate-700">
                             <input
                                 type="checkbox"
                                 checked={dryRun}
                                 onChange={(event) => setDryRun(event.target.checked)}
-                                disabled={uploadMutation.isPending || Boolean(batchId)}
+                                disabled={isSubmittingUpload || Boolean(batchId)}
                             />
                             Dry run only (validate parsing without creating campaigns)
                         </label>
-                        <p className="mt-2 text-xs text-slate-600">
-                            File size: <span className="font-semibold">{fileSizeText}</span> • server limits: upload <span className="font-semibold">{uploadLimitText}</span>, post <span className="font-semibold">{postLimitText}</span>
-                        </p>
+                        {mode === 'file' ? (
+                            <p className="mt-2 text-xs text-slate-600">
+                                File size: <span className="font-semibold">{fileSizeText}</span> • server limits: upload <span className="font-semibold">{uploadLimitText}</span>, post <span className="font-semibold">{postLimitText}</span>
+                            </p>
+                        ) : null}
                         <p className="mt-1 text-xs text-amber-700">
                             For large workbook imports, increase PHP limits (example: `upload_max_filesize=64M`, `post_max_size=64M`) then restart the app server.
                         </p>
