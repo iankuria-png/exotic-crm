@@ -20,11 +20,13 @@ use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
 
 class CrmPushCampaignTest extends TestCase
@@ -137,6 +139,57 @@ class CrmPushCampaignTest extends TestCase
         Queue::assertPushed(ProcessPushUploadJob::class, function (ProcessPushUploadJob $job): bool {
             return $job->dryRun === true;
         });
+    }
+
+    public function test_small_dry_run_upload_processes_inline_without_queue_delay(): void
+    {
+        $platform = $this->createPlatform('Exotic Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Cache::flush();
+        config()->set('services.push_campaigns.inline_dry_run_max_rows', 50);
+
+        Sanctum::actingAs($user);
+
+        $filePath = storage_path('framework/testing/inline-dry-run-' . Str::uuid() . '.xlsx');
+        @mkdir(dirname($filePath), 0777, true);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('KENYA');
+        $sheet->setCellValue('A1', 'DATE');
+        $sheet->setCellValue('B1', 'PROFILE URL');
+        $sheet->setCellValue('C1', '2026 MESSAGES');
+        $sheet->setCellValue('D1', 'TIME');
+        $sheet->setCellValue('A2', '7th January');
+        $sheet->setCellValue('B2', 'https://kenya.example/escort/a/');
+        $sheet->setCellValue('C2', 'Inline dry run message');
+        $sheet->setCellValue('D2', '10:00:00');
+        (new Xlsx($spreadsheet))->save($filePath);
+        $spreadsheet->disconnectWorksheets();
+
+        $upload = new UploadedFile(
+            $filePath,
+            'Kenya Push 2026.xlsx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            null,
+            true
+        );
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload', [
+            'file' => $upload,
+            'dry_run' => true,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('processed_inline', true)
+            ->assertJsonPath('status_payload.status', 'ready')
+            ->assertJsonPath('status_payload.sheets_parsed', 1)
+            ->assertJsonPath('status_payload.total_items', 1)
+            ->assertJsonPath('status_payload.year', 2026);
+        $this->assertSame(0, DB::table('jobs')->count());
+
+        @unlink($filePath);
     }
 
     public function test_push_upload_limits_endpoint_returns_php_limits(): void

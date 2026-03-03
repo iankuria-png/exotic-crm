@@ -82,6 +82,10 @@ return [
         'from' => env('SENDGRID_FROM', env('MAIL_FROM_ADDRESS')),
     ],
 
+    'push_campaigns' => [
+        'inline_dry_run_max_rows' => (int) env('PUSH_UPLOAD_INLINE_DRY_RUN_MAX_ROWS', 800),
+    ],
+
 
 
 ];

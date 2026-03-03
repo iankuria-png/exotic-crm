@@ -65,7 +65,18 @@ class ProcessPushUploadJob implements ShouldQueue
             ->filter(fn(string $name): bool => $name !== '' && !$profileExtractionService->shouldSkipSheet($name))
             ->values()
             ->all();
+        $sheetCount = count($processableSheetNames);
+        $estimatedRows = collect($worksheetInfo)->reduce(
+            fn(int $carry, array $meta): int => $carry + max(0, ((int) ($meta['totalRows'] ?? 0)) - 1),
+            0
+        );
         $singleSheetUpload = count($processableSheetNames) === 1;
+
+        $uploadBatchStatusService->put($this->batchId, [
+            'sheet_count' => $sheetCount,
+            'estimated_rows' => $estimatedRows,
+            'updated_at' => now()->toDateTimeString(),
+        ]);
 
         $campaignsByPlatform = [];
         $campaignIds = [];
@@ -194,6 +205,7 @@ class ProcessPushUploadJob implements ShouldQueue
                 'source_filename' => $this->sourceFilename,
                 'year' => $year,
                 'sheets_parsed' => $sheetsParsed,
+                'sheet_count' => $sheetCount,
                 'mapped_sheets' => $mappedSheets,
                 'total_items' => $totalItems,
                 'campaign_ids' => array_values($campaignIds),
@@ -211,6 +223,7 @@ class ProcessPushUploadJob implements ShouldQueue
                 'source_filename' => $this->sourceFilename,
                 'year' => $year,
                 'sheets_parsed' => $sheetsParsed,
+                'sheet_count' => $sheetCount,
                 'mapped_sheets' => $mappedSheets,
                 'total_items' => $totalItems,
                 'campaign_ids' => [],
@@ -231,6 +244,7 @@ class ProcessPushUploadJob implements ShouldQueue
                 'source_filename' => $this->sourceFilename,
                 'year' => $year,
                 'sheets_parsed' => $sheetsParsed,
+                'sheet_count' => $sheetCount,
                 'mapped_sheets' => $mappedSheets,
                 'total_items' => $totalItems,
                 'campaign_ids' => [],
@@ -255,6 +269,7 @@ class ProcessPushUploadJob implements ShouldQueue
             'source_filename' => $this->sourceFilename,
             'year' => $year,
             'sheets_parsed' => $sheetsParsed,
+            'sheet_count' => $sheetCount,
             'total_items' => $totalItems,
             'campaign_ids' => array_values($campaignIds),
             'unmapped_sheets' => $unmappedSheets,

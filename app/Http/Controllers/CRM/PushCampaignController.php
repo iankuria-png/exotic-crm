@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class PushCampaignController extends Controller
 {
@@ -132,14 +133,23 @@ class PushCampaignController extends Controller
             'dry_run' => $dryRun,
         ]);
 
+        $processedInline = false;
+
         try {
-            ProcessPushUploadJob::dispatch(
+            $jobPayload = [
                 $batchId,
                 storage_path('app/' . $storedPath),
                 (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
                 (int) $request->user()->id,
                 $dryRun,
-            );
+            ];
+
+            if ($this->shouldProcessInline($file, $dryRun)) {
+                ProcessPushUploadJob::dispatchSync(...$jobPayload);
+                $processedInline = true;
+            } else {
+                ProcessPushUploadJob::dispatch(...$jobPayload);
+            }
         } catch (\Throwable $exception) {
             $this->uploadBatchStatusService->put($batchId, [
                 'batch_id' => $batchId,
@@ -158,10 +168,23 @@ class PushCampaignController extends Controller
             ], 500);
         }
 
+        $statusPayload = $this->uploadBatchStatusService->get($batchId) ?? $initialStatus;
+
+        if ($processedInline) {
+            return response()->json([
+                'batch_id' => $batchId,
+                'status' => (string) ($statusPayload['status'] ?? 'ready'),
+                'dry_run' => $dryRun,
+                'processed_inline' => true,
+                'status_payload' => $statusPayload,
+            ]);
+        }
+
         return response()->json([
             'batch_id' => $batchId,
             'status' => 'processing',
             'dry_run' => $dryRun,
+            'processed_inline' => false,
             'status_payload' => $initialStatus,
         ], 202);
     }
@@ -1142,6 +1165,47 @@ class PushCampaignController extends Controller
     private function batchCacheKey(string $batchId): string
     {
         return 'push_upload:' . $batchId;
+    }
+
+    private function shouldProcessInline(\Illuminate\Http\UploadedFile $file, bool $dryRun): bool
+    {
+        if (!$dryRun) {
+            return false;
+        }
+
+        $maxRows = (int) config('services.push_campaigns.inline_dry_run_max_rows', 800);
+        if ($maxRows <= 0) {
+            return false;
+        }
+
+        $realPath = $file->getRealPath();
+        if (!is_string($realPath) || !is_file($realPath)) {
+            return false;
+        }
+
+        $estimatedRows = $this->estimateWorkbookRows($realPath);
+        if ($estimatedRows === null) {
+            return false;
+        }
+
+        return $estimatedRows <= $maxRows;
+    }
+
+    private function estimateWorkbookRows(string $filePath): ?int
+    {
+        try {
+            $reader = IOFactory::createReaderForFile($filePath);
+            $worksheetInfo = $reader->listWorksheetInfo($filePath);
+            $rows = 0;
+
+            foreach ($worksheetInfo as $sheetMeta) {
+                $rows += max(0, ((int) ($sheetMeta['totalRows'] ?? 0)) - 1);
+            }
+
+            return $rows;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
