@@ -198,7 +198,7 @@ class PushCampaignItemMatchService
     private function buildMatchContext(string $profileUrl): array
     {
         $slug = '';
-        if (preg_match('#/escort/([^/?#]+)#i', $profileUrl, $match)) {
+        if (preg_match('#/escort/([^/?\\#]+)#i', $profileUrl, $match)) {
             $slug = strtolower(trim((string) ($match[1] ?? '')));
         }
 

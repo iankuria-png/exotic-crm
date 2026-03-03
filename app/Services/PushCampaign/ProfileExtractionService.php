@@ -532,11 +532,16 @@ class ProfileExtractionService
             if (preg_match('/HTTP\s+(\d{3})/i', $message, $match)) {
                 $httpStatus = (int) ($match[1] ?? 0);
             }
+            if (!$httpStatus && preg_match('/\b(\d{3})\b/', $message, $match)) {
+                $httpStatus = (int) ($match[1] ?? 0);
+            }
+
+            $isHttp404 = $httpStatus === 404 || str_contains($message, '404');
 
             return [
                 ...$context,
                 'http_status' => $httpStatus,
-                'error_code' => $httpStatus === 404 ? 'http_404' : 'no_post_id',
+                'error_code' => $isHttp404 ? 'http_404' : 'no_post_id',
             ];
         }
     }

@@ -1118,6 +1118,385 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame('Updated unique message', $item->fresh()->custom_message);
     }
 
+    public function test_marketing_user_can_update_campaign_item_core_profile_fields(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Editable core fields',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-edit-item-core',
+            'total_items' => 1,
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/legacy-slug',
+            'custom_message' => 'Old message',
+            'status' => 'failed',
+            'error_message' => 'no_post_id: Could not resolve profile',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->patchJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}", [
+            'profile_url' => 'https://kenya.example/?p=991',
+            'profile_name' => 'Updated Name',
+            'profile_phone' => '254700001111',
+            'profile_image_url' => 'https://kenya.example/images/updated.jpg',
+            'profile_age' => '24',
+            'custom_message' => 'Updated message body',
+            'scheduled_at' => '2026-03-05 10:00:00',
+            'timezone' => 'Africa/Nairobi',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('item.profile_name', 'Updated Name')
+            ->assertJsonPath('item.profile_phone', '254700001111')
+            ->assertJsonPath('item.profile_image_url', 'https://kenya.example/images/updated.jpg')
+            ->assertJsonPath('item.profile_age', '24')
+            ->assertJsonPath('item.custom_message', 'Updated message body')
+            ->assertJsonPath('item.status', 'pending')
+            ->assertJsonPath('item.wp_post_id', 991);
+
+        $fresh = $item->fresh();
+        $this->assertSame('pending', (string) $fresh->status);
+        $this->assertNull($fresh->error_message);
+    }
+
+    public function test_extraction_resolves_wp_post_id_from_link_header_shortlink(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Link header extraction',
+            'platform_id' => $platform->id,
+            'status' => 'processing',
+            'upload_batch_id' => 'batch-link-header',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 624,
+            'name' => 'Samira 8',
+            'phone_normalized' => '254700100624',
+            'main_image_url' => 'https://kenya.example/images/samira.jpg',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/samira-8/',
+            'custom_message' => 'Hello',
+            'status' => 'pending_extraction',
+        ]);
+
+        Http::fake([
+            'https://kenya.example/escort/samira-8/' => Http::response(
+                '<html><head></head><body>ok</body></html>',
+                200,
+                [
+                    'content-type' => 'text/html; charset=utf-8',
+                    'link' => '<https://kenya.example/?p=624>; rel="shortlink"',
+                ]
+            ),
+            'https://wp.kenya.test/*' => Http::response([], 404),
+        ]);
+
+        app(ProfileExtractionService::class)->extractProfileBatch(collect([$item]), $platform);
+
+        $fresh = $item->fresh();
+        $this->assertSame((int) $client->id, (int) $fresh->client_id);
+        $this->assertSame(624, (int) $fresh->wp_post_id);
+        $this->assertSame('pending', (string) $fresh->status);
+        $this->assertNull($fresh->error_message);
+    }
+
+    public function test_extraction_classifies_http_404_as_actionable_failure(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $campaign = PushCampaign::query()->create([
+            'name' => '404 extraction',
+            'platform_id' => $platform->id,
+            'status' => 'processing',
+            'upload_batch_id' => 'batch-404',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/missing-profile/',
+            'custom_message' => 'Hello',
+            'status' => 'pending_extraction',
+        ]);
+
+        Http::fake([
+            'https://kenya.example/escort/missing-profile*' => Http::response('Not found', 404, ['content-type' => 'text/html']),
+            'https://wp.kenya.test/*' => Http::response([], 404),
+        ]);
+
+        app(ProfileExtractionService::class)->extractProfileBatch(collect([$item]), $platform);
+
+        $fresh = $item->fresh();
+        $this->assertSame('failed', (string) $fresh->status);
+        $this->assertStringStartsWith('http_404:', (string) $fresh->error_message);
+    }
+
+    public function test_extraction_marks_ambiguous_auto_match_for_manual_resolution(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        config()->set('services.push_campaigns.auto_match_min_margin', 999);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Ambiguous extraction',
+            'platform_id' => $platform->id,
+            'status' => 'processing',
+            'upload_batch_id' => 'batch-ambiguous',
+        ]);
+
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 8001,
+            'name' => 'Samira 8',
+            'phone_normalized' => '254700000801',
+        ]);
+
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 8002,
+            'name' => 'Samira',
+            'phone_normalized' => '254700000802',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/samira-8/',
+            'custom_message' => 'Hello',
+            'status' => 'pending_extraction',
+        ]);
+
+        Http::fake([
+            'https://kenya.example/escort/samira-8/' => Http::response('<html><head><title>Profile</title></head></html>', 200, ['content-type' => 'text/html']),
+            'https://wp.kenya.test/*' => Http::response([], 404),
+        ]);
+
+        app(ProfileExtractionService::class)->extractProfileBatch(collect([$item]), $platform);
+
+        $fresh = $item->fresh();
+        $this->assertSame('failed', (string) $fresh->status);
+        $this->assertStringStartsWith('ambiguous_match:', (string) $fresh->error_message);
+    }
+
+    public function test_match_candidates_endpoint_returns_paginated_candidates(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Match candidates',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-candidates',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/luna/',
+            'custom_message' => 'Hello',
+            'status' => 'failed',
+        ]);
+
+        foreach (range(1, 12) as $index) {
+            Client::query()->create([
+                'platform_id' => $platform->id,
+                'client_type' => 'escort',
+                'wp_post_id' => 9100 + $index,
+                'name' => 'Luna Candidate ' . $index,
+                'phone_normalized' => '25470030' . str_pad((string) $index, 4, '0', STR_PAD_LEFT),
+                'profile_status' => 'publish',
+            ]);
+        }
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/match-candidates?per_page=10&page=1");
+        $response->assertOk()
+            ->assertJsonStructure([
+                'data',
+                'current_page',
+                'last_page',
+                'per_page',
+                'total',
+                'from',
+                'to',
+            ])
+            ->assertJsonPath('current_page', 1)
+            ->assertJsonPath('per_page', 10)
+            ->assertJsonPath('total', 12)
+            ->assertJsonCount(10, 'data');
+    }
+
+    public function test_match_crm_endpoint_binds_item_and_hydrates_wp_fields(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Match CRM',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-match-crm',
+            'total_items' => 1,
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/luna-old/',
+            'custom_message' => 'Hello',
+            'status' => 'failed',
+            'error_message' => 'redirect_home: URL redirected',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 777,
+            'name' => 'Luna',
+            'phone_normalized' => '254700999777',
+            'main_image_url' => 'https://kenya.example/images/luna.jpg',
+        ]);
+
+        Http::fake([
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/777' => Http::response([
+                'client' => [
+                    'name' => 'Luna',
+                    'phone' => '254711000111',
+                    'main_image_url' => 'https://cdn.kenya.test/luna-fresh.jpg',
+                    'meta' => [
+                        'age' => '25',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/match-crm", [
+            'client_id' => $client->id,
+            'replace_profile_url' => true,
+            'hydrate_wp_details' => true,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('item.client_id', $client->id)
+            ->assertJsonPath('item.status', 'pending')
+            ->assertJsonPath('item.profile_phone', '254711000111')
+            ->assertJsonPath('item.profile_image_url', 'https://cdn.kenya.test/luna-fresh.jpg')
+            ->assertJsonPath('item.profile_age', '25')
+            ->assertJsonPath('item.error_message', null);
+    }
+
+    public function test_remove_item_endpoint_soft_skips_item_and_updates_totals(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Remove item campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-remove-item',
+            'total_items' => 2,
+        ]);
+
+        $itemA = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/a/',
+            'custom_message' => 'A',
+            'status' => 'pending',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/b/',
+            'custom_message' => 'B',
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->deleteJson("/api/crm/push-campaigns/{$campaign->id}/items/{$itemA->id}");
+        $response->assertOk()
+            ->assertJsonPath('item.status', 'skipped');
+
+        $this->assertSame('skipped', (string) $itemA->fresh()->status);
+        $this->assertSame(1, (int) $campaign->fresh()->total_items);
+    }
+
+    public function test_sent_item_cannot_be_edited_matched_or_removed(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Immutable sent item',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-sent-item',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/sent/',
+            'custom_message' => 'Sent already',
+            'status' => 'sent',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->patchJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}", [
+            'custom_message' => 'New message',
+        ])->assertStatus(422);
+
+        $this->postJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/match-crm", [
+            'client_id' => 999999,
+        ])->assertStatus(422);
+
+        $this->deleteJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}")
+            ->assertStatus(422);
+    }
+
     public function test_sync_subscribers_returns_diagnostics_for_single_market_when_provider_fails(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
