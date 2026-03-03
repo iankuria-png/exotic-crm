@@ -18,6 +18,7 @@ use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
+use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
 
@@ -39,6 +40,31 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Dashboard
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
     Route::get('/products', [CrmDashboardController::class, 'products']);
+
+    // Push Campaigns (static routes before dynamic route-model binding segments)
+    Route::middleware('role:marketing,admin,sub_admin')->prefix('push-campaigns')->group(function () {
+        Route::get('/', [PushCampaignController::class, 'index']);
+        Route::post('/', [PushCampaignController::class, 'store']);
+
+        // Static routes
+        Route::post('/upload', [PushCampaignController::class, 'upload']);
+        Route::get('/upload/{batchId}/status', [PushCampaignController::class, 'uploadStatus']);
+        Route::get('/dashboard', [PushCampaignController::class, 'dashboard']);
+        Route::get('/subscribers', [PushCampaignController::class, 'subscribers']);
+        Route::post('/subscribers/sync', [PushCampaignController::class, 'syncSubscribers']);
+        Route::get('/presets', [PushCampaignController::class, 'listPresets']);
+        Route::post('/presets', [PushCampaignController::class, 'storePreset']);
+        Route::post('/presets/detect', [PushCampaignController::class, 'detectPreset']);
+        Route::post('/presets/{preset}/test', [PushCampaignController::class, 'testPreset']);
+        Route::patch('/presets/{preset}', [PushCampaignController::class, 'updatePreset'])->middleware('role:admin,sub_admin');
+
+        // Dynamic routes
+        Route::get('/{pushCampaign}', [PushCampaignController::class, 'show']);
+        Route::post('/{pushCampaign}/execute', [PushCampaignController::class, 'execute']);
+        Route::post('/{pushCampaign}/schedule', [PushCampaignController::class, 'schedule']);
+        Route::get('/{pushCampaign}/analytics', [PushCampaignController::class, 'analytics']);
+        Route::delete('/{pushCampaign}', [PushCampaignController::class, 'destroy']);
+    });
 
     // Clients (marketing role has read-only access)
     Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,marketing');
@@ -126,6 +152,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
+    Route::get('/settings/integrations/push-provider', [SettingsController::class, 'pushProviderConfig']);
+    Route::patch('/settings/integrations/push-provider', [SettingsController::class, 'updatePushProvider'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/push-provider/test', [SettingsController::class, 'testPushProvider'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/sms-provider', [SettingsController::class, 'updateSmsProvider'])->middleware('role:admin');
     Route::post('/settings/integrations/sms-provider/test', [SettingsController::class, 'testSmsProvider'])->middleware('role:admin');
     Route::post('/settings/integrations/platforms', [SettingsController::class, 'storeIntegrationPlatform'])->middleware('role:admin');

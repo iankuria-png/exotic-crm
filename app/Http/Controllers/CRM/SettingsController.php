@@ -16,6 +16,7 @@ use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
+use App\Services\PushNotification\PushProviderService;
 use App\Services\ScraperSourceService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
@@ -34,6 +35,7 @@ class SettingsController extends Controller
         private readonly AuditService $auditService,
         private readonly LeadImportService $leadImportService,
         private readonly NotificationService $notificationService,
+        private readonly PushProviderService $pushProviderService,
         private readonly ScraperSourceService $scraperSourceService
     ) {
     }
@@ -53,6 +55,10 @@ class SettingsController extends Controller
             ->values();
 
         $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
+        $pushProvider = $this->scopePushConfigForUser(
+            $this->pushProviderService->currentPushConfig(masked: true),
+            $request->user()
+        );
         $activeProvider = (string) ($smsProvider['active_provider'] ?? 'legacy_gateway');
         $activeConfigured = match ($activeProvider) {
             'africastalking' => (bool) ($smsProvider['africastalking']['username'] ?? null)
@@ -99,6 +105,7 @@ class SettingsController extends Controller
                     'active_provider' => $activeProvider,
                 ],
                 'sms_provider' => $smsProvider,
+                'push_provider' => $pushProvider,
                 'kopokopo' => [
                     'status' => config('services.kopokopo.client_id') && config('services.kopokopo.client_secret')
                         ? 'connected'
@@ -218,6 +225,163 @@ class SettingsController extends Controller
                 'status' => $result['status'] ?? null,
             ],
             $validated['reason'] ?? 'SMS provider test dispatch'
+        );
+
+        return response()->json([
+            'result' => $result,
+        ], ($result['success'] ?? false) ? 200 : 422);
+    }
+
+    public function pushProviderConfig(Request $request)
+    {
+        $config = $this->pushProviderService->currentPushConfig(masked: true);
+
+        return response()->json([
+            'push_provider' => $this->scopePushConfigForUser($config, $request->user()),
+        ]);
+    }
+
+    public function updatePushProvider(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can update push provider settings.'
+        );
+
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+            'default_provider' => 'required|in:webpushr,wonderpush,izooto',
+            'platforms' => 'nullable|array',
+            'platforms.*.active_provider' => 'nullable|in:webpushr,wonderpush,izooto',
+            'platforms.*.fallback_provider' => 'nullable|in:none,webpushr,wonderpush,izooto',
+            'platforms.*.webpushr' => 'nullable|array',
+            'platforms.*.webpushr.api_key' => 'nullable|string|max:255',
+            'platforms.*.webpushr.auth_token' => 'nullable|string|max:255',
+            'platforms.*.wonderpush' => 'nullable|array',
+            'platforms.*.wonderpush.access_token' => 'nullable|string|max:255',
+            'platforms.*.wonderpush.project_id' => 'nullable|string|max:255',
+            'platforms.*.izooto' => 'nullable|array',
+            'platforms.*.izooto.api_token' => 'nullable|string|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $incomingPlatforms = is_array($validated['platforms'] ?? null)
+            ? $validated['platforms']
+            : [];
+
+        $platformIds = [];
+        foreach ($incomingPlatforms as $platformId => $platformConfig) {
+            if (!is_numeric((string) $platformId)) {
+                return response()->json([
+                    'message' => 'platforms must be keyed by platform id.',
+                ], 422);
+            }
+
+            $numericPlatformId = (int) $platformId;
+            if ($numericPlatformId <= 0) {
+                return response()->json([
+                    'message' => 'platforms must be keyed by valid platform ids greater than zero.',
+                ], 422);
+            }
+
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                $numericPlatformId,
+                'You do not have access to one or more selected markets.'
+            );
+
+            if (!is_array($platformConfig)) {
+                return response()->json([
+                    'message' => 'Each platforms entry must be an object.',
+                ], 422);
+            }
+
+            $activeProvider = (string) ($platformConfig['active_provider'] ?? '');
+            $fallbackProvider = (string) ($platformConfig['fallback_provider'] ?? 'none');
+
+            if ($activeProvider !== '' && $fallbackProvider !== 'none' && $activeProvider === $fallbackProvider) {
+                return response()->json([
+                    'message' => "Fallback provider must be different from active provider for platform {$numericPlatformId}.",
+                ], 422);
+            }
+
+            $platformIds[] = $numericPlatformId;
+        }
+
+        $before = $this->scopePushConfigForUser(
+            $this->pushProviderService->currentPushConfig(masked: true),
+            $request->user()
+        );
+        $saved = $this->scopePushConfigForUser(
+            $this->pushProviderService->savePushConfig($validated, (int) $request->user()->id),
+            $request->user()
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId($platformIds) ?? 1,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'integration_setting',
+            2,
+            $before,
+            $saved,
+            $validated['reason'] ?? 'Updated push provider routing settings'
+        );
+
+        return response()->json([
+            'push_provider' => $saved,
+        ]);
+    }
+
+    public function testPushProvider(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can run push provider tests.'
+        );
+
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'title' => 'required|string|max:100',
+            'message' => 'required|string|max:255',
+            'target_url' => 'required|url|max:500',
+            'icon_url' => 'nullable|url|max:500',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this market.'
+        );
+
+        $result = $this->pushProviderService->sendPush([
+            'title' => (string) $validated['title'],
+            'message' => (string) $validated['message'],
+            'target_url' => (string) $validated['target_url'],
+            'icon_url' => $validated['icon_url'] ?? null,
+            'campaign_name' => 'CRM Push Provider Test',
+            'schedule_at' => now()->toIso8601String(),
+        ], [
+            'platform_id' => $platformId,
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            $platformId,
+            CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+            'integration_setting',
+            2,
+            null,
+            [
+                'provider' => $result['provider'] ?? null,
+                'success' => (bool) ($result['success'] ?? false),
+                'provider_notification_id' => $result['provider_notification_id'] ?? null,
+            ],
+            $validated['reason'] ?? 'Push provider test dispatch'
         );
 
         return response()->json([
@@ -2344,6 +2508,38 @@ class SettingsController extends Controller
                 'suggested_action' => 'No immediate action required.',
             ],
         ];
+    }
+
+    private function scopePushConfigForUser(array $config, User $user): array
+    {
+        if ($user->role === MarketAuthorizationService::ROLE_ADMIN) {
+            return $config;
+        }
+
+        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($user);
+        if (!is_array($allowedPlatformIds)) {
+            return $config;
+        }
+
+        $platforms = is_array($config['platforms'] ?? null)
+            ? $config['platforms']
+            : [];
+
+        $scopedPlatforms = [];
+        foreach ($platforms as $platformId => $platformConfig) {
+            $numericPlatformId = (int) $platformId;
+            if ($numericPlatformId <= 0) {
+                continue;
+            }
+
+            if (in_array($numericPlatformId, $allowedPlatformIds, true)) {
+                $scopedPlatforms[(string) $numericPlatformId] = is_array($platformConfig) ? $platformConfig : [];
+            }
+        }
+
+        $config['platforms'] = $scopedPlatforms;
+
+        return $config;
     }
 
     private function resolveAuditPlatformId(array $assignedMarketIds): ?int
