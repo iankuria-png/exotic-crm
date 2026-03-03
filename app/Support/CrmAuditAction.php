@@ -47,4 +47,9 @@ final class CrmAuditAction
     public const CLIENT_CREDENTIAL_SEND = 'client_credential_send';
     public const CLIENT_CREDENTIAL_RETRY = 'client_credential_retry';
     public const LEAD_RECONCILE = 'lead_reconcile';
+    public const PUSH_CAMPAIGN_CREATE = 'push_campaign_create';
+    public const PUSH_CAMPAIGN_EXECUTE = 'push_campaign_execute';
+    public const PUSH_CAMPAIGN_SCHEDULE = 'push_campaign_schedule';
+    public const PUSH_NOTIFICATION_SENT = 'push_notification_sent';
+    public const PUSH_NOTIFICATION_FAILED = 'push_notification_failed';
 }
