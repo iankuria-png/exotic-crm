@@ -83,7 +83,7 @@ return [
     ],
 
     'push_campaigns' => [
-        'inline_dry_run_max_rows' => (int) env('PUSH_UPLOAD_INLINE_DRY_RUN_MAX_ROWS', 800),
+        'inline_dry_run_max_rows' => env('PUSH_UPLOAD_INLINE_DRY_RUN_MAX_ROWS'),
     ],
 
 

@@ -1173,7 +1173,9 @@ class PushCampaignController extends Controller
             return false;
         }
 
-        $maxRows = (int) config('services.push_campaigns.inline_dry_run_max_rows', 800);
+        $defaultLocalRows = app()->environment('local') ? 30000 : 800;
+        $configuredMaxRows = config('services.push_campaigns.inline_dry_run_max_rows');
+        $maxRows = is_numeric($configuredMaxRows) ? (int) $configuredMaxRows : $defaultLocalRows;
         if ($maxRows <= 0) {
             return false;
         }
@@ -1188,7 +1190,7 @@ class PushCampaignController extends Controller
             return false;
         }
 
-        return $estimatedRows <= $maxRows;
+        return $estimatedRows > 0 && $estimatedRows <= $maxRows;
     }
 
     private function estimateWorkbookRows(string $filePath): ?int

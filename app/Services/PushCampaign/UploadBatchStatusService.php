@@ -3,6 +3,7 @@
 namespace App\Services\PushCampaign;
 
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class UploadBatchStatusService
 {
@@ -41,6 +42,7 @@ class UploadBatchStatusService
      *     position:int|null,
      *     active_count:int,
      *     wait_seconds:int|null,
+     *     health:array<string, mixed>|null,
      *     recent:array<int, array<string, mixed>>
      * }
      */
@@ -70,11 +72,14 @@ class UploadBatchStatusService
             }
         }
 
+        $health = $this->resolveQueueHealth($focus, $waitSeconds);
+
         return [
             'ahead_count' => $position ? max(0, $position - 1) : 0,
             'position' => $position,
             'active_count' => count($active),
             'wait_seconds' => $waitSeconds,
+            'health' => $health,
             'recent' => array_slice($recent, 0, max(1, $limit)),
         ];
     }
@@ -149,5 +154,47 @@ class UploadBatchStatusService
         array_unshift($next, $batchId);
 
         Cache::put(self::INDEX_KEY, array_slice($next, 0, self::INDEX_LIMIT), now()->addHours($ttlHours));
+    }
+
+    /**
+     * @param array<string, mixed>|null $focus
+     * @return array<string, mixed>|null
+     */
+    private function resolveQueueHealth(?array $focus, ?int $waitSeconds): ?array
+    {
+        if (config('queue.default') !== 'database') {
+            return null;
+        }
+
+        try {
+            $pendingJobs = (int) DB::table('jobs')->where('queue', 'default')->count();
+            $reservedJobs = (int) DB::table('jobs')
+                ->where('queue', 'default')
+                ->whereNotNull('reserved_at')
+                ->count();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!is_array($focus) || ($focus['status'] ?? null) !== 'queued') {
+            return [
+                'pending_jobs' => $pendingJobs,
+                'reserved_jobs' => $reservedJobs,
+                'worker_detected' => $reservedJobs > 0,
+            ];
+        }
+
+        $workerDetected = $reservedJobs > 0;
+        $workerLikelyOffline = !$workerDetected && $pendingJobs > 0 && ($waitSeconds ?? 0) >= 90;
+
+        return [
+            'pending_jobs' => $pendingJobs,
+            'reserved_jobs' => $reservedJobs,
+            'worker_detected' => $workerDetected,
+            'worker_likely_offline' => $workerLikelyOffline,
+            'message' => $workerLikelyOffline
+                ? 'No active queue worker detected. Start `php artisan queue:work` (or Horizon) to process uploads.'
+                : null,
+        ];
     }
 }

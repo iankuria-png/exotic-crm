@@ -20,6 +20,7 @@ class ProcessPushUploadJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     private const ROW_CHUNK_SIZE = 500;
+    private const DRY_RUN_ROW_CHUNK_SIZE = 2000;
 
     public int $timeout = 600;
 
@@ -111,9 +112,10 @@ class ProcessPushUploadJob implements ShouldQueue
             $highestRow = max(2, $highestRow);
             $sheetItemCount = 0;
             $carriedDateLabel = null;
+            $rowChunkSize = $this->dryRun ? self::DRY_RUN_ROW_CHUNK_SIZE : self::ROW_CHUNK_SIZE;
 
-            for ($startRow = 2; $startRow <= $highestRow; $startRow += self::ROW_CHUNK_SIZE) {
-                $chunkSize = min(self::ROW_CHUNK_SIZE, $highestRow - $startRow + 1);
+            for ($startRow = 2; $startRow <= $highestRow; $startRow += $rowChunkSize) {
+                $chunkSize = min($rowChunkSize, $highestRow - $startRow + 1);
                 $endRow = $startRow + $chunkSize - 1;
 
                 $reader->setLoadSheetsOnly($sheetName);

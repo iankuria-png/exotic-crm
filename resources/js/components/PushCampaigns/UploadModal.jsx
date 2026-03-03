@@ -256,6 +256,8 @@ export default function UploadModal({ open, onClose, onCreated }) {
     const queueAhead = Number(queue?.ahead_count || 0);
     const queuePosition = Number(queue?.position || 0) || null;
     const queueRecent = Array.isArray(queue?.recent) ? queue.recent : [];
+    const queueHealth = queue?.health || null;
+    const workerLikelyOffline = Boolean(queueHealth?.worker_likely_offline);
     const sheetCount = Number(statusPayload?.sheet_count || 0);
 
     let progressPercent = 0;
@@ -282,9 +284,13 @@ export default function UploadModal({ open, onClose, onCreated }) {
 
     let etaLabel = null;
     if (status === 'queued') {
-        etaLabel = queueAhead > 0
-            ? `${queueAhead} upload${queueAhead === 1 ? '' : 's'} ahead`
-            : 'Waiting for worker pickup';
+        if (workerLikelyOffline) {
+            etaLabel = 'No active worker detected';
+        } else {
+            etaLabel = queueAhead > 0
+                ? `${queueAhead} upload${queueAhead === 1 ? '' : 's'} ahead`
+                : 'Waiting for worker pickup';
+        }
     } else if (status === 'extracting' && elapsedSeconds !== null && profilesProcessed > 0 && totalItems > profilesProcessed) {
         const itemsPerSecond = profilesProcessed / Math.max(1, elapsedSeconds);
         const remainingItems = totalItems - profilesProcessed;
@@ -427,6 +433,12 @@ export default function UploadModal({ open, onClose, onCreated }) {
                             {(statusPayload?.unmapped_sheets || []).length > 0 ? (
                                 <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
                                     Unmapped sheets: {(statusPayload.unmapped_sheets || []).join(', ')}
+                                </p>
+                            ) : null}
+
+                            {workerLikelyOffline ? (
+                                <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-800">
+                                    Queue worker appears offline. Start a worker (`php artisan queue:work`) to process uploads.
                                 </p>
                             ) : null}
 
