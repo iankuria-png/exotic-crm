@@ -40,87 +40,89 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
     Route::get('/products', [CrmDashboardController::class, 'products']);
 
-    // Clients
-    Route::get('/clients', [ClientController::class, 'index']);
-    Route::post('/clients', [ClientController::class, 'store']);
-    Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv']);
-    Route::get('/clients/{client}', [ClientController::class, 'show']);
-    Route::patch('/clients/{client}', [ClientController::class, 'update']);
-    Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline']);
-    Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote']);
-    Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne']);
-    Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile']);
-    Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile']);
-    Route::get('/clients/{client}/media', [ClientController::class, 'media']);
-    Route::post('/clients/{client}/media', [ClientController::class, 'uploadMedia']);
-    Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia']);
-    Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia']);
-    Route::get('/clients/{client}/health', [ClientController::class, 'health']);
-    Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth']);
-    Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches']);
-    Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials']);
-    Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch']);
+    // Clients (marketing role has read-only access)
+    Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::post('/clients/{client}/media', [ClientController::class, 'uploadMedia'])->middleware('role:admin,sub_admin,sales');
+    Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia'])->middleware('role:admin,sub_admin,sales');
+    Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/health', [ClientController::class, 'health'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch'])->middleware('role:admin,sub_admin,sales');
 
-    // Deals
-    Route::get('/deals', [DealController::class, 'index']);
-    Route::post('/deals', [DealController::class, 'store']);
-    Route::get('/deals/{deal}', [DealController::class, 'show']);
-    Route::patch('/deals/{deal}', [DealController::class, 'update']);
-    Route::delete('/deals/{deal}', [DealController::class, 'destroy']);
-    Route::post('/deals/{deal}/activate', [DealController::class, 'activate']);
-    Route::post('/deals/{deal}/deactivate', [DealController::class, 'deactivate']);
-    Route::post('/deals/{deal}/extend', [DealController::class, 'extend']);
-    Route::post('/deals/{deal}/renew', [DealController::class, 'renew']);
+    Route::middleware('role:admin,sub_admin,sales')->group(function () {
+        // Deals
+        Route::get('/deals', [DealController::class, 'index']);
+        Route::post('/deals', [DealController::class, 'store']);
+        Route::get('/deals/{deal}', [DealController::class, 'show']);
+        Route::patch('/deals/{deal}', [DealController::class, 'update']);
+        Route::delete('/deals/{deal}', [DealController::class, 'destroy']);
+        Route::post('/deals/{deal}/activate', [DealController::class, 'activate']);
+        Route::post('/deals/{deal}/deactivate', [DealController::class, 'deactivate']);
+        Route::post('/deals/{deal}/extend', [DealController::class, 'extend']);
+        Route::post('/deals/{deal}/renew', [DealController::class, 'renew']);
 
-    // Leads
-    Route::get('/leads', [LeadController::class, 'index']);
-    Route::post('/leads', [LeadController::class, 'store']);
-    Route::post('/leads/scrape-entry', [LeadController::class, 'scrapeEntry']);
-    Route::post('/leads/scraper/preview', [LeadController::class, 'scrapePreview']);
-    Route::post('/leads/scraper/preview/{previewId}/commit', [LeadController::class, 'commitScrapePreview']);
-    Route::delete('/leads/scraper/preview/{previewId}', [LeadController::class, 'dismissScrapePreview']);
-    Route::post('/leads/upload-csv', [LeadController::class, 'uploadCsv']);
-    Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
-    Route::post('/leads/import', [LeadController::class, 'import']);
-    Route::get('/leads/{lead}', [LeadController::class, 'show']);
-    Route::patch('/leads/{lead}/archive', [LeadController::class, 'archive']);
-    Route::delete('/leads/{lead}', [LeadController::class, 'destroy']);
-    Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
-    Route::patch('/leads/{lead}/assign', [LeadController::class, 'assign']);
-    Route::post('/leads/reconcile', [LeadController::class, 'batchReconcile']);
-    Route::post('/leads/{lead}/reconcile', [LeadController::class, 'reconcile']);
+        // Leads
+        Route::get('/leads', [LeadController::class, 'index']);
+        Route::post('/leads', [LeadController::class, 'store']);
+        Route::post('/leads/scrape-entry', [LeadController::class, 'scrapeEntry']);
+        Route::post('/leads/scraper/preview', [LeadController::class, 'scrapePreview']);
+        Route::post('/leads/scraper/preview/{previewId}/commit', [LeadController::class, 'commitScrapePreview']);
+        Route::delete('/leads/scraper/preview/{previewId}', [LeadController::class, 'dismissScrapePreview']);
+        Route::post('/leads/upload-csv', [LeadController::class, 'uploadCsv']);
+        Route::get('/leads/pipeline', [LeadController::class, 'pipeline']);
+        Route::post('/leads/import', [LeadController::class, 'import']);
+        Route::get('/leads/{lead}', [LeadController::class, 'show']);
+        Route::patch('/leads/{lead}/archive', [LeadController::class, 'archive']);
+        Route::delete('/leads/{lead}', [LeadController::class, 'destroy']);
+        Route::patch('/leads/{lead}/status', [LeadController::class, 'updateStatus']);
+        Route::patch('/leads/{lead}/assign', [LeadController::class, 'assign']);
+        Route::post('/leads/reconcile', [LeadController::class, 'batchReconcile']);
+        Route::post('/leads/{lead}/reconcile', [LeadController::class, 'reconcile']);
 
-    // Conversations
-    Route::post('/conversations/clients/{client}/send', [ConversationController::class, 'send']);
+        // Conversations
+        Route::post('/conversations/clients/{client}/send', [ConversationController::class, 'send']);
 
-    // Renewals
-    Route::get('/renewals', [RenewalController::class, 'overview']);
-    Route::get('/renewals/runs', [RenewalController::class, 'runs']);
-    Route::post('/renewals/run', [RenewalController::class, 'run']);
-    Route::post('/renewals/remind', [RenewalController::class, 'remind']);
-    Route::post('/renewals/bulk-remind', [RenewalController::class, 'bulkRemind']);
-    Route::post('/renewals/pause', [RenewalController::class, 'pause']);
-    Route::post('/renewals/resume', [RenewalController::class, 'resume']);
+        // Renewals
+        Route::get('/renewals', [RenewalController::class, 'overview']);
+        Route::get('/renewals/runs', [RenewalController::class, 'runs']);
+        Route::post('/renewals/run', [RenewalController::class, 'run']);
+        Route::post('/renewals/remind', [RenewalController::class, 'remind']);
+        Route::post('/renewals/bulk-remind', [RenewalController::class, 'bulkRemind']);
+        Route::post('/renewals/pause', [RenewalController::class, 'pause']);
+        Route::post('/renewals/resume', [RenewalController::class, 'resume']);
 
-    // Reports
-    Route::get('/reports/summary', [ReportController::class, 'summary']);
+        // Reports
+        Route::get('/reports/summary', [ReportController::class, 'summary']);
 
-    // Payments
-    Route::get('/payments', [PaymentQueueController::class, 'index']);
-    Route::post('/payments/import/preview', [PaymentQueueController::class, 'importPreview']);
-    Route::post('/payments/import/commit', [PaymentQueueController::class, 'importCommit']);
-    Route::get('/payments/import/template', [PaymentQueueController::class, 'importTemplate']);
-    Route::get('/payments/import/kpis', [PaymentQueueController::class, 'importKpis']);
-    Route::get('/payments/{payment}/diagnostics', [PaymentQueueController::class, 'diagnostics']);
-    Route::get('/payments/{payment}/candidates', [PaymentQueueController::class, 'candidates']);
-    Route::post('/payments/{payment}/auto-match', [PaymentQueueController::class, 'autoMatch']);
-    Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);
-    Route::post('/payments/{payment}/retry-stk', [PaymentQueueController::class, 'retryStk']);
-    Route::post('/payments/{payment}/send-payment-link', [PaymentQueueController::class, 'sendPaymentLink']);
-    Route::post('/payments/{payment}/manual-close', [PaymentQueueController::class, 'manualClose']);
-    Route::post('/payments/{payment}/review-state', [PaymentQueueController::class, 'updateReviewState']);
-    Route::post('/payments/{payment}/create-subscription', [PaymentQueueController::class, 'createSubscription']);
-    Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
+        // Payments
+        Route::get('/payments', [PaymentQueueController::class, 'index']);
+        Route::post('/payments/import/preview', [PaymentQueueController::class, 'importPreview']);
+        Route::post('/payments/import/commit', [PaymentQueueController::class, 'importCommit']);
+        Route::get('/payments/import/template', [PaymentQueueController::class, 'importTemplate']);
+        Route::get('/payments/import/kpis', [PaymentQueueController::class, 'importKpis']);
+        Route::get('/payments/{payment}/diagnostics', [PaymentQueueController::class, 'diagnostics']);
+        Route::get('/payments/{payment}/candidates', [PaymentQueueController::class, 'candidates']);
+        Route::post('/payments/{payment}/auto-match', [PaymentQueueController::class, 'autoMatch']);
+        Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);
+        Route::post('/payments/{payment}/retry-stk', [PaymentQueueController::class, 'retryStk']);
+        Route::post('/payments/{payment}/send-payment-link', [PaymentQueueController::class, 'sendPaymentLink']);
+        Route::post('/payments/{payment}/manual-close', [PaymentQueueController::class, 'manualClose']);
+        Route::post('/payments/{payment}/review-state', [PaymentQueueController::class, 'updateReviewState']);
+        Route::post('/payments/{payment}/create-subscription', [PaymentQueueController::class, 'createSubscription']);
+        Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
+    });
 
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
