@@ -138,6 +138,24 @@ class CrmPushCampaignTest extends TestCase
         });
     }
 
+    public function test_push_upload_limits_endpoint_returns_php_limits(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns/upload/limits');
+
+        $response->assertOk();
+        $response->assertJsonStructure([
+            'upload_max_filesize',
+            'post_max_size',
+            'upload_max_bytes',
+            'post_max_bytes',
+        ]);
+    }
+
     public function test_dashboard_route_is_not_captured_by_wildcard_model_binding(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
@@ -447,6 +465,38 @@ class CrmPushCampaignTest extends TestCase
             $items->pluck('profile_url')->all()
         );
         $this->assertSame('2026-01-07 07:00:00', optional($items->first()->scheduled_at)->setTimezone('UTC')->format('Y-m-d H:i:s'));
+    }
+
+    public function test_marketing_user_can_update_campaign_item_message(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Editable campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-edit-item',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/a',
+            'custom_message' => 'Old message',
+            'scheduled_at' => now()->addHour(),
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->patchJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}", [
+            'custom_message' => 'Updated unique message',
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath('item.custom_message', 'Updated unique message');
+        $this->assertSame('Updated unique message', $item->fresh()->custom_message);
     }
 
     public function test_sync_subscribers_returns_diagnostics_for_single_market_when_provider_fails(): void

@@ -161,6 +161,19 @@ class PushCampaignController extends Controller
         ], 202);
     }
 
+    public function uploadLimits(): \Illuminate\Http\JsonResponse
+    {
+        $uploadMax = (string) ini_get('upload_max_filesize');
+        $postMax = (string) ini_get('post_max_size');
+
+        return response()->json([
+            'upload_max_filesize' => $uploadMax,
+            'post_max_size' => $postMax,
+            'upload_max_bytes' => $this->iniSizeToBytes($uploadMax),
+            'post_max_bytes' => $this->iniSizeToBytes($postMax),
+        ]);
+    }
+
     public function uploadStatus(Request $request, string $batchId)
     {
         $status = Cache::get($this->batchCacheKey($batchId));
@@ -511,6 +524,60 @@ class PushCampaignController extends Controller
         return response()->json([
             'campaign' => $pushCampaign,
             'items' => $items,
+        ]);
+    }
+
+    public function updateItem(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+
+        if ((int) $pushCampaignItem->campaign_id !== (int) $pushCampaign->id) {
+            return response()->json([
+                'message' => 'Campaign item does not belong to this campaign.',
+            ], 422);
+        }
+
+        if ((string) $pushCampaignItem->status === 'sent') {
+            return response()->json([
+                'message' => 'Sent items cannot be edited.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'custom_message' => 'sometimes|required|string|max:255',
+            'scheduled_at' => 'sometimes|nullable|date',
+            'timezone' => 'nullable|string|max:64',
+        ]);
+
+        if (!array_key_exists('custom_message', $validated) && !array_key_exists('scheduled_at', $validated)) {
+            return response()->json([
+                'message' => 'No editable fields were provided.',
+            ], 422);
+        }
+
+        $payload = [];
+
+        if (array_key_exists('custom_message', $validated)) {
+            $payload['custom_message'] = trim((string) $validated['custom_message']);
+        }
+
+        if (array_key_exists('scheduled_at', $validated)) {
+            $timezone = trim((string) ($validated['timezone'] ?? config('app.timezone', 'UTC')));
+            $scheduledAt = $validated['scheduled_at']
+                ? Carbon::parse((string) $validated['scheduled_at'], $timezone)->utc()
+                : null;
+
+            $payload['scheduled_at'] = $scheduledAt?->toDateTimeString();
+            $payload['date_label'] = $scheduledAt
+                ? $scheduledAt->copy()->setTimezone($timezone)->toDateString()
+                : null;
+        }
+
+        $pushCampaignItem->forceFill($payload)->save();
+
+        return response()->json([
+            'item' => $pushCampaignItem->fresh(),
+            'message' => 'Campaign item updated.',
         ]);
     }
 
@@ -1227,5 +1294,30 @@ class PushCampaignController extends Controller
         }
 
         return 'The workbook failed to upload. Please retry.';
+    }
+
+    private function iniSizeToBytes(string $value): int
+    {
+        $normalized = trim(strtolower($value));
+        if ($normalized === '') {
+            return 0;
+        }
+
+        $number = (float) $normalized;
+        $unit = substr($normalized, -1);
+
+        if ($unit === 'g') {
+            return (int) ($number * 1024 * 1024 * 1024);
+        }
+
+        if ($unit === 'm') {
+            return (int) ($number * 1024 * 1024);
+        }
+
+        if ($unit === 'k') {
+            return (int) ($number * 1024);
+        }
+
+        return (int) $number;
     }
 }

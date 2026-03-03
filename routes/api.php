@@ -48,6 +48,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
         // Static routes
         Route::post('/upload', [PushCampaignController::class, 'upload']);
+        Route::get('/upload/limits', [PushCampaignController::class, 'uploadLimits']);
         Route::get('/upload/{batchId}/status', [PushCampaignController::class, 'uploadStatus']);
         Route::get('/crm-profiles', [PushCampaignController::class, 'crmProfiles']);
         Route::post('/from-crm', [PushCampaignController::class, 'storeFromCrm']);
@@ -61,6 +62,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::patch('/presets/{preset}', [PushCampaignController::class, 'updatePreset'])->middleware('role:admin,sub_admin');
 
         // Dynamic routes
+        Route::patch('/{pushCampaign}/items/{pushCampaignItem}', [PushCampaignController::class, 'updateItem']);
         Route::get('/{pushCampaign}', [PushCampaignController::class, 'show']);
         Route::post('/{pushCampaign}/execute', [PushCampaignController::class, 'execute']);
         Route::post('/{pushCampaign}/schedule', [PushCampaignController::class, 'schedule']);

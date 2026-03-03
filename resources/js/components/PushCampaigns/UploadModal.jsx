@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import PresetWizard from './PresetWizard';
@@ -23,6 +23,24 @@ function statusLabel(status, dryRun = false) {
     return 'Processing';
 }
 
+function formatBytes(bytes) {
+    if (!Number.isFinite(Number(bytes)) || Number(bytes) <= 0) {
+        return 'n/a';
+    }
+
+    const value = Number(bytes);
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = value;
+    let unitIndex = 0;
+
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex += 1;
+    }
+
+    return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
 export default function UploadModal({ open, onClose, onCreated }) {
     const toast = useToast();
     const [file, setFile] = useState(null);
@@ -31,8 +49,27 @@ export default function UploadModal({ open, onClose, onCreated }) {
     const [statusPayload, setStatusPayload] = useState(null);
     const [selectedDomain, setSelectedDomain] = useState(null);
 
+    const limitsQuery = useQuery({
+        enabled: open,
+        queryKey: ['push-upload-limits'],
+        queryFn: () => api.get('/crm/push-campaigns/upload/limits').then((response) => response.data),
+        staleTime: 60_000,
+    });
+
     const uploadMutation = useMutation({
         mutationFn: (selectedFile) => {
+            const uploadMaxBytes = Number(limitsQuery.data?.upload_max_bytes || 0);
+            const postMaxBytes = Number(limitsQuery.data?.post_max_bytes || 0);
+            const effectiveLimit = [uploadMaxBytes, postMaxBytes]
+                .filter((value) => Number.isFinite(value) && value > 0)
+                .reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY);
+
+            if (Number.isFinite(effectiveLimit) && selectedFile.size > effectiveLimit) {
+                throw new Error(
+                    `Selected file is ${formatBytes(selectedFile.size)} but server request limit is ${formatBytes(effectiveLimit)}. Increase PHP upload/post limits to continue.`
+                );
+            }
+
             const formData = new FormData();
             formData.append('file', selectedFile);
             formData.append('dry_run', dryRun ? '1' : '0');
@@ -50,7 +87,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
             }
         },
         onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Upload failed.');
+            toast.error(error?.response?.data?.message || error?.message || 'Upload failed.');
         },
     });
 
@@ -141,6 +178,9 @@ export default function UploadModal({ open, onClose, onCreated }) {
 
     const status = statusPayload?.status || null;
     const canConfirm = Boolean(batchId) && status === 'ready' && !Boolean(statusPayload?.dry_run);
+    const fileSizeText = file ? formatBytes(file.size) : 'n/a';
+    const uploadLimitText = formatBytes(limitsQuery.data?.upload_max_bytes);
+    const postLimitText = formatBytes(limitsQuery.data?.post_max_bytes);
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
@@ -181,6 +221,12 @@ export default function UploadModal({ open, onClose, onCreated }) {
                             />
                             Dry run only (validate parsing without creating campaigns)
                         </label>
+                        <p className="mt-2 text-xs text-slate-600">
+                            File size: <span className="font-semibold">{fileSizeText}</span> • server limits: upload <span className="font-semibold">{uploadLimitText}</span>, post <span className="font-semibold">{postLimitText}</span>
+                        </p>
+                        <p className="mt-1 text-xs text-amber-700">
+                            For large workbook imports, increase PHP limits (example: `upload_max_filesize=64M`, `post_max_size=64M`) then restart the app server.
+                        </p>
                         {batchId ? (
                             <p className="mt-2 text-xs text-slate-600">Batch: <span className="font-mono">{batchId}</span></p>
                         ) : null}
