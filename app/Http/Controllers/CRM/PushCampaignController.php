@@ -12,10 +12,12 @@ use App\Models\PushSubscriberSnapshot;
 use App\Models\ScraperProfilePreset;
 use App\Services\MarketAuthorizationService;
 use App\Services\PushCampaign\PushCampaignService;
+use App\Services\PushCampaign\PushCampaignItemMatchService;
 use App\Services\PushCampaign\SelectorDetectionService;
 use App\Services\PushCampaign\UploadBatchStatusService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
+use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +35,7 @@ class PushCampaignController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly PushCampaignService $pushCampaignService,
+        private readonly PushCampaignItemMatchService $pushCampaignItemMatchService,
         private readonly SelectorDetectionService $selectorDetectionService,
         private readonly UploadBatchStatusService $uploadBatchStatusService,
         private readonly SubscriberSyncService $subscriberSyncService,
@@ -949,26 +952,32 @@ class PushCampaignController extends Controller
     public function updateItem(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
     {
         $this->ensureCampaignAccess($request, $pushCampaign);
-
-        if ((int) $pushCampaignItem->campaign_id !== (int) $pushCampaign->id) {
-            return response()->json([
-                'message' => 'Campaign item does not belong to this campaign.',
-            ], 422);
-        }
-
-        if ((string) $pushCampaignItem->status === 'sent') {
-            return response()->json([
-                'message' => 'Sent items cannot be edited.',
-            ], 422);
-        }
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+        $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be edited.');
 
         $validated = $request->validate([
             'custom_message' => 'sometimes|required|string|max:255',
             'scheduled_at' => 'sometimes|nullable|date',
+            'profile_url' => 'sometimes|required|url|max:500',
+            'profile_name' => 'sometimes|nullable|string|max:255',
+            'profile_phone' => 'sometimes|nullable|string|max:30',
+            'profile_image_url' => 'sometimes|nullable|url|max:500',
+            'profile_age' => 'sometimes|nullable|string|max:10',
             'timezone' => 'nullable|string|max:64',
         ]);
 
-        if (!array_key_exists('custom_message', $validated) && !array_key_exists('scheduled_at', $validated)) {
+        $editableFields = [
+            'custom_message',
+            'scheduled_at',
+            'profile_url',
+            'profile_name',
+            'profile_phone',
+            'profile_image_url',
+            'profile_age',
+        ];
+        $hasEditableField = collect($editableFields)->contains(fn(string $field): bool => array_key_exists($field, $validated));
+
+        if (!$hasEditableField) {
             return response()->json([
                 'message' => 'No editable fields were provided.',
             ], 422);
@@ -978,6 +987,37 @@ class PushCampaignController extends Controller
 
         if (array_key_exists('custom_message', $validated)) {
             $payload['custom_message'] = trim((string) $validated['custom_message']);
+        }
+
+        if (array_key_exists('profile_url', $validated)) {
+            $profileUrl = trim((string) $validated['profile_url']);
+            $payload['profile_url'] = $profileUrl;
+            $payload['wp_post_id'] = $this->parseWpPostIdFromUrl($profileUrl);
+            $payload['client_id'] = null;
+        }
+
+        if (array_key_exists('profile_name', $validated)) {
+            $payload['profile_name'] = $validated['profile_name'] === null
+                ? null
+                : trim((string) $validated['profile_name']);
+        }
+
+        if (array_key_exists('profile_phone', $validated)) {
+            $payload['profile_phone'] = $validated['profile_phone'] === null
+                ? null
+                : trim((string) $validated['profile_phone']);
+        }
+
+        if (array_key_exists('profile_image_url', $validated)) {
+            $payload['profile_image_url'] = $validated['profile_image_url'] === null
+                ? null
+                : trim((string) $validated['profile_image_url']);
+        }
+
+        if (array_key_exists('profile_age', $validated)) {
+            $payload['profile_age'] = $validated['profile_age'] === null
+                ? null
+                : trim((string) $validated['profile_age']);
         }
 
         if (array_key_exists('scheduled_at', $validated)) {
@@ -992,11 +1032,145 @@ class PushCampaignController extends Controller
                 : null;
         }
 
+        $profileFieldChanged = collect(['profile_url', 'profile_name', 'profile_phone', 'profile_image_url', 'profile_age'])
+            ->contains(fn(string $field): bool => array_key_exists($field, $payload));
+
+        if ($profileFieldChanged) {
+            $payload['error_message'] = null;
+            if (in_array((string) $pushCampaignItem->status, ['failed', 'pending_extraction', 'needs_preset'], true)) {
+                $payload['status'] = 'pending';
+            }
+        }
+
         $pushCampaignItem->forceFill($payload)->save();
+        $this->recalculateCampaignActiveTotals($pushCampaign);
 
         return response()->json([
             'item' => $pushCampaignItem->fresh(),
             'message' => 'Campaign item updated.',
+        ]);
+    }
+
+    public function matchCandidates(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+
+        $validated = $request->validate([
+            'search' => 'nullable|string|max:255',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:25',
+        ]);
+
+        $paginator = $this->pushCampaignItemMatchService->paginateCandidatesForProfile(
+            (int) $pushCampaign->platform_id,
+            (string) $pushCampaignItem->profile_url,
+            $validated['search'] ?? null,
+            (int) ($validated['page'] ?? 1),
+            (int) ($validated['per_page'] ?? 10),
+        );
+
+        return response()->json($paginator);
+    }
+
+    public function matchCrm(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+        $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be matched.');
+
+        $validated = $request->validate([
+            'client_id' => 'required|integer|exists:clients,id',
+            'replace_profile_url' => 'nullable|boolean',
+            'hydrate_wp_details' => 'nullable|boolean',
+        ]);
+
+        $client = $this->pushCampaignItemMatchService->findScopedEscortClient(
+            (int) $pushCampaign->platform_id,
+            (int) $validated['client_id']
+        );
+
+        if (!$client) {
+            return response()->json([
+                'message' => 'Selected CRM profile is not an escort in this campaign market.',
+            ], 422);
+        }
+
+        $replaceProfileUrl = array_key_exists('replace_profile_url', $validated)
+            ? (bool) $validated['replace_profile_url']
+            : true;
+        $hydrateWpDetails = array_key_exists('hydrate_wp_details', $validated)
+            ? (bool) $validated['hydrate_wp_details']
+            : true;
+
+        $pushCampaign->loadMissing('platform:id,domain,wp_api_url,wp_api_user,wp_api_password');
+        $profileUrl = (string) $pushCampaignItem->profile_url;
+
+        if ($replaceProfileUrl) {
+            $resolvedUrl = $this->resolveClientProfileUrl($client, $pushCampaign->platform);
+            if ($resolvedUrl) {
+                $profileUrl = $resolvedUrl;
+            }
+        }
+
+        $payload = [
+            'client_id' => (int) $client->id,
+            'wp_post_id' => (int) ($client->wp_post_id ?? 0) ?: $this->parseWpPostIdFromUrl($profileUrl),
+            'profile_url' => $profileUrl,
+            'profile_name' => $client->name,
+            'profile_phone' => $client->phone_normalized,
+            'profile_image_url' => $client->main_image_url,
+            'status' => 'pending',
+            'error_message' => null,
+        ];
+
+        $wpPostId = (int) ($payload['wp_post_id'] ?? 0);
+        if ($hydrateWpDetails && $wpPostId > 0 && $this->platformHasWpIntegration($pushCampaign->platform)) {
+            try {
+                $wpPayload = (new WpSyncService($pushCampaign->platform))->getClientProfile($wpPostId);
+                $fields = $this->extractWpProfileFields($wpPayload);
+
+                if (!empty($fields['phone'])) {
+                    $payload['profile_phone'] = $fields['phone'];
+                }
+                if (!empty($fields['image'])) {
+                    $payload['profile_image_url'] = $fields['image'];
+                }
+                if (!empty($fields['age'])) {
+                    $payload['profile_age'] = $fields['age'];
+                }
+            } catch (\Throwable) {
+                // Keep CRM payload if WP hydration fails.
+            }
+        }
+
+        $pushCampaignItem->forceFill($payload)->save();
+        $this->recalculateCampaignActiveTotals($pushCampaign);
+
+        return response()->json([
+            'item' => $pushCampaignItem->fresh(),
+            'message' => 'Campaign item matched with CRM profile.',
+        ]);
+    }
+
+    public function removeItem(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+        $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be removed.');
+
+        if ((string) $pushCampaignItem->status !== 'skipped') {
+            $pushCampaignItem->forceFill([
+                'status' => 'skipped',
+                'error_message' => null,
+            ])->save();
+        }
+
+        $this->recalculateCampaignActiveTotals($pushCampaign);
+
+        return response()->json([
+            'item' => $pushCampaignItem->fresh(),
+            'message' => 'Campaign item removed from active send list.',
         ]);
     }
 
@@ -1544,6 +1718,40 @@ class PushCampaignController extends Controller
         );
     }
 
+    private function ensureCampaignItemBelongsToCampaign(PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem): void
+    {
+        if ((int) $pushCampaignItem->campaign_id !== (int) $pushCampaign->id) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => 'Campaign item does not belong to this campaign.',
+            ], 422));
+        }
+    }
+
+    private function ensureCampaignItemMutable(PushCampaignItem $pushCampaignItem, string $message): void
+    {
+        if ((string) $pushCampaignItem->status === 'sent') {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                'message' => $message,
+            ], 422));
+        }
+    }
+
+    private function recalculateCampaignActiveTotals(PushCampaign $pushCampaign): void
+    {
+        $totals = PushCampaignItem::query()
+            ->where('campaign_id', (int) $pushCampaign->id)
+            ->selectRaw("SUM(CASE WHEN status != 'skipped' THEN 1 ELSE 0 END) AS active_total_items")
+            ->selectRaw("SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent_items")
+            ->selectRaw("SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_items")
+            ->first();
+
+        $pushCampaign->forceFill([
+            'total_items' => (int) ($totals?->active_total_items ?? 0),
+            'sent_count' => (int) ($totals?->sent_items ?? 0),
+            'failed_count' => (int) ($totals?->failed_items ?? 0),
+        ])->save();
+    }
+
     /**
      * @param array<int, int> $campaignIds
      * @param array<string, mixed>|null $batchState
@@ -2058,6 +2266,73 @@ class PushCampaignController extends Controller
         }
 
         return $totals;
+    }
+
+    private function parseWpPostIdFromUrl(string $url): ?int
+    {
+        $trimmed = trim($url);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (preg_match('/[?&]post_type=escort(?:&|;)?p=(\d+)/i', $trimmed, $match)) {
+            return (int) ($match[1] ?? 0);
+        }
+
+        if (preg_match('/[?&]p=(\d+)/i', $trimmed, $match)) {
+            return (int) ($match[1] ?? 0);
+        }
+
+        if (preg_match('#/(\d+)/?$#', $trimmed, $match)) {
+            return (int) ($match[1] ?? 0);
+        }
+
+        return null;
+    }
+
+    private function platformHasWpIntegration(?Platform $platform): bool
+    {
+        if (!$platform) {
+            return false;
+        }
+
+        return !empty($platform->wp_api_url)
+            && !empty($platform->wp_api_user)
+            && !empty($platform->wp_api_password);
+    }
+
+    /**
+     * @return array{name:?string,phone:?string,image:?string,age:?string}
+     */
+    private function extractWpProfileFields(array $payload): array
+    {
+        $profile = $payload['client'] ?? $payload['data'] ?? $payload;
+        $profile = is_array($profile) ? $profile : [];
+        $meta = is_array($profile['meta'] ?? null) ? $profile['meta'] : [];
+
+        $name = $profile['name']
+            ?? ($profile['post']['title'] ?? null)
+            ?? null;
+
+        $phone = $meta['phone']
+            ?? ($profile['phone'] ?? null)
+            ?? null;
+
+        $image = $profile['main_image_url']
+            ?? ($profile['featured_image'] ?? null)
+            ?? ($meta['main_image_url'] ?? null)
+            ?? null;
+
+        $age = $meta['age']
+            ?? ($meta['profile_age'] ?? null)
+            ?? null;
+
+        return [
+            'name' => $name ? trim((string) $name) : null,
+            'phone' => $phone ? trim((string) $phone) : null,
+            'image' => $image ? trim((string) $image) : null,
+            'age' => $age ? trim((string) $age) : null,
+        ];
     }
 
     private function extractDomainFromUrl(string $url): ?string

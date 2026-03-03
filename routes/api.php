@@ -69,6 +69,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
         // Dynamic routes
         Route::patch('/{pushCampaign}/items/{pushCampaignItem}', [PushCampaignController::class, 'updateItem']);
+        Route::get('/{pushCampaign}/items/{pushCampaignItem}/match-candidates', [PushCampaignController::class, 'matchCandidates']);
+        Route::post('/{pushCampaign}/items/{pushCampaignItem}/match-crm', [PushCampaignController::class, 'matchCrm']);
+        Route::delete('/{pushCampaign}/items/{pushCampaignItem}', [PushCampaignController::class, 'removeItem']);
         Route::get('/{pushCampaign}', [PushCampaignController::class, 'show']);
         Route::post('/{pushCampaign}/execute', [PushCampaignController::class, 'execute']);
         Route::post('/{pushCampaign}/schedule', [PushCampaignController::class, 'schedule']);

@@ -44,6 +44,11 @@ class ProfileExtractionService
         'country',
     ];
 
+    public function __construct(
+        private readonly PushCampaignItemMatchService $pushCampaignItemMatchService,
+    ) {
+    }
+
     public function shouldSkipSheet(string $sheetName): bool
     {
         return in_array(strtoupper(trim($sheetName)), self::SKIPPED_SHEETS, true);
@@ -250,9 +255,7 @@ class ProfileExtractionService
                 continue;
             }
 
-            $updates = [
-                'wp_post_id' => $this->parseWpPostIdFromUrl((string) $item->profile_url),
-            ];
+            $updates = [];
 
             try {
                 if ($hasWpIntegration) {
@@ -277,70 +280,77 @@ class ProfileExtractionService
 
     private function extractViaWp(PushCampaignItem $item, Platform $platform, ?WpSyncService $wpSync): array
     {
-        $wpPostId = $this->parseWpPostIdFromUrl((string) $item->profile_url);
+        $resolution = $this->resolveWpPostIdForUrl((string) $item->profile_url);
+        $wpPostId = (int) ($resolution['wp_post_id'] ?? 0);
 
-        if ($wpPostId) {
+        if ($wpPostId > 0) {
             $client = Client::query()
                 ->where('platform_id', (int) $platform->id)
+                ->where('client_type', 'escort')
                 ->where('wp_post_id', $wpPostId)
                 ->first();
 
             if ($client) {
-                return [
-                    'client_id' => $client->id,
-                    'profile_name' => $client->name,
-                    'profile_phone' => $client->phone_normalized,
-                    'profile_image_url' => $client->main_image_url,
-                    'profile_age' => null,
-                    'status' => 'pending',
-                    'error_message' => null,
-                ];
+                $updates = $this->buildItemPayloadFromClient($client, (string) $item->profile_url, $wpPostId);
+                if ($wpSync) {
+                    $updates = $this->mergeWpPayloadIntoItem(
+                        $updates,
+                        $this->safeFetchWpProfilePayload($wpSync, $wpPostId)
+                    );
+                }
+
+                return $updates;
+            }
+
+            if ($wpSync) {
+                $wpPayload = $this->safeFetchWpProfilePayload($wpSync, $wpPostId);
+                if ($wpPayload) {
+                    $updates = $this->buildItemPayloadFromWpPayload($wpPayload, $wpPostId);
+                    if ($updates !== null) {
+                        return $updates;
+                    }
+
+                    return [
+                        'wp_post_id' => $wpPostId,
+                        'status' => 'failed',
+                        'error_message' => 'wp_payload_invalid: WordPress profile payload is missing required profile fields.',
+                    ];
+                }
             }
         }
 
-        if (!$wpSync || !$wpPostId) {
-            return [
-                'status' => 'failed',
-                'error_message' => 'Profile could not be resolved via WordPress integration.',
-            ];
+        $autoMatch = $this->pushCampaignItemMatchService->resolveAutoMatch((int) $platform->id, (string) $item->profile_url);
+        if (!empty($autoMatch['candidate']['id'])) {
+            $client = $this->pushCampaignItemMatchService->findScopedEscortClient(
+                (int) $platform->id,
+                (int) $autoMatch['candidate']['id']
+            );
+
+            if ($client) {
+                $resolvedUrl = (string) ($autoMatch['candidate']['wp_profile_url'] ?? '');
+                $updates = $this->buildItemPayloadFromClient(
+                    $client,
+                    $resolvedUrl !== '' ? $resolvedUrl : (string) $item->profile_url,
+                    (int) ($client->wp_post_id ?? 0)
+                );
+
+                if ($wpSync && (int) ($client->wp_post_id ?? 0) > 0) {
+                    $updates = $this->mergeWpPayloadIntoItem(
+                        $updates,
+                        $this->safeFetchWpProfilePayload($wpSync, (int) $client->wp_post_id)
+                    );
+                }
+
+                return $updates;
+            }
         }
 
-        $payload = $wpSync->getClientProfile($wpPostId);
-        $profile = $payload['client'] ?? $payload['data'] ?? $payload;
-        $meta = is_array($profile['meta'] ?? null) ? $profile['meta'] : [];
-
-        $name = $profile['name']
-            ?? ($profile['post']['title'] ?? null)
-            ?? null;
-
-        $phone = $meta['phone']
-            ?? ($profile['phone'] ?? null)
-            ?? null;
-
-        $image = $profile['main_image_url']
-            ?? ($profile['featured_image'] ?? null)
-            ?? ($meta['main_image_url'] ?? null)
-            ?? null;
-
-        $age = $meta['age']
-            ?? ($meta['profile_age'] ?? null)
-            ?? null;
-
-        if (!$name) {
-            return [
-                'status' => 'failed',
-                'error_message' => 'WordPress profile payload missing required name field.',
-            ];
-        }
+        $reasonCode = $this->resolveWpFailureCode($resolution, (string) ($autoMatch['reason'] ?? ''));
 
         return [
-            'client_id' => null,
-            'profile_name' => $name,
-            'profile_phone' => $phone,
-            'profile_image_url' => $image,
-            'profile_age' => $age,
-            'status' => 'pending',
-            'error_message' => null,
+            'wp_post_id' => $wpPostId > 0 ? $wpPostId : null,
+            'status' => 'failed',
+            'error_message' => $this->buildWpFailureMessage($reasonCode),
         ];
     }
 
@@ -449,6 +459,10 @@ class ProfileExtractionService
             return null;
         }
 
+        if (preg_match('/[?&]post_type=escort(?:&|;)?p=(\d+)/i', $trimmed, $match)) {
+            return (int) $match[1];
+        }
+
         if (preg_match('/[?&]p=(\d+)/i', $trimmed, $match)) {
             return (int) $match[1];
         }
@@ -458,6 +472,270 @@ class ProfileExtractionService
         }
 
         return null;
+    }
+
+    /**
+     * @return array{
+     *     wp_post_id:int|null,
+     *     requested_url:string,
+     *     effective_url:string|null,
+     *     redirected:bool,
+     *     http_status:int|null,
+     *     link_header:string|null,
+     *     error_code:string|null
+     * }
+     */
+    private function resolveWpPostIdForUrl(string $url): array
+    {
+        $requestedUrl = trim($url);
+        $initialPostId = $this->parseWpPostIdFromUrl($requestedUrl);
+
+        $context = [
+            'wp_post_id' => $initialPostId,
+            'requested_url' => $requestedUrl,
+            'effective_url' => null,
+            'redirected' => false,
+            'http_status' => null,
+            'link_header' => null,
+            'error_code' => null,
+        ];
+
+        if ($initialPostId) {
+            return $context;
+        }
+
+        try {
+            $payload = $this->fetchHtml($requestedUrl);
+            $effectiveUrl = trim((string) ($payload['effective_url'] ?? $requestedUrl));
+            $linkHeader = trim((string) ($payload['link_header'] ?? ''));
+
+            $resolvedPostId = $this->parseWpPostIdFromUrl($effectiveUrl);
+            if (!$resolvedPostId) {
+                $resolvedPostId = $this->parseWpPostIdFromLinkHeader($linkHeader);
+            }
+            if (!$resolvedPostId) {
+                $resolvedPostId = $this->parseWpPostIdFromHtmlShortlink((string) ($payload['html'] ?? ''));
+            }
+
+            return [
+                ...$context,
+                'wp_post_id' => $resolvedPostId,
+                'effective_url' => $effectiveUrl,
+                'redirected' => (bool) ($payload['redirected'] ?? false),
+                'http_status' => (int) ($payload['status'] ?? 200),
+                'link_header' => $linkHeader !== '' ? $linkHeader : null,
+            ];
+        } catch (\Throwable $exception) {
+            $message = (string) $exception->getMessage();
+            $httpStatus = null;
+
+            if (preg_match('/HTTP\s+(\d{3})/i', $message, $match)) {
+                $httpStatus = (int) ($match[1] ?? 0);
+            }
+
+            return [
+                ...$context,
+                'http_status' => $httpStatus,
+                'error_code' => $httpStatus === 404 ? 'http_404' : 'no_post_id',
+            ];
+        }
+    }
+
+    private function parseWpPostIdFromLinkHeader(string $linkHeader): ?int
+    {
+        $normalized = trim($linkHeader);
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (preg_match_all('/<([^>]+)>;\s*rel="?shortlink"?/i', $normalized, $matches)) {
+            foreach ((array) ($matches[1] ?? []) as $link) {
+                $wpPostId = $this->parseWpPostIdFromUrl((string) $link);
+                if ($wpPostId) {
+                    return $wpPostId;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function parseWpPostIdFromHtmlShortlink(string $html): ?int
+    {
+        $normalized = trim($html);
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (preg_match('/<link[^>]+rel=["\']shortlink["\'][^>]+href=["\']([^"\']+)["\']/i', $normalized, $match)) {
+            return $this->parseWpPostIdFromUrl((string) ($match[1] ?? ''));
+        }
+
+        if (preg_match('/<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']shortlink["\']/i', $normalized, $match)) {
+            return $this->parseWpPostIdFromUrl((string) ($match[1] ?? ''));
+        }
+
+        return null;
+    }
+
+    private function resolveWpFailureCode(array $resolution, string $autoMatchReason = ''): string
+    {
+        if ($autoMatchReason === 'ambiguous') {
+            return 'ambiguous_match';
+        }
+
+        if (($resolution['error_code'] ?? null) === 'http_404' || (int) ($resolution['http_status'] ?? 0) === 404) {
+            return 'http_404';
+        }
+
+        if ((bool) ($resolution['redirected'] ?? false) && $this->redirectedToHomepage((string) ($resolution['effective_url'] ?? ''))) {
+            return 'redirect_home';
+        }
+
+        return 'no_post_id';
+    }
+
+    private function buildWpFailureMessage(string $reasonCode): string
+    {
+        return match ($reasonCode) {
+            'http_404' => 'http_404: Profile URL returned HTTP 404. Match this item to a CRM profile or update the URL.',
+            'redirect_home' => 'redirect_home: URL redirected to homepage. Match this item to a CRM profile.',
+            'ambiguous_match' => 'ambiguous_match: Multiple CRM profiles matched this URL. Choose one profile manually.',
+            default => 'no_post_id: Could not resolve profile ID from URL. Match this item to a CRM profile or edit the URL.',
+        };
+    }
+
+    private function redirectedToHomepage(string $effectiveUrl): bool
+    {
+        $trimmed = trim($effectiveUrl);
+        if ($trimmed === '') {
+            return false;
+        }
+
+        $path = trim((string) parse_url($trimmed, PHP_URL_PATH));
+        $query = trim((string) parse_url($trimmed, PHP_URL_QUERY));
+
+        if ($query !== '' && str_contains($query, 'p=')) {
+            return false;
+        }
+
+        return $path === '' || $path === '/' || strtolower($path) === '/index.php';
+    }
+
+    private function safeFetchWpProfilePayload(?WpSyncService $wpSync, int $wpPostId): ?array
+    {
+        if (!$wpSync || $wpPostId <= 0) {
+            return null;
+        }
+
+        try {
+            $payload = $wpSync->getClientProfile($wpPostId);
+            return is_array($payload) ? $payload : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return array{name:?string,phone:?string,image:?string,age:?string}
+     */
+    private function extractWpProfileFields(array $payload): array
+    {
+        $profile = $payload['client'] ?? $payload['data'] ?? $payload;
+        $profile = is_array($profile) ? $profile : [];
+        $meta = is_array($profile['meta'] ?? null) ? $profile['meta'] : [];
+
+        $name = $profile['name']
+            ?? ($profile['post']['title'] ?? null)
+            ?? null;
+
+        $phone = $meta['phone']
+            ?? ($profile['phone'] ?? null)
+            ?? null;
+
+        $image = $profile['main_image_url']
+            ?? ($profile['featured_image'] ?? null)
+            ?? ($meta['main_image_url'] ?? null)
+            ?? null;
+
+        $age = $meta['age']
+            ?? ($meta['profile_age'] ?? null)
+            ?? null;
+
+        return [
+            'name' => $name ? trim((string) $name) : null,
+            'phone' => $phone ? trim((string) $phone) : null,
+            'image' => $image ? trim((string) $image) : null,
+            'age' => $age ? trim((string) $age) : null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function buildItemPayloadFromWpPayload(array $payload, int $wpPostId): ?array
+    {
+        $fields = $this->extractWpProfileFields($payload);
+        if (empty($fields['name'])) {
+            return null;
+        }
+
+        return [
+            'client_id' => null,
+            'wp_post_id' => $wpPostId > 0 ? $wpPostId : null,
+            'profile_name' => $fields['name'],
+            'profile_phone' => $fields['phone'],
+            'profile_image_url' => $fields['image'],
+            'profile_age' => $fields['age'],
+            'status' => 'pending',
+            'error_message' => null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildItemPayloadFromClient(Client $client, string $profileUrl, int $wpPostId = 0): array
+    {
+        $clientWpPostId = $wpPostId > 0 ? $wpPostId : (int) ($client->wp_post_id ?? 0);
+
+        return [
+            'client_id' => (int) $client->id,
+            'wp_post_id' => $clientWpPostId > 0 ? $clientWpPostId : null,
+            'profile_url' => $profileUrl,
+            'profile_name' => $client->name,
+            'profile_phone' => $client->phone_normalized,
+            'profile_image_url' => $client->main_image_url,
+            'status' => 'pending',
+            'error_message' => null,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $updates
+     * @return array<string, mixed>
+     */
+    private function mergeWpPayloadIntoItem(array $updates, ?array $payload): array
+    {
+        if (!$payload) {
+            return $updates;
+        }
+
+        $fields = $this->extractWpProfileFields($payload);
+        if (!empty($fields['name']) && empty($updates['profile_name'])) {
+            $updates['profile_name'] = $fields['name'];
+        }
+        if (!empty($fields['phone'])) {
+            $updates['profile_phone'] = $fields['phone'];
+        }
+        if (!empty($fields['image'])) {
+            $updates['profile_image_url'] = $fields['image'];
+        }
+        if (!empty($fields['age'])) {
+            $updates['profile_age'] = $fields['age'];
+        }
+
+        return $updates;
     }
 
     private function hasWpIntegration(Platform $platform): bool

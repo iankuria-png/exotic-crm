@@ -43,10 +43,17 @@ trait DomParserTrait
             throw new \RuntimeException(sprintf('Source fetch returned unsupported content type: %s.', $contentType));
         }
 
+        $effectiveUri = $response->effectiveUri();
+        $effectiveUrl = $effectiveUri ? (string) $effectiveUri : (string) $url;
+
         return [
             'status' => $response->status(),
             'content_type' => $contentType,
             'html' => (string) $response->body(),
+            'requested_url' => (string) $url,
+            'effective_url' => $effectiveUrl,
+            'redirected' => $effectiveUrl !== (string) $url,
+            'link_header' => (string) $response->header('link', ''),
         ];
     }
 

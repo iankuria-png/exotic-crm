@@ -84,6 +84,9 @@ return [
 
     'push_campaigns' => [
         'inline_dry_run_max_rows' => env('PUSH_UPLOAD_INLINE_DRY_RUN_MAX_ROWS'),
+        'auto_match_enabled' => filter_var(env('PUSH_CAMPAIGNS_AUTO_MATCH_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'auto_match_min_score' => (int) env('PUSH_CAMPAIGNS_AUTO_MATCH_MIN_SCORE', 85),
+        'auto_match_min_margin' => (int) env('PUSH_CAMPAIGNS_AUTO_MATCH_MIN_MARGIN', 15),
     ],
 
 
