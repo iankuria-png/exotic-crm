@@ -12,6 +12,7 @@ import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { normalizePhone } from '../utils/phone';
+import { useAuth } from '../hooks/useAuth';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -37,6 +38,8 @@ export default function Clients() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
+    const { user } = useAuth();
+    const isReadOnly = user?.role === 'marketing';
     const [searchParams] = useSearchParams();
 
     const [page, setPage] = useState(1);
@@ -451,7 +454,7 @@ export default function Clients() {
                 subtitle={stats.total
                     ? `${stats.total.toLocaleString()} clients in scope • ${stats.active.toLocaleString()} active • ${stats.verified.toLocaleString()} verified`
                     : 'Manage client records and subscription status.'}
-                actions={(
+                actions={!isReadOnly ? (
                     <>
                         <button
                             type="button"
@@ -468,7 +471,7 @@ export default function Clients() {
                             Add client
                         </button>
                     </>
-                )}
+                ) : null}
             />
 
             <section className="grid gap-4 md:grid-cols-3">

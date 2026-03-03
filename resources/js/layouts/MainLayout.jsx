@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { Link, Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import { useAuth } from '../hooks/useAuth';
 
 export default function MainLayout() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const { user } = useAuth();
+    const isMarketing = user?.role === 'marketing';
 
     return (
         <div className="flex h-screen min-h-svh overflow-hidden">
@@ -39,14 +42,16 @@ export default function MainLayout() {
 
                     <p className="hidden text-sm font-medium text-slate-500 lg:block">Sales operations workspace</p>
 
-                    <div className="hidden items-center gap-2 sm:flex">
-                        <Link to="/leads" className="crm-btn-secondary px-3 py-1.5 text-xs">
-                            New lead
-                        </Link>
-                        <Link to="/clients" className="crm-btn-primary px-3 py-1.5 text-xs">
-                            New client
-                        </Link>
-                    </div>
+                    {!isMarketing ? (
+                        <div className="hidden items-center gap-2 sm:flex">
+                            <Link to="/leads" className="crm-btn-secondary px-3 py-1.5 text-xs">
+                                New lead
+                            </Link>
+                            <Link to="/clients" className="crm-btn-primary px-3 py-1.5 text-xs">
+                                New client
+                            </Link>
+                        </div>
+                    ) : null}
                 </header>
 
                 {/* Page content */}

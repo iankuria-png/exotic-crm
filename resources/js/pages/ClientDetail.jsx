@@ -318,9 +318,11 @@ export default function ClientDetail() {
     const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const toast = useToast();
-    const tabs = useMemo(() => ['overview', 'deals', 'notes', 'timeline', 'payments', 'edit_profile', 'profile_health'], []);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
-    const initialTab = tabs.includes(requestedTab) ? requestedTab : 'overview';
+    const initialTab = ['overview', 'deals', 'notes', 'timeline', 'payments', 'edit_profile', 'profile_health']
+        .includes(requestedTab)
+        ? requestedTab
+        : 'overview';
     const [activeTab, setActiveTab] = useState(initialTab);
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
@@ -359,6 +361,8 @@ export default function ClientDetail() {
         queryKey: ['me'],
         queryFn: () => api.get('/crm/me').then((response) => response.data),
     });
+    const currentUser = meData?.user || null;
+    const isReadOnly = currentUser?.role === 'marketing';
 
     const { data: timelineData } = useQuery({
         queryKey: ['client-timeline', id],
@@ -556,24 +560,37 @@ export default function ClientDetail() {
         },
     });
 
-    const tabLinks = useMemo(() => [
-        { key: 'overview', label: 'Overview' },
-        { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
-        { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
-        { key: 'timeline', label: 'Timeline' },
-        { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
-        { key: 'edit_profile', label: 'Edit Profile' },
-        { key: 'profile_health', label: `Profile Health (${healthData?.summary?.duplicate_count || 0})` },
-    ], [client, healthData?.summary?.duplicate_count]);
+    const tabLinks = useMemo(() => {
+        const links = [
+            { key: 'overview', label: 'Overview' },
+            { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
+            { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
+            { key: 'timeline', label: 'Timeline' },
+            { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
+            { key: 'edit_profile', label: 'Edit Profile' },
+            { key: 'profile_health', label: `Profile Health (${healthData?.summary?.duplicate_count || 0})` },
+        ];
+
+        if (!isReadOnly) {
+            return links;
+        }
+
+        return links.filter((tab) => !['edit_profile', 'profile_health'].includes(tab.key));
+    }, [client, healthData?.summary?.duplicate_count, isReadOnly]);
 
     useEffect(() => {
-        const nextTab = tabs.includes(requestedTab) ? requestedTab : 'overview';
+        const allowedTabs = tabLinks.map((tab) => tab.key);
+        const nextTab = allowedTabs.includes(requestedTab) ? requestedTab : 'overview';
         if (nextTab !== activeTab) {
             setActiveTab(nextTab);
         }
-    }, [activeTab, requestedTab, tabs]);
+    }, [activeTab, requestedTab, tabLinks]);
 
     useEffect(() => {
+        if (isReadOnly) {
+            return;
+        }
+
         const requestedAction = (searchParams.get('action') || '').toLowerCase();
         if (requestedAction !== 'new_subscription') {
             return;
@@ -586,7 +603,7 @@ export default function ClientDetail() {
         next.set('tab', 'deals');
         next.delete('action');
         setSearchParams(next, { replace: true });
-    }, [searchParams, setSearchParams]);
+    }, [isReadOnly, searchParams, setSearchParams]);
 
     useEffect(() => {
         if (!wpProfileData?.wp_profile) {
@@ -677,7 +694,7 @@ export default function ClientDetail() {
         setActivationReason('Activation initiated from client profile');
         setActivationPaymentMethod('manual');
         setActivationPaymentReference('');
-        setActivationApprovedBy(meData?.name || '');
+        setActivationApprovedBy(currentUser?.name || '');
     };
 
     const closeActivationDialog = () => {
@@ -839,23 +856,27 @@ export default function ClientDetail() {
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                        <button
-                            onClick={() => setShowSyncConfirm(true)}
-                            disabled={!canSyncFromWp || syncMutation.isPending}
-                            className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                            title={!canSyncFromWp ? 'Sync unavailable for manual CRM-only records' : undefined}
-                        >
-                            {syncMutation.isPending ? 'Syncing...' : 'Sync latest from WP'}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setShowCredentialDrawer(true)}
-                            disabled={!canDispatchCredentials}
-                            className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                            title={!canDispatchCredentials ? 'Credential send is available for WP-linked client profiles.' : undefined}
-                        >
-                            Send credentials
-                        </button>
+                        {!isReadOnly ? (
+                            <>
+                                <button
+                                    onClick={() => setShowSyncConfirm(true)}
+                                    disabled={!canSyncFromWp || syncMutation.isPending}
+                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                    title={!canSyncFromWp ? 'Sync unavailable for manual CRM-only records' : undefined}
+                                >
+                                    {syncMutation.isPending ? 'Syncing...' : 'Sync latest from WP'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCredentialDrawer(true)}
+                                    disabled={!canDispatchCredentials}
+                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                    title={!canDispatchCredentials ? 'Credential send is available for WP-linked client profiles.' : undefined}
+                                >
+                                    Send credentials
+                                </button>
+                            </>
+                        ) : null}
                         <a
                             href={supportChatUrl}
                             target="_blank"
@@ -864,12 +885,14 @@ export default function ClientDetail() {
                         >
                             Support chat
                         </a>
-                        <button
-                            onClick={() => setShowDealModal(true)}
-                            className="crm-btn-primary"
-                        >
-                            New subscription
-                        </button>
+                        {!isReadOnly ? (
+                            <button
+                                onClick={() => setShowDealModal(true)}
+                                className="crm-btn-primary"
+                            >
+                                New subscription
+                            </button>
+                        ) : null}
                     </div>
                 </div>
             </section>
@@ -984,13 +1007,15 @@ export default function ClientDetail() {
                         ) : (
                             <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-4">
                                 <p className="text-sm text-slate-600">No subscription records yet for this client.</p>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowDealModal(true)}
-                                    className="mt-3 crm-btn-primary"
-                                >
-                                    Add subscription
-                                </button>
+                                {!isReadOnly ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowDealModal(true)}
+                                        className="mt-3 crm-btn-primary"
+                                    >
+                                        Add subscription
+                                    </button>
+                                ) : null}
                             </div>
                         )}
                     </div>
@@ -1013,7 +1038,7 @@ export default function ClientDetail() {
                                     </p>
                                 </div>
 
-                                {deal.status === 'pending' ? (
+                                {!isReadOnly && deal.status === 'pending' ? (
                                     <button
                                         onClick={() => openActivationDialog(deal)}
                                         disabled={activateDealMutation.isPending}
@@ -1027,13 +1052,15 @@ export default function ClientDetail() {
                     )) : (
                         <section className="crm-surface p-8 text-center">
                             <p className="text-sm text-slate-600">No subscriptions yet for this client.</p>
-                            <button
-                                type="button"
-                                onClick={() => setShowDealModal(true)}
-                                className="mt-4 crm-btn-primary"
-                            >
-                                Add subscription
-                            </button>
+                            {!isReadOnly ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDealModal(true)}
+                                    className="mt-4 crm-btn-primary"
+                                >
+                                    Add subscription
+                                </button>
+                            ) : null}
                         </section>
                     )}
                 </div>
@@ -1041,48 +1068,50 @@ export default function ClientDetail() {
 
             {activeTab === 'notes' ? (
                 <div className="space-y-3">
-                    <section className="crm-surface p-4">
-                        <h3 className="crm-panel-title">Add Note</h3>
-                        <div className="mt-3 space-y-3">
-                            <div className="flex flex-wrap gap-2">
-                                <select
-                                    value={noteForm.note_type}
-                                    onChange={(e) => setNoteForm({ ...noteForm, note_type: e.target.value })}
-                                    className="crm-select"
-                                >
-                                    <option value="internal">Internal</option>
-                                    <option value="call">Call</option>
-                                    <option value="sms">SMS</option>
-                                    <option value="email">Email</option>
-                                </select>
-                                <input
-                                    type="datetime-local"
-                                    value={noteForm.follow_up_at}
-                                    onChange={(e) => setNoteForm({ ...noteForm, follow_up_at: e.target.value })}
-                                    className="crm-input max-w-[260px]"
-                                    placeholder="Follow-up date"
+                    {!isReadOnly ? (
+                        <section className="crm-surface p-4">
+                            <h3 className="crm-panel-title">Add Note</h3>
+                            <div className="mt-3 space-y-3">
+                                <div className="flex flex-wrap gap-2">
+                                    <select
+                                        value={noteForm.note_type}
+                                        onChange={(e) => setNoteForm({ ...noteForm, note_type: e.target.value })}
+                                        className="crm-select"
+                                    >
+                                        <option value="internal">Internal</option>
+                                        <option value="call">Call</option>
+                                        <option value="sms">SMS</option>
+                                        <option value="email">Email</option>
+                                    </select>
+                                    <input
+                                        type="datetime-local"
+                                        value={noteForm.follow_up_at}
+                                        onChange={(e) => setNoteForm({ ...noteForm, follow_up_at: e.target.value })}
+                                        className="crm-input max-w-[260px]"
+                                        placeholder="Follow-up date"
+                                    />
+                                </div>
+
+                                <textarea
+                                    value={noteForm.content}
+                                    onChange={(e) => setNoteForm({ ...noteForm, content: e.target.value })}
+                                    placeholder="Write a note..."
+                                    rows={3}
+                                    className="crm-input"
                                 />
-                            </div>
 
-                            <textarea
-                                value={noteForm.content}
-                                onChange={(e) => setNoteForm({ ...noteForm, content: e.target.value })}
-                                placeholder="Write a note..."
-                                rows={3}
-                                className="crm-input"
-                            />
-
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => addNoteMutation.mutate(noteForm)}
-                                    disabled={!noteForm.content.trim() || addNoteMutation.isPending}
-                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                    {addNoteMutation.isPending ? 'Saving...' : 'Add note'}
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => addNoteMutation.mutate(noteForm)}
+                                        disabled={!noteForm.content.trim() || addNoteMutation.isPending}
+                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {addNoteMutation.isPending ? 'Saving...' : 'Add note'}
+                                    </button>
+                                </div>
                             </div>
-                        </div>
-                    </section>
+                        </section>
+                    ) : null}
 
                     {client.notes?.length > 0 ? client.notes.map((note) => (
                         <section key={note.id} className="crm-surface p-4">
@@ -1135,7 +1164,7 @@ export default function ClientDetail() {
                 </div>
             ) : null}
 
-            {activeTab === 'edit_profile' ? (
+            {activeTab === 'edit_profile' && !isReadOnly ? (
                 <section className="crm-surface p-4">
                     {!canSyncFromWp ? (
                         <p className="text-sm text-slate-500">This is a CRM-only client record and does not support WordPress profile editing.</p>
@@ -1454,7 +1483,7 @@ export default function ClientDetail() {
                 </section>
             ) : null}
 
-            {activeTab === 'profile_health' ? (
+            {activeTab === 'profile_health' && !isReadOnly ? (
                 <section className="crm-surface p-4">
                     {healthLoading ? (
                         <p className="text-sm text-slate-500">Loading profile health...</p>
@@ -1685,7 +1714,7 @@ export default function ClientDetail() {
                 </div>
             ) : null}
 
-            {showDealModal ? (
+            {!isReadOnly && showDealModal ? (
                 <DealModal
                     client={client}
                     products={products}
@@ -1696,28 +1725,32 @@ export default function ClientDetail() {
                 />
             ) : null}
 
-            <ConfirmDialog
-                open={showSyncConfirm}
-                title="Sync Client from WordPress"
-                message="This refreshes client profile fields from WordPress and may overwrite CRM-side contact data for synced fields."
-                confirmLabel="Sync now"
-                onCancel={() => setShowSyncConfirm(false)}
-                onConfirm={() => syncMutation.mutate()}
-                confirmDisabled={syncMutation.isPending}
-                isPending={syncMutation.isPending}
-            />
+            {!isReadOnly ? (
+                <ConfirmDialog
+                    open={showSyncConfirm}
+                    title="Sync Client from WordPress"
+                    message="This refreshes client profile fields from WordPress and may overwrite CRM-side contact data for synced fields."
+                    confirmLabel="Sync now"
+                    onCancel={() => setShowSyncConfirm(false)}
+                    onConfirm={() => syncMutation.mutate()}
+                    confirmDisabled={syncMutation.isPending}
+                    isPending={syncMutation.isPending}
+                />
+            ) : null}
 
-            <CredentialDispatchDrawer
-                open={showCredentialDrawer}
-                client={client}
-                defaultSource="client_detail"
-                defaultReason="Credential dispatch from client detail"
-                onClose={() => setShowCredentialDrawer(false)}
-                onSuccess={() => {
-                    queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
-                    queryClient.invalidateQueries({ queryKey: ['client', id] });
-                }}
-            />
+            {!isReadOnly ? (
+                <CredentialDispatchDrawer
+                    open={showCredentialDrawer}
+                    client={client}
+                    defaultSource="client_detail"
+                    defaultReason="Credential dispatch from client detail"
+                    onClose={() => setShowCredentialDrawer(false)}
+                    onSuccess={() => {
+                        queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+                        queryClient.invalidateQueries({ queryKey: ['client', id] });
+                    }}
+                />
+            ) : null}
         </div>
     );
 }

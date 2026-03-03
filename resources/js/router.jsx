@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -16,6 +16,7 @@ import { useAuth } from './hooks/useAuth';
 
 function ProtectedRoute({ children }) {
     const { user, isLoading } = useAuth();
+    const location = useLocation();
 
     if (isLoading) {
         return (
@@ -27,6 +28,19 @@ function ProtectedRoute({ children }) {
 
     if (!user) {
         return <Navigate to="/login" replace />;
+    }
+
+    if (user.role === 'marketing') {
+        const path = location.pathname || '/';
+        const allowed = path === '/' || path.startsWith('/clients') || path.startsWith('/push-campaigns');
+
+        if (!allowed) {
+            return <Navigate to="/push-campaigns" replace />;
+        }
+    }
+
+    if (user.role === 'sales' && (location.pathname || '').startsWith('/push-campaigns')) {
+        return <Navigate to="/" replace />;
     }
 
     return children;
@@ -52,6 +66,7 @@ export default function AppRouter() {
                 <Route path="leads" element={<Leads />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />
+                <Route path="push-campaigns/*" element={<Navigate to="/" replace />} />
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />

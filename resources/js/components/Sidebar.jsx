@@ -31,8 +31,46 @@ const navGroups = [
     },
 ];
 
+const pushCampaignNavItem = {
+    to: '/push-campaigns',
+    label: 'Push Campaigns',
+    icon: 'M4.5 6.75h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-3l-3 2.25v-2.25h-9A1.5 1.5 0 0 1 3 15.75v-7.5a1.5 1.5 0 0 1 1.5-1.5Z',
+};
+
 export default function Sidebar({ onClose }) {
     const { user, logout } = useAuth();
+    const role = user?.role || '';
+
+    const filteredNavGroups = role === 'marketing'
+        ? [
+            {
+                title: 'Workspace',
+                items: [
+                    { to: '/', label: 'Dashboard', icon: 'M3.75 4.5h7.5v6.75h-7.5V4.5Zm0 8.25h7.5V19.5h-7.5v-6.75Zm9 0h7.5V19.5h-7.5v-6.75Zm0-8.25h7.5v6.75h-7.5V4.5Z' },
+                    { to: '/clients', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
+                ],
+            },
+            {
+                title: 'Campaigns',
+                items: [pushCampaignNavItem],
+            },
+        ]
+        : role === 'admin' || role === 'sub_admin'
+            ? navGroups.map((group) => {
+                if (group.title !== 'Revenue') {
+                    return group;
+                }
+
+                if (group.items.some((item) => item.to === pushCampaignNavItem.to)) {
+                    return group;
+                }
+
+                return {
+                    ...group,
+                    items: [...group.items, pushCampaignNavItem],
+                };
+            })
+            : navGroups;
 
     return (
         <div className="flex h-full flex-col border-r border-white/10 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-900 text-slate-100">
@@ -54,7 +92,7 @@ export default function Sidebar({ onClose }) {
             </div>
 
             <nav className="flex-1 overflow-y-auto px-3 py-4">
-                {navGroups.map((group) => (
+                {filteredNavGroups.map((group) => (
                     <div key={group.title} className="mb-5">
                         <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{group.title}</p>
                         <div className="mt-2 space-y-1.5">
