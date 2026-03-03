@@ -61,6 +61,21 @@ class Kernel extends ConsoleKernel
             ->hourly()
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_run_renewals.log'));
+
+        // Push campaign phased dispatcher: activates scheduled campaigns and queues next 24h items.
+        $schedule->command('crm:dispatch-scheduled-pushes')
+            ->name('crm_dispatch_scheduled_pushes')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_dispatch_scheduled_pushes.log'));
+
+        // Daily subscriber snapshot sync across configured push providers.
+        $schedule->command('crm:sync-push-subscribers')
+            ->name('crm_sync_push_subscribers')
+            ->daily()
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_sync_push_subscribers.log'));
     }
 
     /**
