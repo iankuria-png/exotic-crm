@@ -107,6 +107,34 @@ class WebPushrProvider implements PushProviderInterface
         ];
     }
 
+    public function getSubscriberCount(array $config): ?array
+    {
+        if (!$this->configured($config)) {
+            return null;
+        }
+
+        $response = Http::acceptJson()
+            ->withHeaders([
+                'webpushrKey' => (string) $config['api_key'],
+                'webpushrAuthToken' => (string) $config['auth_token'],
+            ])
+            ->timeout(20)
+            ->retry(2, 500)
+            ->get('https://api.webpushr.com/v1/site/subscriber_count');
+
+        if (!$response->successful()) {
+            return null;
+        }
+
+        $raw = $response->json();
+        $body = is_array($raw) ? $raw : [];
+
+        return [
+            'total' => (int) $this->firstValue($body, ['total_life_time_subscribers', 'data.total_life_time_subscribers', 'total_subscribers', 'data.total_subscribers'], 0),
+            'active' => (int) $this->firstValue($body, ['active_subscribers', 'data.active_subscribers'], 0),
+        ];
+    }
+
     private function normalizeButtons($buttons): array
     {
         if (!is_array($buttons)) {

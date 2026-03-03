@@ -97,6 +97,13 @@ class IZootoProvider implements PushProviderInterface
         return null;
     }
 
+    public function getSubscriberCount(array $config): ?array
+    {
+        Log::warning('iZooto subscriber count is not available via REST API in current integration.');
+
+        return null;
+    }
+
     private function normalizeActions($buttons): array
     {
         if (!is_array($buttons)) {

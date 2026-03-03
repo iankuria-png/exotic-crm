@@ -7,10 +7,12 @@ use App\Jobs\ProcessPushUploadJob;
 use App\Models\Platform;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
+use App\Models\PushSubscriberSnapshot;
 use App\Models\ScraperProfilePreset;
 use App\Services\MarketAuthorizationService;
 use App\Services\PushCampaign\PushCampaignService;
 use App\Services\PushCampaign\SelectorDetectionService;
+use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -23,6 +25,7 @@ class PushCampaignController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly PushCampaignService $pushCampaignService,
         private readonly SelectorDetectionService $selectorDetectionService,
+        private readonly SubscriberSyncService $subscriberSyncService,
     ) {
     }
 
@@ -356,9 +359,19 @@ class PushCampaignController extends Controller
         $this->marketAuthorizationService->applyPlatformScope($campaignQuery, $request->user());
 
         $campaignIds = $campaignQuery->pluck('id');
+        $platformScopeQuery = Platform::query();
+        $this->marketAuthorizationService->applyPlatformScope($platformScopeQuery, $request->user());
+        $platformIds = $platformScopeQuery
+            ->pluck('id')
+            ->map(fn($id) => (int) $id)
+            ->filter(fn($id) => $id > 0)
+            ->values()
+            ->all();
 
         $sentToday = 0;
         $avgClickRate = null;
+        $totalSubscribers = 0;
+        $activeSubscribers = 0;
 
         if ($campaignIds->isNotEmpty()) {
             $sentToday = PushCampaignItem::query()
@@ -373,6 +386,27 @@ class PushCampaignController extends Controller
             }
         }
 
+        if (!empty($platformIds)) {
+            $snapshots = PushSubscriberSnapshot::query()
+                ->whereIn('platform_id', $platformIds)
+                ->orderByDesc('snapshot_date')
+                ->orderByDesc('id')
+                ->get();
+
+            $latestByPlatform = [];
+            foreach ($snapshots as $snapshot) {
+                if (isset($latestByPlatform[$snapshot->platform_id])) {
+                    continue;
+                }
+                $latestByPlatform[$snapshot->platform_id] = $snapshot;
+            }
+
+            foreach ($latestByPlatform as $snapshot) {
+                $totalSubscribers += (int) $snapshot->total_subscribers;
+                $activeSubscribers += (int) $snapshot->active_subscribers;
+            }
+        }
+
         $totalCampaigns = (int) (clone $campaignQuery)->count();
         $pendingCampaigns = (int) (clone $campaignQuery)
             ->whereIn('status', ['processing', 'draft', 'scheduled', 'running'])
@@ -383,6 +417,8 @@ class PushCampaignController extends Controller
             'pending_campaigns' => $pendingCampaigns,
             'sent_today' => $sentToday,
             'avg_click_rate' => $avgClickRate,
+            'total_subscribers' => $totalSubscribers,
+            'active_subscribers' => $activeSubscribers,
         ]);
     }
 
@@ -396,6 +432,33 @@ class PushCampaignController extends Controller
         }
 
         $platforms = $platformQuery->get(['id', 'name', 'country', 'domain']);
+        $platformIds = $platforms->pluck('id')->map(fn($id) => (int) $id)->all();
+        $historyByPlatform = [];
+        $latestByPlatform = [];
+
+        if (!empty($platformIds)) {
+            $snapshots = PushSubscriberSnapshot::query()
+                ->whereIn('platform_id', $platformIds)
+                ->where('snapshot_date', '>=', now()->subDays(29)->toDateString())
+                ->orderBy('snapshot_date')
+                ->orderBy('id')
+                ->get();
+
+            foreach ($snapshots as $snapshot) {
+                $historyByPlatform[$snapshot->platform_id][] = [
+                    'snapshot_date' => optional($snapshot->snapshot_date)->toDateString() ?: (string) $snapshot->getRawOriginal('snapshot_date'),
+                    'provider' => (string) $snapshot->provider,
+                    'total_subscribers' => (int) $snapshot->total_subscribers,
+                    'active_subscribers' => (int) $snapshot->active_subscribers,
+                ];
+            }
+
+            foreach ($snapshots->sortByDesc(fn($snapshot) => sprintf('%s-%010d', $snapshot->snapshot_date, $snapshot->id)) as $snapshot) {
+                if (!isset($latestByPlatform[$snapshot->platform_id])) {
+                    $latestByPlatform[$snapshot->platform_id] = $snapshot;
+                }
+            }
+        }
 
         return response()->json([
             'items' => $platforms->map(fn(Platform $platform) => [
@@ -403,20 +466,55 @@ class PushCampaignController extends Controller
                 'platform_name' => $platform->name,
                 'country' => $platform->country,
                 'domain' => $platform->domain,
-                'provider' => null,
-                'total_subscribers' => null,
-                'active_subscribers' => null,
-                'last_synced_at' => null,
+                'provider' => $latestByPlatform[$platform->id]->provider ?? null,
+                'total_subscribers' => isset($latestByPlatform[$platform->id]) ? (int) $latestByPlatform[$platform->id]->total_subscribers : null,
+                'active_subscribers' => isset($latestByPlatform[$platform->id]) ? (int) $latestByPlatform[$platform->id]->active_subscribers : null,
+                'last_synced_at' => isset($latestByPlatform[$platform->id]) ? optional($latestByPlatform[$platform->id]->updated_at)->toDateTimeString() : null,
+                'history' => $historyByPlatform[$platform->id] ?? [],
             ])->values(),
-            'note' => 'Subscriber provider sync will be enabled in the next implementation phase.',
+            'note' => 'Subscribers are captured from provider APIs. Users still must opt-in on each market domain.',
         ]);
     }
 
     public function syncSubscribers(Request $request)
     {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+        ]);
+
+        if (!empty($validated['platform_id'])) {
+            $platform = Platform::query()->find((int) $validated['platform_id']);
+            if (!$platform) {
+                return response()->json([
+                    'message' => 'Selected platform was not found.',
+                ], 404);
+            }
+
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                (int) $platform->id,
+                'You do not have access to this market.'
+            );
+
+            $result = $this->subscriberSyncService->syncPlatform($platform);
+
+            return response()->json([
+                'synced' => $result ? 1 : 0,
+                'results' => $result ? [$result] : [],
+            ]);
+        }
+
+        $results = $this->subscriberSyncService->syncAllPlatforms();
+        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        if (is_array($allowedPlatformIds)) {
+            $results = array_values(array_filter($results, static fn(array $row): bool => in_array((int) ($row['platform_id'] ?? 0), $allowedPlatformIds, true)));
+        }
+
         return response()->json([
-            'message' => 'Subscriber sync command is not yet configured.',
-        ], 501);
+            'synced' => count($results),
+            'results' => $results,
+        ]);
     }
 
     public function listPresets(Request $request)

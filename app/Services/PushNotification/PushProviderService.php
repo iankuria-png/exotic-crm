@@ -112,6 +112,49 @@ class PushProviderService
         return $instance->getStatus($providerNotificationId, $providerConfig);
     }
 
+    /**
+     * @return array{provider:string,total:int,active:int}|null
+     */
+    public function getSubscriberCountForPlatform(int $platformId): ?array
+    {
+        if ($platformId <= 0) {
+            return null;
+        }
+
+        $pushConfig = $this->resolvePushConfig();
+
+        if (!(bool) ($pushConfig['enabled'] ?? false)) {
+            return null;
+        }
+
+        $platformConfig = $this->resolvePlatformConfig($pushConfig, $platformId);
+        $providerId = (string) ($platformConfig['active_provider'] ?? $pushConfig['default_provider'] ?? 'webpushr');
+        $provider = $this->providers[$providerId] ?? null;
+
+        if (!$provider) {
+            return null;
+        }
+
+        $providerConfig = is_array($platformConfig[$providerId] ?? null)
+            ? $platformConfig[$providerId]
+            : [];
+
+        if (!$provider->configured($providerConfig)) {
+            return null;
+        }
+
+        $counts = $provider->getSubscriberCount($providerConfig);
+        if (!$counts) {
+            return null;
+        }
+
+        return [
+            'provider' => $providerId,
+            'total' => (int) ($counts['total'] ?? 0),
+            'active' => (int) ($counts['active'] ?? 0),
+        ];
+    }
+
     public function currentPushConfig(bool $masked = true): array
     {
         $config = $this->resolvePushConfig();

@@ -10,6 +10,7 @@ import Payments from './pages/Payments';
 import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Campaigns from './pages/Campaigns';
+import PushCampaigns from './pages/PushCampaigns';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import { useAuth } from './hooks/useAuth';
@@ -66,7 +67,7 @@ export default function AppRouter() {
                 <Route path="leads" element={<Leads />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />
-                <Route path="push-campaigns/*" element={<Navigate to="/" replace />} />
+                <Route path="push-campaigns" element={<PushCampaigns />} />
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />

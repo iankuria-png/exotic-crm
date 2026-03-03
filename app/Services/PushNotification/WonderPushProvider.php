@@ -128,6 +128,32 @@ class WonderPushProvider implements PushProviderInterface
         ];
     }
 
+    public function getSubscriberCount(array $config): ?array
+    {
+        if (!$this->configured($config)) {
+            return null;
+        }
+
+        $response = Http::acceptJson()
+            ->timeout(20)
+            ->retry(2, 500)
+            ->get('https://management-api.wonderpush.com/v1/stats/events', [
+                'accessToken' => (string) $config['access_token'],
+            ]);
+
+        if (!$response->successful()) {
+            return null;
+        }
+
+        $raw = $response->json();
+        $body = is_array($raw) ? $raw : [];
+
+        return [
+            'total' => (int) $this->firstValue($body, ['total_subscribers', 'stats.total_subscribers', 'summary.total_subscribers', 'totals.subscribers'], 0),
+            'active' => (int) $this->firstValue($body, ['active_subscribers', 'stats.active_subscribers', 'summary.active_subscribers'], 0),
+        ];
+    }
+
     private function normalizeButtons($buttons): array
     {
         if (!is_array($buttons)) {

@@ -183,6 +183,104 @@ function buildSmsProviderForm(smsProvider) {
     };
 }
 
+function pushProviderLabel(providerId) {
+    if (providerId === 'webpushr') return 'WebPushr';
+    if (providerId === 'wonderpush') return 'WonderPush';
+    if (providerId === 'izooto') return 'iZooto';
+    return 'Unknown';
+}
+
+function defaultPushPlatformConfig(defaultProvider = 'webpushr') {
+    return {
+        active_provider: defaultProvider,
+        fallback_provider: 'none',
+        webpushr: {
+            api_key: '',
+            auth_token: '',
+            api_key_configured: false,
+            auth_token_configured: false,
+        },
+        wonderpush: {
+            access_token: '',
+            project_id: '',
+            access_token_configured: false,
+        },
+        izooto: {
+            api_token: '',
+            api_token_configured: false,
+        },
+    };
+}
+
+function defaultPushProviderForm() {
+    return {
+        enabled: false,
+        default_provider: 'webpushr',
+        reason: 'Updated push provider routing settings',
+        platforms: {},
+    };
+}
+
+function buildPushProviderForm(pushProvider, platformRows = []) {
+    const fallback = defaultPushProviderForm();
+    const defaultProvider = pushProvider?.default_provider || fallback.default_provider;
+    const base = {
+        ...fallback,
+        enabled: Boolean(pushProvider?.enabled),
+        default_provider: defaultProvider,
+        platforms: {},
+    };
+
+    const availablePlatformIds = new Set((platformRows || []).map((platform) => String(platform.platform_id)));
+    const storedPlatforms = pushProvider?.platforms && typeof pushProvider.platforms === 'object'
+        ? pushProvider.platforms
+        : {};
+
+    Object.entries(storedPlatforms).forEach(([platformId, rawConfig]) => {
+        if (availablePlatformIds.size > 0 && !availablePlatformIds.has(String(platformId))) {
+            return;
+        }
+
+        const merged = defaultPushPlatformConfig(defaultProvider);
+        const next = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+
+        merged.active_provider = next.active_provider || merged.active_provider;
+        merged.fallback_provider = next.fallback_provider || merged.fallback_provider;
+        merged.webpushr = {
+            ...merged.webpushr,
+            ...(next.webpushr || {}),
+            api_key: '',
+            auth_token: '',
+            api_key_configured: Boolean(next.webpushr?.api_key_configured),
+            auth_token_configured: Boolean(next.webpushr?.auth_token_configured),
+        };
+        merged.wonderpush = {
+            ...merged.wonderpush,
+            ...(next.wonderpush || {}),
+            access_token: '',
+            access_token_configured: Boolean(next.wonderpush?.access_token_configured),
+            project_id: next.wonderpush?.project_id || '',
+        };
+        merged.izooto = {
+            ...merged.izooto,
+            ...(next.izooto || {}),
+            api_token: '',
+            api_token_configured: Boolean(next.izooto?.api_token_configured),
+        };
+
+        base.platforms[String(platformId)] = merged;
+    });
+
+    (platformRows || []).forEach((platform) => {
+        const key = String(platform.platform_id);
+        if (!base.platforms[key]) {
+            base.platforms[key] = defaultPushPlatformConfig(defaultProvider);
+        }
+    });
+
+    return base;
+}
+
 function defaultScraperRules() {
     return {
         row_selector: '',
@@ -308,7 +406,7 @@ function dedupeModeLabel(mode) {
     return mode?.replaceAll('_', ' ') || 'Unknown';
 }
 
-function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
+function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManagePushProviders }) {
     const queryClient = useQueryClient();
     const toast = useToast();
     const [integrationArea, setIntegrationArea] = useState('overview');
@@ -335,6 +433,17 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
     });
     const [smsTestConfirmOpen, setSmsTestConfirmOpen] = useState(false);
     const [latestSmsTestResult, setLatestSmsTestResult] = useState(null);
+    const [pushProviderForm, setPushProviderForm] = useState(defaultPushProviderForm());
+    const [pushPlatformId, setPushPlatformId] = useState('');
+    const [pushTestForm, setPushTestForm] = useState({
+        title: 'Quick profile update',
+        message: 'Test notification from ExoticCRM push settings.',
+        target_url: '',
+        icon_url: '',
+        reason: 'Push provider test dispatch',
+    });
+    const [pushTestConfirmOpen, setPushTestConfirmOpen] = useState(false);
+    const [latestPushTestResult, setLatestPushTestResult] = useState(null);
     const [selectedScraperSourceId, setSelectedScraperSourceId] = useState(null);
     const [scraperEditor, setScraperEditor] = useState(null);
     const [scraperCreateOpen, setScraperCreateOpen] = useState(false);
@@ -357,13 +466,24 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
 
     const services = data?.services || {};
     const smsProviderConfig = services.sms_provider || null;
+    const pushProviderConfig = services.push_provider || null;
     const activeProviderLabel = smsProviderLabel(smsProviderConfig?.active_provider || 'legacy_gateway');
+    const pushDefaultLabel = pushProviderLabel(pushProviderConfig?.default_provider || 'webpushr');
+    const pushConfiguredCount = Object.values(pushProviderConfig?.platforms || {}).length;
     const serviceRows = [
         {
             key: 'sms',
             label: 'SMS Routing',
             status: services.sms_gateway?.status || 'pending',
             detail: `Active: ${activeProviderLabel} • ${services.sms_gateway?.enabled ? 'Dispatch enabled' : 'Dispatch disabled'}`,
+        },
+        {
+            key: 'push',
+            label: 'Push Routing',
+            status: pushProviderConfig?.enabled
+                ? (pushConfiguredCount > 0 ? 'connected' : 'configured_disabled')
+                : 'pending',
+            detail: `Default: ${pushDefaultLabel} • ${pushProviderConfig?.enabled ? 'Dispatch enabled' : 'Dispatch disabled'}`,
         },
         {
             key: 'kopokopo',
@@ -399,7 +519,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const requestedArea = params.get('integrationArea');
-        const allowedAreas = new Set(['overview', 'markets', 'payment_links', 'sms', 'scraper']);
+        const allowedAreas = new Set(['overview', 'markets', 'payment_links', 'sms', 'push', 'scraper']);
         if (requestedArea && allowedAreas.has(requestedArea)) {
             setIntegrationArea(requestedArea);
         }
@@ -473,6 +593,39 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         setSmsProviderForm(smsState.form);
         setSmsProviderApiKeyConfigured(smsState.apiKeyConfigured);
     }, [smsProviderConfig]);
+
+    useEffect(() => {
+        const nextPushForm = buildPushProviderForm(pushProviderConfig, platformRows);
+        setPushProviderForm(nextPushForm);
+
+        const availableIds = Object.keys(nextPushForm.platforms || {});
+        if (!availableIds.length) {
+            setPushPlatformId('');
+            return;
+        }
+
+        if (!pushPlatformId || !availableIds.includes(String(pushPlatformId))) {
+            setPushPlatformId(availableIds[0]);
+        }
+    }, [pushProviderConfig, platformRows, pushPlatformId]);
+
+    useEffect(() => {
+        const selectedPlatformForPush = platformRows.find((platform) => String(platform.platform_id) === String(pushPlatformId));
+        if (!selectedPlatformForPush?.domain) {
+            return;
+        }
+
+        setPushTestForm((current) => {
+            if (current.target_url.trim()) {
+                return current;
+            }
+
+            return {
+                ...current,
+                target_url: `https://${selectedPlatformForPush.domain}`,
+            };
+        });
+    }, [platformRows, pushPlatformId]);
 
     const createPlatformMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/settings/integrations/platforms', payload).then((response) => response.data),
@@ -648,6 +801,35 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         },
     });
 
+    const savePushProviderMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/integrations/push-provider', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setPushProviderForm(buildPushProviderForm(response?.push_provider || null, platformRows));
+            toast.success('Push provider settings saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to save push provider settings.');
+        },
+    });
+
+    const testPushProviderMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/integrations/push-provider/test', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestPushTestResult(response?.result || null);
+            setPushTestConfirmOpen(false);
+            toast.success('Push provider test notification sent.');
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestPushTestResult(result);
+            }
+            const message = error?.response?.data?.message || 'Push provider test failed.';
+            toast.error(message);
+        },
+    });
+
     const updateSmsProviderField = (section, key, value) => {
         setSmsProviderForm((current) => ({
             ...current,
@@ -682,6 +864,127 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         }
 
         saveSmsProviderMutation.mutate(payload);
+    };
+
+    const ensurePushPlatformConfig = (platformId, currentForm) => {
+        const key = String(platformId || '');
+        const next = currentForm || pushProviderForm;
+        if (!key) {
+            return next;
+        }
+
+        const existing = next.platforms?.[key];
+        if (existing) {
+            return next;
+        }
+
+        return {
+            ...next,
+            platforms: {
+                ...(next.platforms || {}),
+                [key]: defaultPushPlatformConfig(next.default_provider || 'webpushr'),
+            },
+        };
+    };
+
+    const updatePushProviderField = (field, value) => {
+        setPushProviderForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const updatePushPlatformField = (platformId, field, value) => {
+        setPushProviderForm((current) => {
+            const withPlatform = ensurePushPlatformConfig(platformId, current);
+            const key = String(platformId);
+
+            return {
+                ...withPlatform,
+                platforms: {
+                    ...withPlatform.platforms,
+                    [key]: {
+                        ...withPlatform.platforms[key],
+                        [field]: value,
+                    },
+                },
+            };
+        });
+    };
+
+    const updatePushProviderCredentialField = (platformId, providerKey, field, value) => {
+        setPushProviderForm((current) => {
+            const withPlatform = ensurePushPlatformConfig(platformId, current);
+            const key = String(platformId);
+            const platformConfig = withPlatform.platforms[key];
+
+            return {
+                ...withPlatform,
+                platforms: {
+                    ...withPlatform.platforms,
+                    [key]: {
+                        ...platformConfig,
+                        [providerKey]: {
+                            ...(platformConfig?.[providerKey] || {}),
+                            [field]: value,
+                        },
+                    },
+                },
+            };
+        });
+    };
+
+    const savePushProviderConfig = () => {
+        const platformsPayload = {};
+        const invalidFallback = [];
+
+        Object.entries(pushProviderForm.platforms || {}).forEach(([platformId, config]) => {
+            const activeProvider = config?.active_provider || pushProviderForm.default_provider || 'webpushr';
+            const fallbackProvider = config?.fallback_provider || 'none';
+
+            if (fallbackProvider !== 'none' && fallbackProvider === activeProvider) {
+                invalidFallback.push(platformId);
+            }
+
+            const webpushr = config?.webpushr || {};
+            const wonderpush = config?.wonderpush || {};
+            const izooto = config?.izooto || {};
+
+            const platformPayload = {
+                active_provider: activeProvider,
+                fallback_provider: fallbackProvider,
+                webpushr: {
+                    auth_token: webpushr.auth_token?.trim() || undefined,
+                    api_key: webpushr.api_key?.trim() || undefined,
+                },
+                wonderpush: {
+                    access_token: wonderpush.access_token?.trim() || undefined,
+                    project_id: wonderpush.project_id?.trim() || '',
+                },
+                izooto: {
+                    api_token: izooto.api_token?.trim() || undefined,
+                },
+            };
+
+            if (!platformPayload.webpushr.auth_token) delete platformPayload.webpushr.auth_token;
+            if (!platformPayload.webpushr.api_key) delete platformPayload.webpushr.api_key;
+            if (!platformPayload.wonderpush.access_token) delete platformPayload.wonderpush.access_token;
+            if (!platformPayload.izooto.api_token) delete platformPayload.izooto.api_token;
+
+            platformsPayload[String(platformId)] = platformPayload;
+        });
+
+        if (invalidFallback.length > 0) {
+            toast.error('Fallback provider must be different from active provider for all configured markets.');
+            return;
+        }
+
+        savePushProviderMutation.mutate({
+            enabled: Boolean(pushProviderForm.enabled),
+            default_provider: pushProviderForm.default_provider,
+            platforms: platformsPayload,
+            reason: pushProviderForm.reason.trim(),
+        });
     };
 
     const updatePaymentLinkProvider = (index, field, value) => {
@@ -936,6 +1239,41 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         { value: 'legacy_gateway', label: 'Legacy Gateway' },
         { value: 'africastalking', label: "Africa's Talking" },
     ];
+    const pushProviderOptions = [
+        { value: 'webpushr', label: 'WebPushr' },
+        { value: 'wonderpush', label: 'WonderPush' },
+        { value: 'izooto', label: 'iZooto' },
+    ];
+    const pushFallbackOptions = [
+        { value: 'none', label: 'No fallback' },
+        ...pushProviderOptions,
+    ];
+    const selectedPushConfig = pushPlatformId
+        ? (pushProviderForm.platforms?.[String(pushPlatformId)] || defaultPushPlatformConfig(pushProviderForm.default_provider))
+        : null;
+    const selectedPushPlatform = platformRows.find((platform) => String(platform.platform_id) === String(pushPlatformId)) || null;
+    const selectedPushProvider = selectedPushConfig?.active_provider || pushProviderForm.default_provider || 'webpushr';
+    const selectedPushReady = selectedPushProvider === 'webpushr'
+        ? Boolean(selectedPushConfig?.webpushr?.auth_token?.trim() || selectedPushConfig?.webpushr?.auth_token_configured)
+            && Boolean(selectedPushConfig?.webpushr?.api_key?.trim() || selectedPushConfig?.webpushr?.api_key_configured)
+        : selectedPushProvider === 'wonderpush'
+            ? Boolean(selectedPushConfig?.wonderpush?.project_id?.trim())
+                && Boolean(selectedPushConfig?.wonderpush?.access_token?.trim() || selectedPushConfig?.wonderpush?.access_token_configured)
+            : Boolean(selectedPushConfig?.izooto?.api_token?.trim() || selectedPushConfig?.izooto?.api_token_configured);
+    const pushFallbackInvalid = Boolean(selectedPushConfig)
+        && selectedPushConfig.fallback_provider !== 'none'
+        && selectedPushConfig.fallback_provider === selectedPushConfig.active_provider;
+    const pushReadyPlatforms = Object.values(pushProviderForm.platforms || {}).filter((config) => {
+        const active = config?.active_provider || pushProviderForm.default_provider || 'webpushr';
+        if (active === 'webpushr') {
+            return Boolean((config?.webpushr?.auth_token || config?.webpushr?.auth_token_configured) && (config?.webpushr?.api_key || config?.webpushr?.api_key_configured));
+        }
+        if (active === 'wonderpush') {
+            return Boolean(config?.wonderpush?.project_id) && Boolean(config?.wonderpush?.access_token || config?.wonderpush?.access_token_configured);
+        }
+        return Boolean(config?.izooto?.api_token || config?.izooto?.api_token_configured);
+    }).length;
+    const pushConfiguredPlatforms = Object.keys(pushProviderForm.platforms || {}).length;
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
     const selectedPackageSetup = selectedPlatform?.package_setup || null;
@@ -954,6 +1292,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
         { id: 'markets', label: 'Markets', hint: `${platformRows.length} configured` },
         { id: 'payment_links', label: 'Payment Links', hint: paymentLinkReadOnly ? 'Read-only' : 'Editable routing' },
         { id: 'sms', label: 'SMS Routing', hint: smsProviderForm.enabled ? 'Enabled' : 'Disabled' },
+        { id: 'push', label: 'Push Routing', hint: `${pushReadyPlatforms}/${pushConfiguredPlatforms || 0} ready` },
         { id: 'scraper', label: 'Scraper', hint: `${scraperSources.length} sources` },
     ];
     const openInitialFullSync = () => {
@@ -1277,6 +1616,310 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
                                 </div>
                             </section>
                         ) : null}
+                        </div>
+                    </div>
+                </section>
+            ) : null}
+
+            {integrationArea === 'push' ? (
+                <section className="crm-surface overflow-hidden">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Push Provider Routing</h3>
+                            <p className="crm-panel-subtitle">Configure provider credentials per market and validate notification delivery using a real push test.</p>
+                        </div>
+                    </header>
+
+                    <div className="grid gap-4 p-4 xl:grid-cols-12">
+                        <div className="space-y-4 xl:col-span-7">
+                            {!canManagePushProviders ? (
+                                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                    Read-only access: only admin and sub-admin roles can update push routing settings.
+                                </p>
+                            ) : null}
+
+                            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Routing Controls</h4>
+                                <p className="mt-1 text-xs text-slate-500">Define the global default provider and per-market provider/fallback behavior.</p>
+
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(pushProviderForm.enabled)}
+                                            onChange={(event) => updatePushProviderField('enabled', event.target.checked)}
+                                            disabled={!canManagePushProviders}
+                                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                        />
+                                        Enable push dispatch for campaigns
+                                    </label>
+
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Default provider</label>
+                                        <select
+                                            value={pushProviderForm.default_provider}
+                                            onChange={(event) => updatePushProviderField('default_provider', event.target.value)}
+                                            disabled={!canManagePushProviders}
+                                            className="crm-select w-full"
+                                        >
+                                            {pushProviderOptions.map((option) => (
+                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Market</label>
+                                        <select
+                                            value={pushPlatformId || ''}
+                                            onChange={(event) => setPushPlatformId(event.target.value)}
+                                            className="crm-select w-full"
+                                        >
+                                            {(platformRows || []).map((platform) => (
+                                                <option key={platform.platform_id} value={String(platform.platform_id)}>
+                                                    {platform.platform_name} ({platform.country || '—'})
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Active provider</label>
+                                        <select
+                                            value={selectedPushConfig?.active_provider || pushProviderForm.default_provider}
+                                            onChange={(event) => updatePushPlatformField(pushPlatformId, 'active_provider', event.target.value)}
+                                            disabled={!canManagePushProviders || !pushPlatformId}
+                                            className="crm-select w-full"
+                                        >
+                                            {pushProviderOptions.map((option) => (
+                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Fallback provider</label>
+                                        <select
+                                            value={selectedPushConfig?.fallback_provider || 'none'}
+                                            onChange={(event) => updatePushPlatformField(pushPlatformId, 'fallback_provider', event.target.value)}
+                                            disabled={!canManagePushProviders || !pushPlatformId}
+                                            className="crm-select w-full"
+                                        >
+                                            {pushFallbackOptions.map((option) => (
+                                                <option
+                                                    key={option.value}
+                                                    value={option.value}
+                                                    disabled={option.value !== 'none' && option.value === (selectedPushConfig?.active_provider || '')}
+                                                >
+                                                    {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="md:col-span-2">
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Change reason</label>
+                                        <textarea
+                                            rows={2}
+                                            value={pushProviderForm.reason}
+                                            onChange={(event) => updatePushProviderField('reason', event.target.value)}
+                                            disabled={!canManagePushProviders}
+                                            className="crm-input"
+                                            placeholder="Reason for updating push routing"
+                                        />
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">WebPushr Credentials</h4>
+                                <p className="mt-1 text-xs text-slate-500">Required when WebPushr is selected as active or fallback provider.</p>
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <input
+                                        type="password"
+                                        value={selectedPushConfig?.webpushr?.api_key || ''}
+                                        onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'webpushr', 'api_key', event.target.value)}
+                                        disabled={!canManagePushProviders || !pushPlatformId}
+                                        className="crm-input"
+                                        placeholder="API key (leave blank to keep current)"
+                                    />
+                                    <input
+                                        type="password"
+                                        value={selectedPushConfig?.webpushr?.auth_token || ''}
+                                        onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'webpushr', 'auth_token', event.target.value)}
+                                        disabled={!canManagePushProviders || !pushPlatformId}
+                                        className="crm-input"
+                                        placeholder="Auth token (leave blank to keep current)"
+                                    />
+                                </div>
+                                <p className="mt-2 text-xs text-slate-500">
+                                    Stored keys:
+                                    {' '}
+                                    {selectedPushConfig?.webpushr?.api_key_configured ? 'API key configured' : 'API key missing'}
+                                    {' • '}
+                                    {selectedPushConfig?.webpushr?.auth_token_configured ? 'Auth token configured' : 'Auth token missing'}
+                                </p>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">WonderPush Credentials</h4>
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <input
+                                        type="password"
+                                        value={selectedPushConfig?.wonderpush?.access_token || ''}
+                                        onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'wonderpush', 'access_token', event.target.value)}
+                                        disabled={!canManagePushProviders || !pushPlatformId}
+                                        className="crm-input"
+                                        placeholder="Access token (leave blank to keep current)"
+                                    />
+                                    <input
+                                        value={selectedPushConfig?.wonderpush?.project_id || ''}
+                                        onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'wonderpush', 'project_id', event.target.value)}
+                                        disabled={!canManagePushProviders || !pushPlatformId}
+                                        className="crm-input"
+                                        placeholder="Project ID"
+                                    />
+                                </div>
+                                <p className="mt-2 text-xs text-slate-500">
+                                    Stored token:
+                                    {' '}
+                                    {selectedPushConfig?.wonderpush?.access_token_configured ? 'configured' : 'missing'}
+                                </p>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">iZooto Credentials</h4>
+                                <div className="mt-3">
+                                    <input
+                                        type="password"
+                                        value={selectedPushConfig?.izooto?.api_token || ''}
+                                        onChange={(event) => updatePushProviderCredentialField(pushPlatformId, 'izooto', 'api_token', event.target.value)}
+                                        disabled={!canManagePushProviders || !pushPlatformId}
+                                        className="crm-input"
+                                        placeholder="API token (leave blank to keep current)"
+                                    />
+                                </div>
+                                <p className="mt-2 text-xs text-slate-500">
+                                    Stored token:
+                                    {' '}
+                                    {selectedPushConfig?.izooto?.api_token_configured ? 'configured' : 'missing'}
+                                </p>
+                            </section>
+
+                            {pushFallbackInvalid ? (
+                                <p className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                                    Fallback provider must be different from the active provider.
+                                </p>
+                            ) : null}
+
+                            <div className="flex justify-end">
+                                <button
+                                    type="button"
+                                    onClick={savePushProviderConfig}
+                                    disabled={!canManagePushProviders || savePushProviderMutation.isPending || !pushProviderForm.reason.trim() || pushFallbackInvalid}
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {savePushProviderMutation.isPending ? 'Saving...' : 'Save push settings'}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4 xl:col-span-5">
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Test Notification</h4>
+                                <p className="mt-1 text-xs text-slate-500">Sends a real push notification to all subscribers for the selected market.</p>
+                                <div className="mt-3 space-y-3">
+                                    <input
+                                        value={pushTestForm.title}
+                                        onChange={(event) => setPushTestForm((current) => ({ ...current, title: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Notification title"
+                                    />
+                                    <textarea
+                                        rows={3}
+                                        value={pushTestForm.message}
+                                        onChange={(event) => setPushTestForm((current) => ({ ...current, message: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Notification message"
+                                    />
+                                    <input
+                                        value={pushTestForm.target_url}
+                                        onChange={(event) => setPushTestForm((current) => ({ ...current, target_url: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Target URL"
+                                    />
+                                    <input
+                                        value={pushTestForm.icon_url}
+                                        onChange={(event) => setPushTestForm((current) => ({ ...current, icon_url: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Icon URL (optional)"
+                                    />
+                                    <input
+                                        value={pushTestForm.reason}
+                                        onChange={(event) => setPushTestForm((current) => ({ ...current, reason: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Reason for push test"
+                                    />
+                                </div>
+
+                                <div className="mt-3 flex justify-end">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPushTestConfirmOpen(true)}
+                                        disabled={
+                                            testPushProviderMutation.isPending
+                                            || !canManagePushProviders
+                                            || !pushProviderForm.enabled
+                                            || !pushPlatformId
+                                            || !selectedPushReady
+                                            || !pushTestForm.title.trim()
+                                            || !pushTestForm.message.trim()
+                                            || !pushTestForm.target_url.trim()
+                                            || !pushTestForm.reason.trim()
+                                        }
+                                        className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {testPushProviderMutation.isPending ? 'Sending...' : 'Send test push'}
+                                    </button>
+                                </div>
+
+                                {!pushProviderForm.enabled ? (
+                                    <p className="mt-2 text-xs text-amber-700">Enable push dispatch before sending a test notification.</p>
+                                ) : null}
+                                {pushProviderForm.enabled && !selectedPushReady ? (
+                                    <p className="mt-2 text-xs text-amber-700">Selected provider credentials are incomplete for this market.</p>
+                                ) : null}
+                            </section>
+
+                            {latestPushTestResult ? (
+                                <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <h4 className="text-sm font-semibold text-slate-900">Latest Push Test Result</h4>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(latestPushTestResult.success ? 'success' : 'failed')}`}>
+                                            {latestPushTestResult.success ? 'success' : 'failed'}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                        <p><span className="font-semibold text-slate-800">Provider:</span> {pushProviderLabel(latestPushTestResult.provider)}</p>
+                                        <p><span className="font-semibold text-slate-800">Notification ID:</span> {latestPushTestResult.provider_notification_id || 'n/a'}</p>
+                                        <p className="break-all"><span className="font-semibold text-slate-800">Response:</span> {JSON.stringify(latestPushTestResult.provider_response || {})}</p>
+                                        {latestPushTestResult.fallback_attempted ? (
+                                            <p><span className="font-semibold text-slate-800">Fallback:</span> Attempted</p>
+                                        ) : null}
+                                    </div>
+                                </section>
+                            ) : null}
+
+                            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Selected Market</h4>
+                                <p className="mt-1 text-xs text-slate-600">
+                                    {selectedPushPlatform
+                                        ? `${selectedPushPlatform.platform_name} (${selectedPushPlatform.country || '—'})`
+                                        : 'No market selected.'}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-600">Active provider: {pushProviderLabel(selectedPushProvider)}</p>
+                                <p className="mt-1 text-xs text-slate-600">Fallback: {selectedPushConfig?.fallback_provider === 'none' ? 'No fallback' : pushProviderLabel(selectedPushConfig?.fallback_provider)}</p>
+                            </section>
                         </div>
                     </div>
                 </section>
@@ -2531,6 +3174,43 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks }) {
             </ConfirmDialog>
 
             <ConfirmDialog
+                open={pushTestConfirmOpen}
+                title="Send Test Push Notification?"
+                message="This sends a real push notification to all subscribers for the selected market/provider."
+                confirmLabel="Send test push"
+                cancelLabel="Cancel"
+                tone="warning"
+                onCancel={() => setPushTestConfirmOpen(false)}
+                onConfirm={() => {
+                    testPushProviderMutation.mutate({
+                        platform_id: Number(pushPlatformId),
+                        title: pushTestForm.title.trim(),
+                        message: pushTestForm.message.trim(),
+                        target_url: pushTestForm.target_url.trim(),
+                        icon_url: pushTestForm.icon_url.trim() || undefined,
+                        reason: pushTestForm.reason.trim(),
+                    });
+                }}
+                confirmDisabled={
+                    !pushPlatformId
+                    || !pushTestForm.title.trim()
+                    || !pushTestForm.message.trim()
+                    || !pushTestForm.target_url.trim()
+                    || !pushTestForm.reason.trim()
+                    || !pushProviderForm.enabled
+                    || !selectedPushReady
+                }
+                isPending={testPushProviderMutation.isPending}
+            >
+                <div className="space-y-1 text-sm text-slate-600">
+                    <p><span className="font-semibold text-slate-800">Market:</span> {selectedPushPlatform?.platform_name || '—'}</p>
+                    <p><span className="font-semibold text-slate-800">Provider:</span> {pushProviderLabel(selectedPushProvider)}</p>
+                    <p className="line-clamp-2"><span className="font-semibold text-slate-800">Title:</span> {pushTestForm.title}</p>
+                    <p className="line-clamp-2"><span className="font-semibold text-slate-800">Message:</span> {pushTestForm.message}</p>
+                </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
                 open={scraperRunConfirmOpen}
                 title="Run Scraper Now?"
                 message="This will fetch the source URL, evaluate compliance/robots guardrails, and execute dedupe logic before optional lead creation."
@@ -3591,6 +4271,7 @@ export default function Settings() {
     const canViewRoles = (user?.role || '') === 'admin';
     const canCreateMarkets = (user?.role || '') === 'admin';
     const canEditPaymentLinks = ['admin', 'sub_admin'].includes(user?.role || '');
+    const canManagePushProviders = ['admin', 'sub_admin'].includes(user?.role || '');
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
@@ -3625,6 +4306,7 @@ export default function Settings() {
                 <IntegrationsWorkspace
                     canCreateMarkets={canCreateMarkets}
                     canEditPaymentLinks={canEditPaymentLinks}
+                    canManagePushProviders={canManagePushProviders}
                 />
             ) : null}
 
