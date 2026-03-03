@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
+import RowActionMenu from '../components/RowActionMenu';
 import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -839,134 +840,49 @@ export default function Payments() {
         },
         {
             key: 'actions',
-            label: 'Actions',
+            label: '',
             render: (row) => {
-                const recommendation = pendingRecommendation(row);
+                const isFailed = row.status === 'failed' || row.status === 'initiated' || row.status === 'pending';
+                const isCompletedUnmatched = row.status === 'completed' && !row.client_id;
+                const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id;
+                const isLowConfidence = row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review';
+                const isManualReview = row.reconciliation_state === 'manual_review';
+
+                let primary = null;
+                if (isManualReview) {
+                    primary = { label: 'Resolve', variant: 'success', onClick: () => reviewStateMutation.mutate({ paymentId: row.id, state: 'resolved', reason: 'Manual review resolved from payment queue' }) };
+                } else if (isFailed) {
+                    primary = { label: 'Retry STK', variant: 'warning', onClick: () => setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' }) };
+                } else if (isCompletedUnmatched) {
+                    primary = { label: 'Auto-match', variant: 'primary', onClick: () => autoMatchMutation.mutate(row.id) };
+                } else if (isMatchedNoDeal) {
+                    primary = {
+                        label: 'Create Sub',
+                        variant: 'success',
+                        onClick: () => {
+                            if (row.reconciliation_confidence !== 'high') {
+                                toast.warning('Subscription creation is limited to high-confidence reconciled payments.');
+                                return;
+                            }
+                            setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
+                        },
+                    };
+                } else if (isLowConfidence) {
+                    primary = { label: 'Mark review', variant: 'warning', onClick: () => reviewStateMutation.mutate({ paymentId: row.id, state: 'manual_review', reason: 'Marked for manual review from payment queue' }) };
+                }
+
+                const overflow = [
+                    isFailed && { key: 'send-link', label: 'Send payment link', onClick: () => setSendLinkDialog({ open: true, payment: row, channel: 'sms', provider: '', phone: row.phone || '', reason: 'Send payment link from CRM' }) },
+                    isCompletedUnmatched && { key: 'manual-match', label: 'Match manually', onClick: () => openManualMatch(row) },
+                    { key: 'diagnose', label: 'Diagnose', onClick: () => openDiagnostics(row) },
+                ].filter(Boolean);
 
                 return (
-                    <div className="min-w-[220px] space-y-1.5">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                            {(row.status === 'failed' || row.status === 'initiated' || row.status === 'pending') && (
-                                <>
-                                    <button
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' });
-                                        }}
-                                        className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                                    >
-                                        Retry STK
-                                    </button>
-                                    <button
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            setSendLinkDialog({
-                                                open: true,
-                                                payment: row,
-                                                channel: 'sms',
-                                                provider: '',
-                                                phone: row.phone || '',
-                                                reason: 'Send payment link from CRM',
-                                            });
-                                        }}
-                                        className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                                    >
-                                        Send link
-                                    </button>
-                                </>
-                            )}
-                            <button
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    openDiagnostics(row);
-                                }}
-                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                            >
-                                Diagnose
-                            </button>
-                            {row.status === 'completed' && !row.client_id && (
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        autoMatchMutation.mutate(row.id);
-                                    }}
-                                    className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                                >
-                                    Auto-match
-                                </button>
-                            )}
-                            {row.status === 'completed' && !row.client_id && (
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        openManualMatch(row);
-                                    }}
-                                    className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                                >
-                                    Match manually
-                                </button>
-                            )}
-                            {row.status === 'completed' && row.client_id && !row.deal_id && (
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        if (row.reconciliation_confidence !== 'high') {
-                                            toast.warning('Subscription creation is limited to high-confidence reconciled payments.');
-                                            return;
-                                        }
-                                        setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
-                                    }}
-                                    className="rounded-md border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                                >
-                                    Create Sub
-                                </button>
-                            )}
-                            {row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review' && (
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        reviewStateMutation.mutate({
-                                            paymentId: row.id,
-                                            state: 'manual_review',
-                                            reason: 'Marked for manual review from payment queue',
-                                        });
-                                    }}
-                                    className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                                >
-                                    Mark review
-                                </button>
-                            )}
-                            {row.reconciliation_state === 'manual_review' && (
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        reviewStateMutation.mutate({
-                                            paymentId: row.id,
-                                            state: 'resolved',
-                                            reason: 'Manual review resolved from payment queue',
-                                        });
-                                    }}
-                                    className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                                >
-                                    Resolve review
-                                </button>
-                            )}
-                            {row.client_id ? (
-                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                                    Matched
-                                </span>
-                            ) : null}
-                        </div>
-                        {recommendation ? (
-                            <div className={`inline-flex max-w-full items-start gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium leading-4 ${recommendationClass(recommendation.tone)}`}>
-                                <span
-                                    aria-hidden="true"
-                                    className={`mt-[3px] h-2 w-2 shrink-0 rounded-full ${recommendationDotClass(recommendation.tone)}`}
-                                />
-                                <span className="text-left">Next best action: {recommendation.label}</span>
-                            </div>
-                        ) : null}
-                    </div>
+                    <RowActionMenu
+                        primaryAction={primary}
+                        actions={overflow}
+                        badge={row.client_id ? 'Matched' : null}
+                    />
                 );
             },
         },

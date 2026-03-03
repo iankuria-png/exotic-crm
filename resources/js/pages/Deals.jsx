@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
+import RowActionMenu from '../components/RowActionMenu';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
@@ -479,83 +480,39 @@ export default function Deals() {
         {
             key: 'actions',
             label: 'Actions',
-            render: (row) => (
-                <div className="flex items-center gap-1.5">
-                    {row.is_virtual ? (
-                        <>
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    if (!row.client_id) return;
-                                    const source = row.status === 'untracked' ? 'untracked_row' : 'legacy_row';
-                                    navigate(`/clients/${row.client_id}?tab=deals&action=new_subscription&source=${source}`);
-                                }}
-                                disabled={!row.client_id}
-                                className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                {row.status === 'untracked' ? 'Create subscription' : 'Activate'}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    if (!row.client_id) return;
-                                    navigate(`/clients/${row.client_id}`);
-                                }}
-                                disabled={!row.client_id}
-                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                Open profile
-                            </button>
-                        </>
-                    ) : null}
+            render: (row) => {
+                let primaryAction = null;
+                const overflowActions = [];
 
-                    {!row.is_virtual && row.status === 'pending' ? (
-                        <button
-                            onClick={(event) => openDialog('activate', row, event)}
-                            className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800"
-                        >
-                            Activate
-                        </button>
-                    ) : null}
+                if (row.is_virtual) {
+                    primaryAction = {
+                        label: row.status === 'untracked' ? 'Create subscription' : 'Activate',
+                        variant: 'primary',
+                        disabled: !row.client_id,
+                        onClick: () => {
+                            if (!row.client_id) return;
+                            const source = row.status === 'untracked' ? 'untracked_row' : 'legacy_row';
+                            navigate(`/clients/${row.client_id}?tab=deals&action=new_subscription&source=${source}`);
+                        },
+                    };
+                    overflowActions.push({
+                        key: 'open-profile',
+                        label: 'Open profile',
+                        disabled: !row.client_id,
+                        onClick: () => row.client_id && navigate(`/clients/${row.client_id}`),
+                    });
+                } else if (row.status === 'pending') {
+                    primaryAction = { label: 'Activate', variant: 'primary', onClick: () => openDialog('activate', row) };
+                } else if (row.status === 'active') {
+                    primaryAction = { label: 'Extend', variant: 'default', onClick: () => openDialog('extend', row) };
+                    overflowActions.push({ key: 'deactivate', label: 'Deactivate', variant: 'warning', onClick: () => openDialog('deactivate', row) });
+                } else {
+                    primaryAction = { label: 'Renew', variant: 'success', onClick: () => openDialog('renew', row) };
+                    overflowActions.push({ key: 'delete', label: 'Delete', variant: 'danger', onClick: () => openDialog('delete', row) });
+                }
 
-                    {!row.is_virtual && row.status === 'active' ? (
-                        <>
-                            <button
-                                onClick={(event) => openDialog('extend', row, event)}
-                                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                            >
-                                Extend
-                            </button>
-                            <button
-                                onClick={(event) => openDialog('deactivate', row, event)}
-                                className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
-                            >
-                                Deactivate
-                            </button>
-                        </>
-                    ) : null}
-
-                    {!row.is_virtual && !['pending', 'active'].includes(row.status) ? (
-                        <>
-                            <button
-                                onClick={(event) => openDialog('renew', row, event)}
-                                className="rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700 transition hover:bg-teal-100"
-                            >
-                                Renew
-                            </button>
-                            <button
-                                onClick={(event) => openDialog('delete', row, event)}
-                                className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                            >
-                                Delete
-                            </button>
-                        </>
-                    ) : null}
-
-                </div>
-            ),
+                return <RowActionMenu primaryAction={primaryAction} actions={overflowActions} />;
+            },
         },
     ];
 

@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
+import RowActionMenu from '../components/RowActionMenu';
 import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
@@ -763,85 +764,55 @@ export default function Leads() {
             label: 'Actions',
             render: (row) => {
                 const nextStatus = nextLeadStage(row.status);
+                const hasLinkedClient = row.matched_client || row.converted_client;
 
-                return (
-                    <div className="flex items-center gap-1.5">
-                        {nextStatus && row.status !== 'lost' ? (
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    updateStatusMutation.mutate({ leadId: row.id, status: nextStatus });
-                                }}
-                                className="rounded-md bg-teal-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                            >
-                                Move to {nextStatus}
-                            </button>
-                        ) : null}
+                const primaryAction = nextStatus && row.status !== 'lost'
+                    ? {
+                        label: `Move to ${nextStatus}`,
+                        variant: 'primary',
+                        onClick: () => updateStatusMutation.mutate({ leadId: row.id, status: nextStatus }),
+                    }
+                    : null;
 
-                        <button
-                            type="button"
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                setAssignDialog({
-                                    lead: row,
-                                    assigned_to: row.assigned_to ? String(row.assigned_to) : '',
-                                    reason: 'Lead reassigned from leads page',
-                                });
-                            }}
-                            className="crm-btn-secondary px-2.5 py-1 text-xs"
-                        >
-                            Assign
-                        </button>
+                const overflowActions = [
+                    {
+                        key: 'assign',
+                        label: 'Assign',
+                        onClick: () => setAssignDialog({
+                            lead: row,
+                            assigned_to: row.assigned_to ? String(row.assigned_to) : '',
+                            reason: 'Lead reassigned from leads page',
+                        }),
+                    },
+                    {
+                        key: 'reconcile',
+                        label: 'Reconcile',
+                        variant: 'success',
+                        hidden: !hasLinkedClient,
+                        onClick: () => {
+                            const linked = row.converted_client || row.matched_client;
+                            setReconcileDialog({
+                                lead: row,
+                                action: row.status === 'converted' ? 'link' : 'convert',
+                                client_id: linked?.id ? String(linked.id) : '',
+                                reason: 'Lead reconciled from leads page',
+                            });
+                        },
+                    },
+                    {
+                        key: 'archive',
+                        label: 'Archive',
+                        onClick: () => setArchiveDialog({ lead: row, reason: DEFAULT_LEAD_ARCHIVE_REASON }),
+                    },
+                    {
+                        key: 'delete',
+                        label: 'Delete',
+                        variant: 'danger',
+                        onClick: () => setDeleteDialog({ lead: row, reason: DEFAULT_LEAD_DELETE_REASON }),
+                    },
+                ];
 
-                        {row.matched_client || row.converted_client ? (
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    const linked = row.converted_client || row.matched_client;
-                                    setReconcileDialog({
-                                        lead: row,
-                                        action: row.status === 'converted' ? 'link' : 'convert',
-                                        client_id: linked?.id ? String(linked.id) : '',
-                                        reason: 'Lead reconciled from leads page',
-                                    });
-                                }}
-                                className="rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700 transition hover:bg-teal-100"
-                            >
-                                Reconcile
-                            </button>
-                        ) : null}
-
-                        <button
-                            type="button"
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                setArchiveDialog({
-                                    lead: row,
-                                    reason: DEFAULT_LEAD_ARCHIVE_REASON,
-                                });
-                            }}
-                            className="crm-btn-secondary px-2.5 py-1 text-xs"
-                        >
-                            Archive
-                        </button>
-
-                        <button
-                            type="button"
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                setDeleteDialog({
-                                    lead: row,
-                                    reason: DEFAULT_LEAD_DELETE_REASON,
-                                });
-                            }}
-                            className="crm-btn-danger px-2.5 py-1 text-xs"
-                        >
-                            Delete
-                        </button>
-                    </div>
-                );
+                return <RowActionMenu primaryAction={primaryAction} actions={overflowActions} />;
             },
         },
     ];
