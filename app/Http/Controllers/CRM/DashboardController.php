@@ -11,6 +11,8 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ClientNote;
+use App\Models\RenewalCampaign;
+use App\Models\TimelineEvent;
 use App\Services\MarketAuthorizationService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
@@ -180,6 +182,36 @@ class DashboardController extends Controller
         $countryPeriod = $validated['country_period'] ?? 'week';
         $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod);
 
+        $activeCampaignsQuery = RenewalCampaign::enabled();
+        if (is_array($platformIds)) {
+            $activeCampaignsQuery->whereIn('platform_id', $platformIds);
+        }
+        $activeCampaignsCount = $activeCampaignsQuery->count();
+
+        $recentActivityQuery = TimelineEvent::orderBy('created_at', 'desc');
+        if (is_array($platformIds)) {
+            $recentActivityQuery->whereIn('platform_id', $platformIds);
+        }
+        $recentActivity = $recentActivityQuery->limit(5)->get(['id', 'entity_type', 'event_type', 'created_at']);
+
+        $upcomingFollowUpsCountQuery = ClientNote::withPendingFollowUp();
+        if (is_array($platformIds)) {
+            $upcomingFollowUpsCountQuery->whereHas('client', function ($query) use ($platformIds) {
+                $query->whereIn('platform_id', $platformIds);
+            });
+        }
+        $upcomingFollowUpsCount = $upcomingFollowUpsCountQuery->count();
+
+        $commsStatsQuery = TimelineEvent::whereIn('event_type', ['sms_sent', 'sms_delivered', 'sms_failed', 'whatsapp_sent', 'whatsapp_delivered', 'whatsapp_failed'])
+            ->where('created_at', '>=', now()->subDays(30));
+        if (is_array($platformIds)) {
+            $commsStatsQuery->whereIn('platform_id', $platformIds);
+        }
+        $commsEvents = $commsStatsQuery->get(['event_type']);
+        $commsSentCount = $commsEvents->whereIn('event_type', ['sms_sent', 'whatsapp_sent'])->count();
+        $commsDeliveredCount = $commsEvents->whereIn('event_type', ['sms_delivered', 'whatsapp_delivered'])->count();
+        $commsFailedCount = $commsEvents->whereIn('event_type', ['sms_failed', 'whatsapp_failed'])->count();
+
         return response()->json([
             'filters' => [
                 'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
@@ -219,12 +251,20 @@ class DashboardController extends Controller
                 'renewal_risk_72h' => $renewalRisk72h,
                 'renewal_pipeline_4_14d' => $renewalPipeline14d,
                 'renewal_workload_14d' => $renewalWorkload14d,
+                'upcoming_follow_ups_count' => $upcomingFollowUpsCount,
             ],
             'expiring_deals' => $expiringDeals,
             'payment_review_queue' => $paymentReviewQueue,
             'recent_payments' => $paymentReviewQueue,
             'upcoming_follow_ups' => $upcomingFollowUps,
             'country_revenue' => $countryRevenue,
+            'active_campaigns_count' => $activeCampaignsCount,
+            'recent_activity' => $recentActivity,
+            'comms_stats' => [
+                'sent_count' => $commsSentCount,
+                'delivered_count' => $commsDeliveredCount,
+                'failed_count' => $commsFailedCount,
+            ],
         ]);
     }
 

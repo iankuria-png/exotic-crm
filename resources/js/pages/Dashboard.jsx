@@ -4,6 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import SectionFrame from '../components/SectionFrame';
 import CountryRevenueWidget from '../components/dashboard/CountryRevenueWidget';
+import QuickStatsWidget from '../components/dashboard/QuickStatsWidget';
+import RecentActivityWidget from '../components/dashboard/RecentActivityWidget';
+import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
+import useDashboardWidgets from '../hooks/useDashboardWidgets';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
@@ -173,6 +177,7 @@ function MetricCard({ metric, isLoading }) {
 
 export default function Dashboard() {
     const navigate = useNavigate();
+    const { config: widgetConfig } = useDashboardWidgets();
     const [platformFilter, setPlatformFilter] = useState(() => {
         if (typeof window === 'undefined') {
             return '';
@@ -526,14 +531,17 @@ export default function Dashboard() {
 
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
-                    <CountryRevenueWidget
-                        data={data?.country_revenue || []}
-                        period={countryPeriod}
-                        onPeriodChange={setCountryPeriod}
-                        isLoading={isLoading}
-                    />
+                    {widgetConfig.country_revenue ? (
+                        <CountryRevenueWidget
+                            data={data?.country_revenue || []}
+                            period={countryPeriod}
+                            onPeriodChange={setCountryPeriod}
+                            isLoading={isLoading}
+                        />
+                    ) : null}
 
                     <div className="grid gap-4 xl:grid-cols-2">
+                        {widgetConfig.expiring_subs ? (
                         <SectionFrame
                             title="Expiring Subscriptions"
                             subtitle="Earliest renewals first"
@@ -581,7 +589,9 @@ export default function Dashboard() {
                                 <EmptyState message="No subscriptions expiring soon." />
                             )}
                         </SectionFrame>
+                        ) : null}
 
+                        {widgetConfig.follow_ups ? (
                         <SectionFrame
                             title="Upcoming Follow-ups"
                             subtitle="Scheduled client callbacks due soon"
@@ -637,35 +647,60 @@ export default function Dashboard() {
                                 <EmptyState message="No pending follow-ups." />
                             )}
                         </SectionFrame>
+                        ) : null}
                     </div>
                 </div>
 
-                <div className="xl:col-span-4">
-                    <SectionFrame title="Performance Pulse" subtitle="Health indicators for today">
-                        <div className="space-y-4">
-                            <MetricProgress
-                                label="Payment match quality"
-                                helper={`${Math.round(matchQuality)}% matched this month`}
-                                value={matchQuality}
-                                tone="accent"
-                                tooltip="Percentage of completed payments in the selected window that are linked to a client."
-                            />
-                            <MetricProgress
-                                label="Lead backlog pressure"
-                                helper={`${pendingLeads.toLocaleString()} pending of ${totalLeads.toLocaleString()} leads`}
-                                value={leadBacklog}
-                                tone="warning"
-                                tooltip="Proportion of leads still in 'new' or 'contacted' status vs. total leads."
-                            />
-                            <MetricProgress
-                                label="Active client coverage"
-                                helper={`${activeClients.toLocaleString()} active profiles`}
-                                value={activeCoverage}
-                                tone="success"
-                                tooltip="Share of all client records that have an active (published) profile."
-                            />
-                        </div>
-                    </SectionFrame>
+                <div className="space-y-4 xl:col-span-4">
+                    {widgetConfig.performance_pulse ? (
+                        <SectionFrame title="Performance Pulse" subtitle="Health indicators for today">
+                            <div className="space-y-4">
+                                <MetricProgress
+                                    label="Payment match quality"
+                                    helper={`${Math.round(matchQuality)}% matched this month`}
+                                    value={matchQuality}
+                                    tone="accent"
+                                    tooltip="Percentage of completed payments in the selected window that are linked to a client."
+                                />
+                                <MetricProgress
+                                    label="Lead backlog pressure"
+                                    helper={`${pendingLeads.toLocaleString()} pending of ${totalLeads.toLocaleString()} leads`}
+                                    value={leadBacklog}
+                                    tone="warning"
+                                    tooltip="Proportion of leads still in 'new' or 'contacted' status vs. total leads."
+                                />
+                                <MetricProgress
+                                    label="Active client coverage"
+                                    helper={`${activeClients.toLocaleString()} active profiles`}
+                                    value={activeCoverage}
+                                    tone="success"
+                                    tooltip="Share of all client records that have an active (published) profile."
+                                />
+                            </div>
+                        </SectionFrame>
+                    ) : null}
+
+                    {widgetConfig.quick_stats ? (
+                        <QuickStatsWidget
+                            kpis={kpis}
+                            activeCampaigns={data?.active_campaigns_count || 0}
+                            isLoading={isLoading}
+                        />
+                    ) : null}
+
+                    {widgetConfig.recent_activity ? (
+                        <RecentActivityWidget
+                            events={data?.recent_activity || []}
+                            isLoading={isLoading}
+                        />
+                    ) : null}
+
+                    {widgetConfig.comms_balance ? (
+                        <CommsBalanceWidget
+                            stats={data?.comms_stats || {}}
+                            isLoading={isLoading}
+                        />
+                    ) : null}
                 </div>
             </section>
         </div>

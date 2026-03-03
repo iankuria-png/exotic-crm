@@ -7,6 +7,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import { useAuth } from '../hooks/useAuth';
+import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import { useToast } from '../components/ToastProvider';
 
 const baseTabs = [
@@ -14,6 +15,7 @@ const baseTabs = [
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
+    { id: 'dashboard', label: 'Dashboard' },
 ];
 const defaultDurationOptions = [
     { key: '1_week', label: '1 Week', days: 7 },
@@ -3536,6 +3538,49 @@ function RolesWorkspace() {
     );
 }
 
+function DashboardSettingsPanel() {
+    const { config, toggle, reset, labels } = useDashboardWidgets();
+
+    return (
+        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                <div>
+                    <h3 className="text-lg font-semibold text-slate-900">Dashboard Widgets</h3>
+                    <p className="mt-1 text-sm text-slate-500">Toggle which widgets appear on your dashboard.</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={reset}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                >
+                    Reset defaults
+                </button>
+            </header>
+            <div className="divide-y divide-slate-100">
+                {Object.entries(labels).map(([key, meta]) => (
+                    <label key={key} className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3.5 transition hover:bg-slate-50">
+                        <div>
+                            <p className="text-sm font-medium text-slate-900">{meta.name}</p>
+                            <p className="text-xs text-slate-500">{meta.description}</p>
+                        </div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={config[key]}
+                            onClick={() => toggle(key)}
+                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${config[key] ? 'bg-teal-600' : 'bg-slate-200'}`}
+                        >
+                            <span
+                                className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${config[key] ? 'translate-x-6' : 'translate-x-1'}`}
+                            />
+                        </button>
+                    </label>
+                ))}
+            </div>
+        </section>
+    );
+}
+
 export default function Settings() {
     const { user } = useAuth();
     const [activeTab, setActiveTab] = useState('integrations');
@@ -3583,6 +3628,7 @@ export default function Settings() {
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
+            {activeTab === 'dashboard' ? <DashboardSettingsPanel /> : null}
         </div>
     );
 }
