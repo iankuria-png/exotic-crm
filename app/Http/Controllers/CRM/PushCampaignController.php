@@ -57,7 +57,7 @@ class PushCampaignController extends Controller
         }
 
         $query = PushCampaign::query()
-            ->with('platform:id,name,country')
+            ->with('platform:id,name,country,timezone')
             ->withCount([
                 'items as pending_items_count' => fn($builder) => $builder->whereIn('status', ['pending_extraction', 'needs_preset', 'pending', 'scheduled']),
                 'items as failed_items_count' => fn($builder) => $builder->where('status', 'failed'),

@@ -25,6 +25,32 @@ function formatQueueDate(value) {
     }).format(parsed);
 }
 
+function formatCampaignDate(value, platformTimezone) {
+    if (!value) return '—';
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return value;
+    }
+
+    const options = {
+        month: 'short',
+        day: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    };
+
+    try {
+        return new Intl.DateTimeFormat(undefined, {
+            ...options,
+            ...(platformTimezone ? { timeZone: platformTimezone } : {}),
+        }).format(parsed);
+    } catch (_) {
+        return new Intl.DateTimeFormat(undefined, options).format(parsed);
+    }
+}
+
 export default function PushCampaigns() {
     const toast = useToast();
     const queryClient = useQueryClient();
@@ -208,12 +234,12 @@ export default function PushCampaigns() {
         {
             key: 'schedule',
             label: 'Scheduled',
-            render: (row) => row.scheduled_at || '—',
+            render: (row) => formatCampaignDate(row.scheduled_at, row.platform?.timezone || null),
         },
         {
             key: 'created',
             label: 'Created',
-            render: (row) => row.created_at || '—',
+            render: (row) => formatCampaignDate(row.created_at, row.platform?.timezone || null),
         },
     ], []);
 
