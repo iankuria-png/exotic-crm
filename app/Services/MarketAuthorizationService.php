@@ -12,6 +12,13 @@ class MarketAuthorizationService
     public const ROLE_ADMIN = 'admin';
     public const ROLE_SUB_ADMIN = 'sub_admin';
     public const ROLE_SALES = 'sales';
+    public const ROLE_MARKETING = 'marketing';
+    public const ALLOWED_ROLES = [
+        self::ROLE_ADMIN,
+        self::ROLE_SUB_ADMIN,
+        self::ROLE_SALES,
+        self::ROLE_MARKETING,
+    ];
 
     public function applyPlatformScope(Builder $query, User $user, string $column = 'platform_id'): Builder
     {

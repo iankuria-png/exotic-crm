@@ -1308,7 +1308,7 @@ class SettingsController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|email|max:255|unique:users,email',
             'password' => 'nullable|string|min:8|max:120',
-            'role' => 'required|in:admin,sub_admin,sales',
+            'role' => 'required|in:admin,sub_admin,sales,marketing',
             'status' => 'required|in:active,inactive',
             'assigned_market_ids' => 'nullable|array',
             'assigned_market_ids.*' => 'integer|exists:platforms,id',
@@ -1382,7 +1382,7 @@ class SettingsController extends Controller
     public function updateRole(Request $request, User $user)
     {
         $validated = $request->validate([
-            'role' => 'required|in:admin,sub_admin,sales',
+            'role' => 'required|in:admin,sub_admin,sales,marketing',
             'status' => 'required|in:active,inactive',
             'assigned_market_ids' => 'nullable|array',
             'assigned_market_ids.*' => 'integer|exists:platforms,id',

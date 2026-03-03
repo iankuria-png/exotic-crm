@@ -3138,6 +3138,7 @@ function WebhookLogsWorkspace() {
 function roleClasses(role) {
     if (role === 'admin') return 'bg-indigo-50 text-indigo-700 ring-indigo-200';
     if (role === 'sub_admin') return 'bg-sky-50 text-sky-700 ring-sky-200';
+    if (role === 'marketing') return 'bg-violet-50 text-violet-700 ring-violet-200';
     return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
 
@@ -3351,6 +3352,7 @@ function RolesWorkspace() {
                                     <option value="admin">Admin</option>
                                     <option value="sub_admin">Sub-admin</option>
                                     <option value="sales">Sales</option>
+                                    <option value="marketing">Marketing</option>
                                 </select>
                             </div>
 
@@ -3471,6 +3473,7 @@ function RolesWorkspace() {
                                 <option value="admin">Admin</option>
                                 <option value="sub_admin">Sub-admin</option>
                                 <option value="sales">Sales</option>
+                                <option value="marketing">Marketing</option>
                             </select>
                             <select
                                 value={createForm.status}
