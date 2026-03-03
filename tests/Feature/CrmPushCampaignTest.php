@@ -349,6 +349,50 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame('Escort Kenya', $items[0]['name']);
     }
 
+    public function test_crm_profiles_search_matches_email_and_formatted_phone(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 2101,
+            'name' => 'Nia Searchable',
+            'phone_normalized' => '254700111222',
+            'email' => 'nia.search@example.com',
+            'client_type' => 'escort',
+        ]);
+
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 2102,
+            'name' => 'Other Escort',
+            'phone_normalized' => '254733555000',
+            'email' => 'other@example.com',
+            'client_type' => 'escort',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $emailQuery = http_build_query([
+            'platform_id' => $platform->id,
+            'search' => 'nia.search@example.com',
+        ]);
+        $emailResponse = $this->getJson('/api/crm/push-campaigns/crm-profiles?' . $emailQuery);
+        $emailResponse->assertOk();
+        $this->assertCount(1, $emailResponse->json('data'));
+        $this->assertSame('Nia Searchable', $emailResponse->json('data.0.name'));
+
+        $phoneQuery = http_build_query([
+            'platform_id' => $platform->id,
+            'search' => '+254 700-111-222',
+        ]);
+        $phoneResponse = $this->getJson('/api/crm/push-campaigns/crm-profiles?' . $phoneQuery);
+        $phoneResponse->assertOk();
+        $this->assertCount(1, $phoneResponse->json('data'));
+        $this->assertSame('Nia Searchable', $phoneResponse->json('data.0.name'));
+    }
+
     public function test_marketing_user_can_create_campaign_from_selected_crm_escorts(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya', 'Africa/Nairobi');

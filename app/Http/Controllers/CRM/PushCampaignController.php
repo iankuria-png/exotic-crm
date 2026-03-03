@@ -267,11 +267,19 @@ class PushCampaignController extends Controller
 
         if (!empty($validated['search'])) {
             $search = trim((string) $validated['search']);
-            $query->where(function ($builder) use ($search): void {
+            $normalizedDigits = preg_replace('/\D+/', '', $search) ?? '';
+            $query->where(function ($builder) use ($search, $normalizedDigits): void {
                 $builder->where('name', 'like', '%' . $search . '%')
                     ->orWhere('phone_normalized', 'like', '%' . $search . '%')
                     ->orWhere('email', 'like', '%' . $search . '%')
                     ->orWhere('city', 'like', '%' . $search . '%');
+
+                if ($normalizedDigits !== '') {
+                    $builder->orWhereRaw(
+                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone_normalized, ''), '+', ''), ' ', ''), '-', ''), '(', ''), ')', '') like ?",
+                        ['%' . $normalizedDigits . '%']
+                    );
+                }
             });
         }
 

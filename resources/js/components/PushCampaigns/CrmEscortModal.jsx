@@ -6,6 +6,7 @@ import { useToast } from '../ToastProvider';
 export default function CrmEscortModal({ open, onClose, onCreated, platformOptions = [] }) {
     const toast = useToast();
     const [platformId, setPlatformId] = useState('');
+    const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [selectedIds, setSelectedIds] = useState([]);
     const [message, setMessage] = useState('');
@@ -16,6 +17,7 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
     useEffect(() => {
         if (!open) {
             setPlatformId('');
+            setSearchInput('');
             setSearch('');
             setSelectedIds([]);
             setMessage('');
@@ -24,6 +26,18 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
             setPage(1);
         }
     }, [open]);
+
+    useEffect(() => {
+        if (!open) {
+            return undefined;
+        }
+
+        const handle = window.setTimeout(() => {
+            setSearch(searchInput.trim());
+        }, 250);
+
+        return () => window.clearTimeout(handle);
+    }, [open, searchInput]);
 
     const profilesQuery = useQuery({
         enabled: open && Boolean(platformId),
@@ -92,8 +106,8 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
     const canSubmit = Boolean(platformId) && selectedIds.length > 0 && message.trim().length > 0;
 
     return (
-        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 p-4">
-            <div className="w-full max-w-6xl rounded-xl bg-white shadow-xl">
+        <div className="fixed inset-0 z-[95] overflow-y-auto bg-slate-900/60 p-4">
+            <div className="mx-auto my-4 flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col rounded-xl bg-white shadow-xl">
                 <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                     <div>
                         <h3 className="text-lg font-semibold text-slate-900">Create Campaign From CRM Escorts</h3>
@@ -102,7 +116,7 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
                     <button type="button" onClick={onClose} className="crm-btn-secondary px-3 py-1.5">Close</button>
                 </header>
 
-                <div className="space-y-3 p-4">
+                <div className="flex-1 space-y-3 overflow-y-auto p-4">
                     <section className="grid gap-2 md:grid-cols-4">
                         <select
                             value={platformId}
@@ -121,9 +135,9 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
                             ))}
                         </select>
                         <input
-                            value={search}
+                            value={searchInput}
                             onChange={(event) => {
-                                setSearch(event.target.value);
+                                setSearchInput(event.target.value);
                                 setPage(1);
                             }}
                             className="crm-input md:col-span-2"
@@ -134,8 +148,8 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
                         </div>
                     </section>
 
-                    <section className="rounded-lg border border-slate-200">
-                        <div className="overflow-auto">
+                    <section className="overflow-hidden rounded-lg border border-slate-200">
+                        <div className="max-h-[45vh] overflow-auto">
                             <table className="min-w-full text-xs">
                                 <thead>
                                     <tr className="border-b border-slate-200 text-left text-slate-500">
@@ -180,6 +194,17 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
                         <div className="flex items-center justify-between border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
                             <p>Page {currentPage} of {lastPage}</p>
                             <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setSearchInput('');
+                                        setSearch('');
+                                        setPage(1);
+                                    }}
+                                    className="crm-btn-secondary px-2 py-1 text-xs"
+                                >
+                                    Clear search
+                                </button>
                                 <button
                                     type="button"
                                     onClick={() => setPage((prev) => Math.max(1, prev - 1))}
