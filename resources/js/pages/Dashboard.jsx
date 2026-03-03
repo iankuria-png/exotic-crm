@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
-import StatusBadge from '../components/StatusBadge';
+import SectionFrame from '../components/SectionFrame';
+import CountryRevenueWidget from '../components/dashboard/CountryRevenueWidget';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
@@ -79,22 +80,6 @@ function formatDelta(value) {
     if (!Number.isFinite(numeric)) return null;
     if (numeric === 0) return 'Flat vs previous window';
     return `${numeric > 0 ? '+' : ''}${numeric}% vs previous window`;
-}
-
-function SectionFrame({ title, subtitle, action, children, footer }) {
-    return (
-        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-            <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3.5">
-                <div>
-                    <h3 className="text-[1.08rem] leading-6 font-semibold tracking-tight text-slate-900">{title}</h3>
-                    {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
-                </div>
-                {action}
-            </header>
-            <div className="p-4">{children}</div>
-            {footer ? <footer className="border-t border-slate-100 px-4 py-3">{footer}</footer> : null}
-        </section>
-    );
 }
 
 function LoadingRows() {
@@ -197,16 +182,18 @@ export default function Dashboard() {
     });
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
+    const [countryPeriod, setCountryPeriod] = useState('week');
     const [didHydrateDefaultRange, setDidHydrateDefaultRange] = useState(false);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['dashboard', platformFilter, fromDate, toDate],
+        queryKey: ['dashboard', platformFilter, fromDate, toDate, countryPeriod],
         queryFn: () =>
             api.get('/crm/dashboard', {
                 params: {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...(fromDate ? { from: fromDate } : {}),
                     ...(toDate ? { to: toDate } : {}),
+                    country_period: countryPeriod,
                 },
             }).then((response) => response.data),
         refetchInterval: DASHBOARD_REFRESH_MS,
@@ -356,10 +343,6 @@ export default function Dashboard() {
             onClick: () => navigate(withMarketScope('/deals?bucket=workload')),
         },
     ];
-
-    const payments = data?.payment_review_queue || data?.recent_payments || [];
-    const paymentPreview = payments.slice(0, LIST_PREVIEW_LIMIT);
-    const hiddenPaymentCount = Math.max(0, payments.length - LIST_PREVIEW_LIMIT);
 
     const expiringDeals = data?.expiring_deals || [];
     const expiringPreview = expiringDeals.slice(0, LIST_PREVIEW_LIMIT);
@@ -543,55 +526,12 @@ export default function Dashboard() {
 
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
-                    <SectionFrame
-                        title="Completed — Unlinked Payments"
-                        subtitle="Completed payments not yet matched to a client record."
-                        action={(
-                            <button
-                                type="button"
-                                onClick={() => navigate('/payments')}
-                                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                            >
-                                View all
-                            </button>
-                        )}
-                        footer={(
-                            <PreviewFooter
-                                hiddenCount={hiddenPaymentCount}
-                                noun="payments"
-                                ctaLabel="Open payment matching"
-                                onOpen={() => navigate('/payments')}
-                            />
-                        )}
-                    >
-                        {isLoading ? (
-                            <LoadingRows />
-                        ) : paymentPreview.length > 0 ? (
-                            <div className="space-y-2">
-                                {paymentPreview.map((payment) => (
-                                    <button
-                                        key={payment.id}
-                                        type="button"
-                                        onClick={() => navigate('/payments')}
-                                        className="flex w-full items-center justify-between gap-4 rounded-md border border-slate-200 bg-white px-3.5 py-2.5 text-left transition hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                                    >
-                                        <div className="min-w-0">
-                                            <p className="truncate text-sm font-semibold text-slate-900">{formatCurrency(payment.amount, payment.currency || selectedCurrency)}</p>
-                                            <p className="truncate text-xs text-slate-500">
-                                                {payment.phone || 'No phone'} {payment.transaction_reference ? `- ${payment.transaction_reference}` : ''}
-                                            </p>
-                                        </div>
-                                        <div className="shrink-0 text-right">
-                                            <StatusBadge status={payment.status} />
-                                            <p className="mt-1 text-xs text-slate-400">{formatRelativeTime(payment.created_at)}</p>
-                                        </div>
-                                    </button>
-                                ))}
-                            </div>
-                        ) : (
-                            <EmptyState message="All completed payments are linked to client records." />
-                        )}
-                    </SectionFrame>
+                    <CountryRevenueWidget
+                        data={data?.country_revenue || []}
+                        period={countryPeriod}
+                        onPeriodChange={setCountryPeriod}
+                        isLoading={isLoading}
+                    />
 
                     <div className="grid gap-4 xl:grid-cols-2">
                         <SectionFrame

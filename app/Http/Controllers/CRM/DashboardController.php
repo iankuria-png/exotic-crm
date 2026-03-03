@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\Lead;
 use App\Models\Deal;
 use App\Models\Payment;
+use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ClientNote;
 use App\Services\MarketAuthorizationService;
@@ -27,6 +28,7 @@ class DashboardController extends Controller
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'search' => 'nullable|string|max:120',
+            'country_period' => 'nullable|in:week,month',
         ]);
 
         $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -175,6 +177,9 @@ class DashboardController extends Controller
         $renewalPipeline14d = (clone $renewalPipeline14dQuery)->count();
         $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
+        $countryPeriod = $validated['country_period'] ?? 'week';
+        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod);
+
         return response()->json([
             'filters' => [
                 'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
@@ -219,6 +224,7 @@ class DashboardController extends Controller
             'payment_review_queue' => $paymentReviewQueue,
             'recent_payments' => $paymentReviewQueue,
             'upcoming_follow_ups' => $upcomingFollowUps,
+            'country_revenue' => $countryRevenue,
         ]);
     }
 
@@ -245,6 +251,59 @@ class DashboardController extends Controller
             ->get();
 
         return response()->json($products);
+    }
+
+    private function buildCountryRevenue(?array $platformIds, string $period): array
+    {
+        $now = now();
+        if ($period === 'month') {
+            $currentFrom = $now->copy()->startOfMonth();
+            $currentTo = $now->copy()->endOfDay();
+            $previousFrom = $now->copy()->subMonth()->startOfMonth();
+            $previousTo = $now->copy()->subMonth()->endOfMonth();
+        } else {
+            $currentFrom = $now->copy()->startOfWeek();
+            $currentTo = $now->copy()->endOfDay();
+            $previousFrom = $now->copy()->subWeek()->startOfWeek();
+            $previousTo = $now->copy()->subWeek()->endOfWeek();
+        }
+
+        $platforms = Platform::where('is_active', true);
+        if (is_array($platformIds)) {
+            $platforms->whereIn('id', $platformIds);
+        }
+        $platforms = $platforms->get();
+
+        $result = [];
+        foreach ($platforms as $platform) {
+            $currentRevenue = (float) Payment::where('platform_id', $platform->id)
+                ->where('status', 'completed')
+                ->whereBetween('created_at', [$currentFrom, $currentTo])
+                ->sum('amount');
+
+            $previousRevenue = (float) Payment::where('platform_id', $platform->id)
+                ->where('status', 'completed')
+                ->whereBetween('created_at', [$previousFrom, $previousTo])
+                ->sum('amount');
+
+            $trend = $previousRevenue > 0
+                ? round((($currentRevenue - $previousRevenue) / $previousRevenue) * 100, 1)
+                : ($currentRevenue > 0 ? 100.0 : null);
+
+            $result[] = [
+                'platform_id' => $platform->id,
+                'name' => $platform->name,
+                'country' => $platform->country,
+                'currency' => $platform->currency_code,
+                'current_revenue' => $currentRevenue,
+                'previous_revenue' => $previousRevenue,
+                'trend' => $trend,
+            ];
+        }
+
+        usort($result, fn($a, $b) => $b['current_revenue'] <=> $a['current_revenue']);
+
+        return $result;
     }
 
     private function resolveOldestDashboardRecordAt(?array $platformIds): ?Carbon
