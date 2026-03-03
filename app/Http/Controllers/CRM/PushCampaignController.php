@@ -1704,8 +1704,8 @@ class PushCampaignController extends Controller
         $lines = explode("\n", $normalized);
 
         foreach ($lines as $index => $line) {
-            $rawLine = trim($line);
-            if ($rawLine === '') {
+            $rawLine = rtrim((string) $line, "\r\n");
+            if (trim($rawLine) === '') {
                 continue;
             }
 
@@ -1720,10 +1720,10 @@ class PushCampaignController extends Controller
                 array_pop($columns);
             }
 
-            if (count($columns) < 4) {
+            if (count($columns) < 3) {
                 throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
                     'message' => sprintf(
-                        'Invalid paste format at line %d. Expected 4 tab-separated columns: Date, Profile URL, Message, Time.',
+                        'Invalid paste format at line %d. Expected tab-separated columns: Date, Profile URL, Message, Time.',
                         $lineNumber
                     ),
                 ], 422));
@@ -1734,6 +1734,11 @@ class PushCampaignController extends Controller
                 $date = (string) ($columns[0] ?? '');
                 $profileUrl = (string) ($columns[1] ?? '');
                 $message = trim(implode(' ', array_slice($columns, 2)));
+            } elseif (count($columns) === 3) {
+                $date = (string) ($columns[0] ?? '');
+                $profileUrl = (string) ($columns[1] ?? '');
+                $message = (string) ($columns[2] ?? '');
+                $time = '';
             } else {
                 $date = (string) ($columns[0] ?? '');
                 $profileUrl = (string) ($columns[1] ?? '');

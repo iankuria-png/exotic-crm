@@ -54,6 +54,34 @@ class CrmPushCampaignTest extends TestCase
         $response->assertJsonPath('data.0.id', $campaign->id);
     }
 
+    public function test_campaign_listing_includes_platform_timezone_and_parseable_dates(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya', 'Africa/Nairobi');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Timezone Campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-timezone',
+            'scheduled_at' => now()->addDay()->utc(),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns');
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $campaign->id)
+            ->assertJsonPath('data.0.platform.timezone', 'Africa/Nairobi');
+
+        $scheduledAt = $response->json('data.0.scheduled_at');
+        $createdAt = $response->json('data.0.created_at');
+
+        $this->assertNotNull(Carbon::parse((string) $scheduledAt));
+        $this->assertNotNull(Carbon::parse((string) $createdAt));
+    }
+
     public function test_sales_user_cannot_access_push_campaigns(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
@@ -330,8 +358,20 @@ class CrmPushCampaignTest extends TestCase
 
         $response = $this->getJson('/api/crm/push-campaigns/upload/queue');
         $response->assertOk()
+            ->assertJsonStructure([
+                'data',
+                'current_page',
+                'last_page',
+                'per_page',
+                'total',
+                'from',
+                'to',
+                'health',
+            ])
             ->assertJsonCount(5, 'items')
+            ->assertJsonCount(5, 'data')
             ->assertJsonPath('items.0.batch_id', 'queue-b')
+            ->assertJsonPath('data.0.batch_id', 'queue-b')
             ->assertJsonPath('items.1.batch_id', 'queue-a')
             ->assertJsonPath('items.1.can_cancel', true)
             ->assertJsonPath('items.1.can_process_now', true)
@@ -351,6 +391,111 @@ class CrmPushCampaignTest extends TestCase
             'batch_id' => 'queue-e',
             'can_process_now' => true,
         ]);
+    }
+
+    public function test_upload_queue_endpoint_supports_page_and_per_page_slicing(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $otherUser = $this->createUser('marketing', [$platform->id]);
+
+        /** @var UploadBatchStatusService $uploadBatchStatusService */
+        $uploadBatchStatusService = app(UploadBatchStatusService::class);
+
+        for ($i = 1; $i <= 13; $i++) {
+            $uploadBatchStatusService->put('page-batch-' . $i, [
+                'batch_id' => 'page-batch-' . $i,
+                'status' => 'queued',
+                'source_filename' => 'Queue ' . $i . '.xlsx',
+                'queued_at' => now()->subMinutes($i)->toDateTimeString(),
+                'initiated_by' => $user->id,
+                'dry_run' => true,
+            ]);
+        }
+
+        $uploadBatchStatusService->put('page-batch-other-user', [
+            'batch_id' => 'page-batch-other-user',
+            'status' => 'queued',
+            'source_filename' => 'Other User.xlsx',
+            'queued_at' => now()->subSeconds(30)->toDateTimeString(),
+            'initiated_by' => $otherUser->id,
+            'dry_run' => true,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/push-campaigns/upload/queue?page=2&per_page=5');
+        $response->assertOk()
+            ->assertJsonPath('current_page', 2)
+            ->assertJsonPath('last_page', 3)
+            ->assertJsonPath('per_page', 5)
+            ->assertJsonPath('total', 13)
+            ->assertJsonPath('from', 6)
+            ->assertJsonPath('to', 10)
+            ->assertJsonCount(5, 'data')
+            ->assertJsonPath('data.0.batch_id', 'page-batch-6')
+            ->assertJsonPath('data.4.batch_id', 'page-batch-10');
+    }
+
+    public function test_paste_upload_endpoint_accepts_valid_tab_delimited_rows_and_dispatches_processing(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Queue::fake();
+        config()->set('services.push_campaigns.inline_dry_run_max_rows', 0);
+        Sanctum::actingAs($user);
+
+        $content = implode("\n", [
+            "Date\tProfile URL\tMessage\tTime",
+            "7th January\thttps://kenya.example/?p=1001\tHello Kenya\t10:00:00",
+            "\thttps://kenya.example/?p=1002\tHello Kenya 2\t12:00:00",
+        ]);
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload/paste', [
+            'platform_id' => $platform->id,
+            'content' => $content,
+            'dry_run' => false,
+            'year' => 2026,
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonStructure([
+                'batch_id',
+                'status',
+                'dry_run',
+                'processed_inline',
+                'status_payload',
+            ])
+            ->assertJsonPath('dry_run', false)
+            ->assertJsonPath('processed_inline', false);
+
+        $batchId = (string) $response->json('batch_id');
+        $this->assertNotSame('', $batchId);
+
+        Queue::assertPushed(ProcessPushUploadJob::class, function (ProcessPushUploadJob $job) use ($batchId): bool {
+            return $job->batchId === $batchId
+                && $job->dryRun === false
+                && str_contains($job->sourceFilename, 'Kenya Push 2026.xlsx');
+        });
+    }
+
+    public function test_paste_upload_endpoint_rejects_invalid_content_shape_with_422(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload/paste', [
+            'platform_id' => $platform->id,
+            'content' => "Invalid row without tabs",
+        ]);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString(
+            'Expected tab-separated columns',
+            (string) $response->json('message')
+        );
     }
 
     public function test_marketing_user_can_cancel_queued_upload_batch(): void
