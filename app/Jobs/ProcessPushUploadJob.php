@@ -28,6 +28,7 @@ class ProcessPushUploadJob implements ShouldQueue
         public readonly string $filePath,
         public readonly string $sourceFilename,
         public readonly int $userId,
+        public readonly bool $dryRun = false,
     ) {
     }
 
@@ -42,6 +43,7 @@ class ProcessPushUploadJob implements ShouldQueue
             'total_items' => 0,
             'campaign_ids' => [],
             'unmapped_sheets' => [],
+            'dry_run' => $this->dryRun,
         ], now()->addHours(12));
 
         if (!is_file($this->filePath)) {
@@ -56,7 +58,9 @@ class ProcessPushUploadJob implements ShouldQueue
         $campaignsByPlatform = [];
         $campaignIds = [];
         $unmappedSheets = [];
+        $sheetRowCounts = [];
         $sheetsParsed = 0;
+        $mappedSheets = 0;
         $totalItems = 0;
 
         foreach ($worksheetInfo as $sheetMeta) {
@@ -75,17 +79,7 @@ class ProcessPushUploadJob implements ShouldQueue
                 $unmappedSheets[] = $sheetName;
                 continue;
             }
-
-            if (!isset($campaignsByPlatform[$platform->id])) {
-                $campaignsByPlatform[$platform->id] = $pushCampaignService->createCampaignForPlatform(
-                    (int) $platform->id,
-                    $this->batchId,
-                    $this->sourceFilename,
-                    $this->userId,
-                );
-            }
-
-            $campaign = $campaignsByPlatform[$platform->id];
+            $mappedSheets++;
             $highestRow = (int) ($sheetMeta['totalRows'] ?? 0);
             $highestRow = max(2, $highestRow);
             $sheetItemCount = 0;
@@ -127,6 +121,24 @@ class ProcessPushUploadJob implements ShouldQueue
                     continue;
                 }
 
+                $rowCount = count($rows);
+                $sheetItemCount += $rowCount;
+                $totalItems += $rowCount;
+
+                if ($this->dryRun) {
+                    continue;
+                }
+
+                if (!isset($campaignsByPlatform[$platform->id])) {
+                    $campaignsByPlatform[$platform->id] = $pushCampaignService->createCampaignForPlatform(
+                        (int) $platform->id,
+                        $this->batchId,
+                        $this->sourceFilename,
+                        $this->userId,
+                    );
+                }
+
+                $campaign = $campaignsByPlatform[$platform->id];
                 $now = now();
                 $payload = [];
 
@@ -144,17 +156,20 @@ class ProcessPushUploadJob implements ShouldQueue
                 }
 
                 PushCampaignItem::query()->insert($payload);
-
-                $rowCount = count($rows);
-                $sheetItemCount += $rowCount;
-                $totalItems += $rowCount;
             }
 
-            if ($sheetItemCount > 0) {
+            $sheetRowCounts[$sheetName] = $sheetItemCount;
+
+            if (!$this->dryRun && $sheetItemCount > 0 && isset($campaignsByPlatform[$platform->id])) {
+                $campaign = $campaignsByPlatform[$platform->id];
                 $campaign->increment('total_items', $sheetItemCount);
             }
 
-            $campaignIds[(int) $campaign->id] = (int) $campaign->id;
+            if (!$this->dryRun && isset($campaignsByPlatform[$platform->id])) {
+                $campaign = $campaignsByPlatform[$platform->id];
+                $campaignIds[(int) $campaign->id] = (int) $campaign->id;
+            }
+
             $sheetsParsed++;
 
             Cache::put($this->batchCacheKey(), [
@@ -163,11 +178,34 @@ class ProcessPushUploadJob implements ShouldQueue
                 'source_filename' => $this->sourceFilename,
                 'year' => $year,
                 'sheets_parsed' => $sheetsParsed,
+                'mapped_sheets' => $mappedSheets,
                 'total_items' => $totalItems,
                 'campaign_ids' => array_values($campaignIds),
                 'unmapped_sheets' => $unmappedSheets,
+                'sheet_row_counts' => $sheetRowCounts,
+                'dry_run' => $this->dryRun,
                 'updated_at' => now()->toDateTimeString(),
             ], now()->addHours(12));
+        }
+
+        if ($this->dryRun) {
+            Cache::put($this->batchCacheKey(), [
+                'batch_id' => $this->batchId,
+                'status' => 'ready',
+                'source_filename' => $this->sourceFilename,
+                'year' => $year,
+                'sheets_parsed' => $sheetsParsed,
+                'mapped_sheets' => $mappedSheets,
+                'total_items' => $totalItems,
+                'campaign_ids' => [],
+                'unmapped_sheets' => $unmappedSheets,
+                'sheet_row_counts' => $sheetRowCounts,
+                'dry_run' => true,
+                'message' => 'Dry run complete. No campaigns were created.',
+                'updated_at' => now()->toDateTimeString(),
+            ], now()->addHours(12));
+
+            return;
         }
 
         if (empty($campaignIds)) {
@@ -177,10 +215,15 @@ class ProcessPushUploadJob implements ShouldQueue
                 'source_filename' => $this->sourceFilename,
                 'year' => $year,
                 'sheets_parsed' => $sheetsParsed,
+                'mapped_sheets' => $mappedSheets,
                 'total_items' => $totalItems,
                 'campaign_ids' => [],
                 'unmapped_sheets' => $unmappedSheets,
-                'error' => 'No mapped sheets found in upload file.',
+                'sheet_row_counts' => $sheetRowCounts,
+                'dry_run' => false,
+                'error' => $mappedSheets === 0
+                    ? 'No mapped sheets found in upload file.'
+                    : 'No valid data rows found in mapped sheets.',
                 'updated_at' => now()->toDateTimeString(),
             ], now()->addHours(12));
             return;
@@ -199,6 +242,8 @@ class ProcessPushUploadJob implements ShouldQueue
             'total_items' => $totalItems,
             'campaign_ids' => array_values($campaignIds),
             'unmapped_sheets' => $unmappedSheets,
+            'sheet_row_counts' => $sheetRowCounts,
+            'dry_run' => false,
             'updated_at' => now()->toDateTimeString(),
         ], now()->addHours(12));
     }
@@ -216,6 +261,7 @@ class ProcessPushUploadJob implements ShouldQueue
             'status' => 'failed',
             'source_filename' => $this->sourceFilename,
             'error' => $exception->getMessage(),
+            'dry_run' => $this->dryRun,
             'updated_at' => now()->toDateTimeString(),
         ], now()->addHours(12));
     }

@@ -109,7 +109,18 @@ class PushProviderService
             return null;
         }
 
-        return $instance->getStatus($providerNotificationId, $providerConfig);
+        try {
+            return $instance->getStatus($providerNotificationId, $providerConfig);
+        } catch (\Throwable $exception) {
+            Log::warning('Push analytics polling failed', [
+                'provider' => $providerId,
+                'platform_id' => $platformId,
+                'provider_notification_id' => $providerNotificationId,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
     }
 
     /**
@@ -143,7 +154,18 @@ class PushProviderService
             return null;
         }
 
-        $counts = $provider->getSubscriberCount($providerConfig);
+        try {
+            $counts = $provider->getSubscriberCount($providerConfig);
+        } catch (\Throwable $exception) {
+            Log::warning('Push subscriber sync failed for provider', [
+                'provider' => $providerId,
+                'platform_id' => $platformId,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+
         if (!$counts) {
             return null;
         }

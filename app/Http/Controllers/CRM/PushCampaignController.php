@@ -16,6 +16,7 @@ use App\Services\PushNotification\SubscriberSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -87,7 +88,17 @@ class PushCampaignController extends Controller
     {
         $validated = $request->validate([
             'file' => 'required|file|mimes:xlsx,xls|max:51200',
+            'dry_run' => 'nullable|boolean',
         ]);
+
+        $dryRun = (bool) ($validated['dry_run'] ?? false);
+        $setupIssues = $this->pushUploadSetupIssues($dryRun);
+        if (!empty($setupIssues)) {
+            return response()->json([
+                'message' => 'Push upload setup is incomplete. Run CRM push migrations/setup first.',
+                'issues' => $setupIssues,
+            ], 503);
+        }
 
         $file = $validated['file'];
         $batchId = (string) Str::uuid();
@@ -105,18 +116,38 @@ class PushCampaignController extends Controller
             'profiles_processed' => 0,
             'campaign_ids' => [],
             'unmapped_sheets' => [],
+            'dry_run' => $dryRun,
         ], now()->addHours(12));
 
-        ProcessPushUploadJob::dispatch(
-            $batchId,
-            storage_path('app/' . $storedPath),
-            (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
-            (int) $request->user()->id,
-        );
+        try {
+            ProcessPushUploadJob::dispatch(
+                $batchId,
+                storage_path('app/' . $storedPath),
+                (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
+                (int) $request->user()->id,
+                $dryRun,
+            );
+        } catch (\Throwable $exception) {
+            Cache::put($this->batchCacheKey($batchId), [
+                'batch_id' => $batchId,
+                'status' => 'failed',
+                'source_filename' => (string) ($file->getClientOriginalName() ?: $batchId . '.' . $extension),
+                'error' => $exception->getMessage(),
+                'dry_run' => $dryRun,
+                'updated_at' => now()->toDateTimeString(),
+            ], now()->addHours(12));
+
+            return response()->json([
+                'message' => 'Failed to queue workbook processing.',
+                'error' => $exception->getMessage(),
+                'batch_id' => $batchId,
+            ], 500);
+        }
 
         return response()->json([
             'batch_id' => $batchId,
             'status' => 'processing',
+            'dry_run' => $dryRun,
         ], 202);
     }
 
@@ -200,6 +231,13 @@ class PushCampaignController extends Controller
             'campaign_ids' => 'nullable|array',
             'campaign_ids.*' => 'integer|exists:push_campaigns,id',
         ]);
+
+        $batchState = Cache::get($this->batchCacheKey((string) $validated['batch_id']));
+        if (is_array($batchState) && (bool) ($batchState['dry_run'] ?? false)) {
+            return response()->json([
+                'message' => 'This batch was uploaded in dry-run mode. Upload again without dry-run to create campaigns.',
+            ], 422);
+        }
 
         $query = PushCampaign::query()
             ->where('upload_batch_id', (string) $validated['batch_id']);
@@ -501,6 +539,9 @@ class PushCampaignController extends Controller
             return response()->json([
                 'synced' => $result ? 1 : 0,
                 'results' => $result ? [$result] : [],
+                'message' => $result
+                    ? 'Subscriber snapshot synced for selected market.'
+                    : 'No subscriber data returned. Verify provider credentials and active provider for this market.',
             ]);
         }
 
@@ -514,6 +555,9 @@ class PushCampaignController extends Controller
         return response()->json([
             'synced' => count($results),
             'results' => $results,
+            'message' => count($results) > 0
+                ? 'Subscriber snapshots synced successfully.'
+                : 'No subscriber snapshots were synced. Verify provider credentials and active provider mapping per market.',
         ]);
     }
 
@@ -770,6 +814,28 @@ class PushCampaignController extends Controller
     private function batchCacheKey(string $batchId): string
     {
         return 'push_upload:' . $batchId;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function pushUploadSetupIssues(bool $dryRun): array
+    {
+        $issues = [];
+
+        if (config('queue.default') === 'database' && !Schema::hasTable('jobs')) {
+            $issues[] = 'Missing table: jobs (required for QUEUE_CONNECTION=database).';
+        }
+
+        if (!$dryRun) {
+            foreach (['push_campaigns', 'push_campaign_items'] as $table) {
+                if (!Schema::hasTable($table)) {
+                    $issues[] = "Missing table: {$table}.";
+                }
+            }
+        }
+
+        return $issues;
     }
 
     /**

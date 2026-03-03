@@ -13,10 +13,11 @@ function extractDomain(url) {
     }
 }
 
-function statusLabel(status) {
+function statusLabel(status, dryRun = false) {
     if (status === 'queued') return 'Upload queued';
     if (status === 'processing') return 'Parsing sheets';
     if (status === 'extracting') return 'Extracting profiles';
+    if (status === 'ready' && dryRun) return 'Dry run complete';
     if (status === 'ready') return 'Ready for confirmation';
     if (status === 'failed') return 'Upload failed';
     return 'Processing';
@@ -25,6 +26,7 @@ function statusLabel(status) {
 export default function UploadModal({ open, onClose, onCreated }) {
     const toast = useToast();
     const [file, setFile] = useState(null);
+    const [dryRun, setDryRun] = useState(false);
     const [batchId, setBatchId] = useState(null);
     const [statusPayload, setStatusPayload] = useState(null);
     const [selectedDomain, setSelectedDomain] = useState(null);
@@ -33,6 +35,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
         mutationFn: (selectedFile) => {
             const formData = new FormData();
             formData.append('file', selectedFile);
+            formData.append('dry_run', dryRun ? '1' : '0');
             return api.post('/crm/push-campaigns/upload', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             }).then((response) => response.data);
@@ -40,7 +43,11 @@ export default function UploadModal({ open, onClose, onCreated }) {
         onSuccess: (response) => {
             setBatchId(response?.batch_id || null);
             setStatusPayload(response || null);
-            toast.success('Workbook uploaded. Parsing has started.');
+            if (response?.dry_run) {
+                toast.success('Workbook uploaded for dry run. Parsing has started.');
+            } else {
+                toast.success('Workbook uploaded. Parsing has started.');
+            }
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Upload failed.');
@@ -77,6 +84,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
     useEffect(() => {
         if (!open) {
             setFile(null);
+            setDryRun(false);
             setBatchId(null);
             setStatusPayload(null);
             setSelectedDomain(null);
@@ -132,7 +140,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
     }
 
     const status = statusPayload?.status || null;
-    const canConfirm = Boolean(batchId) && status === 'ready';
+    const canConfirm = Boolean(batchId) && status === 'ready' && !Boolean(statusPayload?.dry_run);
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
@@ -164,6 +172,15 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                 {uploadMutation.isPending ? 'Uploading...' : 'Upload workbook'}
                             </button>
                         </div>
+                        <label className="mt-2 flex items-center gap-2 text-xs text-slate-700">
+                            <input
+                                type="checkbox"
+                                checked={dryRun}
+                                onChange={(event) => setDryRun(event.target.checked)}
+                                disabled={uploadMutation.isPending || Boolean(batchId)}
+                            />
+                            Dry run only (validate parsing without creating campaigns)
+                        </label>
                         {batchId ? (
                             <p className="mt-2 text-xs text-slate-600">Batch: <span className="font-mono">{batchId}</span></p>
                         ) : null}
@@ -175,7 +192,7 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                 <h4 className="text-sm font-semibold text-slate-900">Processing Status</h4>
                                 <div className="flex items-center gap-2">
                                     <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                                        {statusLabel(status)}
+                                        {statusLabel(status, Boolean(statusPayload?.dry_run))}
                                     </span>
                                     <button
                                         type="button"
@@ -193,6 +210,18 @@ export default function UploadModal({ open, onClose, onCreated }) {
                                 <p><span className="font-semibold text-slate-800">Profiles:</span> {(statusPayload?.profiles_processed || 0).toLocaleString()}</p>
                                 <p><span className="font-semibold text-slate-800">Year:</span> {statusPayload?.year || 'n/a'}</p>
                             </div>
+
+                            {(statusPayload?.message || '').trim() ? (
+                                <p className="mt-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-800">
+                                    {statusPayload.message}
+                                </p>
+                            ) : null}
+
+                            {(statusPayload?.error || '').trim() ? (
+                                <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-800">
+                                    {statusPayload.error}
+                                </p>
+                            ) : null}
 
                             {(statusPayload?.unmapped_sheets || []).length > 0 ? (
                                 <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
@@ -257,7 +286,11 @@ export default function UploadModal({ open, onClose, onCreated }) {
 
                 <footer className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
                     <p className="text-xs text-slate-500">
-                        {canConfirm ? 'Processing complete. Confirm campaigns to unlock execute/schedule actions.' : 'Waiting for processing to finish before confirmation.'}
+                        {statusPayload?.dry_run
+                            ? 'Dry run complete. Upload again with dry-run disabled to create campaigns.'
+                            : (canConfirm
+                                ? 'Processing complete. Confirm campaigns to unlock execute/schedule actions.'
+                                : 'Waiting for processing to finish before confirmation.')}
                     </p>
                     <button
                         type="button"

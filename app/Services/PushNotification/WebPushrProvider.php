@@ -3,6 +3,7 @@
 namespace App\Services\PushNotification;
 
 use Illuminate\Support\Arr;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 
 class WebPushrProvider implements PushProviderInterface
@@ -42,13 +43,7 @@ class WebPushrProvider implements PushProviderInterface
 
         $payload = array_filter($payload, static fn ($value) => !is_null($value) && $value !== '');
 
-        $response = Http::acceptJson()
-            ->withHeaders([
-                'webpushrKey' => (string) $config['api_key'],
-                'webpushrAuthToken' => (string) $config['auth_token'],
-            ])
-            ->timeout(20)
-            ->retry(2, 500)
+        $response = $this->baseRequest($config)
             ->post('https://api.webpushr.com/v1/notification/send/all', $payload);
 
         $raw = $response->json();
@@ -81,13 +76,7 @@ class WebPushrProvider implements PushProviderInterface
             return null;
         }
 
-        $response = Http::acceptJson()
-            ->withHeaders([
-                'webpushrKey' => (string) $config['api_key'],
-                'webpushrAuthToken' => (string) $config['auth_token'],
-            ])
-            ->timeout(20)
-            ->retry(2, 500)
+        $response = $this->baseRequest($config)
             ->get('https://api.webpushr.com/v1/notification/status/id/' . urlencode($providerNotificationId));
 
         if (!$response->successful()) {
@@ -113,13 +102,7 @@ class WebPushrProvider implements PushProviderInterface
             return null;
         }
 
-        $response = Http::acceptJson()
-            ->withHeaders([
-                'webpushrKey' => (string) $config['api_key'],
-                'webpushrAuthToken' => (string) $config['auth_token'],
-            ])
-            ->timeout(20)
-            ->retry(2, 500)
+        $response = $this->baseRequest($config)
             ->get('https://api.webpushr.com/v1/site/subscriber_count');
 
         if (!$response->successful()) {
@@ -133,6 +116,19 @@ class WebPushrProvider implements PushProviderInterface
             'total' => (int) $this->firstValue($body, ['total_life_time_subscribers', 'data.total_life_time_subscribers', 'total_subscribers', 'data.total_subscribers'], 0),
             'active' => (int) $this->firstValue($body, ['active_subscribers', 'data.active_subscribers'], 0),
         ];
+    }
+
+    private function baseRequest(array $config): PendingRequest
+    {
+        return Http::acceptJson()
+            ->asJson()
+            ->withHeaders([
+                'Content-Type' => 'application/json',
+                'webpushrKey' => (string) $config['api_key'],
+                'webpushrAuthToken' => (string) $config['auth_token'],
+            ])
+            ->timeout(20)
+            ->retry(2, 500, throw: false);
     }
 
     private function normalizeButtons($buttons): array

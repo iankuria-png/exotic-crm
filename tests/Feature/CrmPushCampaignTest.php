@@ -108,6 +108,32 @@ class CrmPushCampaignTest extends TestCase
         Queue::assertPushed(ProcessPushUploadJob::class, 1);
     }
 
+    public function test_push_upload_dry_run_dispatches_job_with_dry_run_flag(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        Queue::fake();
+        Cache::flush();
+
+        Sanctum::actingAs($user);
+
+        $file = UploadedFile::fake()->create('PUSH DOCUMENT 2026.xlsx', 32, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+        $response = $this->postJson('/api/crm/push-campaigns/upload', [
+            'file' => $file,
+            'dry_run' => true,
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('dry_run', true)
+            ->assertJsonStructure(['batch_id', 'status']);
+
+        Queue::assertPushed(ProcessPushUploadJob::class, function (ProcessPushUploadJob $job): bool {
+            return $job->dryRun === true;
+        });
+    }
+
     public function test_dashboard_route_is_not_captured_by_wildcard_model_binding(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');

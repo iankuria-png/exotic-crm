@@ -65,9 +65,14 @@ export default function PushCampaigns() {
 
     const syncSubscribersMutation = useMutation({
         mutationFn: () => api.post('/crm/push-campaigns/subscribers/sync', {}).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['push-campaigns-subscribers'] });
-            toast.success('Subscriber sync request accepted.');
+            const synced = Number(response?.synced || 0);
+            if (synced > 0) {
+                toast.success(response?.message || `Subscriber sync complete (${synced} market${synced === 1 ? '' : 's'}).`);
+            } else {
+                toast.warning(response?.message || 'No subscriber snapshots were synced. Check provider credentials.');
+            }
         },
         onError: (error) => {
             const status = error?.response?.status;
