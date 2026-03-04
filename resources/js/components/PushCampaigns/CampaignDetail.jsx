@@ -64,6 +64,39 @@ function extractionReason(item) {
     };
 }
 
+function timingStateMeta(timingState) {
+    const state = String(timingState || '').toLowerCase();
+    if (state === 'overdue') {
+        return {
+            label: 'Overdue',
+            className: 'bg-rose-100 text-rose-700',
+        };
+    }
+
+    if (state === 'send_now') {
+        return {
+            label: 'Sends now',
+            className: 'bg-amber-100 text-amber-700',
+        };
+    }
+
+    if (state === 'future_delayed') {
+        return {
+            label: 'Scheduled later',
+            className: 'bg-teal-100 text-teal-700',
+        };
+    }
+
+    if (state === 'outside_window') {
+        return {
+            label: 'Outside 24h queue',
+            className: 'bg-slate-100 text-slate-700',
+        };
+    }
+
+    return null;
+}
+
 const EMPTY_EDIT_FORM = {
     profile_url: '',
     profile_name: '',
@@ -118,6 +151,8 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const [mediaUploadFile, setMediaUploadFile] = useState(null);
     const [hydratingItem, setHydratingItem] = useState(null);
     const [hydrationSources, setHydrationSources] = useState({});
+    const [executeModalOpen, setExecuteModalOpen] = useState(false);
+    const [executeReadiness, setExecuteReadiness] = useState(null);
 
     const detailQueryKey = ['push-campaign-detail', campaignId, itemPage, itemStatus];
 
@@ -277,15 +312,40 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
         },
     });
 
+    const executeReadinessMutation = useMutation({
+        mutationFn: () => api.get(`/crm/push-campaigns/${campaignId}/dispatch-readiness`, {
+            params: {
+                mode: 'execute_now',
+            },
+        }).then((response) => response.data),
+        onSuccess: (response) => {
+            setExecuteReadiness(response || null);
+            setExecuteModalOpen(true);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to check execution readiness.');
+        },
+    });
+
     const executeMutation = useMutation({
         mutationFn: () => api.post(`/crm/push-campaigns/${campaignId}/execute`, {}).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
             queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
             onChanged?.();
-            toast.success('Campaign execution started.');
+            setExecuteModalOpen(false);
+            setExecuteReadiness(null);
+            toast.success(response?.dispatch_plan?.message || 'Campaign execution started.');
         },
         onError: (error) => {
+            const readinessPayload = error?.response?.data;
+            if (readinessPayload && typeof readinessPayload === 'object' && Object.prototype.hasOwnProperty.call(readinessPayload, 'can_activate')) {
+                setExecuteReadiness(readinessPayload);
+                setExecuteModalOpen(true);
+                toast.warning(readinessPayload?.message || 'Campaign execution is blocked.');
+                return;
+            }
+
             toast.error(error?.response?.data?.message || 'Failed to execute campaign.');
         },
     });
@@ -432,6 +492,8 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const selectedMediaUrl = itemMediaQuery.data?.selected_url || editForm.profile_image_url || activeEditItem?.profile_image_url || '';
     const recommendedMediaUrl = itemMediaQuery.data?.recommended_url || '';
     const mediaErrorMessage = itemMediaQuery.error?.response?.data?.message || itemMediaQuery.error?.message || '';
+    const executeCounts = executeReadiness?.counts || null;
+    const executeSampleOverdue = executeReadiness?.sample_overdue_items || [];
 
     if (!campaignId) {
         return null;
@@ -444,6 +506,10 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
 
         setHydratingItem({ itemId, context });
         hydrateItemMutation.mutate({ itemId, force, context, silent });
+    };
+
+    const openExecuteConfirmation = () => {
+        executeReadinessMutation.mutate();
     };
 
     const startEditing = (item) => {
@@ -547,11 +613,13 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                         <div className="flex flex-wrap items-end gap-2">
                             <button
                                 type="button"
-                                onClick={() => executeMutation.mutate()}
-                                disabled={executeMutation.isPending || campaign?.status === 'processing'}
+                                onClick={openExecuteConfirmation}
+                                disabled={executeReadinessMutation.isPending || executeMutation.isPending || campaign?.status === 'processing'}
                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                                {executeMutation.isPending ? 'Executing...' : 'Execute now'}
+                                {executeReadinessMutation.isPending
+                                    ? 'Checking...'
+                                    : (executeMutation.isPending ? 'Executing...' : 'Execute now')}
                             </button>
 
                             <div className="flex items-center gap-2">
@@ -589,6 +657,9 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                 {deleteMutation.isPending ? 'Deleting...' : 'Delete campaign'}
                             </button>
                         </div>
+                        <p className="mt-2 text-[11px] text-slate-500">
+                            Campaign schedule sets activation time only. Each item still sends at its own date/time.
+                        </p>
                     </section>
 
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
@@ -689,6 +760,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                     <tbody>
                                         {items.map((item) => {
                                             const reason = extractionReason(item);
+                                            const timingMeta = timingStateMeta(item.timing_state);
 
                                             return (
                                                 <tr
@@ -701,6 +773,11 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                         <p className="font-medium text-slate-700">{item.profile_name || 'Unknown'}</p>
                                                         <p className="max-w-[250px] truncate text-slate-500">{item.profile_url}</p>
                                                         <p className="text-[11px] text-slate-500">{item.profile_phone || 'phone n/a'} • age {item.profile_age || 'n/a'}</p>
+                                                        {timingMeta ? (
+                                                            <span className={`mr-1 inline-flex max-w-[250px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase ${timingMeta.className}`}>
+                                                                {timingMeta.label}
+                                                            </span>
+                                                        ) : null}
                                                         {reason ? (
                                                             <span className="inline-flex max-w-[250px] truncate rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-700" title={reason.message}>
                                                                 {reason.code}
@@ -1128,6 +1205,93 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                     ) : null}
                 </div>
             </div>
+
+            {executeModalOpen ? (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/50 p-4" onClick={() => setExecuteModalOpen(false)}>
+                    <div
+                        className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <header className="border-b border-slate-200 px-4 py-3">
+                            <h4 className="text-base font-semibold text-slate-900">Confirm Execute Now</h4>
+                            <p className="mt-1 text-xs text-slate-600">
+                                Campaign schedule sets activation only. Item-level date/time still controls delivery timing.
+                            </p>
+                        </header>
+
+                        <div className="space-y-3 p-4">
+                            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                <article className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
+                                    <p className="font-semibold text-slate-800">Overdue</p>
+                                    <p className="mt-1 text-lg font-semibold text-slate-900">{executeCounts?.overdue || 0}</p>
+                                </article>
+                                <article className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
+                                    <p className="font-semibold text-slate-800">Send immediately</p>
+                                    <p className="mt-1 text-lg font-semibold text-slate-900">{executeCounts?.send_immediately || 0}</p>
+                                </article>
+                                <article className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
+                                    <p className="font-semibold text-slate-800">Queue with delay</p>
+                                    <p className="mt-1 text-lg font-semibold text-slate-900">{executeCounts?.queue_with_delay || 0}</p>
+                                </article>
+                                <article className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
+                                    <p className="font-semibold text-slate-800">Outside 24h queue</p>
+                                    <p className="mt-1 text-lg font-semibold text-slate-900">{executeCounts?.outside_dispatch_window || 0}</p>
+                                </article>
+                            </div>
+
+                            <p className={`rounded-md border px-3 py-2 text-sm ${
+                                executeReadiness?.can_activate
+                                    ? 'border-teal-200 bg-teal-50 text-teal-800'
+                                    : 'border-rose-200 bg-rose-50 text-rose-800'
+                            }`}>
+                                {executeReadiness?.message || 'Run readiness check to understand what execute now will do.'}
+                            </p>
+
+                            {!executeReadiness?.can_activate && executeSampleOverdue.length > 0 ? (
+                                <div className="rounded-md border border-rose-200 bg-rose-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Overdue items need reschedule</p>
+                                    <div className="mt-2 space-y-1">
+                                        {executeSampleOverdue.map((item) => (
+                                            <p key={item.id} className="text-xs text-rose-800">
+                                                #{item.id} {item.profile_name || 'Unknown'} • {formatDateTime(item.scheduled_at_local || item.scheduled_at, '--')}
+                                            </p>
+                                        ))}
+                                    </div>
+                                    <p className="mt-2 text-[11px] text-rose-700">
+                                        Use the Items table `Edit item` action to change overdue times, then run execute again.
+                                    </p>
+                                </div>
+                            ) : null}
+                        </div>
+
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+                            <button
+                                type="button"
+                                onClick={() => executeReadinessMutation.mutate()}
+                                disabled={executeReadinessMutation.isPending}
+                                className="crm-btn-secondary px-3 py-1.5 text-xs disabled:opacity-60"
+                            >
+                                {executeReadinessMutation.isPending ? 'Rechecking...' : 'Recheck'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setExecuteModalOpen(false)}
+                                className="crm-btn-secondary px-3 py-1.5 text-xs"
+                            >
+                                Close
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => executeMutation.mutate()}
+                                disabled={executeMutation.isPending || !executeReadiness?.can_activate}
+                                className="crm-btn-primary px-3 py-1.5 text-xs disabled:opacity-60"
+                            >
+                                {executeMutation.isPending ? 'Executing...' : 'Confirm execute'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }
