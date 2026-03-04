@@ -1425,6 +1425,308 @@ class CrmPushCampaignTest extends TestCase
             ->assertJsonPath('item.error_message', null);
     }
 
+    public function test_hydrate_profile_endpoint_derives_age_from_birthday_and_prefers_main_media_image(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Hydrate profile campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-hydrate-profile',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 95350,
+            'name' => 'Terrian',
+            'phone_normalized' => '254741015966',
+            'main_image_url' => null,
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 95350,
+            'profile_url' => 'https://kenya.example/?p=95350',
+            'custom_message' => 'Hydrate me',
+            'status' => 'pending_extraction',
+            'scheduled_at' => '2026-03-05 11:00:00',
+            'profile_age' => null,
+            'profile_image_url' => null,
+        ]);
+
+        Http::fake([
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/95350' => Http::response([
+                'client' => [
+                    'name' => 'Terrian',
+                    'phone' => '254741015966',
+                    'meta' => [
+                        'birthday' => '2003-01-10',
+                    ],
+                ],
+            ], 200),
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/95350/media' => Http::response([
+                'data' => [
+                    [
+                        'id' => 3001,
+                        'url' => 'https://cdn.kenya.test/media/terrian-side.webp',
+                        'filename' => 'terrian-side.webp',
+                        'is_main' => false,
+                    ],
+                    [
+                        'id' => 3002,
+                        'url' => 'https://cdn.kenya.test/media/terrian-main.webp',
+                        'filename' => 'terrian-main.webp',
+                        'is_main' => true,
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/hydrate-profile", [
+            'force' => false,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('item.profile_age', '23')
+            ->assertJsonPath('item.profile_image_url', 'https://cdn.kenya.test/media/terrian-main.webp')
+            ->assertJsonPath('item.status', 'pending')
+            ->assertJsonPath('sources.age_source', 'wp_birthday_derived')
+            ->assertJsonPath('sources.image_source', 'wp_media_main')
+            ->assertJsonCount(2, 'media');
+    }
+
+    public function test_hydrate_profile_endpoint_uses_scheduled_at_date_for_age_derivation(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Scheduled age reference',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-hydrate-age-reference',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 95350,
+            'name' => 'Terrian',
+            'phone_normalized' => '254741015966',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 95350,
+            'profile_url' => 'https://kenya.example/?p=95350',
+            'custom_message' => 'Hydrate me',
+            'status' => 'pending_extraction',
+            // 2024-01-09 21:15 UTC -> 2024-01-10 00:15 Africa/Nairobi.
+            'scheduled_at' => '2024-01-09 21:15:00',
+            'profile_age' => null,
+        ]);
+
+        Http::fake([
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/95350' => Http::response([
+                'client' => [
+                    'name' => 'Terrian',
+                    'meta' => [
+                        'birthday' => '2003-01-10',
+                    ],
+                ],
+            ], 200),
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/95350/media' => Http::response([
+                'data' => [],
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/hydrate-profile", [
+            'force' => false,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('item.profile_age', '21')
+            ->assertJsonPath('sources.age_source', 'wp_birthday_derived');
+    }
+
+    public function test_select_item_media_updates_item_only_without_mutating_client_main_image(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Select media campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-select-media',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 95350,
+            'name' => 'Terrian',
+            'phone_normalized' => '254741015966',
+            'main_image_url' => 'https://kenya.example/media/client-main.webp',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 95350,
+            'profile_url' => 'https://kenya.example/?p=95350',
+            'custom_message' => 'Select media',
+            'status' => 'failed',
+            'profile_image_url' => null,
+        ]);
+
+        Http::fake([
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/95350/media' => Http::response([
+                'data' => [
+                    [
+                        'id' => 5001,
+                        'url' => 'https://cdn.kenya.test/media/terrian-main.webp',
+                        'filename' => 'terrian-main.webp',
+                        'is_main' => true,
+                    ],
+                    [
+                        'id' => 5002,
+                        'url' => 'https://cdn.kenya.test/media/terrian-alt.webp',
+                        'filename' => 'terrian-alt.webp',
+                        'is_main' => false,
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/media/select", [
+            'attachment_id' => 5002,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('item.profile_image_url', 'https://cdn.kenya.test/media/terrian-alt.webp')
+            ->assertJsonPath('selected_media.id', 5002);
+
+        $this->assertSame('https://kenya.example/media/client-main.webp', (string) $client->fresh()->main_image_url);
+        $this->assertSame('https://cdn.kenya.test/media/terrian-alt.webp', (string) $item->fresh()->profile_image_url);
+    }
+
+    public function test_upload_item_media_endpoint_allows_marketing_and_applies_uploaded_image_to_item(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Upload media campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-upload-media',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 95350,
+            'name' => 'Terrian',
+            'phone_normalized' => '254741015966',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'client_id' => $client->id,
+            'wp_post_id' => 95350,
+            'profile_url' => 'https://kenya.example/?p=95350',
+            'custom_message' => 'Upload media',
+            'status' => 'failed',
+            'profile_image_url' => null,
+        ]);
+
+        Http::fake(function ($request) {
+            if ($request->method() === 'POST' && $request->url() === 'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/95350/media') {
+                return Http::response([
+                    'attachment' => [
+                        'id' => 9001,
+                        'url' => 'https://cdn.kenya.test/media/terrian-uploaded.webp',
+                        'filename' => 'terrian-uploaded.webp',
+                        'mime_type' => 'image/webp',
+                        'uploaded_at' => '2026-03-04T11:00:00Z',
+                    ],
+                ], 200);
+            }
+
+            if ($request->method() === 'GET' && $request->url() === 'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/95350/media') {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 9001,
+                            'url' => 'https://cdn.kenya.test/media/terrian-uploaded.webp',
+                            'filename' => 'terrian-uploaded.webp',
+                            'is_main' => false,
+                            'mime_type' => 'image/webp',
+                            'uploaded_at' => '2026-03-04T11:00:00Z',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response([], 404);
+        });
+
+        Sanctum::actingAs($user);
+
+        $response = $this->post("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/media/upload", [
+            'file' => UploadedFile::fake()->image('terrian-upload.png'),
+            'apply_to_item' => '1',
+        ], [
+            'Accept' => 'application/json',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('item.profile_image_url', 'https://cdn.kenya.test/media/terrian-uploaded.webp')
+            ->assertJsonPath('uploaded_media.id', 9001)
+            ->assertJsonPath('uploaded_media.url', 'https://cdn.kenya.test/media/terrian-uploaded.webp')
+            ->assertJsonCount(1, 'media');
+    }
+
     public function test_remove_item_endpoint_soft_skips_item_and_updates_totals(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
@@ -1495,6 +1797,21 @@ class CrmPushCampaignTest extends TestCase
 
         $this->deleteJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}")
             ->assertStatus(422);
+
+        $this->postJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/hydrate-profile", [
+            'force' => true,
+        ])->assertStatus(422);
+
+        $this->postJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/media/select", [
+            'attachment_id' => 123,
+        ])->assertStatus(422);
+
+        $this->post("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}/media/upload", [
+            'file' => UploadedFile::fake()->image('sent-item.png'),
+            'apply_to_item' => '1',
+        ], [
+            'Accept' => 'application/json',
+        ])->assertStatus(422);
     }
 
     public function test_sync_subscribers_returns_diagnostics_for_single_market_when_provider_fails(): void
