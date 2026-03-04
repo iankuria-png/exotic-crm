@@ -74,6 +74,31 @@ const EMPTY_EDIT_FORM = {
     scheduled_at: '',
 };
 
+function itemToEditForm(item) {
+    return {
+        profile_url: item?.profile_url || '',
+        profile_name: item?.profile_name || '',
+        profile_phone: item?.profile_phone || '',
+        profile_image_url: item?.profile_image_url || '',
+        profile_age: item?.profile_age || '',
+        custom_message: item?.custom_message || '',
+        scheduled_at: toDateTimeLocal(item?.scheduled_at),
+    };
+}
+
+function mergeHydratedItemIntoForm(form, item) {
+    const next = { ...form };
+    const hydrated = itemToEditForm(item);
+
+    ['profile_url', 'profile_name', 'profile_phone', 'profile_image_url', 'profile_age', 'scheduled_at'].forEach((field) => {
+        if (!next[field] && hydrated[field]) {
+            next[field] = hydrated[field];
+        }
+    });
+
+    return next;
+}
+
 export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const toast = useToast();
     const queryClient = useQueryClient();
@@ -90,9 +115,14 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const [matchSearch, setMatchSearch] = useState('');
     const [matchPage, setMatchPage] = useState(1);
     const [matchHydrateWp, setMatchHydrateWp] = useState(true);
+    const [mediaUploadFile, setMediaUploadFile] = useState(null);
+    const [hydratingItem, setHydratingItem] = useState(null);
+    const [hydrationSources, setHydrationSources] = useState({});
+
+    const detailQueryKey = ['push-campaign-detail', campaignId, itemPage, itemStatus];
 
     const { data, isLoading } = useQuery({
-        queryKey: ['push-campaign-detail', campaignId, itemPage, itemStatus],
+        queryKey: detailQueryKey,
         enabled: Boolean(campaignId),
         queryFn: () => api.get(`/crm/push-campaigns/${campaignId}`, {
             params: {
@@ -126,6 +156,125 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                 per_page: 10,
             },
         }).then((response) => response.data),
+    });
+
+    const mergeItemIntoCurrentDetail = (updatedItem) => {
+        if (!updatedItem?.id) {
+            return;
+        }
+
+        queryClient.setQueryData(detailQueryKey, (current) => {
+            if (!current?.items?.data) {
+                return current;
+            }
+
+            return {
+                ...current,
+                items: {
+                    ...current.items,
+                    data: current.items.data.map((row) => (row.id === updatedItem.id ? { ...row, ...updatedItem } : row)),
+                },
+            };
+        });
+    };
+
+    const hydrateItemMutation = useMutation({
+        mutationFn: ({ itemId, force }) => api.post(`/crm/push-campaigns/${campaignId}/items/${itemId}/hydrate-profile`, {
+            force: Boolean(force),
+        }).then((response) => response.data),
+        onSuccess: (response, variables) => {
+            const hydratedItem = response?.item;
+            if (hydratedItem) {
+                mergeItemIntoCurrentDetail(hydratedItem);
+                setHydrationSources((prev) => ({
+                    ...prev,
+                    [hydratedItem.id]: response?.sources || null,
+                }));
+
+                if (editingItemId === hydratedItem.id) {
+                    setEditForm((prev) => mergeHydratedItemIntoForm(prev, hydratedItem));
+                }
+            }
+
+            queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
+            if (variables?.itemId) {
+                queryClient.invalidateQueries({ queryKey: ['push-campaign-item-media', campaignId, variables.itemId] });
+            }
+        },
+        onError: (error, variables) => {
+            if (variables?.silent) {
+                return;
+            }
+
+            toast.error(error?.response?.data?.message || 'Failed to refresh profile details.');
+        },
+        onSettled: (_, __, variables) => {
+            setHydratingItem((prev) => (prev?.itemId === variables?.itemId ? null : prev));
+        },
+    });
+
+    const itemMediaQuery = useQuery({
+        queryKey: ['push-campaign-item-media', campaignId, editingItemId],
+        enabled: Boolean(campaignId && editingItemId),
+        retry: false,
+        queryFn: () => api.get(`/crm/push-campaigns/${campaignId}/items/${editingItemId}/media`).then((response) => response.data),
+    });
+
+    const selectItemMediaMutation = useMutation({
+        mutationFn: ({ itemId, attachmentId }) => api.post(`/crm/push-campaigns/${campaignId}/items/${itemId}/media/select`, {
+            attachment_id: attachmentId,
+        }).then((response) => response.data),
+        onSuccess: (response, variables) => {
+            if (response?.item) {
+                mergeItemIntoCurrentDetail(response.item);
+                if (editingItemId === response.item.id) {
+                    setEditForm((prev) => ({
+                        ...prev,
+                        profile_image_url: response.item.profile_image_url || prev.profile_image_url,
+                    }));
+                }
+            }
+
+            queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaign-item-media', campaignId, variables.itemId] });
+            toast.success('Profile image applied to this campaign item.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to apply selected media.');
+        },
+    });
+
+    const uploadItemMediaMutation = useMutation({
+        mutationFn: ({ itemId, file, applyToItem }) => {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('apply_to_item', applyToItem ? '1' : '0');
+
+            return api.post(`/crm/push-campaigns/${campaignId}/items/${itemId}/media/upload`, formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            }).then((response) => response.data);
+        },
+        onSuccess: (response, variables) => {
+            if (response?.item) {
+                mergeItemIntoCurrentDetail(response.item);
+                if (editingItemId === response.item.id) {
+                    setEditForm((prev) => ({
+                        ...prev,
+                        profile_image_url: response.item.profile_image_url || prev.profile_image_url,
+                    }));
+                }
+            }
+
+            setMediaUploadFile(null);
+            queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
+            queryClient.invalidateQueries({ queryKey: ['push-campaign-item-media', campaignId, variables.itemId] });
+            toast.success('Image uploaded and applied to this campaign item.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Media upload failed.');
+        },
     });
 
     const executeMutation = useMutation({
@@ -183,13 +332,17 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
 
     const updateItemMutation = useMutation({
         mutationFn: ({ itemId, payload }) => api.patch(`/crm/push-campaigns/${campaignId}/items/${itemId}`, payload).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (response) => {
+            if (response?.item) {
+                mergeItemIntoCurrentDetail(response.item);
+            }
             queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
             queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
             onChanged?.();
             toast.success('Campaign item updated.');
             setEditingItemId(null);
             setEditForm(EMPTY_EDIT_FORM);
+            setMediaUploadFile(null);
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to update campaign item.');
@@ -202,7 +355,10 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
             replace_profile_url: true,
             hydrate_wp_details: matchHydrateWp,
         }).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (response) => {
+            if (response?.item) {
+                mergeItemIntoCurrentDetail(response.item);
+            }
             queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
             queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
             onChanged?.();
@@ -219,11 +375,19 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
 
     const removeItemMutation = useMutation({
         mutationFn: (itemId) => api.delete(`/crm/push-campaigns/${campaignId}/items/${itemId}`).then((response) => response.data),
-        onSuccess: () => {
+        onSuccess: (_, itemId) => {
             queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
             queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
             onChanged?.();
             toast.success('Item removed from active campaign.');
+            if (editingItemId === itemId) {
+                setEditingItemId(null);
+                setEditForm(EMPTY_EDIT_FORM);
+                setMediaUploadFile(null);
+            }
+            if (matchingItemId === itemId) {
+                setMatchingItemId(null);
+            }
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to remove campaign item.');
@@ -262,21 +426,51 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
         items.find((item) => item.id === matchingItemId) || null
     ), [items, matchingItemId]);
 
+    const activeEditHydrationSources = activeEditItem ? (hydrationSources[activeEditItem.id] || null) : null;
+    const activeMatchHydrationSources = activeMatchItem ? (hydrationSources[activeMatchItem.id] || null) : null;
+    const itemMedia = itemMediaQuery.data?.data || [];
+    const selectedMediaUrl = itemMediaQuery.data?.selected_url || editForm.profile_image_url || activeEditItem?.profile_image_url || '';
+    const recommendedMediaUrl = itemMediaQuery.data?.recommended_url || '';
+    const mediaErrorMessage = itemMediaQuery.error?.response?.data?.message || itemMediaQuery.error?.message || '';
+
     if (!campaignId) {
         return null;
     }
 
+    const hydrateItemProfile = ({ itemId, force = false, context = 'edit', silent = true }) => {
+        if (!itemId) {
+            return;
+        }
+
+        setHydratingItem({ itemId, context });
+        hydrateItemMutation.mutate({ itemId, force, context, silent });
+    };
+
     const startEditing = (item) => {
         setEditingItemId(item.id);
         setMatchingItemId(null);
-        setEditForm({
-            profile_url: item.profile_url || '',
-            profile_name: item.profile_name || '',
-            profile_phone: item.profile_phone || '',
-            profile_image_url: item.profile_image_url || '',
-            profile_age: item.profile_age || '',
-            custom_message: item.custom_message || '',
-            scheduled_at: toDateTimeLocal(item.scheduled_at),
+        setEditForm(itemToEditForm(item));
+        setMediaUploadFile(null);
+        hydrateItemProfile({
+            itemId: item.id,
+            force: false,
+            context: 'edit',
+            silent: true,
+        });
+    };
+
+    const startMatching = (item) => {
+        setMatchingItemId(item.id);
+        setEditingItemId(null);
+        setMatchSearchInput('');
+        setMatchSearch('');
+        setMatchPage(1);
+        setMediaUploadFile(null);
+        hydrateItemProfile({
+            itemId: item.id,
+            force: false,
+            context: 'match',
+            silent: true,
         });
     };
 
@@ -534,11 +728,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                                 type="button"
                                                                 onClick={(event) => {
                                                                     event.stopPropagation();
-                                                                    setMatchingItemId(item.id);
-                                                                    setEditingItemId(null);
-                                                                    setMatchSearchInput('');
-                                                                    setMatchSearch('');
-                                                                    setMatchPage(1);
+                                                                    startMatching(item);
                                                                 }}
                                                                 disabled={!canMutateItem(item)}
                                                                 className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-50"
@@ -594,19 +784,148 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
 
                     {activeEditItem ? (
                         <section className="rounded-lg border border-teal-200 bg-teal-50/40 p-3">
-                            <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                 <h4 className="text-sm font-semibold text-slate-900">Edit item #{activeEditItem.id}</h4>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setEditingItemId(null);
-                                        setEditForm(EMPTY_EDIT_FORM);
-                                    }}
-                                    className="crm-btn-secondary px-2 py-1 text-xs"
-                                >
-                                    Close
-                                </button>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => hydrateItemProfile({
+                                            itemId: activeEditItem.id,
+                                            force: true,
+                                            context: 'edit',
+                                            silent: false,
+                                        })}
+                                        disabled={hydrateItemMutation.isPending}
+                                        className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-60"
+                                    >
+                                        {hydrateItemMutation.isPending && hydratingItem?.itemId === activeEditItem.id ? 'Refreshing...' : 'Refresh profile data'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setEditingItemId(null);
+                                            setEditForm(EMPTY_EDIT_FORM);
+                                            setMediaUploadFile(null);
+                                        }}
+                                        className="crm-btn-secondary px-2 py-1 text-xs"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
                             </div>
+
+                            {hydratingItem?.itemId === activeEditItem.id && hydratingItem?.context === 'edit' ? (
+                                <p className="mb-2 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-800">
+                                    Refreshing profile data...
+                                </p>
+                            ) : null}
+
+                            {activeEditHydrationSources ? (
+                                <p className="mb-2 text-[11px] text-slate-600">
+                                    Age source: <span className="font-medium text-slate-800">{activeEditHydrationSources.age_source || 'n/a'}</span>
+                                    {' • '}
+                                    Image source: <span className="font-medium text-slate-800">{activeEditHydrationSources.image_source || 'n/a'}</span>
+                                </p>
+                            ) : null}
+
+                            <div className="mb-3 rounded-md border border-slate-200 bg-white p-2">
+                                <div className="flex items-center gap-3">
+                                    {selectedMediaUrl ? (
+                                        <img
+                                            src={selectedMediaUrl}
+                                            alt={editForm.profile_name || 'Profile'}
+                                            className="h-16 w-16 rounded-md object-cover"
+                                        />
+                                    ) : (
+                                        <div className="flex h-16 w-16 items-center justify-center rounded-md bg-slate-200 text-lg font-semibold text-slate-700">
+                                            {(editForm.profile_name || 'E').charAt(0).toUpperCase()}
+                                        </div>
+                                    )}
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-900">{editForm.profile_name || 'Unknown profile'}</p>
+                                        <p className="text-xs text-slate-600">{editForm.profile_phone || 'phone n/a'} • age {editForm.profile_age || 'n/a'}</p>
+                                        <p className="truncate text-[11px] text-slate-500">{editForm.profile_url || '--'}</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mb-3 rounded-md border border-slate-200 bg-white p-2">
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Profile media</p>
+                                    <p className="text-[11px] text-slate-500">Selecting an image updates this campaign item only.</p>
+                                </div>
+
+                                {itemMediaQuery.isLoading ? (
+                                    <p className="rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">Loading profile media...</p>
+                                ) : null}
+
+                                {!itemMediaQuery.isLoading && mediaErrorMessage ? (
+                                    <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-2 text-xs text-amber-800">{mediaErrorMessage}</p>
+                                ) : null}
+
+                                {!itemMediaQuery.isLoading && !mediaErrorMessage && itemMedia.length > 0 ? (
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                        {itemMedia.map((media) => {
+                                            const isSelected = selectedMediaUrl && media.url === selectedMediaUrl;
+                                            const isRecommended = recommendedMediaUrl && media.url === recommendedMediaUrl;
+
+                                            return (
+                                                <div key={media.id} className={`rounded-md border p-2 ${isSelected ? 'border-teal-300 bg-teal-50/50' : 'border-slate-200 bg-white'}`}>
+                                                    <img src={media.url} alt={media.filename || 'Media'} className="h-24 w-full rounded object-cover" />
+                                                    <p className="mt-1 truncate text-[11px] text-slate-600">{media.filename || `media #${media.id}`}</p>
+                                                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                                                        {media.is_main ? (
+                                                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">Main image</span>
+                                                        ) : null}
+                                                        {isRecommended && !media.is_main ? (
+                                                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">Recommended</span>
+                                                        ) : null}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => selectItemMediaMutation.mutate({ itemId: activeEditItem.id, attachmentId: media.id })}
+                                                        disabled={selectItemMediaMutation.isPending || isSelected}
+                                                        className="mt-2 w-full rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-700 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        {isSelected ? 'Selected' : (selectItemMediaMutation.isPending ? 'Applying...' : 'Use image')}
+                                                    </button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : null}
+
+                                {!itemMediaQuery.isLoading && !mediaErrorMessage && itemMedia.length === 0 ? (
+                                    <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-2 py-4 text-center text-xs text-slate-500">
+                                        No profile media found for this item yet.
+                                    </p>
+                                ) : null}
+
+                                <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
+                                    <input
+                                        type="file"
+                                        accept="image/jpeg,image/png,image/webp"
+                                        onChange={(event) => setMediaUploadFile(event.target.files?.[0] || null)}
+                                        className="crm-input"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (!mediaUploadFile) return;
+                                            uploadItemMediaMutation.mutate({
+                                                itemId: activeEditItem.id,
+                                                file: mediaUploadFile,
+                                                applyToItem: true,
+                                            });
+                                        }}
+                                        disabled={!mediaUploadFile || uploadItemMediaMutation.isPending}
+                                        className="crm-btn-primary px-3 py-2 text-xs disabled:opacity-60"
+                                    >
+                                        {uploadItemMediaMutation.isPending ? 'Uploading...' : 'Upload image'}
+                                    </button>
+                                </div>
+                            </div>
+
                             <div className="grid gap-2 md:grid-cols-2">
                                 <input
                                     value={editForm.profile_url}
@@ -669,14 +988,46 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                         <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                 <h4 className="text-sm font-semibold text-slate-900">Match CRM profile for item #{activeMatchItem.id}</h4>
-                                <button
-                                    type="button"
-                                    onClick={() => setMatchingItemId(null)}
-                                    className="crm-btn-secondary px-2 py-1 text-xs"
-                                >
-                                    Close
-                                </button>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => hydrateItemProfile({
+                                            itemId: activeMatchItem.id,
+                                            force: true,
+                                            context: 'match',
+                                            silent: false,
+                                        })}
+                                        disabled={hydrateItemMutation.isPending}
+                                        className="crm-btn-secondary px-2 py-1 text-xs disabled:opacity-60"
+                                    >
+                                        {hydrateItemMutation.isPending && hydratingItem?.itemId === activeMatchItem.id ? 'Refreshing...' : 'Refresh profile data'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setMatchingItemId(null);
+                                            setHydratingItem(null);
+                                        }}
+                                        className="crm-btn-secondary px-2 py-1 text-xs"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
                             </div>
+
+                            {hydratingItem?.itemId === activeMatchItem.id && hydratingItem?.context === 'match' ? (
+                                <p className="mb-2 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-800">
+                                    Refreshing profile data...
+                                </p>
+                            ) : null}
+
+                            {activeMatchHydrationSources ? (
+                                <p className="mb-2 text-[11px] text-slate-600">
+                                    Age source: <span className="font-medium text-slate-800">{activeMatchHydrationSources.age_source || 'n/a'}</span>
+                                    {' • '}
+                                    Image source: <span className="font-medium text-slate-800">{activeMatchHydrationSources.image_source || 'n/a'}</span>
+                                </p>
+                            ) : null}
 
                             <div className="mb-2 grid gap-2 md:grid-cols-[1fr_auto]">
                                 <input
