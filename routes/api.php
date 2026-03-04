@@ -76,6 +76,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::post('/{pushCampaign}/items/{pushCampaignItem}/media/select', [PushCampaignController::class, 'selectItemMedia']);
         Route::post('/{pushCampaign}/items/{pushCampaignItem}/media/upload', [PushCampaignController::class, 'uploadItemMedia']);
         Route::delete('/{pushCampaign}/items/{pushCampaignItem}', [PushCampaignController::class, 'removeItem']);
+        Route::get('/{pushCampaign}/dispatch-readiness', [PushCampaignController::class, 'dispatchReadiness']);
         Route::get('/{pushCampaign}', [PushCampaignController::class, 'show']);
         Route::post('/{pushCampaign}/execute', [PushCampaignController::class, 'execute']);
         Route::post('/{pushCampaign}/schedule', [PushCampaignController::class, 'schedule']);
@@ -165,6 +166,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::post('/payments/{payment}/review-state', [PaymentQueueController::class, 'updateReviewState']);
         Route::post('/payments/{payment}/create-subscription', [PaymentQueueController::class, 'createSubscription']);
         Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
+        Route::get('/payments/mpesa-review', [PaymentQueueController::class, 'mpesaReview']);
+        Route::post('/payments/mpesa-confirm-subscriptions', [PaymentQueueController::class, 'mpesaConfirmSubscriptions']);
     });
 
     // Settings

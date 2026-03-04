@@ -12,6 +12,7 @@ use App\Models\PushSubscriberSnapshot;
 use App\Models\ScraperProfilePreset;
 use App\Services\MarketAuthorizationService;
 use App\Services\PushCampaign\PushCampaignService;
+use App\Services\PushCampaign\PushCampaignDispatchReadinessService;
 use App\Services\PushCampaign\PushCampaignItemMatchService;
 use App\Services\PushCampaign\SelectorDetectionService;
 use App\Services\PushCampaign\UploadBatchStatusService;
@@ -35,6 +36,7 @@ class PushCampaignController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly PushCampaignService $pushCampaignService,
+        private readonly PushCampaignDispatchReadinessService $pushCampaignDispatchReadinessService,
         private readonly PushCampaignItemMatchService $pushCampaignItemMatchService,
         private readonly SelectorDetectionService $selectorDetectionService,
         private readonly UploadBatchStatusService $uploadBatchStatusService,
@@ -928,7 +930,7 @@ class PushCampaignController extends Controller
         ]);
 
         $pushCampaign->load([
-            'platform:id,name,country',
+            'platform:id,name,country,timezone',
             'creator:id,name,email',
         ]);
 
@@ -942,6 +944,21 @@ class PushCampaignController extends Controller
         }
 
         $items = $itemsQuery->paginate((int) ($validated['per_page'] ?? 50));
+        $timingReferenceUtc = now()->utc();
+        $timingTimezone = (string) ($pushCampaign->platform?->timezone ?: config('app.timezone', 'UTC'));
+        $items->getCollection()->transform(function (PushCampaignItem $item) use ($timingReferenceUtc, $timingTimezone): PushCampaignItem {
+            $timing = $this->pushCampaignDispatchReadinessService->describeItemTimingState(
+                $item,
+                $timingReferenceUtc,
+                $timingTimezone
+            );
+
+            $item->setAttribute('timing_state', (string) ($timing['timing_state'] ?? 'unscheduled'));
+            $item->setAttribute('timing_reference_timezone', (string) ($timing['timing_reference_timezone'] ?? $timingTimezone));
+            $item->setAttribute('is_overdue', (bool) ($timing['is_overdue'] ?? false));
+
+            return $item;
+        });
 
         return response()->json([
             'campaign' => $pushCampaign,
@@ -1329,6 +1346,39 @@ class PushCampaignController extends Controller
         }
     }
 
+    public function dispatchReadiness(Request $request, PushCampaign $pushCampaign)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+
+        $validated = $request->validate([
+            'mode' => 'nullable|in:execute_now,schedule',
+            'scheduled_at' => 'nullable|date',
+            'timezone' => 'nullable|string|max:64',
+        ]);
+
+        $mode = (string) ($validated['mode'] ?? 'execute_now');
+        $timezone = trim((string) ($validated['timezone'] ?? ($pushCampaign->platform?->timezone ?: config('app.timezone', 'UTC'))));
+        $activationAt = now()->utc();
+
+        if ($mode === 'schedule') {
+            if (empty($validated['scheduled_at'])) {
+                return response()->json([
+                    'message' => 'scheduled_at is required when mode is schedule.',
+                ], 422);
+            }
+
+            $activationAt = Carbon::parse((string) $validated['scheduled_at'], $timezone)->utc();
+        }
+
+        $readiness = $this->pushCampaignDispatchReadinessService->analyzeActivation(
+            $pushCampaign,
+            $activationAt,
+            $timezone
+        );
+
+        return response()->json($readiness);
+    }
+
     public function execute(Request $request, PushCampaign $pushCampaign)
     {
         $this->ensureCampaignAccess($request, $pushCampaign);
@@ -1339,10 +1389,22 @@ class PushCampaignController extends Controller
             ], 422);
         }
 
+        $pushCampaign->loadMissing('platform:id,timezone');
+        $readiness = $this->pushCampaignDispatchReadinessService->analyzeActivation(
+            $pushCampaign,
+            now()->utc(),
+            (string) ($pushCampaign->platform?->timezone ?: config('app.timezone', 'UTC'))
+        );
+
+        if (!(bool) ($readiness['can_activate'] ?? false)) {
+            return $this->readinessBlockedResponse($readiness);
+        }
+
         $campaign = $this->pushCampaignService->executeCampaign($pushCampaign, (int) $request->user()->id);
 
         return response()->json([
             'campaign' => $campaign,
+            'dispatch_plan' => $readiness,
         ]);
     }
 
@@ -1364,6 +1426,16 @@ class PushCampaignController extends Controller
             ], 422);
         }
 
+        $readiness = $this->pushCampaignDispatchReadinessService->analyzeActivation(
+            $pushCampaign,
+            $scheduledAt,
+            $timezone
+        );
+
+        if (!(bool) ($readiness['can_activate'] ?? false)) {
+            return $this->readinessBlockedResponse($readiness);
+        }
+
         $campaign = $this->pushCampaignService->scheduleCampaign(
             $pushCampaign,
             $scheduledAt,
@@ -1372,6 +1444,7 @@ class PushCampaignController extends Controller
 
         return response()->json([
             'campaign' => $campaign,
+            'dispatch_plan' => $readiness,
         ]);
     }
 
@@ -1849,6 +1922,16 @@ class PushCampaignController extends Controller
         return response()->json([
             'preset' => $preset,
         ]);
+    }
+
+    /**
+     * @param array<string, mixed> $readiness
+     */
+    private function readinessBlockedResponse(array $readiness)
+    {
+        return response()->json(array_merge([
+            'message' => 'Campaign activation is blocked by overdue item times. Reschedule overdue items first.',
+        ], $readiness), 422);
     }
 
     private function ensureCampaignAccess(Request $request, PushCampaign $pushCampaign): void
