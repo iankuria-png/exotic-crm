@@ -862,7 +862,7 @@ class CrmPushCampaignTest extends TestCase
             'campaign_id' => $campaign->id,
             'profile_url' => 'https://kenya.example/c',
             'custom_message' => 'C',
-            'scheduled_at' => now()->subHour(),
+            'scheduled_at' => null,
             'status' => 'pending',
         ]);
 
@@ -881,16 +881,262 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame(['scheduled', 'pending', 'scheduled'], $statuses);
     }
 
+    public function test_dispatch_readiness_endpoint_returns_timing_counts_for_pending_items(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 09:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Readiness snapshot',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-readiness',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/overdue',
+            'custom_message' => 'Overdue',
+            'scheduled_at' => Carbon::parse('2026-03-04 08:30:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/immediate',
+            'custom_message' => 'Immediate',
+            'scheduled_at' => Carbon::parse('2026-03-04 09:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/delayed',
+            'custom_message' => 'Delayed',
+            'scheduled_at' => Carbon::parse('2026-03-04 12:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/outside',
+            'custom_message' => 'Outside',
+            'scheduled_at' => Carbon::parse('2026-03-06 10:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/push-campaigns/{$campaign->id}/dispatch-readiness");
+        $response->assertOk()
+            ->assertJsonPath('counts.total_pending', 4)
+            ->assertJsonPath('counts.overdue', 1)
+            ->assertJsonPath('counts.send_immediately', 1)
+            ->assertJsonPath('counts.queue_with_delay', 1)
+            ->assertJsonPath('counts.outside_dispatch_window', 1)
+            ->assertJsonPath('can_activate', false);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_campaign_detail_includes_item_timing_state_fields(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 16:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Timing fields campaign',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-timing-fields',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/overdue',
+            'custom_message' => 'Overdue',
+            'scheduled_at' => Carbon::parse('2026-03-04 08:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/push-campaigns/{$campaign->id}");
+        $response->assertOk()
+            ->assertJsonPath('items.data.0.timing_state', 'overdue')
+            ->assertJsonPath('items.data.0.is_overdue', true)
+            ->assertJsonPath('items.data.0.timing_reference_timezone', 'Africa/Nairobi');
+
+        Carbon::setTestNow();
+    }
+
+    public function test_execute_endpoint_is_blocked_when_pending_items_are_overdue(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 16:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Blocked execute',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-blocked-execute',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/overdue',
+            'custom_message' => 'Too late',
+            'scheduled_at' => Carbon::parse('2026-03-04 02:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        Queue::fake();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/execute");
+        $response->assertStatus(422)
+            ->assertJsonPath('can_activate', false)
+            ->assertJsonPath('counts.overdue', 1);
+
+        Queue::assertNotPushed(SendPushNotificationJob::class);
+        Carbon::setTestNow();
+    }
+
+    public function test_execute_endpoint_returns_dispatch_plan_when_activation_is_allowed(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 09:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Allowed execute',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-allowed-execute',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/immediate',
+            'custom_message' => 'Immediate',
+            'scheduled_at' => null,
+            'status' => 'pending',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/future',
+            'custom_message' => 'Future',
+            'scheduled_at' => Carbon::parse('2026-03-04 12:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        Queue::fake();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/execute");
+        $response->assertOk()
+            ->assertJsonPath('dispatch_plan.can_activate', true)
+            ->assertJsonPath('dispatch_plan.counts.send_immediately', 1)
+            ->assertJsonPath('dispatch_plan.counts.queue_with_delay', 1);
+
+        Queue::assertPushed(SendPushNotificationJob::class, 2);
+        Carbon::setTestNow();
+    }
+
+    public function test_schedule_endpoint_blocks_activation_that_would_make_items_overdue(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 09:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Blocked schedule',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-blocked-schedule',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/noon',
+            'custom_message' => 'Noon',
+            'scheduled_at' => Carbon::parse('2026-03-04 14:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/schedule", [
+            'scheduled_at' => '2026-03-04 16:00:00',
+            'timezone' => 'Africa/Nairobi',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('can_activate', false)
+            ->assertJsonPath('counts.overdue', 1);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_send_push_job_marks_item_failed_when_send_window_is_missed(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Missed window campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-missed-window',
+        ]);
+
+        $scheduledAt = now()->subMinutes(20);
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/item',
+            'custom_message' => 'Missed',
+            'scheduled_at' => $scheduledAt,
+            'status' => 'scheduled',
+        ]);
+
+        $this->mock(\App\Services\PushNotification\PushProviderService::class, function ($mock): void {
+            $mock->shouldNotReceive('sendPush');
+        });
+
+        $job = new SendPushNotificationJob((int) $item->id);
+        $job->handle(
+            app(\App\Services\PushNotification\PushProviderService::class),
+            app(\App\Services\AuditService::class)
+        );
+
+        $fresh = $item->fresh();
+        $this->assertSame('failed', (string) $fresh->status);
+        $this->assertStringStartsWith('missed_window:', (string) $fresh->error_message);
+        $this->assertNull($fresh->provider_notification_id);
+        $this->assertNull($fresh->sent_at);
+    }
+
     public function test_dispatch_command_promotes_running_campaign_pending_items(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
-        $this->createUser('admin', [$platform->id]);
+        $admin = $this->createUser('admin', [$platform->id]);
 
         $campaign = PushCampaign::query()->create([
             'name' => 'Running campaign',
             'platform_id' => $platform->id,
             'status' => 'running',
-            'created_by' => 1,
+            'created_by' => $admin->id,
             'upload_batch_id' => 'batch-running',
         ]);
 
@@ -908,6 +1154,57 @@ class CrmPushCampaignTest extends TestCase
 
         Queue::assertPushed(SendPushNotificationJob::class, 1);
         $this->assertSame('scheduled', $item->fresh()->status);
+    }
+
+    public function test_dispatch_command_skips_blocked_scheduled_campaign_and_continues_running_campaigns(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-04 16:00:00', 'Africa/Nairobi')->utc());
+
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        $blockedCampaign = PushCampaign::query()->create([
+            'name' => 'Blocked scheduled campaign',
+            'platform_id' => $platform->id,
+            'status' => 'scheduled',
+            'created_by' => $admin->id,
+            'upload_batch_id' => 'batch-blocked-command',
+            'scheduled_at' => now()->subMinute(),
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $blockedCampaign->id,
+            'profile_url' => 'https://kenya.example/old-item',
+            'custom_message' => 'Old item',
+            'scheduled_at' => Carbon::parse('2026-03-04 02:00:00', 'Africa/Nairobi')->utc(),
+            'status' => 'pending',
+        ]);
+
+        $runningCampaign = PushCampaign::query()->create([
+            'name' => 'Running campaign',
+            'platform_id' => $platform->id,
+            'status' => 'running',
+            'created_by' => $admin->id,
+            'upload_batch_id' => 'batch-running-command',
+        ]);
+
+        $runningItem = PushCampaignItem::query()->create([
+            'campaign_id' => $runningCampaign->id,
+            'profile_url' => 'https://kenya.example/future-item',
+            'custom_message' => 'Future item',
+            'scheduled_at' => now()->addHours(2),
+            'status' => 'pending',
+        ]);
+
+        Queue::fake();
+
+        $this->artisan('crm:dispatch-scheduled-pushes')->assertExitCode(0);
+
+        Queue::assertPushed(SendPushNotificationJob::class, 1);
+        $this->assertSame('scheduled', (string) $runningItem->fresh()->status);
+        $this->assertSame('scheduled', (string) $blockedCampaign->fresh()->status);
+
+        Carbon::setTestNow();
     }
 
     public function test_subscribers_endpoint_is_platform_scoped(): void
