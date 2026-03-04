@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Models\TimelineEvent;
+use App\Services\PushCampaign\PushCampaignDispatchReadinessService;
 use App\Services\AuditService;
 use App\Services\PushNotification\PushProviderService;
 use App\Support\CrmAuditAction;
@@ -42,6 +43,57 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
 
         if (in_array((string) $item->status, ['sent', 'failed', 'skipped'], true)) {
             return;
+        }
+
+        if ($item->scheduled_at) {
+            $latestAllowedSendAt = $item->scheduled_at->copy()->addMinutes(PushCampaignDispatchReadinessService::LATE_GRACE_MINUTES);
+            if (now()->greaterThan($latestAllowedSendAt)) {
+                $item->forceFill([
+                    'status' => 'failed',
+                    'provider_notification_id' => null,
+                    'sent_at' => null,
+                    'error_message' => sprintf(
+                        'missed_window: Item exceeded %d-minute grace at job execution. Reschedule required.',
+                        PushCampaignDispatchReadinessService::LATE_GRACE_MINUTES
+                    ),
+                ])->save();
+
+                if ($item->client_id) {
+                    TimelineEvent::query()->create([
+                        'platform_id' => (int) $campaign->platform_id,
+                        'entity_type' => 'client',
+                        'entity_id' => (int) $item->client_id,
+                        'event_type' => 'push_notification_failed',
+                        'actor_id' => $actorId,
+                        'content' => [
+                            'campaign_id' => (int) $campaign->id,
+                            'campaign_item_id' => (int) $item->id,
+                            'provider' => 'timing_guard',
+                            'reason_code' => 'missed_window',
+                        ],
+                        'created_at' => now(),
+                    ]);
+                }
+
+                PushCampaign::query()->whereKey((int) $campaign->id)->increment('failed_count');
+
+                $auditService->record([
+                    'platform_id' => (int) $campaign->platform_id,
+                    'actor_id' => $actorId,
+                    'action' => CrmAuditAction::PUSH_NOTIFICATION_FAILED,
+                    'entity_type' => 'push_campaign_item',
+                    'entity_id' => (int) $item->id,
+                    'after_state' => [
+                        'status' => 'failed',
+                        'provider' => 'timing_guard',
+                        'provider_notification_id' => null,
+                    ],
+                    'reason' => 'Push item skipped because scheduled send window was missed.',
+                ]);
+
+                $this->completeCampaignIfDone((int) $campaign->id);
+                return;
+            }
         }
 
         $notification = [

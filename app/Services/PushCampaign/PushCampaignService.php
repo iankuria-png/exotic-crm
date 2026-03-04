@@ -2,6 +2,7 @@
 
 namespace App\Services\PushCampaign;
 
+use App\Exceptions\PushCampaignActivationBlockedException;
 use App\Jobs\SendPushNotificationJob;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
@@ -15,6 +16,7 @@ class PushCampaignService
     public function __construct(
         private readonly PushProviderService $pushProviderService,
         private readonly AuditService $auditService,
+        private readonly PushCampaignDispatchReadinessService $pushCampaignDispatchReadinessService,
     ) {
     }
 
@@ -59,34 +61,21 @@ class PushCampaignService
 
     public function executeCampaign(PushCampaign $campaign, int $actorId): PushCampaign
     {
+        $campaign->loadMissing('platform:id,timezone');
+        $activationAt = now()->utc();
+        $timezone = (string) ($campaign->platform?->timezone ?: config('app.timezone', 'UTC'));
+        $readiness = $this->pushCampaignDispatchReadinessService->analyzeActivation($campaign, $activationAt, $timezone);
+
+        if (!(bool) ($readiness['can_activate'] ?? false)) {
+            throw new PushCampaignActivationBlockedException($readiness);
+        }
+
         $campaign->forceFill([
             'status' => 'running',
-            'executed_at' => now(),
+            'executed_at' => $activationAt,
         ])->save();
 
-        $dispatchUntil = now()->addDay();
-
-        $items = PushCampaignItem::query()
-            ->where('campaign_id', $campaign->id)
-            ->where('status', 'pending')
-            ->where(function ($query) use ($dispatchUntil) {
-                $query->whereNull('scheduled_at')
-                    ->orWhere('scheduled_at', '<=', $dispatchUntil);
-            })
-            ->orderBy('scheduled_at')
-            ->get();
-
-        foreach ($items as $item) {
-            if ($item->scheduled_at && $item->scheduled_at->isFuture()) {
-                SendPushNotificationJob::dispatch($item->id)->delay($item->scheduled_at);
-            } else {
-                SendPushNotificationJob::dispatch($item->id);
-            }
-
-            $item->forceFill([
-                'status' => 'scheduled',
-            ])->save();
-        }
+        $queuedCount = $this->queueDispatchablePendingItems($campaign, $activationAt);
 
         $this->auditService->record([
             'platform_id' => (int) $campaign->platform_id,
@@ -96,12 +85,143 @@ class PushCampaignService
             'entity_id' => (int) $campaign->id,
             'after_state' => [
                 'status' => 'running',
-                'scheduled_dispatch_count' => $items->count(),
+                'scheduled_dispatch_count' => $queuedCount,
             ],
             'reason' => 'Executed push campaign immediately.',
         ]);
 
         return $campaign->fresh();
+    }
+
+    public function queueRunningCampaignPendingItems(PushCampaign $campaign, ?Carbon $referenceAtUtc = null): int
+    {
+        $referenceAt = ($referenceAtUtc?->copy() ?? now())->utc();
+        $missedCount = $this->markMissedPendingItems($campaign, $referenceAt);
+        $queuedCount = $this->queueDispatchablePendingItems($campaign, $referenceAt);
+
+        if ($missedCount > 0) {
+            $this->auditService->record([
+                'platform_id' => (int) $campaign->platform_id,
+                'actor_id' => null,
+                'action' => CrmAuditAction::PUSH_NOTIFICATION_FAILED,
+                'entity_type' => 'push_campaign',
+                'entity_id' => (int) $campaign->id,
+                'after_state' => [
+                    'status' => 'running',
+                    'missed_window_items' => $missedCount,
+                    'queued_items' => $queuedCount,
+                ],
+                'reason' => 'Marked overdue pending items as missed before queue dispatch.',
+            ]);
+        }
+
+        $this->syncCampaignOutcomeIfDone((int) $campaign->id);
+
+        return $queuedCount;
+    }
+
+    private function queueDispatchablePendingItems(PushCampaign $campaign, Carbon $referenceAtUtc): int
+    {
+        $dispatchUntil = $referenceAtUtc->copy()->addHours(PushCampaignDispatchReadinessService::DISPATCH_WINDOW_HOURS);
+        $graceThreshold = $referenceAtUtc->copy()->subMinutes(PushCampaignDispatchReadinessService::LATE_GRACE_MINUTES);
+
+        $items = PushCampaignItem::query()
+            ->where('campaign_id', (int) $campaign->id)
+            ->where('status', 'pending')
+            ->where(function ($query) use ($dispatchUntil, $graceThreshold) {
+                $query->whereNull('scheduled_at')
+                    ->orWhereBetween('scheduled_at', [$graceThreshold->toDateTimeString(), $dispatchUntil->toDateTimeString()]);
+            })
+            ->orderBy('scheduled_at')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($items as $item) {
+            $scheduledAt = $item->scheduled_at?->copy()?->utc();
+
+            if ($scheduledAt && $scheduledAt->greaterThan($referenceAtUtc)) {
+                SendPushNotificationJob::dispatch((int) $item->id)->delay($scheduledAt);
+            } else {
+                SendPushNotificationJob::dispatch((int) $item->id);
+            }
+
+            $item->forceFill([
+                'status' => 'scheduled',
+            ])->save();
+        }
+
+        return (int) $items->count();
+    }
+
+    private function markMissedPendingItems(PushCampaign $campaign, Carbon $referenceAtUtc): int
+    {
+        $missedThreshold = $referenceAtUtc->copy()->subMinutes(PushCampaignDispatchReadinessService::LATE_GRACE_MINUTES);
+
+        $missedItems = PushCampaignItem::query()
+            ->where('campaign_id', (int) $campaign->id)
+            ->where('status', 'pending')
+            ->whereNotNull('scheduled_at')
+            ->where('scheduled_at', '<', $missedThreshold->toDateTimeString())
+            ->get(['id']);
+
+        if ($missedItems->isEmpty()) {
+            return 0;
+        }
+
+        PushCampaignItem::query()
+            ->whereIn('id', $missedItems->pluck('id')->all())
+            ->update([
+                'status' => 'failed',
+                'error_message' => sprintf(
+                    'missed_window: Item exceeded %d-minute grace before queue dispatch. Reschedule required.',
+                    PushCampaignDispatchReadinessService::LATE_GRACE_MINUTES
+                ),
+                'provider_notification_id' => null,
+                'sent_at' => null,
+                'updated_at' => now(),
+            ]);
+
+        PushCampaign::query()
+            ->whereKey((int) $campaign->id)
+            ->increment('failed_count', (int) $missedItems->count());
+
+        return (int) $missedItems->count();
+    }
+
+    private function syncCampaignOutcomeIfDone(int $campaignId): void
+    {
+        $campaign = PushCampaign::query()->find($campaignId);
+        if (!$campaign) {
+            return;
+        }
+
+        $remaining = PushCampaignItem::query()
+            ->where('campaign_id', $campaignId)
+            ->whereNotIn('status', ['sent', 'failed', 'skipped'])
+            ->count();
+
+        if ($remaining > 0) {
+            return;
+        }
+
+        $sent = PushCampaignItem::query()
+            ->where('campaign_id', $campaignId)
+            ->where('status', 'sent')
+            ->count();
+
+        $failed = PushCampaignItem::query()
+            ->where('campaign_id', $campaignId)
+            ->where('status', 'failed')
+            ->count();
+
+        $status = $sent > 0 && $failed === 0
+            ? 'completed'
+            : ($sent > 0 ? 'partial' : 'failed');
+
+        $campaign->forceFill([
+            'status' => $status,
+            'completed_at' => now(),
+        ])->save();
     }
 
     public function scheduleCampaign(PushCampaign $campaign, Carbon $scheduledAt, int $actorId): PushCampaign

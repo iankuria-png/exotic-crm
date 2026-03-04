@@ -2,9 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Jobs\SendPushNotificationJob;
+use App\Exceptions\PushCampaignActivationBlockedException;
 use App\Models\PushCampaign;
-use App\Models\PushCampaignItem;
 use App\Services\PushCampaign\PushCampaignService;
 use Illuminate\Console\Command;
 
@@ -18,6 +17,7 @@ class DispatchScheduledPushesCommand extends Command
     {
         $activatedCampaigns = 0;
         $queuedItems = 0;
+        $blockedCampaigns = 0;
 
         $dueCampaigns = PushCampaign::query()
             ->where('status', 'scheduled')
@@ -27,45 +27,37 @@ class DispatchScheduledPushesCommand extends Command
             ->get();
 
         foreach ($dueCampaigns as $campaign) {
-            $pushCampaignService->executeCampaign($campaign, 0);
-            $activatedCampaigns++;
+            try {
+                $pushCampaignService->executeCampaign($campaign, 0);
+                $activatedCampaigns++;
+            } catch (PushCampaignActivationBlockedException $exception) {
+                $blockedCampaigns++;
+                $readiness = $exception->readiness();
+                $this->warn(sprintf(
+                    'Campaign #%d activation blocked: %s',
+                    (int) $campaign->id,
+                    (string) ($readiness['message'] ?? $exception->getMessage())
+                ));
+            }
         }
-
-        $dispatchUntil = now()->addDay();
 
         $runningCampaignIds = PushCampaign::query()
             ->where('status', 'running')
             ->pluck('id');
 
         foreach ($runningCampaignIds as $campaignId) {
-            $items = PushCampaignItem::query()
-                ->where('campaign_id', (int) $campaignId)
-                ->where('status', 'pending')
-                ->where(function ($query) use ($dispatchUntil) {
-                    $query->whereNull('scheduled_at')
-                        ->orWhere('scheduled_at', '<=', $dispatchUntil);
-                })
-                ->orderBy('scheduled_at')
-                ->get();
-
-            foreach ($items as $item) {
-                if ($item->scheduled_at && $item->scheduled_at->isFuture()) {
-                    SendPushNotificationJob::dispatch($item->id)->delay($item->scheduled_at);
-                } else {
-                    SendPushNotificationJob::dispatch($item->id);
-                }
-
-                $item->forceFill([
-                    'status' => 'scheduled',
-                ])->save();
-
-                $queuedItems++;
+            $campaign = PushCampaign::query()->find((int) $campaignId);
+            if (!$campaign) {
+                continue;
             }
+
+            $queuedItems += $pushCampaignService->queueRunningCampaignPendingItems($campaign, now()->utc());
         }
 
         $this->info(sprintf(
-            'Push dispatcher complete: %d campaign(s) activated, %d item job(s) queued.',
+            'Push dispatcher complete: %d campaign(s) activated, %d blocked, %d item job(s) queued.',
             $activatedCampaigns,
+            $blockedCampaigns,
             $queuedItems
         ));
 
