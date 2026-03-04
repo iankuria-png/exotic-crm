@@ -71,6 +71,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::patch('/{pushCampaign}/items/{pushCampaignItem}', [PushCampaignController::class, 'updateItem']);
         Route::get('/{pushCampaign}/items/{pushCampaignItem}/match-candidates', [PushCampaignController::class, 'matchCandidates']);
         Route::post('/{pushCampaign}/items/{pushCampaignItem}/match-crm', [PushCampaignController::class, 'matchCrm']);
+        Route::post('/{pushCampaign}/items/{pushCampaignItem}/hydrate-profile', [PushCampaignController::class, 'hydrateItemProfile']);
+        Route::get('/{pushCampaign}/items/{pushCampaignItem}/media', [PushCampaignController::class, 'itemMedia']);
+        Route::post('/{pushCampaign}/items/{pushCampaignItem}/media/select', [PushCampaignController::class, 'selectItemMedia']);
+        Route::post('/{pushCampaign}/items/{pushCampaignItem}/media/upload', [PushCampaignController::class, 'uploadItemMedia']);
         Route::delete('/{pushCampaign}/items/{pushCampaignItem}', [PushCampaignController::class, 'removeItem']);
         Route::get('/{pushCampaign}', [PushCampaignController::class, 'show']);
         Route::post('/{pushCampaign}/execute', [PushCampaignController::class, 'execute']);

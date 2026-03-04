@@ -293,9 +293,17 @@ class ProfileExtractionService
             if ($client) {
                 $updates = $this->buildItemPayloadFromClient($client, (string) $item->profile_url, $wpPostId);
                 if ($wpSync) {
+                    $wpPayload = $this->safeFetchWpProfilePayload($wpSync, $wpPostId);
                     $updates = $this->mergeWpPayloadIntoItem(
                         $updates,
-                        $this->safeFetchWpProfilePayload($wpSync, $wpPostId)
+                        $wpPayload,
+                        $item,
+                        $platform
+                    );
+
+                    $updates = $this->mergeWpMediaIntoItem(
+                        $updates,
+                        $this->safeFetchWpMediaPayload($wpSync, $wpPostId)
                     );
                 }
 
@@ -305,8 +313,12 @@ class ProfileExtractionService
             if ($wpSync) {
                 $wpPayload = $this->safeFetchWpProfilePayload($wpSync, $wpPostId);
                 if ($wpPayload) {
-                    $updates = $this->buildItemPayloadFromWpPayload($wpPayload, $wpPostId);
+                    $updates = $this->buildItemPayloadFromWpPayload($wpPayload, $wpPostId, $item, $platform);
                     if ($updates !== null) {
+                        $updates = $this->mergeWpMediaIntoItem(
+                            $updates,
+                            $this->safeFetchWpMediaPayload($wpSync, $wpPostId)
+                        );
                         return $updates;
                     }
 
@@ -335,9 +347,16 @@ class ProfileExtractionService
                 );
 
                 if ($wpSync && (int) ($client->wp_post_id ?? 0) > 0) {
+                    $wpPayload = $this->safeFetchWpProfilePayload($wpSync, (int) $client->wp_post_id);
                     $updates = $this->mergeWpPayloadIntoItem(
                         $updates,
-                        $this->safeFetchWpProfilePayload($wpSync, (int) $client->wp_post_id)
+                        $wpPayload,
+                        $item,
+                        $platform
+                    );
+                    $updates = $this->mergeWpMediaIntoItem(
+                        $updates,
+                        $this->safeFetchWpMediaPayload($wpSync, (int) $client->wp_post_id)
                     );
                 }
 
@@ -642,7 +661,24 @@ class ProfileExtractionService
     }
 
     /**
-     * @return array{name:?string,phone:?string,image:?string,age:?string}
+     * @return array<int, array<string, mixed>>|null
+     */
+    private function safeFetchWpMediaPayload(?WpSyncService $wpSync, int $wpPostId): ?array
+    {
+        if (!$wpSync || $wpPostId <= 0) {
+            return null;
+        }
+
+        try {
+            $payload = $wpSync->getClientMedia($wpPostId);
+            return is_array($payload) ? $payload : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return array{name:?string,phone:?string,image:?string,age_value:?string,birthday:?string}
      */
     private function extractWpProfileFields(array $payload): array
     {
@@ -667,22 +703,36 @@ class ProfileExtractionService
             ?? ($meta['profile_age'] ?? null)
             ?? null;
 
+        $birthday = $meta['birthday']
+            ?? ($profile['birthday'] ?? null)
+            ?? null;
+
         return [
             'name' => $name ? trim((string) $name) : null,
             'phone' => $phone ? trim((string) $phone) : null,
             'image' => $image ? trim((string) $image) : null,
-            'age' => $age ? trim((string) $age) : null,
+            'age_value' => $age ? trim((string) $age) : null,
+            'birthday' => $birthday ? trim((string) $birthday) : null,
         ];
     }
 
     /**
      * @return array<string, mixed>|null
      */
-    private function buildItemPayloadFromWpPayload(array $payload, int $wpPostId): ?array
+    private function buildItemPayloadFromWpPayload(array $payload, int $wpPostId, PushCampaignItem $item, Platform $platform): ?array
     {
         $fields = $this->extractWpProfileFields($payload);
         if (empty($fields['name'])) {
             return null;
+        }
+
+        $profileAge = $fields['age_value'] ?? null;
+        if (!$profileAge && !empty($fields['birthday'])) {
+            $profileAge = $this->deriveAgeFromBirthday(
+                (string) $fields['birthday'],
+                $this->resolveItemAgeReferenceDate($item, $platform),
+                (string) ($platform->timezone ?: config('app.timezone', 'UTC'))
+            );
         }
 
         return [
@@ -691,7 +741,7 @@ class ProfileExtractionService
             'profile_name' => $fields['name'],
             'profile_phone' => $fields['phone'],
             'profile_image_url' => $fields['image'],
-            'profile_age' => $fields['age'],
+            'profile_age' => $profileAge,
             'status' => 'pending',
             'error_message' => null,
         ];
@@ -720,7 +770,7 @@ class ProfileExtractionService
      * @param array<string, mixed> $updates
      * @return array<string, mixed>
      */
-    private function mergeWpPayloadIntoItem(array $updates, ?array $payload): array
+    private function mergeWpPayloadIntoItem(array $updates, ?array $payload, PushCampaignItem $item, Platform $platform): array
     {
         if (!$payload) {
             return $updates;
@@ -736,11 +786,137 @@ class ProfileExtractionService
         if (!empty($fields['image'])) {
             $updates['profile_image_url'] = $fields['image'];
         }
-        if (!empty($fields['age'])) {
-            $updates['profile_age'] = $fields['age'];
+        if (!empty($fields['age_value'])) {
+            $updates['profile_age'] = $fields['age_value'];
+        } elseif (empty($updates['profile_age']) && !empty($fields['birthday'])) {
+            $derivedAge = $this->deriveAgeFromBirthday(
+                (string) $fields['birthday'],
+                $this->resolveItemAgeReferenceDate($item, $platform),
+                (string) ($platform->timezone ?: config('app.timezone', 'UTC'))
+            );
+            if ($derivedAge !== null) {
+                $updates['profile_age'] = $derivedAge;
+            }
         }
 
         return $updates;
+    }
+
+    /**
+     * @param array<string, mixed> $updates
+     * @param array<string, mixed>|null $mediaPayload
+     * @return array<string, mixed>
+     */
+    private function mergeWpMediaIntoItem(array $updates, ?array $mediaPayload): array
+    {
+        if (!empty($updates['profile_image_url'])) {
+            return $updates;
+        }
+
+        $mediaItems = $this->normalizeWpMediaItems($mediaPayload);
+        if (empty($mediaItems)) {
+            return $updates;
+        }
+
+        $recommended = $this->pickRecommendedMedia($mediaItems);
+        if ($recommended && !empty($recommended['url'])) {
+            $updates['profile_image_url'] = (string) $recommended['url'];
+        }
+
+        return $updates;
+    }
+
+    /**
+     * @param array<string, mixed>|null $payload
+     * @return array<int, array{id:int,url:string,is_main:bool}>
+     */
+    private function normalizeWpMediaItems(?array $payload): array
+    {
+        if (!$payload) {
+            return [];
+        }
+
+        $rows = data_get($payload, 'data');
+        if (!is_array($rows)) {
+            $rows = array_is_list($payload) ? $payload : [];
+        }
+
+        return collect($rows)
+            ->map(function ($media): array {
+                $row = is_array($media) ? $media : [];
+                return [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'url' => trim((string) ($row['url'] ?? '')),
+                    'is_main' => (bool) ($row['is_main'] ?? false),
+                ];
+            })
+            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0 && ($media['url'] ?? '') !== '')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param array<int, array{id:int,url:string,is_main:bool}> $mediaItems
+     * @return array{id:int,url:string,is_main:bool}|null
+     */
+    private function pickRecommendedMedia(array $mediaItems): ?array
+    {
+        if (empty($mediaItems)) {
+            return null;
+        }
+
+        $main = collect($mediaItems)->first(fn(array $item): bool => (bool) ($item['is_main'] ?? false));
+        if ($main) {
+            return $main;
+        }
+
+        return $mediaItems[0] ?? null;
+    }
+
+    private function resolveItemAgeReferenceDate(PushCampaignItem $item, Platform $platform): Carbon
+    {
+        $timezone = (string) ($platform->timezone ?: config('app.timezone', 'UTC'));
+        $scheduledAt = $item->scheduled_at;
+
+        if ($scheduledAt instanceof Carbon) {
+            return $scheduledAt->copy()->setTimezone($timezone);
+        }
+
+        if (!empty($scheduledAt)) {
+            try {
+                return Carbon::parse((string) $scheduledAt, 'UTC')->setTimezone($timezone);
+            } catch (\Throwable) {
+                // Ignore invalid values and fallback to now.
+            }
+        }
+
+        return now($timezone);
+    }
+
+    private function deriveAgeFromBirthday(string $birthday, Carbon $referenceDate, string $timezone): ?string
+    {
+        $normalizedBirthday = trim($birthday);
+        if ($normalizedBirthday === '') {
+            return null;
+        }
+
+        try {
+            $birthDate = Carbon::parse($normalizedBirthday, $timezone)->startOfDay();
+            $reference = $referenceDate->copy()->setTimezone($timezone)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($birthDate->greaterThan($reference)) {
+            return null;
+        }
+
+        $years = $birthDate->diffInYears($reference);
+        if ($years < 0 || $years > 120) {
+            return null;
+        }
+
+        return (string) $years;
     }
 
     private function hasWpIntegration(Platform $platform): bool

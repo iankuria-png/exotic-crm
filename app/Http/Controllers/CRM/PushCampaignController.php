@@ -1136,8 +1136,8 @@ class PushCampaignController extends Controller
                 if (!empty($fields['image'])) {
                     $payload['profile_image_url'] = $fields['image'];
                 }
-                if (!empty($fields['age'])) {
-                    $payload['profile_age'] = $fields['age'];
+                if (!empty($fields['age_value'])) {
+                    $payload['profile_age'] = $fields['age_value'];
                 }
             } catch (\Throwable) {
                 // Keep CRM payload if WP hydration fails.
@@ -1145,6 +1145,9 @@ class PushCampaignController extends Controller
         }
 
         $pushCampaignItem->forceFill($payload)->save();
+        if ($hydrateWpDetails) {
+            $this->hydratePushCampaignItemProfile($pushCampaign, $pushCampaignItem, true, true);
+        }
         $this->recalculateCampaignActiveTotals($pushCampaign);
 
         return response()->json([
@@ -1172,6 +1175,158 @@ class PushCampaignController extends Controller
             'item' => $pushCampaignItem->fresh(),
             'message' => 'Campaign item removed from active send list.',
         ]);
+    }
+
+    public function hydrateItemProfile(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+        $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be hydrated.');
+
+        $validated = $request->validate([
+            'force' => 'nullable|boolean',
+        ]);
+
+        $force = (bool) ($validated['force'] ?? false);
+        $result = $this->hydratePushCampaignItemProfile($pushCampaign, $pushCampaignItem, $force, true);
+
+        return response()->json([
+            'item' => $result['item'],
+            'sources' => $result['sources'],
+            'media' => $result['media'],
+        ]);
+    }
+
+    public function itemMedia(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+
+        $context = $this->resolveItemWpContext($pushCampaign, $pushCampaignItem, true);
+        if (($context['error'] ?? null) !== null) {
+            return response()->json([
+                'message' => (string) $context['error'],
+            ], 422);
+        }
+
+        $media = $this->fetchWpMediaOptions((array) $context);
+        $recommended = $this->pickRecommendedMedia($media);
+
+        return response()->json([
+            'data' => $media,
+            'selected_url' => $pushCampaignItem->profile_image_url ?: null,
+            'recommended_url' => $recommended['url'] ?? null,
+        ]);
+    }
+
+    public function selectItemMedia(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+        $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be edited.');
+
+        $validated = $request->validate([
+            'attachment_id' => 'required|integer|min:1',
+        ]);
+
+        $context = $this->resolveItemWpContext($pushCampaign, $pushCampaignItem, true);
+        if (($context['error'] ?? null) !== null) {
+            return response()->json([
+                'message' => (string) $context['error'],
+            ], 422);
+        }
+
+        $media = $this->fetchWpMediaOptions((array) $context);
+        $selected = collect($media)->first(fn(array $item): bool => (int) ($item['id'] ?? 0) === (int) $validated['attachment_id']);
+
+        if (!$selected) {
+            return response()->json([
+                'message' => 'Selected media item was not found for this profile.',
+            ], 422);
+        }
+
+        $pushCampaignItem->forceFill([
+            'profile_image_url' => (string) ($selected['url'] ?? ''),
+            'error_message' => null,
+            'status' => in_array((string) $pushCampaignItem->status, ['failed', 'pending_extraction', 'needs_preset'], true)
+                ? 'pending'
+                : $pushCampaignItem->status,
+        ])->save();
+        $this->recalculateCampaignActiveTotals($pushCampaign);
+
+        return response()->json([
+            'item' => $pushCampaignItem->fresh(),
+            'selected_media' => $selected,
+        ]);
+    }
+
+    public function uploadItemMedia(Request $request, PushCampaign $pushCampaign, PushCampaignItem $pushCampaignItem)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+        $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
+        $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be edited.');
+
+        $validated = $request->validate([
+            'file' => 'required|file|mimes:jpg,jpeg,png,webp|max:5120',
+            'apply_to_item' => 'nullable|boolean',
+        ]);
+
+        $context = $this->resolveItemWpContext($pushCampaign, $pushCampaignItem, true);
+        if (($context['error'] ?? null) !== null) {
+            return response()->json([
+                'message' => (string) $context['error'],
+            ], 422);
+        }
+
+        try {
+            /** @var Platform $platform */
+            $platform = $context['platform'];
+            $wpPostId = (int) ($context['wp_post_id'] ?? 0);
+            $wpSync = new WpSyncService($platform);
+
+            $upload = $wpSync->uploadClientMedia(
+                $wpPostId,
+                $request->file('file'),
+                false
+            );
+
+            $media = $this->normalizeWpMediaItems($wpSync->getClientMedia($wpPostId));
+            $attachmentId = (int) data_get($upload, 'attachment.id', 0);
+            $uploadedMedia = collect($media)->first(fn(array $item): bool => (int) ($item['id'] ?? 0) === $attachmentId);
+
+            $applyToItem = array_key_exists('apply_to_item', $validated)
+                ? (bool) $validated['apply_to_item']
+                : true;
+
+            if ($applyToItem && $uploadedMedia && !empty($uploadedMedia['url'])) {
+                $pushCampaignItem->forceFill([
+                    'profile_image_url' => (string) $uploadedMedia['url'],
+                    'error_message' => null,
+                    'status' => in_array((string) $pushCampaignItem->status, ['failed', 'pending_extraction', 'needs_preset'], true)
+                        ? 'pending'
+                        : $pushCampaignItem->status,
+                ])->save();
+                $this->recalculateCampaignActiveTotals($pushCampaign);
+            }
+
+            return response()->json([
+                'item' => $pushCampaignItem->fresh(),
+                'uploaded_media' => $uploadedMedia ?: [
+                    'id' => $attachmentId > 0 ? $attachmentId : null,
+                    'url' => data_get($upload, 'attachment.url'),
+                    'filename' => data_get($upload, 'attachment.filename'),
+                    'is_main' => false,
+                    'mime_type' => data_get($upload, 'attachment.mime_type'),
+                    'uploaded_at' => data_get($upload, 'attachment.uploaded_at'),
+                ],
+                'media' => $media,
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to upload profile media for campaign item.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
     }
 
     public function execute(Request $request, PushCampaign $pushCampaign)
@@ -2302,7 +2457,7 @@ class PushCampaignController extends Controller
     }
 
     /**
-     * @return array{name:?string,phone:?string,image:?string,age:?string}
+     * @return array{name:?string,phone:?string,image:?string,age_value:?string,birthday:?string}
      */
     private function extractWpProfileFields(array $payload): array
     {
@@ -2327,12 +2482,326 @@ class PushCampaignController extends Controller
             ?? ($meta['profile_age'] ?? null)
             ?? null;
 
+        $birthday = $meta['birthday'] ?? ($profile['birthday'] ?? null);
+
         return [
             'name' => $name ? trim((string) $name) : null,
             'phone' => $phone ? trim((string) $phone) : null,
             'image' => $image ? trim((string) $image) : null,
-            'age' => $age ? trim((string) $age) : null,
+            'age_value' => $age ? trim((string) $age) : null,
+            'birthday' => $birthday ? trim((string) $birthday) : null,
         ];
+    }
+
+    /**
+     * @return array{item:PushCampaignItem,sources:array{age_source:?string,image_source:?string},media:array<int,array<string,mixed>>}
+     */
+    private function hydratePushCampaignItemProfile(
+        PushCampaign $pushCampaign,
+        PushCampaignItem $pushCampaignItem,
+        bool $force = false,
+        bool $persist = true
+    ): array {
+        $context = $this->resolveItemWpContext($pushCampaign, $pushCampaignItem, false);
+        /** @var Platform $platform */
+        $platform = $context['platform'];
+        /** @var Client|null $client */
+        $client = $context['client'];
+        $wpPostId = (int) ($context['wp_post_id'] ?? 0);
+        $canHydrateWp = (bool) ($context['can_hydrate_wp'] ?? false);
+
+        $payload = [];
+        $media = [];
+        $sources = [
+            'age_source' => $pushCampaignItem->profile_age ? 'existing' : null,
+            'image_source' => $pushCampaignItem->profile_image_url ? 'item_existing' : null,
+        ];
+
+        if ($client) {
+            if ($force || $this->isBlankValue($pushCampaignItem->profile_name)) {
+                if (!$this->isBlankValue($client->name)) {
+                    $payload['profile_name'] = trim((string) $client->name);
+                }
+            }
+
+            if ($force || $this->isBlankValue($pushCampaignItem->profile_phone)) {
+                if (!$this->isBlankValue($client->phone_normalized)) {
+                    $payload['profile_phone'] = trim((string) $client->phone_normalized);
+                }
+            }
+
+            if ($force || $this->isBlankValue($pushCampaignItem->profile_image_url)) {
+                if (!$this->isBlankValue($client->main_image_url)) {
+                    $payload['profile_image_url'] = trim((string) $client->main_image_url);
+                    $sources['image_source'] = 'client_main';
+                }
+            }
+        }
+
+        if ($canHydrateWp && $wpPostId > 0) {
+            try {
+                $wpSync = new WpSyncService($platform);
+                $wpPayload = $wpSync->getClientProfile($wpPostId);
+                $fields = $this->extractWpProfileFields($wpPayload);
+
+                if (($force || $this->isBlankValue($pushCampaignItem->profile_name)) && !$this->isBlankValue($fields['name'] ?? null)) {
+                    $payload['profile_name'] = (string) $fields['name'];
+                }
+
+                if (($force || $this->isBlankValue($pushCampaignItem->profile_phone)) && !$this->isBlankValue($fields['phone'] ?? null)) {
+                    $payload['profile_phone'] = (string) $fields['phone'];
+                }
+
+                if (($force || $this->isBlankValue($pushCampaignItem->profile_image_url) || $this->isBlankValue($payload['profile_image_url'] ?? null))
+                    && !$this->isBlankValue($fields['image'] ?? null)) {
+                    $payload['profile_image_url'] = (string) $fields['image'];
+                    $sources['image_source'] = 'wp_profile';
+                }
+
+                if ($force || $this->isBlankValue($pushCampaignItem->profile_age)) {
+                    if (!$this->isBlankValue($fields['age_value'] ?? null)) {
+                        $payload['profile_age'] = (string) $fields['age_value'];
+                        $sources['age_source'] = 'wp_meta_age';
+                    } elseif (!$this->isBlankValue($fields['birthday'] ?? null)) {
+                        $derivedAge = $this->deriveAgeFromBirthday(
+                            (string) $fields['birthday'],
+                            $this->resolveItemAgeReferenceDate($pushCampaignItem, $platform),
+                            (string) ($platform->timezone ?: config('app.timezone', 'UTC'))
+                        );
+                        if ($derivedAge !== null) {
+                            $payload['profile_age'] = $derivedAge;
+                            $sources['age_source'] = 'wp_birthday_derived';
+                        }
+                    }
+                }
+
+                if ($force || $this->isBlankValue($pushCampaignItem->profile_image_url) || $this->isBlankValue($payload['profile_image_url'] ?? null)) {
+                    $media = $this->normalizeWpMediaItems($wpSync->getClientMedia($wpPostId));
+                    $recommended = $this->pickRecommendedMedia($media);
+                    if ($recommended && !$this->isBlankValue($recommended['url'] ?? null)) {
+                        $payload['profile_image_url'] = (string) ($recommended['url'] ?? '');
+                        $sources['image_source'] = (bool) ($recommended['is_main'] ?? false) ? 'wp_media_main' : 'wp_media_first';
+                    }
+                } else {
+                    $media = $this->normalizeWpMediaItems($wpSync->getClientMedia($wpPostId));
+                }
+            } catch (\Throwable) {
+                // Keep available local/client values when WP hydration fails.
+            }
+        }
+
+        if (($force || $this->isBlankValue($pushCampaignItem->wp_post_id)) && $wpPostId > 0) {
+            $payload['wp_post_id'] = $wpPostId;
+        }
+
+        $changedProfileFields = collect(['profile_name', 'profile_phone', 'profile_image_url', 'profile_age'])
+            ->contains(fn(string $field): bool => array_key_exists($field, $payload));
+
+        if ($changedProfileFields) {
+            $payload['error_message'] = null;
+            if (in_array((string) $pushCampaignItem->status, ['failed', 'pending_extraction', 'needs_preset'], true)) {
+                $payload['status'] = 'pending';
+            }
+        }
+
+        if ($persist && !empty($payload)) {
+            $pushCampaignItem->forceFill($payload)->save();
+            $pushCampaignItem = $pushCampaignItem->fresh();
+        } elseif (!empty($payload)) {
+            $pushCampaignItem->forceFill($payload);
+        }
+
+        return [
+            'item' => $pushCampaignItem,
+            'sources' => [
+                'age_source' => $sources['age_source'],
+                'image_source' => $sources['image_source'],
+            ],
+            'media' => $media,
+        ];
+    }
+
+    /**
+     * @param array{platform:Platform,wp_post_id:int} $context
+     * @return array<int, array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}>
+     */
+    private function fetchWpMediaOptions(array $context): array
+    {
+        $wpSync = new WpSyncService($context['platform']);
+        return $this->normalizeWpMediaItems($wpSync->getClientMedia((int) $context['wp_post_id']));
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array<int, array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}>
+     */
+    private function normalizeWpMediaItems(array $payload): array
+    {
+        $rows = data_get($payload, 'data');
+        if (!is_array($rows)) {
+            $rows = array_is_list($payload) ? $payload : [];
+        }
+
+        return collect($rows)
+            ->map(function ($media): array {
+                $row = is_array($media) ? $media : [];
+                return [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'url' => trim((string) ($row['url'] ?? '')),
+                    'filename' => isset($row['filename']) ? trim((string) $row['filename']) : null,
+                    'is_main' => (bool) ($row['is_main'] ?? false),
+                    'mime_type' => isset($row['mime_type']) ? trim((string) $row['mime_type']) : null,
+                    'uploaded_at' => isset($row['uploaded_at']) ? trim((string) $row['uploaded_at']) : null,
+                ];
+            })
+            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0 && !$this->isBlankValue($media['url'] ?? null))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param array<int, array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}> $media
+     * @return array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}|null
+     */
+    private function pickRecommendedMedia(array $media): ?array
+    {
+        if (empty($media)) {
+            return null;
+        }
+
+        $main = collect($media)->first(fn(array $item): bool => (bool) ($item['is_main'] ?? false));
+        if ($main) {
+            return $main;
+        }
+
+        return $media[0] ?? null;
+    }
+
+    /**
+     * @return array{
+     *     platform:Platform,
+     *     client:Client|null,
+     *     wp_post_id:int,
+     *     can_hydrate_wp:bool,
+     *     error:?string
+     * }
+     */
+    private function resolveItemWpContext(
+        PushCampaign $pushCampaign,
+        PushCampaignItem $pushCampaignItem,
+        bool $requireLinkedClient = true
+    ): array {
+        $pushCampaign->loadMissing('platform:id,name,domain,timezone,wp_api_url,wp_api_user,wp_api_password');
+        $pushCampaignItem->loadMissing('client:id,platform_id,wp_post_id,name,phone_normalized,main_image_url');
+
+        /** @var Platform $platform */
+        $platform = $pushCampaign->platform;
+        $client = $pushCampaignItem->client;
+        $wpPostId = (int) ($pushCampaignItem->wp_post_id ?? 0);
+
+        if ($wpPostId <= 0 && $client) {
+            $wpPostId = (int) ($client->wp_post_id ?? 0);
+        }
+        if ($wpPostId <= 0) {
+            $wpPostId = (int) ($this->parseWpPostIdFromUrl((string) ($pushCampaignItem->profile_url ?? '')) ?? 0);
+        }
+
+        if ($requireLinkedClient && !$client) {
+            return [
+                'platform' => $platform,
+                'client' => null,
+                'wp_post_id' => $wpPostId,
+                'can_hydrate_wp' => false,
+                'error' => 'Match this campaign item to a CRM escort profile before managing media.',
+            ];
+        }
+
+        if ($wpPostId <= 0) {
+            return [
+                'platform' => $platform,
+                'client' => $client,
+                'wp_post_id' => 0,
+                'can_hydrate_wp' => false,
+                'error' => 'WordPress profile link is missing for this campaign item.',
+            ];
+        }
+
+        if (!$this->platformHasWpIntegration($platform)) {
+            return [
+                'platform' => $platform,
+                'client' => $client,
+                'wp_post_id' => $wpPostId,
+                'can_hydrate_wp' => false,
+                'error' => 'WordPress integration credentials are missing for this market.',
+            ];
+        }
+
+        return [
+            'platform' => $platform,
+            'client' => $client,
+            'wp_post_id' => $wpPostId,
+            'can_hydrate_wp' => true,
+            'error' => null,
+        ];
+    }
+
+    private function resolveItemAgeReferenceDate(PushCampaignItem $pushCampaignItem, Platform $platform): Carbon
+    {
+        $timezone = (string) ($platform->timezone ?: config('app.timezone', 'UTC'));
+        $scheduledAt = $pushCampaignItem->scheduled_at;
+
+        if ($scheduledAt instanceof Carbon) {
+            return $scheduledAt->copy()->setTimezone($timezone);
+        }
+
+        if (!$this->isBlankValue($scheduledAt)) {
+            try {
+                return Carbon::parse((string) $scheduledAt, 'UTC')->setTimezone($timezone);
+            } catch (\Throwable) {
+                // Fallback to now for invalid date payload.
+            }
+        }
+
+        return now($timezone);
+    }
+
+    private function deriveAgeFromBirthday(string $birthday, Carbon $referenceDate, string $timezone): ?string
+    {
+        $normalizedBirthday = trim($birthday);
+        if ($normalizedBirthday === '') {
+            return null;
+        }
+
+        try {
+            $birthDate = Carbon::parse($normalizedBirthday, $timezone)->startOfDay();
+            $reference = $referenceDate->copy()->setTimezone($timezone)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($birthDate->greaterThan($reference)) {
+            return null;
+        }
+
+        $years = $birthDate->diffInYears($reference);
+        if ($years < 0 || $years > 120) {
+            return null;
+        }
+
+        return (string) $years;
+    }
+
+    private function isBlankValue(mixed $value): bool
+    {
+        if ($value === null) {
+            return true;
+        }
+
+        if (is_string($value)) {
+            return trim($value) === '';
+        }
+
+        return false;
     }
 
     private function extractDomainFromUrl(string $url): ?string
