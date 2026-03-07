@@ -9,15 +9,19 @@ use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Support\PhoneNormalizer;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 
 class PaymentMatchingService
 {
     private PaymentReconciliationConfidenceService $confidenceService;
+    private SubscriptionProvisioningService $subscriptionProvisioningService;
 
     public function __construct(
-        ?PaymentReconciliationConfidenceService $confidenceService = null
+        ?PaymentReconciliationConfidenceService $confidenceService = null,
+        ?SubscriptionProvisioningService $subscriptionProvisioningService = null
     ) {
         $this->confidenceService = $confidenceService ?? new PaymentReconciliationConfidenceService();
+        $this->subscriptionProvisioningService = $subscriptionProvisioningService ?? new SubscriptionProvisioningService();
     }
 
     /**
@@ -336,71 +340,17 @@ class PaymentMatchingService
      */
     public function createDealFromPayment(Payment $payment, int $actorId): Deal
     {
-        if ($payment->status !== 'completed') {
-            throw new \InvalidArgumentException('Payment must be completed to create a subscription.');
-        }
-        if (!$payment->client_id) {
-            throw new \InvalidArgumentException('Payment must be matched to a client first.');
-        }
-        if ($payment->deal_id) {
-            throw new \InvalidArgumentException('Payment is already linked to a subscription.');
-        }
-
-        $payment->loadMissing('platform');
-        $platformId = (int) $payment->platform_id;
-
-        $product = $payment->product_id ? Product::find($payment->product_id) : null;
-        if ($product && $platformId > 0 && (int) $product->platform_id !== $platformId) {
-            $product = null;
-        }
-
-        if (!$product) {
-            $product = $this->matchProductByAmount(
-                (float) $payment->amount,
-                null,
-                $platformId > 0 ? $platformId : null,
-                $payment->currency
-            );
-        }
-
-        // Determine duration from product pricing tier match
-        $duration = 'monthly';
-        if ($product) {
-            $amount = (float) $payment->amount;
-            if ($product->weekly_price && abs($product->weekly_price - $amount) < 0.01) {
-                $duration = 'weekly';
-            } elseif ($product->biweekly_price && abs($product->biweekly_price - $amount) < 0.01) {
-                $duration = 'biweekly';
-            }
-        }
-
-        $durationDays = match ($duration) {
-            'weekly' => 7,
-            'biweekly' => 14,
-            'monthly' => 30,
-            default => 30,
-        };
-
-        $planType = $this->resolvePlanTypeFromProduct($product);
-
-        $deal = Deal::create([
-            'platform_id' => (int) $payment->platform_id,
-            'client_id' => (int) $payment->client_id,
-            'payment_id' => (int) $payment->id,
-            'product_id' => $product?->id,
-            'plan_type' => $planType,
-            'amount' => (float) $payment->amount,
-            'currency' => $product?->currency ?: ($payment->currency ?: ($payment->platform?->currency_code ?: 'KES')),
-            'duration' => $duration,
-            'status' => 'active',
-            'activated_at' => now(),
-            'expires_at' => now()->addDays($durationDays),
-            'assigned_to' => $actorId,
-        ]);
-
-        $payment->update(['deal_id' => $deal->id]);
-
-        return $deal;
+        return DB::transaction(fn () => $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
+            'actor_id' => $actorId,
+            'confirmed_by' => $actorId,
+            'confirmed_at' => $payment->confirmed_at ?? now(),
+            'match_confidence' => $payment->match_confidence ?: 'manual',
+            'reconciliation_confidence' => $payment->reconciliation_confidence ?: 'high',
+            'reconciliation_state' => 'resolved',
+            'emit_payment_received_timeline' => true,
+            'emit_profile_activated_timeline' => false,
+            'emit_deal_activated_timeline' => true,
+        ]));
     }
 
     /**

@@ -18,8 +18,10 @@ use App\Services\PaymentImportService;
 use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\MarketAuthorizationService;
+use App\Services\SubscriptionProvisioningService;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Carbon;
@@ -32,7 +34,8 @@ class PaymentQueueController extends Controller
         private readonly AuditService $auditService,
         private readonly NotificationService $notificationService,
         private readonly PaymentAttemptService $paymentAttemptService,
-        private readonly PaymentImportService $paymentImportService
+        private readonly PaymentImportService $paymentImportService,
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
 
@@ -312,7 +315,6 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $service = new PaymentMatchingService();
         $beforeState = [
             'deal_id' => $payment->deal_id,
             'client_id' => $payment->client_id,
@@ -320,7 +322,33 @@ class PaymentQueueController extends Controller
             'reconciliation_confidence' => $reconciliationConfidence,
         ];
 
-        $deal = $service->createDealFromPayment($payment, (int) $request->user()->id);
+        try {
+            $deal = DB::transaction(fn () => $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
+                'actor_id' => (int) $request->user()->id,
+                'confirmed_by' => (int) $request->user()->id,
+                'confirmed_at' => $payment->confirmed_at ?? now(),
+                'match_confidence' => $payment->match_confidence ?: 'manual',
+                'reconciliation_confidence' => $payment->reconciliation_confidence ?: $reconciliationConfidence,
+                'reconciliation_state' => 'resolved',
+                'emit_payment_received_timeline' => true,
+                'emit_profile_activated_timeline' => false,
+                'emit_deal_activated_timeline' => true,
+            ]));
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Payment queue subscription creation failed', [
+                'payment_id' => $payment->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Subscription creation failed: ' . $exception->getMessage(),
+            ], 500);
+        }
+
         $payment->refresh();
         $payment->load(['platform', 'product', 'client']);
         $deal->load(['client', 'product', 'platform']);

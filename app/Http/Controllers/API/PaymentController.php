@@ -11,11 +11,11 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Activation;
 use App\Models\SmsLog;
-use App\Models\TimelineEvent;
 use App\Models\WordpressPost;
 use App\Services\DynamicDatabaseService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentMatchingService;
+use App\Services\SubscriptionProvisioningService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -25,6 +25,11 @@ use Services\KopokopoService;
 
 class PaymentController extends Controller
 {
+    public function __construct(
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
+    ) {
+    }
+
     public function initiate(Request $request)
     {
         try {
@@ -399,96 +404,29 @@ class PaymentController extends Controller
     
                 $payment->update([
                     'status' => 'completed',
-                    'transaction_reference' => $resource['reference'] ?? null,
+                    'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
                     'completed_at' => now(),
                     'raw_payload' => array_merge($payment->raw_payload ?? [], [
                         'webhook_data' => $rawData,
-                        'processed_at' => now()->toDateTimeString()
+                    'processed_at' => now()->toDateTimeString()
                     ])
                 ]);
-    
-                \Log::info('Payment updated, starting service activation', [
-                    'payment_id' => $payment->id,
-                    'user_id' => $payment->user_id
-                ]);
-    
-                // Activate user services
-                $activatedCount = $this->activateUserServices($payment->user_id, $payment);
-    
-                \Log::info('Services activation result', [
-                    'payment_id' => $payment->id,
-                    'activated_count' => $activatedCount,
-                    'success' => $activatedCount > 0
-                ]);
 
-                // Sprint 2: record CRM sales artifacts after successful activation.
                 $client = $this->resolveClientForSuccessfulPayment($payment);
+                $deal = null;
 
                 if ($client) {
-                    $deal = Deal::where('payment_id', $payment->id)->first();
-                    $isNewDeal = false;
-
-                    if (!$deal) {
-                        $payment->loadMissing('product', 'platform');
-                        $expiresAt = $payment->end_date
-                            ? Carbon::parse($payment->end_date)
-                            : $this->calculateSubscriptionEndDate($payment->duration, now());
-
-                        $deal = Deal::create([
-                            'platform_id' => $payment->platform_id,
-                            'client_id' => $client->id,
-                            'payment_id' => $payment->id,
-                            'product_id' => $payment->product_id,
-                            'plan_type' => $this->inferPlanTypeFromProduct($payment->product),
-                            'amount' => $payment->amount,
-                            'currency' => $payment->currency ?: ($payment->platform->currency_code ?? 'KES'),
-                            'duration' => in_array($payment->duration, ['weekly', 'biweekly', 'monthly']) ? $payment->duration : 'manual',
-                            'status' => 'active',
-                            'activated_at' => $payment->start_date ? Carbon::parse($payment->start_date) : now(),
-                            'expires_at' => $expiresAt,
-                            'assigned_to' => $client->assigned_to,
-                        ]);
-                        $isNewDeal = true;
-                    }
-
-                    $payment->forceFill([
-                        'client_id' => $client->id,
-                        'deal_id' => $deal->id,
-                        'match_confidence' => 'auto_high',
-                        'confirmed_at' => now(),
-                    ])->save();
-
-                    if ($isNewDeal) {
-                        TimelineEvent::create([
-                            'platform_id' => $client->platform_id,
-                            'entity_type' => 'client',
-                            'entity_id' => $client->id,
-                            'event_type' => 'payment_received',
-                            'actor_id' => null,
-                            'content' => [
-                                'payment_id' => $payment->id,
-                                'deal_id' => $deal->id,
-                                'amount' => $payment->amount,
-                                'currency' => $payment->currency ?: 'KES',
-                                'transaction_reference' => $payment->transaction_reference,
-                            ],
-                            'created_at' => now(),
-                        ]);
-
-                        TimelineEvent::create([
-                            'platform_id' => $client->platform_id,
-                            'entity_type' => 'deal',
-                            'entity_id' => $deal->id,
-                            'event_type' => 'deal_activated',
-                            'actor_id' => null,
-                            'content' => [
-                                'payment_id' => $payment->id,
-                                'activated_at' => optional($deal->activated_at)->toDateTimeString(),
-                                'expires_at' => optional($deal->expires_at)->toDateTimeString(),
-                            ],
-                            'created_at' => now(),
-                        ]);
-                    }
+                    $deal = $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
+                        'client' => $client,
+                        'confirmed_at' => $payment->confirmed_at ?? now(),
+                        'match_confidence' => $payment->match_confidence ?: 'auto_high',
+                        'reconciliation_confidence' => 'high',
+                        'reconciliation_state' => 'resolved',
+                        'payment_method' => $this->resolveProvisioningPaymentMethod($payment, $metadata, $rawData),
+                        'emit_payment_received_timeline' => true,
+                        'emit_profile_activated_timeline' => false,
+                        'emit_deal_activated_timeline' => true,
+                    ]);
                 } else {
                     Log::warning('Successful payment could not be linked to a CRM client', [
                         'payment_id' => $payment->id,
@@ -496,6 +434,12 @@ class PaymentController extends Controller
                         'user_id' => $payment->user_id,
                     ]);
                 }
+
+                \Log::info('Services activation result', [
+                    'payment_id' => $payment->id,
+                    'deal_id' => $deal?->id,
+                    'success' => $deal !== null
+                ]);
     
                 // Generate and send success message (without icon)
                 $message = $this->generateSuccessMessage($payment, $payment->transaction_reference);
@@ -504,7 +448,7 @@ class PaymentController extends Controller
                 Log::info('Payment completed and activated successfully', [
                     'payment_id' => $payment->id,
                     'user_id' => $payment->user_id,
-                    'activated_posts' => $activatedCount
+                    'deal_id' => $deal?->id
                 ]);
             });
         } catch (\Exception $e) {
@@ -570,6 +514,17 @@ class PaymentController extends Controller
         }
 
         return 'basic';
+    }
+
+    private function resolveProvisioningPaymentMethod(Payment $payment, ?array $metadata, array $rawData): string
+    {
+        $method = data_get($payment->raw_payload, 'method')
+            ?? data_get($metadata, 'payment_method')
+            ?? data_get($rawData, 'payment_method')
+            ?? data_get($rawData, 'source')
+            ?? 'provider';
+
+        return strtolower(trim((string) $method)) ?: 'provider';
     }
     
     private function handleReversedPayment(array $resource, ?array $metadata, array $rawData)

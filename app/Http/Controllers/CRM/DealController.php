@@ -17,6 +17,7 @@ use App\Services\WpSyncService;
 use App\Services\ClientSyncService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
+use App\Services\SubscriptionProvisioningService;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
@@ -31,7 +32,8 @@ class DealController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
         private readonly \App\Services\RenewalService $renewalService,
-        private readonly NotificationService $notificationService
+        private readonly NotificationService $notificationService,
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
 
@@ -367,30 +369,20 @@ class DealController extends Controller
                 ], 202);
             }
 
-            $wpSync = WpSyncService::forPlatform($client->platform_id);
-            $wpSync->activateClient(
-                $client->wp_post_id,
-                $deal->plan_type,
-                $durationDays,
-                $deal->id
-            );
-
             $isFreeTrial = $paymentMethod === 'free_trial';
-            $deal->update([
-                'status' => 'active',
-                'activated_at' => now(),
-                'expires_at' => now()->addDays($durationDays),
-                'payment_id' => $payment?->id,
+            $deal = $this->subscriptionProvisioningService->activateDeal($deal, [
+                'payment' => $payment,
+                'payment_method' => $paymentMethod,
+                'duration_days' => $durationDays,
                 'payment_reference' => $payment?->transaction_reference
                     ?? ($paymentMethod === 'manual' ? (string) $validated['payment_reference'] : null),
                 'is_free_trial' => $isFreeTrial,
                 'free_trial_approved_by' => $isFreeTrial ? (string) $validated['approved_by'] : null,
+                'actor_id' => (int) $request->user()->id,
+                'emit_profile_activated_timeline' => true,
+                'emit_deal_activated_timeline' => true,
             ]);
-
-            // Re-sync client from WP to get updated meta
-            $syncService = new ClientSyncService($platform);
-            $syncService->syncOne($client->wp_post_id);
-            $client->refresh();
+            $client = $deal->client;
 
             $afterState = [
                 'deal_status' => 'active',
@@ -428,36 +420,6 @@ class DealController extends Controller
                     $validated['reason'] ?: 'Free trial activation from CRM flow'
                 );
             }
-
-            TimelineEvent::create([
-                'platform_id' => $client->platform_id,
-                'entity_type' => 'client',
-                'entity_id' => $client->id,
-                'event_type' => 'profile_activated',
-                'actor_id' => $request->user()->id,
-                'content' => [
-                    'deal_id' => $deal->id,
-                    'plan_type' => $deal->plan_type,
-                    'duration_days' => $durationDays,
-                    'expires_at' => $deal->expires_at->toDateTimeString(),
-                    'payment_method' => $paymentMethod,
-                ],
-                'created_at' => now(),
-            ]);
-
-            TimelineEvent::create([
-                'platform_id' => $client->platform_id,
-                'entity_type' => 'deal',
-                'entity_id' => $deal->id,
-                'event_type' => 'deal_activated',
-                'actor_id' => $request->user()->id,
-                'content' => [
-                    'duration_days' => $durationDays,
-                    'expires_at' => $deal->expires_at->toDateTimeString(),
-                    'payment_method' => $paymentMethod,
-                ],
-                'created_at' => now(),
-            ]);
 
             DB::commit();
 
