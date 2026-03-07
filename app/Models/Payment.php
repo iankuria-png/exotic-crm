@@ -30,9 +30,13 @@ class Payment extends Model
         'transaction_reference',
         'reference_number',
         'status',
+        'purpose',
         'failure_reason',
         'completed_at',
         'source',
+        'wallet_transaction_id',
+        'provider_key',
+        'provider_environment',
         'import_batch_id',
         'import_legacy_hash',
         'reconciliation_confidence',
@@ -84,6 +88,11 @@ class Payment extends Model
     public function deal()
     {
         return $this->belongsTo(Deal::class);
+    }
+
+    public function walletTransaction()
+    {
+        return $this->belongsTo(WalletTransaction::class);
     }
 
     public function confirmedBy()

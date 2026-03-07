@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class Platform extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
         'name', 'domain', 'country', 'is_active',
         'db_host', 'db_name', 'db_user', 'db_pass', 'db_prefix', 'product_id',
@@ -15,6 +17,7 @@ class Platform extends Model
         'sync_last_checked_at', 'sync_last_synced_at',
         'sync_last_scope', 'sync_last_status',
         'sync_last_error', 'sync_last_result', 'payment_link_providers', 'support_chat_url',
+        'wallet_settings',
     ];
 
     protected $casts = [
@@ -23,6 +26,7 @@ class Platform extends Model
         'sync_last_synced_at' => 'datetime',
         'sync_last_result' => 'array',
         'payment_link_providers' => 'array',
+        'wallet_settings' => 'array',
     ];
     
     public function getConnectionConfig()

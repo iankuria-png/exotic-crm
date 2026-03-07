@@ -26,6 +26,9 @@ class Client extends Model
         'escort_expire',
         'verified',
         'main_image_url',
+        'wallet_balance',
+        'wallet_currency',
+        'wallet_last_synced_at',
         'assigned_to',
         'duplicate_of',
         'last_online_at',
@@ -36,11 +39,13 @@ class Client extends Model
         'premium' => 'boolean',
         'featured' => 'boolean',
         'verified' => 'boolean',
+        'wallet_balance' => 'decimal:2',
         'premium_expire' => 'integer',
         'featured_expire' => 'integer',
         'escort_expire' => 'integer',
         'duplicate_of' => 'integer',
         'last_online_at' => 'integer',
+        'wallet_last_synced_at' => 'datetime',
         'last_synced_at' => 'datetime',
     ];
 
@@ -83,6 +88,11 @@ class Client extends Model
     public function payments()
     {
         return $this->hasMany(Payment::class);
+    }
+
+    public function walletTransactions()
+    {
+        return $this->hasMany(WalletTransaction::class);
     }
 
     public function credentialDispatches()
