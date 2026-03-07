@@ -17,6 +17,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
@@ -115,7 +116,14 @@ class DashboardController extends Controller
         $totalLeadsQuery = Lead::query();
         $activeDealsQuery = Deal::active();
         $expiringSoonQuery = Deal::expiringSoon(7);
-        $paymentsWindowQuery = Payment::where('status', 'completed')->whereBetween('created_at', [$from, $to]);
+        $paymentsWindowQuery = Payment::query()
+            ->where('status', 'completed')
+            ->excludingWalletTopups()
+            ->whereBetween('created_at', [$from, $to]);
+        $walletTopupsWindowQuery = Payment::query()
+            ->where('status', 'completed')
+            ->walletTopups()
+            ->whereBetween('created_at', [$from, $to]);
         $unmatchedPaymentsWindowQuery = Payment::whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
         $awaitingPaymentsQuery = Payment::whereIn('status', ['initiated', 'pending']);
         $failedPaymentsQuery = Payment::where('status', 'failed');
@@ -146,7 +154,10 @@ class DashboardController extends Controller
         $windowSeconds = max(1, $to->diffInSeconds($from) + 1);
         $previousFrom = (clone $from)->subSeconds($windowSeconds);
         $previousTo = (clone $from)->subSecond();
-        $previousRevenueQuery = Payment::where('status', 'completed')->whereBetween('created_at', [$previousFrom, $previousTo]);
+        $previousRevenueQuery = Payment::query()
+            ->where('status', 'completed')
+            ->excludingWalletTopups()
+            ->whereBetween('created_at', [$previousFrom, $previousTo]);
         if (is_array($platformIds)) {
             $previousRevenueQuery->whereIn('platform_id', $platformIds);
         }
@@ -154,6 +165,8 @@ class DashboardController extends Controller
         $completedPaymentsWindow = (clone $paymentsWindowQuery)->count();
         $revenueWindow = (float) (clone $paymentsWindowQuery)->sum('amount');
         $revenuePreviousWindow = (float) (clone $previousRevenueQuery)->sum('amount');
+        $walletTopupsWindow = (clone $walletTopupsWindowQuery)->count();
+        $walletTopupRevenueWindow = (float) (clone $walletTopupsWindowQuery)->sum('amount');
         $averageTicket = $completedPaymentsWindow > 0 ? round($revenueWindow / $completedPaymentsWindow, 2) : 0.0;
         $revenueDeltaPercent = $revenuePreviousWindow > 0
             ? round((($revenueWindow - $revenuePreviousWindow) / $revenuePreviousWindow) * 100, 1)
@@ -231,6 +244,8 @@ class DashboardController extends Controller
                 'recent_payments' => $completedPaymentsWindow,
                 'revenue_window' => $revenueWindow,
                 'revenue_mtd' => $revenueWindow,
+                'wallet_topups_window' => $walletTopupsWindow,
+                'wallet_topup_revenue_window' => $walletTopupRevenueWindow,
                 'revenue_previous_window' => $revenuePreviousWindow,
                 'revenue_delta_percent' => $revenueDeltaPercent,
                 'average_ticket_window' => $averageTicket,
@@ -310,11 +325,13 @@ class DashboardController extends Controller
         foreach ($platforms as $platform) {
             $currentRevenue = (float) Payment::where('platform_id', $platform->id)
                 ->where('status', 'completed')
+                ->excludingWalletTopups()
                 ->whereBetween('created_at', [$currentFrom, $currentTo])
                 ->sum('amount');
 
             $previousRevenue = (float) Payment::where('platform_id', $platform->id)
                 ->where('status', 'completed')
+                ->excludingWalletTopups()
                 ->whereBetween('created_at', [$previousFrom, $previousTo])
                 ->sum('amount');
 
@@ -346,7 +363,11 @@ class DashboardController extends Controller
     private function buildExpiringSubscriptionsWidget(?array $platformIds, string $search = ''): array
     {
         $nowTs = now()->timestamp;
-        $expiryExpr = 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire, clients.premium_expire, clients.featured_expire)';
+        $driver = DB::connection()->getDriverName();
+        $dealExpiryExpr = $driver === 'sqlite'
+            ? "CAST(strftime('%s', deals.expires_at) AS INTEGER)"
+            : 'UNIX_TIMESTAMP(deals.expires_at)';
+        $expiryExpr = "COALESCE({$dealExpiryExpr}, clients.escort_expire, clients.premium_expire, clients.featured_expire)";
 
         $query = Client::query()
             ->leftJoin('deals', function ($join) {
@@ -358,10 +379,14 @@ class DashboardController extends Controller
                 'clients.id as client_id',
                 'clients.name as client_name',
                 'clients.platform_id',
+                'clients.premium',
+                'clients.premium_expire',
+                'clients.featured',
+                'clients.featured_expire',
                 'deals.id as deal_id',
                 'deals.plan_type',
                 'deal_products.name as product_name',
-                \Illuminate\Support\Facades\DB::raw("{$expiryExpr} as expiry_ts")
+                DB::raw("{$expiryExpr} as expiry_ts")
             )
             ->where(function ($q) use ($expiryExpr, $nowTs) {
                 $q->where('deals.status', 'active')
@@ -370,7 +395,7 @@ class DashboardController extends Controller
                             ->whereRaw("{$expiryExpr} >= ?", [$nowTs]);
                     });
             })
-            ->whereBetween(\Illuminate\Support\Facades\DB::raw($expiryExpr), [$nowTs, $nowTs + (14 * 86400)])
+            ->whereBetween(DB::raw($expiryExpr), [$nowTs, $nowTs + (14 * 86400)])
             ->orderByRaw("{$expiryExpr} ASC");
 
         if (is_array($platformIds)) {

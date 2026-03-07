@@ -18,6 +18,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ScraperSourceService;
+use App\Services\WalletSettingsService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
@@ -36,7 +37,8 @@ class SettingsController extends Controller
         private readonly LeadImportService $leadImportService,
         private readonly NotificationService $notificationService,
         private readonly PushProviderService $pushProviderService,
-        private readonly ScraperSourceService $scraperSourceService
+        private readonly ScraperSourceService $scraperSourceService,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -97,6 +99,7 @@ class SettingsController extends Controller
 
         return response()->json([
             'services' => [
+                'wallet_system' => $this->walletSystemSummary($platformStatuses),
                 'sms_gateway' => [
                     'status' => $smsStatus,
                     'enabled' => (bool) ($smsProvider['enabled'] ?? false),
@@ -123,6 +126,12 @@ class SettingsController extends Controller
                     'status' => 'deferred',
                     'note' => 'SendGrid email dispatch is deferred until post Sprint 3 stabilization.',
                 ],
+            ],
+            'wallet' => [
+                'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
+                'provider_keys' => WalletSettingsService::PROVIDERS,
+                'mode_options' => WalletSettingsService::MODES,
+                'environment_options' => WalletSettingsService::ENVIRONMENTS,
             ],
             'platforms' => $platformStatuses,
             'scraper' => [
@@ -447,6 +456,429 @@ class SettingsController extends Controller
             'activation_deferred' => $activationDeferred,
             'package_setup' => $this->platformPackageSetup($platform),
         ], 201);
+    }
+
+    public function wallet(Request $request)
+    {
+        $platformQuery = Platform::query()->orderBy('id');
+        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        if (is_array($allowedPlatformIds)) {
+            $platformQuery->whereIn('id', $allowedPlatformIds);
+        }
+
+        $platforms = $platformQuery->get()
+            ->map(fn (Platform $platform) => [
+                'platform_id' => (int) $platform->id,
+                'platform_name' => $platform->name,
+                'wallet' => $this->walletSettingsService->currentPlatformConfig($platform, masked: true),
+            ])
+            ->values();
+
+        return response()->json([
+            'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
+            'platforms' => $platforms,
+            'provider_keys' => WalletSettingsService::PROVIDERS,
+            'mode_options' => WalletSettingsService::MODES,
+            'environment_options' => WalletSettingsService::ENVIRONMENTS,
+        ]);
+    }
+
+    public function updateWallet(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can update wallet system settings.'
+        );
+
+        $validated = $request->validate([
+            'mode' => ['required', Rule::in(WalletSettingsService::MODES)],
+            'default_currency' => 'required|string|size:3',
+            'max_single_topup_default' => 'required|numeric|min:0',
+            'max_wallet_balance_default' => 'required|numeric|min:0',
+            'billing_domains' => 'required|array',
+            'billing_domains.sandbox' => 'nullable|url|max:255',
+            'billing_domains.production' => 'nullable|url|max:255',
+            'billing_branding' => 'required|array',
+            'billing_branding.sandbox.business_name' => 'required|string|max:120',
+            'billing_branding.sandbox.description' => 'required|string|max:255',
+            'billing_branding.production.business_name' => 'required|string|max:120',
+            'billing_branding.production.description' => 'required|string|max:255',
+            'redirect_delay_seconds' => 'required|integer|min:1|max:30',
+            'wallet_refresh_rate_limit_seconds' => 'required|integer|min:1|max:120',
+            'wallet_refresh_timeout_seconds' => 'required|integer|min:1|max:120',
+            'topup_poll_interval_seconds' => 'required|integer|min:1|max:120',
+            'smtp' => 'required|array',
+            'smtp.enabled' => 'required|boolean',
+            'smtp.host' => 'nullable|string|max:255',
+            'smtp.port' => 'nullable|integer|min:1|max:65535',
+            'smtp.username' => 'nullable|string|max:255',
+            'smtp.password' => 'nullable|string|max:255',
+            'smtp.encryption' => 'nullable|string|max:20',
+            'smtp.from_address' => 'nullable|email|max:255',
+            'smtp.from_name' => 'nullable|string|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $before = $this->walletSettingsService->currentSystemConfig(masked: true);
+        $saved = $this->walletSettingsService->saveSystemConfig($validated, (int) $request->user()->id);
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId([]) ?? 1,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'integration_setting',
+            1,
+            $before,
+            $saved,
+            $validated['reason'] ?? 'Updated wallet system settings'
+        );
+
+        return response()->json([
+            'system' => $saved,
+        ]);
+    }
+
+    public function updatePlatformWallet(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can update platform wallet settings.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+            'mode_override' => ['nullable', Rule::in(['inherit', 'sandbox', 'production'])],
+            'currency_code' => 'required|string|size:3',
+            'max_single_topup' => 'required|numeric|min:0',
+            'max_wallet_balance' => 'required|numeric|min:0',
+            'topup_presets' => 'required|array|min:1|max:10',
+            'topup_presets.*' => 'numeric|min:0',
+            'allow_combined_topup_subscribe' => 'required|boolean',
+            'show_refresh_button' => 'required|boolean',
+            'recent_transactions_limit' => 'required|integer|min:1|max:50',
+            'providers' => 'required|array',
+            'providers.pesapal.enabled' => 'required|boolean',
+            'providers.pesapal.min_amount' => 'required|numeric|min:0',
+            'providers.pesapal.max_amount' => 'required|numeric|min:0',
+            'providers.paystack.enabled' => 'required|boolean',
+            'providers.paystack.min_amount' => 'required|numeric|min:0',
+            'providers.paystack.max_amount' => 'required|numeric|min:0',
+            'providers.mpesa_stk.enabled' => 'required|boolean',
+            'providers.mpesa_stk.min_amount' => 'required|numeric|min:0',
+            'providers.mpesa_stk.max_amount' => 'required|numeric|min:0',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $beforeState = $this->platformAuditState($platform);
+        $platformWallet = $this->walletSettingsService->savePlatformConfig($platform, $validated);
+        $platform->refresh();
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'platform',
+            (int) $platform->id,
+            $beforeState,
+            $this->platformAuditState($platform),
+            $validated['reason'] ?? 'Updated platform wallet settings'
+        );
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform),
+            'wallet' => $platformWallet,
+        ]);
+    }
+
+    public function updatePlatformWalletProviders(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can update platform wallet provider credentials.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'pesapal' => 'nullable|array',
+            'pesapal.sandbox.consumer_key' => 'nullable|string|max:255',
+            'pesapal.sandbox.consumer_secret' => 'nullable|string|max:255',
+            'pesapal.sandbox.ipn_id' => 'nullable|string|max:255',
+            'pesapal.production.consumer_key' => 'nullable|string|max:255',
+            'pesapal.production.consumer_secret' => 'nullable|string|max:255',
+            'pesapal.production.ipn_id' => 'nullable|string|max:255',
+            'paystack' => 'nullable|array',
+            'paystack.sandbox.public_key' => 'nullable|string|max:255',
+            'paystack.sandbox.secret_key' => 'nullable|string|max:255',
+            'paystack.production.public_key' => 'nullable|string|max:255',
+            'paystack.production.secret_key' => 'nullable|string|max:255',
+            'mpesa_stk' => 'nullable|array',
+            'mpesa_stk.sandbox.transport' => ['nullable', Rule::in(['django_proxy', 'direct_provider'])],
+            'mpesa_stk.sandbox.payment_service_base_url' => 'nullable|url|max:255',
+            'mpesa_stk.sandbox.organization_code' => 'nullable|string|max:50',
+            'mpesa_stk.sandbox.callback_base_url' => 'nullable|url|max:255',
+            'mpesa_stk.production.transport' => ['nullable', Rule::in(['django_proxy', 'direct_provider'])],
+            'mpesa_stk.production.payment_service_base_url' => 'nullable|url|max:255',
+            'mpesa_stk.production.organization_code' => 'nullable|string|max:50',
+            'mpesa_stk.production.callback_base_url' => 'nullable|url|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $beforeState = $this->platformAuditState($platform);
+        $platformWallet = $this->walletSettingsService->savePlatformProviderCredentials($platform, $validated, (int) $request->user()->id);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'platform',
+            (int) $platform->id,
+            $beforeState,
+            $this->platformAuditState($platform->fresh()),
+            $validated['reason'] ?? 'Updated wallet provider credentials'
+        );
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform->fresh()),
+            'wallet' => $platformWallet,
+        ]);
+    }
+
+    public function rotatePlatformWalletWpCredentials(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can rotate wallet WP credentials.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
+            'credential' => ['required', Rule::in(['bearer', 'hmac', 'both'])],
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $result = $this->walletSettingsService->rotateWpCredentials(
+            $platform,
+            $validated['environment'],
+            $validated['credential'],
+            (int) $request->user()->id
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'platform',
+            (int) $platform->id,
+            null,
+            [
+                'wallet_wp_credential_rotation' => [
+                    'environment' => $validated['environment'],
+                    'credential' => $validated['credential'],
+                ],
+            ],
+            $validated['reason'] ?? 'Rotated wallet WP credentials'
+        );
+
+        return response()->json($result);
+    }
+
+    public function testPlatformWalletProvider(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can test wallet providers.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'provider' => ['required', Rule::in(WalletSettingsService::PROVIDERS)],
+            'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $beforeState = $this->platformAuditState($platform);
+
+        try {
+            $result = $this->walletSettingsService->testProvider($platform, $validated['provider'], $validated['environment']);
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Wallet provider test executed'
+            );
+
+            return response()->json([
+                'result' => $result,
+            ], ($result['ok'] ?? false) ? 200 : 422);
+        } catch (\Throwable $exception) {
+            $result = [
+                'provider' => $validated['provider'],
+                'environment' => $validated['environment'],
+                'ok' => false,
+                'status' => 'failed',
+                'message' => $exception->getMessage(),
+            ];
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Wallet provider test failed'
+            );
+
+            return response()->json([
+                'result' => $result,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+    }
+
+    public function testWalletEmail(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can test wallet email delivery.'
+        );
+
+        $validated = $request->validate([
+            'to_email' => 'required|email|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $result = $this->walletSettingsService->sendTestEmail($validated['to_email']);
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId([]) ?? 1,
+            CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+            'integration_setting',
+            1,
+            null,
+            $result,
+            $validated['reason'] ?? 'Wallet SMTP test email sent'
+        );
+
+        return response()->json([
+            'result' => $result,
+        ]);
+    }
+
+    public function testWalletDomain(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can test wallet billing domains.'
+        );
+
+        $validated = $request->validate([
+            'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $result = $this->walletSettingsService->testDomain($validated['environment']);
+
+            $this->auditService->fromRequest(
+                $request,
+                $this->resolveAuditPlatformId([]) ?? 1,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'integration_setting',
+                1,
+                null,
+                $result,
+                $validated['reason'] ?? 'Wallet billing domain test executed'
+            );
+
+            return response()->json([
+                'result' => $result,
+            ], ($result['resolved'] ?? false) ? 200 : 422);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'result' => [
+                    'environment' => $validated['environment'],
+                    'status' => 'failed',
+                    'message' => $exception->getMessage(),
+                ],
+            ], 422);
+        }
+    }
+
+    public function testWalletSsl(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can test wallet billing SSL.'
+        );
+
+        $validated = $request->validate([
+            'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $result = $this->walletSettingsService->testSsl($validated['environment']);
+
+            $this->auditService->fromRequest(
+                $request,
+                $this->resolveAuditPlatformId([]) ?? 1,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'integration_setting',
+                1,
+                null,
+                $result,
+                $validated['reason'] ?? 'Wallet billing SSL test executed'
+            );
+
+            return response()->json([
+                'result' => $result,
+            ], ($result['ok'] ?? false) ? 200 : 422);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'result' => [
+                    'environment' => $validated['environment'],
+                    'status' => 'failed',
+                    'message' => $exception->getMessage(),
+                ],
+            ], 422);
+        }
     }
 
     public function updateIntegrationPlatform(Request $request, Platform $platform)
@@ -2078,6 +2510,7 @@ class SettingsController extends Controller
             'payment_link_providers' => is_array($platform->payment_link_providers)
                 ? $platform->payment_link_providers
                 : null,
+            'wallet' => $this->walletSettingsService->currentPlatformConfig($platform, masked: true),
             'packages' => $packageRows,
             'package_setup' => $packageSetup,
         ];
@@ -2131,6 +2564,27 @@ class SettingsController extends Controller
             'payment_link_providers' => is_array($platform->payment_link_providers)
                 ? $platform->payment_link_providers
                 : null,
+            'wallet' => $this->walletSettingsService->currentPlatformConfig($platform, masked: true),
+        ];
+    }
+
+    private function walletSystemSummary($platformStatuses): array
+    {
+        $system = $this->walletSettingsService->currentSystemConfig(masked: true);
+        $enabledMarkets = collect($platformStatuses)
+            ->filter(fn (array $platform) => (bool) data_get($platform, 'wallet.enabled'))
+            ->count();
+        $productionOverrides = collect($platformStatuses)
+            ->filter(fn (array $platform) => data_get($platform, 'wallet.mode_override') === 'production')
+            ->count();
+
+        return [
+            'status' => ($system['mode'] ?? 'disabled') === 'disabled'
+                ? 'configured_disabled'
+                : ($enabledMarkets > 0 ? 'connected' : 'pending'),
+            'mode' => $system['mode'] ?? 'disabled',
+            'enabled_markets' => $enabledMarkets,
+            'production_overrides' => $productionOverrides,
         ];
     }
 

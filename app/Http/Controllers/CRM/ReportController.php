@@ -48,6 +48,11 @@ class ReportController extends Controller
 
         $paymentsQuery = Payment::query()
             ->where('status', 'completed')
+            ->excludingWalletTopups()
+            ->whereBetween('created_at', [$from, $to]);
+        $walletTopupsQuery = Payment::query()
+            ->where('status', 'completed')
+            ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
 
         $clientsQuery = Client::query();
@@ -120,6 +125,13 @@ class ReportController extends Controller
 
         $revenueMtd = Payment::query()
             ->where('status', 'completed')
+            ->excludingWalletTopups()
+            ->where('created_at', '>=', now()->startOfMonth())
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
+            ->sum('amount');
+        $walletTopupRevenueMtd = Payment::query()
+            ->where('status', 'completed')
+            ->walletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
             ->sum('amount');
@@ -127,6 +139,9 @@ class ReportController extends Controller
         $kpis = [
             'total_revenue' => (float) (clone $paymentsQuery)->sum('amount'),
             'revenue_mtd' => (float) $revenueMtd,
+            'wallet_topups_count' => (int) (clone $walletTopupsQuery)->count(),
+            'wallet_topup_revenue' => (float) (clone $walletTopupsQuery)->sum('amount'),
+            'wallet_topup_revenue_mtd' => (float) $walletTopupRevenueMtd,
             'active_clients' => (int) (clone $clientsQuery)->where('profile_status', 'publish')->count(),
             'total_clients' => (int) (clone $clientsQuery)->count(),
             'conversion_rate' => $conversionRate,
@@ -143,6 +158,7 @@ class ReportController extends Controller
             ->selectRaw("{$monthKeyExpression} as month_key")
             ->selectRaw('SUM(amount) as total_revenue')
             ->where('status', 'completed')
+            ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
             ->groupBy('month_key')

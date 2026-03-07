@@ -190,6 +190,13 @@ function pushProviderLabel(providerId) {
     return 'Unknown';
 }
 
+function walletProviderLabel(providerId) {
+    if (providerId === 'pesapal') return 'Pesapal';
+    if (providerId === 'paystack') return 'Paystack';
+    if (providerId === 'mpesa_stk') return 'M-Pesa STK';
+    return providerId?.replaceAll('_', ' ') || 'Unknown';
+}
+
 function defaultPushPlatformConfig(defaultProvider = 'webpushr') {
     return {
         active_provider: defaultProvider,
@@ -355,6 +362,207 @@ function buildPaymentLinkProviderForm(platform) {
     };
 }
 
+function defaultWalletSystemForm() {
+    return {
+        mode: 'disabled',
+        default_currency: 'KES',
+        max_single_topup_default: '50000.00',
+        max_wallet_balance_default: '200000.00',
+        billing_domains: {
+            sandbox: '',
+            production: '',
+        },
+        billing_branding: {
+            sandbox: {
+                business_name: 'Exotic Ads Test',
+                description: 'Ad credit top-up',
+            },
+            production: {
+                business_name: 'Exotic Ads',
+                description: 'Ad credit top-up',
+            },
+        },
+        redirect_delay_seconds: 3,
+        wallet_refresh_rate_limit_seconds: 15,
+        wallet_refresh_timeout_seconds: 15,
+        topup_poll_interval_seconds: 10,
+        smtp: {
+            enabled: false,
+            host: '',
+            port: 587,
+            username: '',
+            password: '',
+            password_configured: false,
+            encryption: 'tls',
+            from_address: '',
+            from_name: '',
+        },
+        reason: 'Updated wallet system settings',
+    };
+}
+
+function buildWalletSystemForm(systemConfig) {
+    const fallback = defaultWalletSystemForm();
+    if (!systemConfig) {
+        return fallback;
+    }
+
+    return {
+        ...fallback,
+        mode: systemConfig.mode || fallback.mode,
+        default_currency: systemConfig.default_currency || fallback.default_currency,
+        max_single_topup_default: systemConfig.max_single_topup_default || fallback.max_single_topup_default,
+        max_wallet_balance_default: systemConfig.max_wallet_balance_default || fallback.max_wallet_balance_default,
+        billing_domains: {
+            sandbox: systemConfig.billing_domains?.sandbox || '',
+            production: systemConfig.billing_domains?.production || '',
+        },
+        billing_branding: {
+            sandbox: {
+                business_name: systemConfig.billing_branding?.sandbox?.business_name || fallback.billing_branding.sandbox.business_name,
+                description: systemConfig.billing_branding?.sandbox?.description || fallback.billing_branding.sandbox.description,
+            },
+            production: {
+                business_name: systemConfig.billing_branding?.production?.business_name || fallback.billing_branding.production.business_name,
+                description: systemConfig.billing_branding?.production?.description || fallback.billing_branding.production.description,
+            },
+        },
+        redirect_delay_seconds: Number(systemConfig.redirect_delay_seconds || fallback.redirect_delay_seconds),
+        wallet_refresh_rate_limit_seconds: Number(systemConfig.wallet_refresh_rate_limit_seconds || fallback.wallet_refresh_rate_limit_seconds),
+        wallet_refresh_timeout_seconds: Number(systemConfig.wallet_refresh_timeout_seconds || fallback.wallet_refresh_timeout_seconds),
+        topup_poll_interval_seconds: Number(systemConfig.topup_poll_interval_seconds || fallback.topup_poll_interval_seconds),
+        smtp: {
+            enabled: Boolean(systemConfig.smtp?.enabled),
+            host: systemConfig.smtp?.host || '',
+            port: Number(systemConfig.smtp?.port || fallback.smtp.port),
+            username: systemConfig.smtp?.username || '',
+            password: '',
+            password_configured: Boolean(systemConfig.smtp?.password_configured),
+            encryption: systemConfig.smtp?.encryption || fallback.smtp.encryption,
+            from_address: systemConfig.smtp?.from_address || '',
+            from_name: systemConfig.smtp?.from_name || '',
+        },
+        reason: 'Updated wallet system settings',
+    };
+}
+
+function defaultWalletPlatformForm(currency = 'KES') {
+    return {
+        enabled: false,
+        mode_override: 'inherit',
+        currency_code: currency,
+        max_single_topup: '50000.00',
+        max_wallet_balance: '200000.00',
+        topup_presets: ['500.00', '1000.00', '2000.00', '5000.00'],
+        allow_combined_topup_subscribe: true,
+        show_refresh_button: true,
+        recent_transactions_limit: 10,
+        providers: {
+            pesapal: { enabled: false, min_amount: '100.00', max_amount: '150000.00' },
+            paystack: { enabled: false, min_amount: '100.00', max_amount: '500000.00' },
+            mpesa_stk: { enabled: false, min_amount: '100.00', max_amount: '150000.00' },
+        },
+        reason: 'Updated platform wallet settings',
+    };
+}
+
+function buildWalletPlatformForm(platform) {
+    const fallback = defaultWalletPlatformForm(platform?.currency || 'KES');
+    const wallet = platform?.wallet;
+    if (!wallet) {
+        return fallback;
+    }
+
+    return {
+        ...fallback,
+        enabled: Boolean(wallet.enabled),
+        mode_override: wallet.mode_override || 'inherit',
+        currency_code: wallet.currency_code || fallback.currency_code,
+        max_single_topup: wallet.max_single_topup || fallback.max_single_topup,
+        max_wallet_balance: wallet.max_wallet_balance || fallback.max_wallet_balance,
+        topup_presets: Array.isArray(wallet.topup_presets) && wallet.topup_presets.length > 0
+            ? wallet.topup_presets.map((value) => String(value))
+            : fallback.topup_presets,
+        allow_combined_topup_subscribe: Boolean(wallet.allow_combined_topup_subscribe),
+        show_refresh_button: Boolean(wallet.show_refresh_button),
+        recent_transactions_limit: Number(wallet.recent_transactions_limit || fallback.recent_transactions_limit),
+        providers: {
+            pesapal: {
+                enabled: Boolean(wallet.providers?.pesapal?.enabled),
+                min_amount: wallet.providers?.pesapal?.min_amount || fallback.providers.pesapal.min_amount,
+                max_amount: wallet.providers?.pesapal?.max_amount || fallback.providers.pesapal.max_amount,
+            },
+            paystack: {
+                enabled: Boolean(wallet.providers?.paystack?.enabled),
+                min_amount: wallet.providers?.paystack?.min_amount || fallback.providers.paystack.min_amount,
+                max_amount: wallet.providers?.paystack?.max_amount || fallback.providers.paystack.max_amount,
+            },
+            mpesa_stk: {
+                enabled: Boolean(wallet.providers?.mpesa_stk?.enabled),
+                min_amount: wallet.providers?.mpesa_stk?.min_amount || fallback.providers.mpesa_stk.min_amount,
+                max_amount: wallet.providers?.mpesa_stk?.max_amount || fallback.providers.mpesa_stk.max_amount,
+            },
+        },
+        reason: 'Updated platform wallet settings',
+    };
+}
+
+function buildWalletProvidersForm(platform) {
+    const credentials = platform?.wallet?.credentials || {};
+
+    return {
+        pesapal: {
+            sandbox: {
+                consumer_key: '',
+                consumer_secret: '',
+                consumer_key_configured: Boolean(credentials.pesapal?.sandbox?.consumer_key_configured),
+                consumer_secret_configured: Boolean(credentials.pesapal?.sandbox?.consumer_secret_configured),
+                ipn_id: credentials.pesapal?.sandbox?.ipn_id || '',
+            },
+            production: {
+                consumer_key: '',
+                consumer_secret: '',
+                consumer_key_configured: Boolean(credentials.pesapal?.production?.consumer_key_configured),
+                consumer_secret_configured: Boolean(credentials.pesapal?.production?.consumer_secret_configured),
+                ipn_id: credentials.pesapal?.production?.ipn_id || '',
+            },
+        },
+        paystack: {
+            sandbox: {
+                public_key: '',
+                secret_key: '',
+                public_key_configured: Boolean(credentials.paystack?.sandbox?.public_key_configured),
+                secret_key_configured: Boolean(credentials.paystack?.sandbox?.secret_key_configured),
+            },
+            production: {
+                public_key: '',
+                secret_key: '',
+                public_key_configured: Boolean(credentials.paystack?.production?.public_key_configured),
+                secret_key_configured: Boolean(credentials.paystack?.production?.secret_key_configured),
+            },
+        },
+        mpesa_stk: {
+            sandbox: {
+                transport: credentials.mpesa_stk?.sandbox?.transport || 'django_proxy',
+                payment_service_base_url: credentials.mpesa_stk?.sandbox?.payment_service_base_url || '',
+                organization_code: credentials.mpesa_stk?.sandbox?.organization_code || '76',
+                callback_base_url: credentials.mpesa_stk?.sandbox?.callback_base_url || '',
+            },
+            production: {
+                transport: credentials.mpesa_stk?.production?.transport || 'django_proxy',
+                payment_service_base_url: credentials.mpesa_stk?.production?.payment_service_base_url || '',
+                organization_code: credentials.mpesa_stk?.production?.organization_code || '76',
+                callback_base_url: credentials.mpesa_stk?.production?.callback_base_url || '',
+            },
+        },
+        wp_to_crm: credentials.wp_to_crm || {
+            sandbox: { bearer_key_configured: false, hmac_configured: false, bearer_last_rotated_at: null, hmac_last_rotated_at: null },
+            production: { bearer_key_configured: false, hmac_configured: false, bearer_last_rotated_at: null, hmac_last_rotated_at: null },
+        },
+        reason: 'Updated wallet provider credentials',
+    };
+}
+
 function buildScraperEditor(source) {
     if (!source) {
         return null;
@@ -406,7 +614,14 @@ function dedupeModeLabel(mode) {
     return mode?.replaceAll('_', ' ') || 'Unknown';
 }
 
-function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManagePushProviders }) {
+function IntegrationsWorkspace({
+    canCreateMarkets,
+    canEditPaymentLinks,
+    canManagePushProviders,
+    canManageWalletSystem,
+    canManageWalletPlatforms,
+    currentUserEmail,
+}) {
     const queryClient = useQueryClient();
     const toast = useToast();
     const [integrationArea, setIntegrationArea] = useState('overview');
@@ -444,6 +659,36 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
     });
     const [pushTestConfirmOpen, setPushTestConfirmOpen] = useState(false);
     const [latestPushTestResult, setLatestPushTestResult] = useState(null);
+    const [walletSystemForm, setWalletSystemForm] = useState(defaultWalletSystemForm());
+    const [walletPlatformForm, setWalletPlatformForm] = useState(defaultWalletPlatformForm());
+    const [walletProvidersForm, setWalletProvidersForm] = useState(buildWalletProvidersForm(null));
+    const [walletProviderTestForm, setWalletProviderTestForm] = useState({
+        provider: 'pesapal',
+        environment: 'sandbox',
+        reason: 'Wallet provider connectivity test',
+    });
+    const [walletDomainTestForm, setWalletDomainTestForm] = useState({
+        environment: 'sandbox',
+        reason: 'Wallet billing domain DNS check',
+    });
+    const [walletSslTestForm, setWalletSslTestForm] = useState({
+        environment: 'sandbox',
+        reason: 'Wallet billing SSL reachability check',
+    });
+    const [walletEmailTestForm, setWalletEmailTestForm] = useState({
+        to_email: currentUserEmail || '',
+        reason: 'Wallet SMTP test email',
+    });
+    const [walletCredentialRotationForm, setWalletCredentialRotationForm] = useState({
+        environment: 'sandbox',
+        credential: 'bearer',
+        reason: 'Rotate wallet WP credential',
+    });
+    const [latestWalletProviderTest, setLatestWalletProviderTest] = useState(null);
+    const [latestWalletDomainTest, setLatestWalletDomainTest] = useState(null);
+    const [latestWalletSslTest, setLatestWalletSslTest] = useState(null);
+    const [latestWalletEmailTest, setLatestWalletEmailTest] = useState(null);
+    const [walletCredentialReveal, setWalletCredentialReveal] = useState(null);
     const [selectedScraperSourceId, setSelectedScraperSourceId] = useState(null);
     const [scraperEditor, setScraperEditor] = useState(null);
     const [scraperCreateOpen, setScraperCreateOpen] = useState(false);
@@ -465,12 +710,23 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
     });
 
     const services = data?.services || {};
+    const walletConfig = data?.wallet || {};
+    const walletSystemConfig = walletConfig.system || null;
+    const walletModeOptions = walletConfig.mode_options || ['disabled', 'sandbox', 'production'];
+    const walletEnvironmentOptions = walletConfig.environment_options || ['sandbox', 'production'];
+    const walletProviderKeys = walletConfig.provider_keys || ['pesapal', 'paystack', 'mpesa_stk'];
     const smsProviderConfig = services.sms_provider || null;
     const pushProviderConfig = services.push_provider || null;
     const activeProviderLabel = smsProviderLabel(smsProviderConfig?.active_provider || 'legacy_gateway');
     const pushDefaultLabel = pushProviderLabel(pushProviderConfig?.default_provider || 'webpushr');
     const pushConfiguredCount = Object.values(pushProviderConfig?.platforms || {}).length;
     const serviceRows = [
+        {
+            key: 'wallet',
+            label: 'Wallet System',
+            status: services.wallet_system?.status || 'configured_disabled',
+            detail: `Mode: ${walletSystemConfig?.mode || 'disabled'} • ${services.wallet_system?.enabled_markets || 0} enabled markets`,
+        },
         {
             key: 'sms',
             label: 'SMS Routing',
@@ -519,7 +775,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const requestedArea = params.get('integrationArea');
-        const allowedAreas = new Set(['overview', 'markets', 'payment_links', 'sms', 'push', 'scraper']);
+        const allowedAreas = new Set(['overview', 'wallet', 'markets', 'payment_links', 'sms', 'push', 'scraper']);
         if (requestedArea && allowedAreas.has(requestedArea)) {
             setIntegrationArea(requestedArea);
         }
@@ -543,6 +799,10 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
     }, [platformRows, selectedPlatformId]);
 
     useEffect(() => {
+        setWalletSystemForm(buildWalletSystemForm(walletSystemConfig));
+    }, [walletSystemConfig]);
+
+    useEffect(() => {
         if (!selectedPlatform) {
             return;
         }
@@ -551,6 +811,9 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
         setPaymentLinkForm(buildPaymentLinkProviderForm(selectedPlatform));
         setPackageEditor(buildPackageEditor(selectedPlatform));
+        setWalletPlatformForm(buildWalletPlatformForm(selectedPlatform));
+        setWalletProvidersForm(buildWalletProvidersForm(selectedPlatform));
+        setWalletCredentialReveal(null);
     }, [selectedPlatformId, selectedPlatform]);
 
     useEffect(() => {
@@ -608,6 +871,13 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
             setPushPlatformId(availableIds[0]);
         }
     }, [pushProviderConfig, platformRows, pushPlatformId]);
+
+    useEffect(() => {
+        setWalletEmailTestForm((current) => ({
+            ...current,
+            to_email: current.to_email || currentUserEmail || '',
+        }));
+    }, [currentUserEmail]);
 
     useEffect(() => {
         const selectedPlatformForPush = platformRows.find((platform) => String(platform.platform_id) === String(pushPlatformId));
@@ -812,6 +1082,380 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
             toast.error(error?.response?.data?.message || 'Failed to save push provider settings.');
         },
     });
+
+    const saveWalletSystemMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/wallet', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setWalletSystemForm(buildWalletSystemForm(response?.system || null));
+            toast.success('Wallet system settings saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to save wallet system settings.');
+        },
+    });
+
+    const saveWalletPlatformMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}/wallet`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            if (response?.platform) {
+                setWalletPlatformForm(buildWalletPlatformForm(response.platform));
+                setWalletProvidersForm(buildWalletProvidersForm(response.platform));
+            }
+            toast.success('Platform wallet settings saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to save platform wallet settings.');
+        },
+    });
+
+    const saveWalletProvidersMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}/wallet/providers`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            if (response?.platform) {
+                setWalletProvidersForm(buildWalletProvidersForm(response.platform));
+            }
+            toast.success('Wallet provider credentials saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to save wallet provider credentials.');
+        },
+    });
+
+    const rotateWalletCredentialMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/wallet/wp-credentials/rotate`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setWalletCredentialReveal({
+                environment: response?.environment,
+                credential: response?.credential,
+                revealed: response?.revealed || {},
+            });
+            toast.success('Wallet WP credential rotated. Copy the revealed value now.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to rotate wallet credential.');
+        },
+    });
+
+    const testWalletProviderMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/wallet/providers/test`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestWalletProviderTest(response?.result || null);
+            toast.success('Wallet provider test completed.');
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestWalletProviderTest(result);
+            }
+            toast.error(error?.response?.data?.message || result?.message || 'Wallet provider test failed.');
+        },
+    });
+
+    const testWalletDomainMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/wallet/test-domain', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestWalletDomainTest(response?.result || null);
+            toast.success('Wallet domain test completed.');
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestWalletDomainTest(result);
+            }
+            toast.error(error?.response?.data?.message || result?.message || 'Wallet domain test failed.');
+        },
+    });
+
+    const testWalletSslMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/wallet/test-ssl', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestWalletSslTest(response?.result || null);
+            toast.success('Wallet SSL test completed.');
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestWalletSslTest(result);
+            }
+            toast.error(error?.response?.data?.message || result?.message || 'Wallet SSL test failed.');
+        },
+    });
+
+    const testWalletEmailMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/wallet/test-email', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestWalletEmailTest(response?.result || null);
+            toast.success('Wallet test email sent.');
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestWalletEmailTest(result);
+            }
+            toast.error(error?.response?.data?.message || result?.message || 'Wallet test email failed.');
+        },
+    });
+
+    const updateWalletSystemField = (field, value) => {
+        setWalletSystemForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const updateWalletSystemDomain = (environment, value) => {
+        setWalletSystemForm((current) => ({
+            ...current,
+            billing_domains: {
+                ...current.billing_domains,
+                [environment]: value,
+            },
+        }));
+    };
+
+    const updateWalletSystemBranding = (environment, field, value) => {
+        setWalletSystemForm((current) => ({
+            ...current,
+            billing_branding: {
+                ...current.billing_branding,
+                [environment]: {
+                    ...current.billing_branding[environment],
+                    [field]: value,
+                },
+            },
+        }));
+    };
+
+    const updateWalletSystemSmtp = (field, value) => {
+        setWalletSystemForm((current) => ({
+            ...current,
+            smtp: {
+                ...current.smtp,
+                [field]: value,
+            },
+        }));
+    };
+
+    const saveWalletSystemConfig = () => {
+        saveWalletSystemMutation.mutate({
+            mode: walletSystemForm.mode,
+            default_currency: walletSystemForm.default_currency.trim().toUpperCase(),
+            max_single_topup_default: walletSystemForm.max_single_topup_default,
+            max_wallet_balance_default: walletSystemForm.max_wallet_balance_default,
+            billing_domains: {
+                sandbox: walletSystemForm.billing_domains.sandbox.trim() || null,
+                production: walletSystemForm.billing_domains.production.trim() || null,
+            },
+            billing_branding: {
+                sandbox: {
+                    business_name: walletSystemForm.billing_branding.sandbox.business_name.trim(),
+                    description: walletSystemForm.billing_branding.sandbox.description.trim(),
+                },
+                production: {
+                    business_name: walletSystemForm.billing_branding.production.business_name.trim(),
+                    description: walletSystemForm.billing_branding.production.description.trim(),
+                },
+            },
+            redirect_delay_seconds: Number(walletSystemForm.redirect_delay_seconds || 3),
+            wallet_refresh_rate_limit_seconds: Number(walletSystemForm.wallet_refresh_rate_limit_seconds || 15),
+            wallet_refresh_timeout_seconds: Number(walletSystemForm.wallet_refresh_timeout_seconds || 15),
+            topup_poll_interval_seconds: Number(walletSystemForm.topup_poll_interval_seconds || 10),
+            smtp: {
+                enabled: Boolean(walletSystemForm.smtp.enabled),
+                host: walletSystemForm.smtp.host.trim(),
+                port: Number(walletSystemForm.smtp.port || 587),
+                username: walletSystemForm.smtp.username.trim(),
+                password: walletSystemForm.smtp.password.trim() || null,
+                encryption: walletSystemForm.smtp.encryption.trim(),
+                from_address: walletSystemForm.smtp.from_address.trim() || null,
+                from_name: walletSystemForm.smtp.from_name.trim(),
+            },
+            reason: walletSystemForm.reason.trim(),
+        });
+    };
+
+    const updateWalletPlatformField = (field, value) => {
+        setWalletPlatformForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const updateWalletPlatformProviderField = (provider, field, value) => {
+        setWalletPlatformForm((current) => ({
+            ...current,
+            providers: {
+                ...current.providers,
+                [provider]: {
+                    ...current.providers[provider],
+                    [field]: value,
+                },
+            },
+        }));
+    };
+
+    const updateWalletTopupPreset = (index, value) => {
+        setWalletPlatformForm((current) => ({
+            ...current,
+            topup_presets: current.topup_presets.map((preset, presetIndex) => (
+                presetIndex === index ? value : preset
+            )),
+        }));
+    };
+
+    const addWalletTopupPreset = () => {
+        setWalletPlatformForm((current) => ({
+            ...current,
+            topup_presets: [...current.topup_presets, ''],
+        }));
+    };
+
+    const removeWalletTopupPreset = (index) => {
+        setWalletPlatformForm((current) => ({
+            ...current,
+            topup_presets: current.topup_presets.filter((_, presetIndex) => presetIndex !== index),
+        }));
+    };
+
+    const saveWalletPlatformConfig = () => {
+        if (!selectedPlatform) {
+            return;
+        }
+
+        const topupPresets = walletPlatformForm.topup_presets
+            .map((value) => value.trim())
+            .filter(Boolean);
+
+        if (topupPresets.length === 0) {
+            toast.error('Add at least one wallet top-up preset before saving.');
+            return;
+        }
+
+        const invalidProviderRange = Object.entries(walletPlatformForm.providers || {}).find(([, providerConfig]) => (
+            Number(providerConfig?.min_amount || 0) > Number(providerConfig?.max_amount || 0)
+        ));
+
+        if (invalidProviderRange) {
+            toast.error(`${walletProviderLabel(invalidProviderRange[0])} minimum amount cannot exceed the maximum amount.`);
+            return;
+        }
+
+        saveWalletPlatformMutation.mutate({
+            platformId: selectedPlatform.platform_id,
+            payload: {
+                enabled: Boolean(walletPlatformForm.enabled),
+                mode_override: walletPlatformForm.mode_override || 'inherit',
+                currency_code: walletPlatformForm.currency_code.trim().toUpperCase(),
+                max_single_topup: walletPlatformForm.max_single_topup.trim(),
+                max_wallet_balance: walletPlatformForm.max_wallet_balance.trim(),
+                topup_presets: topupPresets,
+                allow_combined_topup_subscribe: Boolean(walletPlatformForm.allow_combined_topup_subscribe),
+                show_refresh_button: Boolean(walletPlatformForm.show_refresh_button),
+                recent_transactions_limit: Number(walletPlatformForm.recent_transactions_limit || 10),
+                providers: {
+                    pesapal: {
+                        enabled: Boolean(walletPlatformForm.providers.pesapal.enabled),
+                        min_amount: walletPlatformForm.providers.pesapal.min_amount.trim(),
+                        max_amount: walletPlatformForm.providers.pesapal.max_amount.trim(),
+                    },
+                    paystack: {
+                        enabled: Boolean(walletPlatformForm.providers.paystack.enabled),
+                        min_amount: walletPlatformForm.providers.paystack.min_amount.trim(),
+                        max_amount: walletPlatformForm.providers.paystack.max_amount.trim(),
+                    },
+                    mpesa_stk: {
+                        enabled: Boolean(walletPlatformForm.providers.mpesa_stk.enabled),
+                        min_amount: walletPlatformForm.providers.mpesa_stk.min_amount.trim(),
+                        max_amount: walletPlatformForm.providers.mpesa_stk.max_amount.trim(),
+                    },
+                },
+                reason: walletPlatformForm.reason.trim(),
+            },
+        });
+    };
+
+    const updateWalletProviderCredentialField = (provider, environment, field, value) => {
+        setWalletProvidersForm((current) => ({
+            ...current,
+            [provider]: {
+                ...current[provider],
+                [environment]: {
+                    ...current[provider][environment],
+                    [field]: value,
+                },
+            },
+        }));
+    };
+
+    const saveWalletProvidersConfig = () => {
+        if (!selectedPlatform) {
+            return;
+        }
+
+        saveWalletProvidersMutation.mutate({
+            platformId: selectedPlatform.platform_id,
+            payload: {
+                pesapal: {
+                    sandbox: {
+                        consumer_key: walletProvidersForm.pesapal.sandbox.consumer_key.trim(),
+                        consumer_secret: walletProvidersForm.pesapal.sandbox.consumer_secret.trim(),
+                        ipn_id: walletProvidersForm.pesapal.sandbox.ipn_id.trim(),
+                    },
+                    production: {
+                        consumer_key: walletProvidersForm.pesapal.production.consumer_key.trim(),
+                        consumer_secret: walletProvidersForm.pesapal.production.consumer_secret.trim(),
+                        ipn_id: walletProvidersForm.pesapal.production.ipn_id.trim(),
+                    },
+                },
+                paystack: {
+                    sandbox: {
+                        public_key: walletProvidersForm.paystack.sandbox.public_key.trim(),
+                        secret_key: walletProvidersForm.paystack.sandbox.secret_key.trim(),
+                    },
+                    production: {
+                        public_key: walletProvidersForm.paystack.production.public_key.trim(),
+                        secret_key: walletProvidersForm.paystack.production.secret_key.trim(),
+                    },
+                },
+                mpesa_stk: {
+                    sandbox: {
+                        transport: walletProvidersForm.mpesa_stk.sandbox.transport,
+                        payment_service_base_url: walletProvidersForm.mpesa_stk.sandbox.payment_service_base_url.trim() || null,
+                        organization_code: walletProvidersForm.mpesa_stk.sandbox.organization_code.trim(),
+                        callback_base_url: walletProvidersForm.mpesa_stk.sandbox.callback_base_url.trim() || null,
+                    },
+                    production: {
+                        transport: walletProvidersForm.mpesa_stk.production.transport,
+                        payment_service_base_url: walletProvidersForm.mpesa_stk.production.payment_service_base_url.trim() || null,
+                        organization_code: walletProvidersForm.mpesa_stk.production.organization_code.trim(),
+                        callback_base_url: walletProvidersForm.mpesa_stk.production.callback_base_url.trim() || null,
+                    },
+                },
+                reason: walletProvidersForm.reason.trim(),
+            },
+        });
+    };
+
+    const copyWalletReveal = async (label, value) => {
+        if (!value) {
+            return;
+        }
+
+        try {
+            if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+                throw new Error('Clipboard unavailable');
+            }
+
+            await navigator.clipboard.writeText(value);
+            toast.success(`${label} copied to clipboard.`);
+        } catch (_error) {
+            toast.error(`Copy ${label.toLowerCase()} manually from the reveal panel.`);
+        }
+    };
 
     const testPushProviderMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/settings/integrations/push-provider/test', payload).then((response) => response.data),
@@ -1274,6 +1918,14 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
         return Boolean(config?.izooto?.api_token || config?.izooto?.api_token_configured);
     }).length;
     const pushConfiguredPlatforms = Object.keys(pushProviderForm.platforms || {}).length;
+    const walletSystemReadOnly = !canManageWalletSystem;
+    const walletPlatformReadOnly = !canManageWalletPlatforms;
+    const walletEnabledMarkets = platformRows.filter((platform) => Boolean(platform.wallet?.enabled)).length;
+    const walletActiveMarkets = platformRows.filter((platform) => (platform.wallet?.effective_mode || 'disabled') !== 'disabled').length;
+    const selectedWalletConfig = selectedPlatform?.wallet || null;
+    const selectedWalletEffectiveMode = selectedWalletConfig?.effective_mode || 'disabled';
+    const selectedWalletProvidersEnabled = Object.values(walletPlatformForm.providers || {}).filter((provider) => provider?.enabled).length;
+    const selectedWalletWpCredentials = walletProvidersForm.wp_to_crm || {};
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
     const selectedPackageSetup = selectedPlatform?.package_setup || null;
@@ -1289,6 +1941,7 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
     const selectedScraperCompliant = Boolean(scraperEditor?.compliance_ack_robots) && Boolean(scraperEditor?.compliance_ack_tos);
     const integrationAreas = [
         { id: 'overview', label: 'Overview', hint: 'Service health' },
+        { id: 'wallet', label: 'Wallet', hint: `${walletSystemConfig?.mode || 'disabled'} • ${walletActiveMarkets}/${platformRows.length || 0} live` },
         { id: 'markets', label: 'Markets', hint: `${platformRows.length} configured` },
         { id: 'payment_links', label: 'Payment Links', hint: paymentLinkReadOnly ? 'Read-only' : 'Editable routing' },
         { id: 'sms', label: 'SMS Routing', hint: smsProviderForm.enabled ? 'Enabled' : 'Disabled' },
@@ -1920,6 +2573,971 @@ function IntegrationsWorkspace({ canCreateMarkets, canEditPaymentLinks, canManag
                                 <p className="mt-1 text-xs text-slate-600">Active provider: {pushProviderLabel(selectedPushProvider)}</p>
                                 <p className="mt-1 text-xs text-slate-600">Fallback: {selectedPushConfig?.fallback_provider === 'none' ? 'No fallback' : pushProviderLabel(selectedPushConfig?.fallback_provider)}</p>
                             </section>
+                        </div>
+                    </div>
+                </section>
+            ) : null}
+
+            {integrationArea === 'wallet' ? (
+                <section className="crm-surface overflow-hidden">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Wallet Configuration</h3>
+                            <p className="crm-panel-subtitle">Manage wallet mode, market-level limits, provider credentials, and testing without leaving settings.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => queryClient.invalidateQueries({ queryKey: ['settings-integrations'] })}
+                            className="crm-btn-secondary px-3 py-2"
+                        >
+                            Refresh
+                        </button>
+                    </header>
+
+                    <div className="grid gap-4 p-4 xl:grid-cols-12">
+                        <div className="space-y-4 xl:col-span-7">
+                            {!canManageWalletSystem ? (
+                                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                    Global wallet settings are read-only for this role. Only admin can change wallet mode, billing domains, and SMTP.
+                                </p>
+                            ) : null}
+
+                            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-slate-900">System Mode</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Choose whether wallet flows are disabled, sandboxed, or fully live across markets.</p>
+                                    </div>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(walletSystemConfig?.mode === 'production' ? 'connected' : walletSystemConfig?.mode === 'sandbox' ? 'configured_disabled' : 'pending')}`}>
+                                        {(walletSystemConfig?.mode || 'disabled').replaceAll('_', ' ')}
+                                    </span>
+                                </div>
+
+                                <fieldset disabled={walletSystemReadOnly || saveWalletSystemMutation.isPending} className={walletSystemReadOnly ? 'opacity-70' : ''}>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Mode</label>
+                                            <select
+                                                value={walletSystemForm.mode}
+                                                onChange={(event) => updateWalletSystemField('mode', event.target.value)}
+                                                className="crm-select w-full"
+                                            >
+                                                {walletModeOptions.map((mode) => (
+                                                    <option key={mode} value={mode}>{mode.replaceAll('_', ' ')}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Default currency</label>
+                                            <input
+                                                value={walletSystemForm.default_currency}
+                                                onChange={(event) => updateWalletSystemField('default_currency', event.target.value.toUpperCase())}
+                                                className="crm-input"
+                                                placeholder="KES"
+                                            />
+                                        </div>
+
+                                        <input
+                                            value={walletSystemForm.max_single_topup_default}
+                                            onChange={(event) => updateWalletSystemField('max_single_topup_default', event.target.value)}
+                                            className="crm-input"
+                                            placeholder="Default max single top-up"
+                                        />
+                                        <input
+                                            value={walletSystemForm.max_wallet_balance_default}
+                                            onChange={(event) => updateWalletSystemField('max_wallet_balance_default', event.target.value)}
+                                            className="crm-input"
+                                            placeholder="Default max wallet balance"
+                                        />
+
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="30"
+                                            value={walletSystemForm.redirect_delay_seconds}
+                                            onChange={(event) => updateWalletSystemField('redirect_delay_seconds', Number(event.target.value || 3))}
+                                            className="crm-input"
+                                            placeholder="Redirect delay"
+                                        />
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="120"
+                                            value={walletSystemForm.topup_poll_interval_seconds}
+                                            onChange={(event) => updateWalletSystemField('topup_poll_interval_seconds', Number(event.target.value || 10))}
+                                            className="crm-input"
+                                            placeholder="Top-up poll interval"
+                                        />
+
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="120"
+                                            value={walletSystemForm.wallet_refresh_rate_limit_seconds}
+                                            onChange={(event) => updateWalletSystemField('wallet_refresh_rate_limit_seconds', Number(event.target.value || 15))}
+                                            className="crm-input"
+                                            placeholder="Refresh rate limit"
+                                        />
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="120"
+                                            value={walletSystemForm.wallet_refresh_timeout_seconds}
+                                            onChange={(event) => updateWalletSystemField('wallet_refresh_timeout_seconds', Number(event.target.value || 15))}
+                                            className="crm-input"
+                                            placeholder="Refresh timeout"
+                                        />
+
+                                        <div className="md:col-span-2">
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Change reason</label>
+                                            <textarea
+                                                rows={2}
+                                                value={walletSystemForm.reason}
+                                                onChange={(event) => updateWalletSystemField('reason', event.target.value)}
+                                                className="crm-input"
+                                                placeholder="Reason for wallet system change"
+                                            />
+                                        </div>
+                                    </div>
+                                </fieldset>
+
+                                <div className="mt-3 flex justify-end">
+                                    <button
+                                        type="button"
+                                        onClick={saveWalletSystemConfig}
+                                        disabled={
+                                            walletSystemReadOnly
+                                            || saveWalletSystemMutation.isPending
+                                            || !walletSystemForm.default_currency.trim()
+                                            || !walletSystemForm.billing_branding.sandbox.business_name.trim()
+                                            || !walletSystemForm.billing_branding.sandbox.description.trim()
+                                            || !walletSystemForm.billing_branding.production.business_name.trim()
+                                            || !walletSystemForm.billing_branding.production.description.trim()
+                                            || !walletSystemForm.reason.trim()
+                                        }
+                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {saveWalletSystemMutation.isPending ? 'Saving...' : 'Save wallet system'}
+                                    </button>
+                                </div>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Billing Domains and Branding</h4>
+                                <p className="mt-1 text-xs text-slate-500">Each environment needs its own billing URL and copy so payment pages and callbacks stay aligned.</p>
+
+                                <fieldset disabled={walletSystemReadOnly || saveWalletSystemMutation.isPending} className={walletSystemReadOnly ? 'opacity-70' : ''}>
+                                    <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                                        {walletEnvironmentOptions.map((environment) => (
+                                            <div key={`wallet-branding-${environment}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{environment}</p>
+                                                <div className="mt-2 space-y-3">
+                                                    <input
+                                                        value={walletSystemForm.billing_domains[environment]}
+                                                        onChange={(event) => updateWalletSystemDomain(environment, event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="https://billing.example.com"
+                                                    />
+                                                    <input
+                                                        value={walletSystemForm.billing_branding[environment].business_name}
+                                                        onChange={(event) => updateWalletSystemBranding(environment, 'business_name', event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="Business name"
+                                                    />
+                                                    <textarea
+                                                        rows={2}
+                                                        value={walletSystemForm.billing_branding[environment].description}
+                                                        onChange={(event) => updateWalletSystemBranding(environment, 'description', event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="Billing description"
+                                                    />
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </fieldset>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Wallet SMTP</h4>
+                                <p className="mt-1 text-xs text-slate-500">Used for wallet billing test messages and recovery notifications where SMTP delivery is enabled.</p>
+
+                                <fieldset disabled={walletSystemReadOnly || saveWalletSystemMutation.isPending} className={walletSystemReadOnly ? 'opacity-70' : ''}>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(walletSystemForm.smtp.enabled)}
+                                                onChange={(event) => updateWalletSystemSmtp('enabled', event.target.checked)}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Enable wallet SMTP delivery
+                                        </label>
+
+                                        <input
+                                            value={walletSystemForm.smtp.host}
+                                            onChange={(event) => updateWalletSystemSmtp('host', event.target.value)}
+                                            className="crm-input"
+                                            placeholder="SMTP host"
+                                        />
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="65535"
+                                            value={walletSystemForm.smtp.port}
+                                            onChange={(event) => updateWalletSystemSmtp('port', Number(event.target.value || 587))}
+                                            className="crm-input"
+                                            placeholder="Port"
+                                        />
+
+                                        <input
+                                            value={walletSystemForm.smtp.username}
+                                            onChange={(event) => updateWalletSystemSmtp('username', event.target.value)}
+                                            className="crm-input"
+                                            placeholder="SMTP username"
+                                        />
+                                        <input
+                                            type="password"
+                                            value={walletSystemForm.smtp.password}
+                                            onChange={(event) => updateWalletSystemSmtp('password', event.target.value)}
+                                            className="crm-input"
+                                            placeholder="SMTP password (leave blank to keep current)"
+                                        />
+
+                                        <select
+                                            value={walletSystemForm.smtp.encryption}
+                                            onChange={(event) => updateWalletSystemSmtp('encryption', event.target.value)}
+                                            className="crm-select"
+                                        >
+                                            <option value="tls">TLS</option>
+                                            <option value="ssl">SSL</option>
+                                            <option value="">None</option>
+                                        </select>
+                                        <input
+                                            value={walletSystemForm.smtp.from_address}
+                                            onChange={(event) => updateWalletSystemSmtp('from_address', event.target.value)}
+                                            className="crm-input"
+                                            placeholder="From email"
+                                        />
+
+                                        <input
+                                            value={walletSystemForm.smtp.from_name}
+                                            onChange={(event) => updateWalletSystemSmtp('from_name', event.target.value)}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="From name"
+                                        />
+                                    </div>
+                                </fieldset>
+
+                                <p className={`mt-2 text-xs ${walletSystemForm.smtp.password_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                    {walletSystemForm.smtp.password_configured
+                                        ? 'SMTP password is already stored. Leave the password field blank to keep it.'
+                                        : 'No SMTP password is currently stored.'}
+                                </p>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-slate-900">Market Wallet Controls</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Set limits, presets, provider availability, and refresh behavior for each market.</p>
+                                    </div>
+                                    {!canManageWalletPlatforms ? (
+                                        <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800">Read-only</span>
+                                    ) : null}
+                                </div>
+
+                                <div className="mt-3">
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Market</label>
+                                    <select
+                                        value={selectedPlatformId || ''}
+                                        onChange={(event) => setSelectedPlatformId(Number(event.target.value) || null)}
+                                        className="crm-select max-w-xl"
+                                    >
+                                        {platformRows.map((platform) => (
+                                            <option key={platform.platform_id} value={platform.platform_id}>
+                                                {platform.platform_name} ({platform.country || '—'})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {!selectedPlatform ? (
+                                    <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                                        Select a market to edit wallet controls.
+                                    </p>
+                                ) : (
+                                    <>
+                                        <fieldset disabled={walletPlatformReadOnly || saveWalletPlatformMutation.isPending} className={walletPlatformReadOnly ? 'opacity-70' : ''}>
+                                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                                <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={Boolean(walletPlatformForm.enabled)}
+                                                        onChange={(event) => updateWalletPlatformField('enabled', event.target.checked)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    Enable wallet for this market
+                                                </label>
+
+                                                <div>
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Mode override</label>
+                                                    <select
+                                                        value={walletPlatformForm.mode_override}
+                                                        onChange={(event) => updateWalletPlatformField('mode_override', event.target.value)}
+                                                        className="crm-select w-full"
+                                                    >
+                                                        <option value="inherit">Inherit system mode</option>
+                                                        <option value="sandbox">Sandbox only</option>
+                                                        <option value="production">Production only</option>
+                                                    </select>
+                                                </div>
+
+                                                <div>
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Currency</label>
+                                                    <input
+                                                        value={walletPlatformForm.currency_code}
+                                                        onChange={(event) => updateWalletPlatformField('currency_code', event.target.value.toUpperCase())}
+                                                        className="crm-input"
+                                                        placeholder="KES"
+                                                    />
+                                                </div>
+
+                                                <input
+                                                    value={walletPlatformForm.max_single_topup}
+                                                    onChange={(event) => updateWalletPlatformField('max_single_topup', event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Max single top-up"
+                                                />
+                                                <input
+                                                    value={walletPlatformForm.max_wallet_balance}
+                                                    onChange={(event) => updateWalletPlatformField('max_wallet_balance', event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Max wallet balance"
+                                                />
+
+                                                <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={Boolean(walletPlatformForm.allow_combined_topup_subscribe)}
+                                                        onChange={(event) => updateWalletPlatformField('allow_combined_topup_subscribe', event.target.checked)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    Allow combined top-up + subscribe
+                                                </label>
+                                                <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={Boolean(walletPlatformForm.show_refresh_button)}
+                                                        onChange={(event) => updateWalletPlatformField('show_refresh_button', event.target.checked)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    Show escort refresh button
+                                                </label>
+
+                                                <div>
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Recent transactions limit</label>
+                                                    <input
+                                                        type="number"
+                                                        min="1"
+                                                        max="50"
+                                                        value={walletPlatformForm.recent_transactions_limit}
+                                                        onChange={(event) => updateWalletPlatformField('recent_transactions_limit', Number(event.target.value || 10))}
+                                                        className="crm-input"
+                                                    />
+                                                </div>
+
+                                                <div className="md:col-span-2">
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Top-up presets</label>
+                                                    <div className="space-y-2">
+                                                        {walletPlatformForm.topup_presets.map((preset, index) => (
+                                                            <div key={`wallet-preset-${index}`} className="flex gap-2">
+                                                                <input
+                                                                    value={preset}
+                                                                    onChange={(event) => updateWalletTopupPreset(index, event.target.value)}
+                                                                    className="crm-input flex-1"
+                                                                    placeholder="Preset amount"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeWalletTopupPreset(index)}
+                                                                    disabled={walletPlatformForm.topup_presets.length <= 1}
+                                                                    className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                >
+                                                                    Remove
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={addWalletTopupPreset}
+                                                        className="mt-2 text-xs font-semibold text-teal-700 hover:text-teal-900"
+                                                    >
+                                                        + Add preset
+                                                    </button>
+                                                </div>
+
+                                                <div className="md:col-span-2">
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Change reason</label>
+                                                    <textarea
+                                                        rows={2}
+                                                        value={walletPlatformForm.reason}
+                                                        onChange={(event) => updateWalletPlatformField('reason', event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="Reason for platform wallet change"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                                                {walletProviderKeys.map((providerKey) => (
+                                                    <div key={`wallet-provider-controls-${providerKey}`} className="rounded-md border border-slate-200 bg-white p-3">
+                                                        <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(walletPlatformForm.providers[providerKey]?.enabled)}
+                                                                onChange={(event) => updateWalletPlatformProviderField(providerKey, 'enabled', event.target.checked)}
+                                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                            />
+                                                            {walletProviderLabel(providerKey)}
+                                                        </label>
+                                                        <div className="mt-3 grid gap-2">
+                                                            <input
+                                                                value={walletPlatformForm.providers[providerKey]?.min_amount || ''}
+                                                                onChange={(event) => updateWalletPlatformProviderField(providerKey, 'min_amount', event.target.value)}
+                                                                className="crm-input"
+                                                                placeholder="Minimum amount"
+                                                            />
+                                                            <input
+                                                                value={walletPlatformForm.providers[providerKey]?.max_amount || ''}
+                                                                onChange={(event) => updateWalletPlatformProviderField(providerKey, 'max_amount', event.target.value)}
+                                                                className="crm-input"
+                                                                placeholder="Maximum amount"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </fieldset>
+
+                                        <div className="mt-3 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={saveWalletPlatformConfig}
+                                                disabled={
+                                                    walletPlatformReadOnly
+                                                    || saveWalletPlatformMutation.isPending
+                                                    || !walletPlatformForm.currency_code.trim()
+                                                    || !walletPlatformForm.reason.trim()
+                                                }
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {saveWalletPlatformMutation.isPending ? 'Saving...' : 'Save market wallet'}
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </section>
+
+                            {selectedPlatform ? (
+                                <>
+                                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">Provider Credentials</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Credential updates are per market and environment. Blank secret fields keep the currently stored value.</p>
+
+                                        <fieldset disabled={walletPlatformReadOnly || saveWalletProvidersMutation.isPending} className={walletPlatformReadOnly ? 'opacity-70' : ''}>
+                                            <div className="mt-3 space-y-3">
+                                                {walletProviderKeys.map((providerKey) => (
+                                                    <div key={`wallet-provider-credentials-${providerKey}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                                            <h5 className="text-sm font-semibold text-slate-900">{walletProviderLabel(providerKey)}</h5>
+                                                            <span className="text-xs text-slate-500">{selectedPlatform.platform_name}</span>
+                                                        </div>
+
+                                                        <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                                                            {walletEnvironmentOptions.map((environment) => {
+                                                                const providerConfig = walletProvidersForm[providerKey]?.[environment] || {};
+
+                                                                return (
+                                                                    <div key={`${providerKey}-${environment}`} className="rounded-md border border-slate-200 bg-white p-3">
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{environment}</p>
+                                                                            {providerKey === 'pesapal' ? (
+                                                                                <span className={`text-[11px] ${providerConfig.consumer_key_configured && providerConfig.consumer_secret_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                                                                    {providerConfig.consumer_key_configured && providerConfig.consumer_secret_configured ? 'Secrets stored' : 'Secrets incomplete'}
+                                                                                </span>
+                                                                            ) : providerKey === 'paystack' ? (
+                                                                                <span className={`text-[11px] ${providerConfig.public_key_configured && providerConfig.secret_key_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                                                                    {providerConfig.public_key_configured && providerConfig.secret_key_configured ? 'Keys stored' : 'Keys incomplete'}
+                                                                                </span>
+                                                                            ) : (
+                                                                                <span className="text-[11px] text-slate-500">{providerConfig.transport || 'django_proxy'}</span>
+                                                                            )}
+                                                                        </div>
+
+                                                                        {providerKey === 'pesapal' ? (
+                                                                            <div className="mt-3 grid gap-2">
+                                                                                <input
+                                                                                    value={providerConfig.consumer_key || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'consumer_key', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="Consumer key"
+                                                                                />
+                                                                                <input
+                                                                                    type="password"
+                                                                                    value={providerConfig.consumer_secret || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'consumer_secret', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="Consumer secret"
+                                                                                />
+                                                                                <input
+                                                                                    value={providerConfig.ipn_id || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'ipn_id', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="IPN ID"
+                                                                                />
+                                                                            </div>
+                                                                        ) : null}
+
+                                                                        {providerKey === 'paystack' ? (
+                                                                            <div className="mt-3 grid gap-2">
+                                                                                <input
+                                                                                    value={providerConfig.public_key || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'public_key', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="Public key"
+                                                                                />
+                                                                                <input
+                                                                                    type="password"
+                                                                                    value={providerConfig.secret_key || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'secret_key', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="Secret key"
+                                                                                />
+                                                                            </div>
+                                                                        ) : null}
+
+                                                                        {providerKey === 'mpesa_stk' ? (
+                                                                            <div className="mt-3 grid gap-2">
+                                                                                <select
+                                                                                    value={providerConfig.transport || 'django_proxy'}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'transport', event.target.value)}
+                                                                                    className="crm-select"
+                                                                                >
+                                                                                    <option value="django_proxy">Django proxy</option>
+                                                                                    <option value="direct_provider">Direct provider</option>
+                                                                                </select>
+                                                                                <input
+                                                                                    value={providerConfig.payment_service_base_url || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'payment_service_base_url', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="Payment service base URL"
+                                                                                />
+                                                                                <input
+                                                                                    value={providerConfig.organization_code || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'organization_code', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="Organization code"
+                                                                                />
+                                                                                <input
+                                                                                    value={providerConfig.callback_base_url || ''}
+                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'callback_base_url', event.target.value)}
+                                                                                    className="crm-input"
+                                                                                    placeholder="Callback base URL"
+                                                                                />
+                                                                            </div>
+                                                                        ) : null}
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                                                <input
+                                                    value={walletProvidersForm.reason}
+                                                    onChange={(event) => setWalletProvidersForm((current) => ({ ...current, reason: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="Reason for provider credential update"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={saveWalletProvidersConfig}
+                                                    disabled={walletPlatformReadOnly || saveWalletProvidersMutation.isPending || !walletProvidersForm.reason.trim()}
+                                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {saveWalletProvidersMutation.isPending ? 'Saving...' : 'Save provider credentials'}
+                                                </button>
+                                            </div>
+                                        </fieldset>
+                                    </section>
+
+                                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <h4 className="text-sm font-semibold text-slate-900">WP to CRM Credentials</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Rotate bearer and HMAC secrets for the WordPress plugin. Revealed values are shown once and must be copied immediately.</p>
+
+                                        <fieldset disabled={walletPlatformReadOnly || rotateWalletCredentialMutation.isPending} className={walletPlatformReadOnly ? 'opacity-70' : ''}>
+                                            <div className="mt-3 grid gap-3 md:grid-cols-3">
+                                                <select
+                                                    value={walletCredentialRotationForm.environment}
+                                                    onChange={(event) => setWalletCredentialRotationForm((current) => ({ ...current, environment: event.target.value }))}
+                                                    className="crm-select"
+                                                >
+                                                    {walletEnvironmentOptions.map((environment) => (
+                                                        <option key={`wallet-rotate-${environment}`} value={environment}>{environment}</option>
+                                                    ))}
+                                                </select>
+                                                <select
+                                                    value={walletCredentialRotationForm.credential}
+                                                    onChange={(event) => setWalletCredentialRotationForm((current) => ({ ...current, credential: event.target.value }))}
+                                                    className="crm-select"
+                                                >
+                                                    <option value="bearer">Bearer only</option>
+                                                    <option value="hmac">HMAC only</option>
+                                                    <option value="both">Bearer + HMAC</option>
+                                                </select>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => rotateWalletCredentialMutation.mutate({
+                                                        platformId: selectedPlatform.platform_id,
+                                                        payload: {
+                                                            environment: walletCredentialRotationForm.environment,
+                                                            credential: walletCredentialRotationForm.credential,
+                                                            reason: walletCredentialRotationForm.reason.trim(),
+                                                        },
+                                                    })}
+                                                    disabled={!walletCredentialRotationForm.reason.trim()}
+                                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {rotateWalletCredentialMutation.isPending ? 'Rotating...' : 'Rotate credentials'}
+                                                </button>
+                                                <textarea
+                                                    rows={2}
+                                                    value={walletCredentialRotationForm.reason}
+                                                    onChange={(event) => setWalletCredentialRotationForm((current) => ({ ...current, reason: event.target.value }))}
+                                                    className="crm-input md:col-span-3"
+                                                    placeholder="Reason for credential rotation"
+                                                />
+                                            </div>
+                                        </fieldset>
+
+                                        <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                                            {walletEnvironmentOptions.map((environment) => {
+                                                const credentials = selectedWalletWpCredentials[environment] || {};
+
+                                                return (
+                                                    <div key={`wallet-wp-state-${environment}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{environment}</p>
+                                                        <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                                            <p>Bearer: {credentials.bearer_key_configured ? 'configured' : 'missing'}</p>
+                                                            <p>Last bearer rotation: {formatDateTime(credentials.bearer_last_rotated_at)}</p>
+                                                            <p>HMAC: {credentials.hmac_configured ? 'configured' : 'missing'}</p>
+                                                            <p>Last HMAC rotation: {formatDateTime(credentials.hmac_last_rotated_at)}</p>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+
+                                        {walletCredentialReveal ? (
+                                            <div className="mt-3 rounded-md border border-teal-200 bg-teal-50/70 p-3">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-teal-900">One-time credential reveal</p>
+                                                        <p className="text-xs text-teal-700">
+                                                            {walletCredentialReveal.environment} • {walletCredentialReveal.credential}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setWalletCredentialReveal(null)}
+                                                        className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+                                                    >
+                                                        Clear
+                                                    </button>
+                                                </div>
+                                                <div className="mt-3 space-y-2">
+                                                    {Object.entries(walletCredentialReveal.revealed || {}).map(([key, value]) => (
+                                                        <div key={`wallet-reveal-${key}`} className="rounded-md border border-teal-200 bg-white p-2">
+                                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                                <p className="text-xs font-semibold text-slate-800">{key}</p>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => copyWalletReveal(key, value)}
+                                                                    className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+                                                                >
+                                                                    Copy
+                                                                </button>
+                                                            </div>
+                                                            <code className="mt-2 block break-all rounded bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100">{value}</code>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : null}
+                                    </section>
+                                </>
+                            ) : null}
+                        </div>
+
+                        <div className="space-y-4 xl:col-span-5">
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Wallet Health</h4>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">System mode</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{(walletSystemConfig?.mode || 'disabled').replaceAll('_', ' ')}</p>
+                                    </div>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Markets enabled</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{walletEnabledMarkets}</p>
+                                    </div>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Markets live</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{walletActiveMarkets}</p>
+                                    </div>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Selected providers</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{selectedWalletProvidersEnabled}</p>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-slate-900">Connectivity Tests</h4>
+                                <p className="mt-1 text-xs text-slate-500">Run DNS, SSL, provider, and SMTP checks against the current configuration.</p>
+
+                                <div className="mt-3 space-y-3">
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Billing domain</p>
+                                        <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
+                                            <select
+                                                value={walletDomainTestForm.environment}
+                                                onChange={(event) => setWalletDomainTestForm((current) => ({ ...current, environment: event.target.value }))}
+                                                className="crm-select"
+                                            >
+                                                {walletEnvironmentOptions.map((environment) => (
+                                                    <option key={`wallet-domain-${environment}`} value={environment}>{environment}</option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() => testWalletDomainMutation.mutate({
+                                                    environment: walletDomainTestForm.environment,
+                                                    reason: walletDomainTestForm.reason.trim(),
+                                                })}
+                                                disabled={testWalletDomainMutation.isPending || !walletDomainTestForm.reason.trim()}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {testWalletDomainMutation.isPending ? 'Testing...' : 'Run DNS test'}
+                                            </button>
+                                            <input
+                                                value={walletDomainTestForm.reason}
+                                                onChange={(event) => setWalletDomainTestForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="Reason for billing domain test"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Billing SSL</p>
+                                        <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
+                                            <select
+                                                value={walletSslTestForm.environment}
+                                                onChange={(event) => setWalletSslTestForm((current) => ({ ...current, environment: event.target.value }))}
+                                                className="crm-select"
+                                            >
+                                                {walletEnvironmentOptions.map((environment) => (
+                                                    <option key={`wallet-ssl-${environment}`} value={environment}>{environment}</option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() => testWalletSslMutation.mutate({
+                                                    environment: walletSslTestForm.environment,
+                                                    reason: walletSslTestForm.reason.trim(),
+                                                })}
+                                                disabled={testWalletSslMutation.isPending || !walletSslTestForm.reason.trim()}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {testWalletSslMutation.isPending ? 'Testing...' : 'Run SSL test'}
+                                            </button>
+                                            <input
+                                                value={walletSslTestForm.reason}
+                                                onChange={(event) => setWalletSslTestForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="Reason for billing SSL test"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Provider connectivity</p>
+                                        {!selectedPlatform ? (
+                                            <p className="mt-2 text-xs text-amber-700">Select a market before running provider tests.</p>
+                                        ) : (
+                                            <div className="mt-2 grid gap-2">
+                                                <div className="grid gap-2 md:grid-cols-2">
+                                                    <select
+                                                        value={walletProviderTestForm.provider}
+                                                        onChange={(event) => setWalletProviderTestForm((current) => ({ ...current, provider: event.target.value }))}
+                                                        className="crm-select"
+                                                    >
+                                                        {walletProviderKeys.map((providerKey) => (
+                                                            <option key={`wallet-provider-test-${providerKey}`} value={providerKey}>{walletProviderLabel(providerKey)}</option>
+                                                        ))}
+                                                    </select>
+                                                    <select
+                                                        value={walletProviderTestForm.environment}
+                                                        onChange={(event) => setWalletProviderTestForm((current) => ({ ...current, environment: event.target.value }))}
+                                                        className="crm-select"
+                                                    >
+                                                        {walletEnvironmentOptions.map((environment) => (
+                                                            <option key={`wallet-provider-environment-${environment}`} value={environment}>{environment}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <input
+                                                    value={walletProviderTestForm.reason}
+                                                    onChange={(event) => setWalletProviderTestForm((current) => ({ ...current, reason: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="Reason for provider test"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => testWalletProviderMutation.mutate({
+                                                        platformId: selectedPlatform.platform_id,
+                                                        payload: {
+                                                            provider: walletProviderTestForm.provider,
+                                                            environment: walletProviderTestForm.environment,
+                                                            reason: walletProviderTestForm.reason.trim(),
+                                                        },
+                                                    })}
+                                                    disabled={testWalletProviderMutation.isPending || !walletProviderTestForm.reason.trim()}
+                                                    className="crm-btn-secondary self-end disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {testWalletProviderMutation.isPending ? 'Testing...' : 'Run provider test'}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">SMTP test email</p>
+                                        <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
+                                            <input
+                                                value={walletEmailTestForm.to_email}
+                                                onChange={(event) => setWalletEmailTestForm((current) => ({ ...current, to_email: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="recipient@example.com"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => testWalletEmailMutation.mutate({
+                                                    to_email: walletEmailTestForm.to_email.trim(),
+                                                    reason: walletEmailTestForm.reason.trim(),
+                                                })}
+                                                disabled={testWalletEmailMutation.isPending || !walletEmailTestForm.to_email.trim() || !walletEmailTestForm.reason.trim()}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {testWalletEmailMutation.isPending ? 'Sending...' : 'Send test email'}
+                                            </button>
+                                            <input
+                                                value={walletEmailTestForm.reason}
+                                                onChange={(event) => setWalletEmailTestForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="Reason for SMTP test email"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {selectedPlatform ? (
+                                <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Selected Market</h4>
+                                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                        <p><span className="font-semibold text-slate-800">Market:</span> {selectedPlatform.platform_name}</p>
+                                        <p><span className="font-semibold text-slate-800">Country:</span> {selectedPlatform.country || '—'}</p>
+                                        <p><span className="font-semibold text-slate-800">Effective mode:</span> {selectedWalletEffectiveMode.replaceAll('_', ' ')}</p>
+                                        <p><span className="font-semibold text-slate-800">Currency:</span> {walletPlatformForm.currency_code || selectedPlatform.currency || 'KES'}</p>
+                                        <p><span className="font-semibold text-slate-800">Refresh button:</span> {walletPlatformForm.show_refresh_button ? 'shown' : 'hidden'}</p>
+                                    </div>
+                                </section>
+                            ) : null}
+
+                            {latestWalletProviderTest ? (
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <h4 className="text-sm font-semibold text-slate-900">Latest Provider Test</h4>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(latestWalletProviderTest.ok ? 'success' : 'failed')}`}>
+                                            {latestWalletProviderTest.ok ? 'success' : 'failed'}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                        <p><span className="font-semibold text-slate-800">Provider:</span> {walletProviderLabel(latestWalletProviderTest.provider)}</p>
+                                        <p><span className="font-semibold text-slate-800">Environment:</span> {latestWalletProviderTest.environment || '--'}</p>
+                                        <p><span className="font-semibold text-slate-800">HTTP status:</span> {latestWalletProviderTest.http_status || '--'}</p>
+                                        <p className="break-all"><span className="font-semibold text-slate-800">Message:</span> {latestWalletProviderTest.message || '--'}</p>
+                                        {latestWalletProviderTest.provider_response ? (
+                                            <p className="break-all"><span className="font-semibold text-slate-800">Response:</span> {JSON.stringify(latestWalletProviderTest.provider_response)}</p>
+                                        ) : null}
+                                    </div>
+                                </section>
+                            ) : null}
+
+                            {latestWalletDomainTest ? (
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <h4 className="text-sm font-semibold text-slate-900">Latest Domain Test</h4>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(latestWalletDomainTest.status || 'failed')}`}>
+                                            {(latestWalletDomainTest.status || 'failed').replaceAll('_', ' ')}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                        <p><span className="font-semibold text-slate-800">Environment:</span> {latestWalletDomainTest.environment || '--'}</p>
+                                        <p><span className="font-semibold text-slate-800">Host:</span> {latestWalletDomainTest.host || '--'}</p>
+                                        <p className="break-all"><span className="font-semibold text-slate-800">Message:</span> {latestWalletDomainTest.message || '--'}</p>
+                                    </div>
+                                </section>
+                            ) : null}
+
+                            {latestWalletSslTest ? (
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <h4 className="text-sm font-semibold text-slate-900">Latest SSL Test</h4>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(latestWalletSslTest.ok ? 'success' : 'failed')}`}>
+                                            {latestWalletSslTest.ok ? 'success' : 'failed'}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                        <p><span className="font-semibold text-slate-800">Environment:</span> {latestWalletSslTest.environment || '--'}</p>
+                                        <p><span className="font-semibold text-slate-800">HTTP status:</span> {latestWalletSslTest.http_status || '--'}</p>
+                                        <p className="break-all"><span className="font-semibold text-slate-800">Message:</span> {latestWalletSslTest.message || '--'}</p>
+                                    </div>
+                                </section>
+                            ) : null}
+
+                            {latestWalletEmailTest ? (
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <h4 className="text-sm font-semibold text-slate-900">Latest Email Test</h4>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(latestWalletEmailTest.status || 'success')}`}>
+                                            {(latestWalletEmailTest.status || 'success').replaceAll('_', ' ')}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                        <p><span className="font-semibold text-slate-800">Recipient:</span> {latestWalletEmailTest.to_email || '--'}</p>
+                                        <p><span className="font-semibold text-slate-800">Mailer:</span> {latestWalletEmailTest.mailer || '--'}</p>
+                                        <p className="break-all"><span className="font-semibold text-slate-800">Message:</span> {latestWalletEmailTest.message || '--'}</p>
+                                    </div>
+                                </section>
+                            ) : null}
                         </div>
                     </div>
                 </section>
@@ -4272,6 +5890,8 @@ export default function Settings() {
     const canCreateMarkets = (user?.role || '') === 'admin';
     const canEditPaymentLinks = ['admin', 'sub_admin'].includes(user?.role || '');
     const canManagePushProviders = ['admin', 'sub_admin'].includes(user?.role || '');
+    const canManageWalletSystem = (user?.role || '') === 'admin';
+    const canManageWalletPlatforms = ['admin', 'sub_admin'].includes(user?.role || '');
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
@@ -4307,6 +5927,9 @@ export default function Settings() {
                     canCreateMarkets={canCreateMarkets}
                     canEditPaymentLinks={canEditPaymentLinks}
                     canManagePushProviders={canManagePushProviders}
+                    canManageWalletSystem={canManageWalletSystem}
+                    canManageWalletPlatforms={canManageWalletPlatforms}
+                    currentUserEmail={user?.email || ''}
                 />
             ) : null}
 

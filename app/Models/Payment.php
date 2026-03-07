@@ -109,4 +109,17 @@ class Payment extends Model
     {
         return $this->belongsTo(PaymentImportBatch::class, 'import_batch_id');
     }
+
+    public function scopeExcludingWalletTopups($query)
+    {
+        return $query->where(function ($builder) {
+            $builder->whereNull('purpose')
+                ->orWhere('purpose', '!=', 'wallet_topup');
+        });
+    }
+
+    public function scopeWalletTopups($query)
+    {
+        return $query->where('purpose', 'wallet_topup');
+    }
 }
