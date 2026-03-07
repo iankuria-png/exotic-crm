@@ -4,10 +4,13 @@ namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Client;
+use App\Models\Product;
 use App\Models\Platform;
 use App\Models\PaymentImportBatch;
+use App\Models\PaymentImportRow;
 use App\Models\AuditLog;
 use App\Services\AuditService;
 use App\Services\NotificationService;
@@ -429,10 +432,12 @@ class PaymentQueueController extends Controller
     {
         $validated = $request->validate([
             'platform_id' => 'required|integer|exists:platforms,id',
-            'file' => 'required|file|mimes:csv,txt,xlsx|max:10240',
+            'file' => 'required|file|mimes:csv,txt,xlsx,xml|max:20480',
             'has_header' => 'nullable|boolean',
             'default_currency' => 'nullable|string|max:10',
             'reason' => 'required|string|max:500',
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date|after_or_equal:date_from',
         ]);
 
         $platformId = (int) $validated['platform_id'];
@@ -451,7 +456,9 @@ class PaymentQueueController extends Controller
                 (int) $request->user()->id,
                 (bool) ($validated['has_header'] ?? true),
                 (string) $validated['reason'],
-                $validated['default_currency'] ?? null
+                $validated['default_currency'] ?? null,
+                $validated['date_from'] ?? null,
+                $validated['date_to'] ?? null
             );
         } catch (InvalidArgumentException $exception) {
             return response()->json([
@@ -1344,6 +1351,276 @@ class PaymentQueueController extends Controller
         if ($payment->platform_id && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $payment->platform_id)) {
             abort(403, 'You do not have access to this payment market.');
         }
+    }
+
+    public function mpesaReview(Request $request)
+    {
+        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request);
+
+        $perPage = min(max((int) ($request->query('per_page') ?: 50), 10), 200);
+        $search = trim((string) ($request->query('search') ?? ''));
+        $confidenceFilter = trim((string) ($request->query('confidence') ?? ''));
+
+        $query = Payment::query()
+            ->with(['platform:id,name,phone_prefix,currency_code', 'client:id,name,phone_normalized,profile_status,wp_post_id'])
+            ->where('source', 'mpesa_xml_import')
+            ->whereNotNull('client_id')
+            ->whereNull('deal_id')
+            ->whereIn('platform_id', $platformIds);
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('phone', 'like', "%{$search}%")
+                    ->orWhere('transaction_reference', 'like', "%{$search}%")
+                    ->orWhereHas('client', fn($cq) => $cq->where('name', 'like', "%{$search}%"));
+            });
+        }
+
+        if (in_array($confidenceFilter, ['high', 'medium', 'low'], true)) {
+            $query->where('reconciliation_confidence', $confidenceFilter);
+        }
+
+        $payments = $query->orderByDesc('created_at')->paginate($perPage);
+
+        $matchingService = app(PaymentMatchingService::class);
+        $payments->getCollection()->transform(function (Payment $payment) use ($matchingService) {
+            $data = $payment->toArray();
+            $data['product_estimates'] = $matchingService->estimateProductByAmount(
+                (float) $payment->amount,
+                $payment->platform_id ? (int) $payment->platform_id : null,
+                $payment->currency
+            );
+            $senderName = null;
+            if (is_array($payment->raw_payload)) {
+                $normalizedRow = $payment->raw_payload['normalized_row'] ?? [];
+                $senderName = $normalizedRow['sender_name'] ?? null;
+            }
+            $data['sender_name'] = $senderName;
+            return $data;
+        });
+
+        $totalReview = Payment::query()
+            ->where('source', 'mpesa_xml_import')
+            ->whereNotNull('client_id')
+            ->whereNull('deal_id')
+            ->whereIn('platform_id', $platformIds)
+            ->count();
+
+        return response()->json([
+            'data' => $payments->items(),
+            'meta' => [
+                'current_page' => $payments->currentPage(),
+                'last_page' => $payments->lastPage(),
+                'per_page' => $payments->perPage(),
+                'total' => $payments->total(),
+                'total_review' => $totalReview,
+            ],
+        ]);
+    }
+
+    public function mpesaConfirmSubscriptions(Request $request)
+    {
+        $validated = $request->validate([
+            'selections' => 'required|array|min:1|max:500',
+            'selections.*.payment_id' => 'required|integer|exists:payments,id',
+            'selections.*.product_id' => 'required|integer|exists:products,id',
+            'selections.*.duration_key' => 'required|string|in:weekly,biweekly,monthly',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $actorId = (int) $request->user()->id;
+        $reason = $validated['reason'] ?? 'MPESA subscription confirmation';
+        $created = 0;
+        $createdActive = 0;
+        $createdExpired = 0;
+        $skipped = 0;
+        $failed = 0;
+        $dealIds = [];
+
+        $durationDays = [
+            'weekly' => 7,
+            'biweekly' => 14,
+            'monthly' => 30,
+        ];
+
+        foreach ($validated['selections'] as $selection) {
+            $payment = Payment::find($selection['payment_id']);
+            if (!$payment || $payment->deal_id) {
+                $skipped += 1;
+                continue;
+            }
+
+            if (!$payment->client_id) {
+                $failed += 1;
+                continue;
+            }
+
+            $this->authorizePaymentAccess($request, $payment);
+
+            $product = Product::find($selection['product_id']);
+            if (!$product) {
+                $failed += 1;
+                continue;
+            }
+
+            $durKey = $selection['duration_key'];
+            $days = $durationDays[$durKey] ?? 30;
+
+            $planType = 'basic';
+            $nameLower = strtolower((string) $product->name);
+            if (str_contains($nameLower, 'vip')) {
+                $planType = 'vip';
+            } elseif (str_contains($nameLower, 'premium')) {
+                $planType = 'premium';
+            }
+
+            try {
+                $activatedAt = $payment->created_at ? \Carbon\Carbon::parse($payment->created_at) : now();
+                $expiresAt = $activatedAt->copy()->addDays($days);
+
+                // Derive correct status: if expiry is in the past, deal is expired
+                $status = $expiresAt->isPast() ? 'expired' : 'active';
+
+                // Pause renewal reminders for expired MPESA imports to prevent campaign targeting
+                $pauseReminders = ($status === 'expired');
+
+                $deal = Deal::create([
+                    'platform_id' => (int) $payment->platform_id,
+                    'client_id' => (int) $payment->client_id,
+                    'payment_id' => (int) $payment->id,
+                    'product_id' => $product->id,
+                    'plan_type' => $planType,
+                    'amount' => (float) $payment->amount,
+                    'currency' => $product->currency ?: ($payment->currency ?: 'KES'),
+                    'duration' => $durKey,
+                    'status' => $status,
+                    'activated_at' => $activatedAt,
+                    'expires_at' => $expiresAt,
+                    'assigned_to' => $actorId,
+                    'origin' => 'mpesa_import',
+                    'payment_reference' => $payment->transaction_reference,
+                    'renewal_reminders_paused' => $pauseReminders,
+                ]);
+
+                $payment->update([
+                    'deal_id' => $deal->id,
+                    'match_confidence' => $payment->match_confidence ?: 'manual',
+                    'confirmed_by' => $actorId,
+                    'confirmed_at' => now(),
+                    'reconciliation_state' => 'resolved',
+                ]);
+
+                $dealIds[] = $deal->id;
+                $created += 1;
+                if ($status === 'active') {
+                    $createdActive += 1;
+                } else {
+                    $createdExpired += 1;
+                }
+            } catch (\Throwable $e) {
+                Log::error('MPESA subscription confirm failed', [
+                    'payment_id' => $payment->id,
+                    'error' => $e->getMessage(),
+                ]);
+                $failed += 1;
+            }
+        }
+
+        if ($created > 0) {
+            $this->auditService->fromRequest(
+                $request,
+                null,
+                CrmAuditAction::PAYMENT_MPESA_CONFIRM_SUBSCRIPTION,
+                'deal',
+                $dealIds[0] ?? 0,
+                null,
+                ['created' => $created, 'skipped' => $skipped, 'failed' => $failed],
+                $reason
+            );
+        }
+
+        return response()->json([
+            'created' => $created,
+            'created_active' => $createdActive,
+            'created_expired' => $createdExpired,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'deal_ids' => $dealIds,
+        ]);
+    }
+
+    public function importCandidates(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+            'search' => 'required|string|min:2|max:120',
+        ]);
+
+        $platformId = (int) $validated['platform_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $platformId,
+            'You do not have access to this payment market.'
+        );
+
+        $search = trim($validated['search']);
+        $candidates = Client::where('platform_id', $platformId)
+            ->where(function ($builder) use ($search) {
+                $builder->where('name', 'like', "%{$search}%")
+                    ->orWhere('phone_normalized', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
+                if (ctype_digit($search)) {
+                    $builder->orWhere('id', (int) $search)
+                        ->orWhere('wp_post_id', (int) $search)
+                        ->orWhere('wp_user_id', (int) $search);
+                }
+            })
+            ->select(['id', 'wp_post_id', 'wp_user_id', 'name', 'phone_normalized', 'email', 'city', 'profile_status', 'premium', 'featured', 'verified'])
+            ->orderBy('name')
+            ->limit(25)
+            ->get();
+
+        return response()->json(['data' => $candidates]);
+    }
+
+    public function updateImportRowMatch(Request $request)
+    {
+        $validated = $request->validate([
+            'row_id' => 'required|integer|exists:payment_import_rows,id',
+            'client_id' => 'required|integer|exists:clients,id',
+        ]);
+
+        $row = PaymentImportRow::with('batch')->findOrFail((int) $validated['row_id']);
+        $batch = $row->batch;
+
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $batch->platform_id,
+            'You do not have access to this payment market.'
+        );
+
+        if ($batch->status === 'committed') {
+            return response()->json(['message' => 'Batch already committed.'], 422);
+        }
+
+        $client = Client::findOrFail((int) $validated['client_id']);
+        if ((int) $client->platform_id !== (int) $batch->platform_id) {
+            return response()->json(['message' => 'Client does not belong to this market.'], 422);
+        }
+
+        $row->update([
+            'suggested_match' => [
+                'confidence' => 'manual',
+                'basis' => 'manual_import_match',
+                'client_id' => $client->id,
+                'client_name' => $client->name,
+            ],
+        ]);
+
+        return response()->json([
+            'row_id' => $row->id,
+            'suggested_match' => $row->fresh()->suggested_match,
+        ]);
     }
 
     private function resolveReconciliationConfidence(Payment $payment): string

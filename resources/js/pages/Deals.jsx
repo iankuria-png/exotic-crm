@@ -32,7 +32,7 @@ function normalizePlatformFilter(value) {
 }
 
 export default function Deals() {
-    const allowedBuckets = new Set(['all', 'active', 'risk', 'pending', 'workload', 'stable', 'expired', 'lapsed', 'paused', 'untracked']);
+    const allowedBuckets = new Set(['all', 'active', 'risk', 'pending', 'workload', 'stable', 'expired', 'lapsed', 'paused', 'untracked', 'mpesa_review', 'mpesa_history']);
     const allowedStatuses = new Set(['pending', 'awaiting_payment', 'paid', 'active', 'expired', 'renewed', 'cancelled', 'untracked']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -80,10 +80,14 @@ export default function Deals() {
         notifyClient: false,
     });
 
+    const [mpesaPlanSelections, setMpesaPlanSelections] = useState({});
+
     const [bucket, setBucket] = useState(() => {
         const requested = (searchParams.get('bucket') || 'all').trim();
         return allowedBuckets.has(requested) ? requested : 'all';
     });
+
+    const isMpesaBucket = bucket === 'mpesa_review';
 
     const { data, isLoading } = useQuery({
         queryKey: ['deals', page, perPage, search, statusFilter, bucket, platformFilter],
@@ -98,12 +102,37 @@ export default function Deals() {
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                 },
             }).then((response) => response.data),
+        enabled: !isMpesaBucket,
     });
 
     const { data: integrationData } = useQuery({
         queryKey: ['settings-integrations', 'deals-filter'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
     });
+
+    const { data: mpesaReviewData, isLoading: mpesaReviewLoading } = useQuery({
+        queryKey: ['mpesa-review', page, perPage, search, platformFilter],
+        queryFn: () =>
+            api.get('/crm/payments/mpesa-review', {
+                params: {
+                    page,
+                    per_page: perPage,
+                    ...(search && { search }),
+                    ...(platformFilter && { platform_id: Number(platformFilter) }),
+                },
+            }).then((r) => r.data),
+        enabled: isMpesaBucket,
+    });
+
+    const { data: mpesaCountData } = useQuery({
+        queryKey: ['mpesa-review-count', platformFilter],
+        queryFn: () =>
+            api.get('/crm/payments/mpesa-review', {
+                params: { per_page: 1, ...(platformFilter && { platform_id: Number(platformFilter) }) },
+            }).then((r) => r.data?.meta?.total_review ?? 0),
+        staleTime: 60000,
+    });
+    const mpesaReviewCount = typeof mpesaCountData === 'number' ? mpesaCountData : 0;
 
     const platformOptions = integrationData?.platforms || [];
     const selectedPlatformCurrency = useMemo(() => {
@@ -273,6 +302,31 @@ export default function Deals() {
         },
     });
 
+    const mpesaConfirmMutation = useMutation({
+        mutationFn: (selections) =>
+            api.post('/crm/payments/mpesa-confirm-subscriptions', { selections }).then((r) => r.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['mpesa-review'] });
+            queryClient.invalidateQueries({ queryKey: ['mpesa-review-count'] });
+            queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setClearSelectionKey((v) => v + 1);
+            setMpesaPlanSelections({});
+            if (result.failed > 0) {
+                toast.warning(`${result.created} confirmed, ${result.failed} failed.`);
+            } else if (result.created_expired > 0) {
+                toast.success(
+                    `${result.created} subscription(s) confirmed: ${result.created_active} active, ${result.created_expired} historical (expired).`
+                );
+            } else {
+                toast.success(`${result.created} subscription(s) confirmed successfully.`);
+            }
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Subscription confirmation failed.');
+        },
+    });
+
     const handleSearch = (event) => {
         event.preventDefault();
         setSearch(searchInput.trim());
@@ -304,6 +358,8 @@ export default function Deals() {
         if (bucket === 'pending') return 'pipeline';
         if (bucket === 'expired') return 'expired';
         if (bucket === 'untracked') return 'untracked';
+        if (bucket === 'mpesa_review') return 'mpesa';
+        if (bucket === 'mpesa_history') return 'mpesa_history';
         return '';
     }, [bucket, statusFilter]);
 
@@ -314,6 +370,8 @@ export default function Deals() {
             pipeline: 'pending',
             expired: 'expired',
             untracked: 'untracked',
+            mpesa: 'mpesa_review',
+            mpesa_history: 'mpesa_history',
         };
 
         const nextBucket = metricBucketMap[metricKey] || 'all';
@@ -364,6 +422,8 @@ export default function Deals() {
                         <p className="text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</p>
                         {row.origin_type === 'modern' ? (
                             <span className="inline-flex items-center rounded-sm bg-blue-50 px-1 text-[10px] font-bold uppercase tracking-wider text-blue-600 ring-1 ring-inset ring-blue-600/20">Modern</span>
+                        ) : row.origin_type === 'mpesa_import' ? (
+                            <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA</span>
                         ) : row.origin_type === 'untracked' ? (
                             <span className="inline-flex items-center rounded-sm bg-amber-50 px-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-inset ring-amber-700/20">Untracked</span>
                         ) : (
@@ -545,6 +605,186 @@ export default function Deals() {
         },
     ];
 
+    const mpesaColumns = [
+        {
+            key: 'client',
+            label: 'Client',
+            render: (row) => (
+                <div>
+                    <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{row.client?.name || row.sender_name || 'Unknown'}</p>
+                        <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA</span>
+                    </div>
+                    <p className="crm-mono text-xs text-slate-500">{row.client?.phone_normalized || row.phone || ''}</p>
+                </div>
+            ),
+        },
+        {
+            key: 'amount',
+            label: 'Amount',
+            render: (row) => (
+                <span className="text-sm font-semibold text-slate-900">
+                    {formatCurrency(row.amount, row.currency || row.platform?.currency_code || 'KES')}
+                </span>
+            ),
+        },
+        {
+            key: 'transaction',
+            label: 'Transaction',
+            render: (row) => (
+                <div>
+                    <p className="crm-mono text-xs font-semibold text-slate-700">{row.transaction_reference || '—'}</p>
+                    <p className="text-[11px] text-slate-400">
+                        {row.created_at ? new Date(row.created_at).toLocaleDateString() : '—'}
+                    </p>
+                </div>
+            ),
+        },
+        {
+            key: 'plan_estimate',
+            label: 'Estimated Plan',
+            render: (row) => {
+                const estimates = row.product_estimates || [];
+                const selection = mpesaPlanSelections[row.id];
+
+                if (estimates.length === 0) {
+                    return <span className="text-xs text-slate-400">No match</span>;
+                }
+
+                if (estimates.length === 1) {
+                    const est = estimates[0];
+                    return (
+                        <div className="flex items-center gap-1.5">
+                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                est.exact_match
+                                    ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20'
+                                    : 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20'
+                            }`}>
+                                {est.product_name} {est.duration_key}
+                            </span>
+                            <span className={`h-2 w-2 rounded-full ${
+                                est.confidence === 'exact' ? 'bg-emerald-500' : est.confidence === 'high' ? 'bg-amber-500' : 'bg-slate-400'
+                            }`} title={`Confidence: ${est.confidence}`} />
+                        </div>
+                    );
+                }
+
+                return (
+                    <select
+                        value={selection ? `${selection.product_id}:${selection.duration_key}` : ''}
+                        onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) {
+                                setMpesaPlanSelections((prev) => {
+                                    const next = { ...prev };
+                                    delete next[row.id];
+                                    return next;
+                                });
+                                return;
+                            }
+                            const [pid, dk] = val.split(':');
+                            setMpesaPlanSelections((prev) => ({
+                                ...prev,
+                                [row.id]: { product_id: Number(pid), duration_key: dk },
+                            }));
+                        }}
+                        className="crm-select text-xs"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <option value="">Select plan...</option>
+                        {estimates.map((est) => (
+                            <option key={`${est.product_id}:${est.duration_key}`} value={`${est.product_id}:${est.duration_key}`}>
+                                {est.product_name} {est.duration_key} — {formatCurrency(est.price, row.currency || 'KES')}
+                                {est.exact_match ? ' (exact)' : ''}
+                            </option>
+                        ))}
+                    </select>
+                );
+            },
+        },
+        {
+            key: 'actions',
+            label: '',
+            render: (row) => {
+                const estimates = row.product_estimates || [];
+                const selection = mpesaPlanSelections[row.id];
+                const canConfirm = estimates.length === 1 || Boolean(selection);
+
+                return (
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            disabled={!canConfirm || mpesaConfirmMutation.isPending}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                const sel = selection || (estimates.length === 1 ? { product_id: estimates[0].product_id, duration_key: estimates[0].duration_key } : null);
+                                if (!sel) return;
+                                mpesaConfirmMutation.mutate([{
+                                    payment_id: row.id,
+                                    product_id: sel.product_id,
+                                    duration_key: sel.duration_key,
+                                }]);
+                            }}
+                            className="crm-btn-primary text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Confirm
+                        </button>
+                        {row.client?.id ? (
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); navigate(`/clients/${row.client.id}`); }}
+                                className="text-xs text-slate-500 hover:text-slate-700"
+                            >
+                                Profile
+                            </button>
+                        ) : null}
+                    </div>
+                );
+            },
+        },
+    ];
+
+    const mpesaBulkActions = [
+        {
+            key: 'mpesa-bulk-confirm',
+            label: 'Confirm subscriptions',
+            loadingLabel: 'Confirming...',
+            variant: 'primary',
+            onClick: (rowsSelection) => {
+                const selections = rowsSelection
+                    .map((row) => {
+                        const estimates = row.product_estimates || [];
+                        const sel = mpesaPlanSelections[row.id] || (estimates.length === 1 ? { product_id: estimates[0].product_id, duration_key: estimates[0].duration_key } : null);
+                        if (!sel) return null;
+                        return { payment_id: row.id, ...sel };
+                    })
+                    .filter(Boolean);
+
+                if (selections.length === 0) {
+                    toast.warning('No confirmable rows selected. Select a plan for rows with multiple candidates.');
+                    return;
+                }
+
+                mpesaConfirmMutation.mutate(selections);
+            },
+        },
+    ];
+
+    useEffect(() => {
+        if (!mpesaReviewData?.data) return;
+        setMpesaPlanSelections((prev) => {
+            const next = { ...prev };
+            mpesaReviewData.data.forEach((row) => {
+                if (next[row.id]) return;
+                const estimates = row.product_estimates || [];
+                if (estimates.length === 1) {
+                    next[row.id] = { product_id: estimates[0].product_id, duration_key: estimates[0].duration_key };
+                }
+            });
+            return next;
+        });
+    }, [mpesaReviewData?.data]);
+
     useEffect(() => {
         if (dialog.type === 'extend' && !['manual', 'stk', 'link', 'free_trial'].includes(paymentMethod)) {
             setPaymentMethod('manual');
@@ -595,7 +835,7 @@ export default function Deals() {
                     : 'Subscription activation and lifecycle management'}
             />
 
-            <section className="grid gap-4 md:grid-cols-5">
+            <section className={`grid gap-4 ${mpesaReviewCount > 0 ? 'md:grid-cols-3 xl:grid-cols-6' : 'md:grid-cols-5'}`}>
                 <MetricCard
                     label="In Scope (All Types)"
                     value={inScopeTotal.toLocaleString()}
@@ -636,6 +876,16 @@ export default function Deals() {
                     onClick={() => applyMetricFilter('untracked')}
                     active={activeMetric === 'untracked'}
                 />
+                {mpesaReviewCount > 0 ? (
+                    <MetricCard
+                        label="MPESA Review"
+                        value={mpesaReviewCount.toLocaleString()}
+                        meta="Imported payments awaiting confirmation"
+                        tone="accent"
+                        onClick={() => applyMetricFilter('mpesa')}
+                        active={activeMetric === 'mpesa'}
+                    />
+                ) : null}
             </section>
 
             <p className="px-1 text-xs text-slate-500">Click a metric card to filter this table. Click it again to clear.</p>
@@ -684,6 +934,8 @@ export default function Deals() {
                             { value: 'untracked', label: 'Untracked Active' },
                             { value: 'lapsed', label: 'Lapsed (Legacy)' },
                             { value: 'paused', label: 'Paused Reminders' },
+                            ...(mpesaReviewCount > 0 ? [{ value: 'mpesa_review', label: `MPESA Review (${mpesaReviewCount})` }] : [{ value: 'mpesa_review', label: 'MPESA Review' }]),
+                            { value: 'mpesa_history', label: 'MPESA History (Imported)' },
                         ]}
                     />
 
@@ -723,21 +975,59 @@ export default function Deals() {
                 </div>
             </section>
 
-            <DataTable
-                columns={columns}
-                data={data?.targets?.data}
-                pagination={data?.targets}
-                onPageChange={setPage}
-                onRowClick={(row) => row.client && navigate(`/clients/${row.client.id}`)}
-                isLoading={isLoading}
-                emptyMessage="No subscriptions found."
-                compact
-                selectable
-                bulkActions={bulkActions}
-                clearSelectionKey={clearSelectionKey}
-                perPage={perPage}
-                onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
-            />
+            {isMpesaBucket ? (
+                <>
+                    {mpesaReviewData?.data?.length > 0 ? (
+                        <div className="rounded-lg border border-teal-200 bg-teal-50/50 px-4 py-2.5">
+                            <div className="flex items-center gap-2 text-sm text-teal-800">
+                                <svg className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                <span>
+                                    <strong>{mpesaReviewData.meta?.total ?? 0}</strong> MPESA payments matched to clients but not yet confirmed as subscriptions.
+                                    Select rows and choose a plan to confirm.
+                                </span>
+                            </div>
+                        </div>
+                    ) : null}
+                    <DataTable
+                        columns={mpesaColumns}
+                        data={mpesaReviewData?.data}
+                        pagination={mpesaReviewData?.meta ? {
+                            current_page: mpesaReviewData.meta.current_page,
+                            last_page: mpesaReviewData.meta.last_page,
+                            per_page: mpesaReviewData.meta.per_page,
+                            total: mpesaReviewData.meta.total,
+                        } : undefined}
+                        onPageChange={setPage}
+                        onRowClick={(row) => row.client?.id && navigate(`/clients/${row.client.id}`)}
+                        isLoading={mpesaReviewLoading}
+                        emptyMessage="No MPESA payments awaiting review."
+                        compact
+                        selectable
+                        bulkActions={mpesaBulkActions}
+                        clearSelectionKey={clearSelectionKey}
+                        perPage={perPage}
+                        onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
+                    />
+                </>
+            ) : (
+                <DataTable
+                    columns={columns}
+                    data={data?.targets?.data}
+                    pagination={data?.targets}
+                    onPageChange={setPage}
+                    onRowClick={(row) => row.client && navigate(`/clients/${row.client.id}`)}
+                    isLoading={isLoading}
+                    emptyMessage="No subscriptions found."
+                    compact
+                    selectable
+                    bulkActions={bulkActions}
+                    clearSelectionKey={clearSelectionKey}
+                    perPage={perPage}
+                    onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
+                />
+            )}
 
             {selectedDeal ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setDialog({ type: null, deal: null })}>

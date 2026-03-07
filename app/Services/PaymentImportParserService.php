@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
 use InvalidArgumentException;
 use SimpleXMLElement;
@@ -9,14 +10,15 @@ use ZipArchive;
 
 class PaymentImportParserService
 {
-    public function parseUploadedFile(UploadedFile $file, bool $hasHeader = true): array
+    public function parseUploadedFile(UploadedFile $file, bool $hasHeader = true, ?Carbon $dateFrom = null, ?Carbon $dateTo = null): array
     {
         $extension = strtolower((string) ($file->getClientOriginalExtension() ?: $file->extension()));
 
         return match ($extension) {
             'csv', 'txt' => $this->parseCsv($file->getRealPath(), $hasHeader),
             'xlsx' => $this->parseXlsx($file->getRealPath(), $hasHeader),
-            default => throw new InvalidArgumentException('Unsupported file type. Use CSV or XLSX.'),
+            'xml' => $this->parseMpesaSmsXml($file->getRealPath(), $dateFrom, $dateTo),
+            default => throw new InvalidArgumentException('Unsupported file type. Use CSV, XLSX, or XML.'),
         };
     }
 
@@ -300,6 +302,150 @@ class PaymentImportParserService
         }
 
         return $index - 1;
+    }
+
+    private function parseMpesaSmsXml(string $path, ?Carbon $dateFrom = null, ?Carbon $dateTo = null): array
+    {
+        $xml = @simplexml_load_file($path);
+        if (!$xml instanceof SimpleXMLElement) {
+            throw new InvalidArgumentException('Unable to parse uploaded XML file.');
+        }
+
+        $headers = ['transaction_reference', 'amount', 'phone', 'date', 'currency', 'status', 'sender_name'];
+        $rows = [];
+        $rowNumber = 0;
+
+        $meta = [
+            'total_sms' => 0,
+            'inbound_parsed' => 0,
+            'skipped_outbound' => 0,
+            'skipped_pre_cutoff' => 0,
+            'skipped_post_cutoff' => 0,
+            'skipped_unparseable' => 0,
+            'date_range_start' => null,
+            'date_range_end' => null,
+        ];
+
+        foreach ($xml->sms as $sms) {
+            $meta['total_sms'] += 1;
+            $body = (string) ($sms['body'] ?? '');
+
+            $parsed = $this->parseInboundMpesaSms($body);
+            if ($parsed === null) {
+                $meta['skipped_outbound'] += 1;
+                continue;
+            }
+
+            if ($dateFrom !== null && $parsed['date']->lt($dateFrom)) {
+                $meta['skipped_pre_cutoff'] += 1;
+                continue;
+            }
+
+            if ($dateTo !== null && $parsed['date']->gt($dateTo->copy()->endOfDay())) {
+                $meta['skipped_post_cutoff'] += 1;
+                continue;
+            }
+
+            $meta['inbound_parsed'] += 1;
+            $rowNumber += 1;
+
+            $dateString = $parsed['date']->format('Y-m-d H:i:s');
+
+            if ($meta['date_range_start'] === null || $parsed['date']->lt(Carbon::parse($meta['date_range_start']))) {
+                $meta['date_range_start'] = $dateString;
+            }
+            if ($meta['date_range_end'] === null || $parsed['date']->gt(Carbon::parse($meta['date_range_end']))) {
+                $meta['date_range_end'] = $dateString;
+            }
+
+            $values = [
+                'transaction_reference' => $parsed['transaction_code'],
+                'amount' => $parsed['amount'],
+                'phone' => $parsed['phone'],
+                'date' => $dateString,
+                'currency' => 'KES',
+                'status' => 'completed',
+                'sender_name' => $parsed['sender_name'],
+            ];
+
+            $rows[] = [
+                'row_number' => $rowNumber,
+                'values' => $values,
+                'raw' => array_values($values),
+            ];
+        }
+
+        if (empty($rows)) {
+            $detail = 'Total SMS in file: ' . $meta['total_sms']
+                . ', outbound/other: ' . $meta['skipped_outbound'];
+            if ($meta['skipped_pre_cutoff'] > 0) {
+                $detail .= ', before date filter: ' . $meta['skipped_pre_cutoff'];
+            }
+            if ($meta['skipped_post_cutoff'] > 0) {
+                $detail .= ', after date filter: ' . $meta['skipped_post_cutoff'];
+            }
+            throw new InvalidArgumentException(
+                'No inbound MPESA payments found matching the given criteria. ' . $detail . '.'
+            );
+        }
+
+        return [
+            'headers' => $headers,
+            'rows' => $rows,
+            'meta' => $meta,
+        ];
+    }
+
+    private function parseInboundMpesaSms(string $body): ?array
+    {
+        $pattern = '/^([A-Z0-9]+)\s+Confirmed\.[Oo]n\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+at\s+(\d{1,2}:\d{2}\s*[AP]M)\s*Ksh([\d,]+\.\d{2})\s+received\s+from\s+(\d{9,15})\s+(.+?)\.\s+New\s+Account/i';
+
+        if (!preg_match($pattern, $body, $matches)) {
+            return null;
+        }
+
+        $transactionCode = $matches[1];
+        $dateStr = $matches[2];
+        $timeStr = trim($matches[3]);
+        $amountStr = str_replace(',', '', $matches[4]);
+        $phone = $matches[5];
+        $senderName = trim($matches[6]);
+
+        $date = $this->parseMpesaDate($dateStr, $timeStr);
+        if ($date === null) {
+            return null;
+        }
+
+        return [
+            'transaction_code' => $transactionCode,
+            'amount' => $amountStr,
+            'phone' => $phone,
+            'sender_name' => $senderName,
+            'date' => $date,
+        ];
+    }
+
+    private function parseMpesaDate(string $dateStr, string $timeStr): ?Carbon
+    {
+        // Normalize time: ensure space before AM/PM
+        $timeStr = preg_replace('/([AP]M)/i', ' $1', $timeStr) ?? $timeStr;
+        $timeStr = preg_replace('/\s+/', ' ', trim($timeStr));
+
+        $combined = trim($dateStr) . ' ' . $timeStr;
+
+        // Try d/m/yy format first (most common: 2/3/26)
+        $date = @Carbon::createFromFormat('j/n/y g:i A', $combined);
+        if ($date instanceof Carbon) {
+            return $date;
+        }
+
+        // Try d/m/yyyy format (23/10/2025)
+        $date = @Carbon::createFromFormat('j/n/Y g:i A', $combined);
+        if ($date instanceof Carbon) {
+            return $date;
+        }
+
+        return null;
     }
 
     private function normalizeHeaders(array $rawHeaders): array

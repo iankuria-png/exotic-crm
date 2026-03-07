@@ -43,6 +43,7 @@ function formatRelativeFromUnix(unixTs) {
 }
 
 const DEFAULT_SUPPORT_CHAT_URL = 'https://chat.cloud.board.support/1369683147';
+const FOREVER_PLAN_TOOLTIP = 'Reference: This profile is intentionally kept active to avoid zero-escort locations, which protects search ranking.';
 
 const PROFILE_ENUM_CHOICES = {
     gender: [
@@ -674,6 +675,20 @@ export default function ClientDetail() {
     }
 
     const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
+    const isUntrackedForeverPlan = client.profile_status === 'publish'
+        && Number(client.deals?.length || 0) === 0
+        && !client.escort_expire
+        && !client.premium_expire
+        && !client.featured_expire;
+    const activeSubscriptionLabel = client.active_deal
+        ? (client.active_deal.product?.name || client.active_deal.plan_type)
+        : (isUntrackedForeverPlan ? 'Forever plan' : 'None');
+    const subscriptionExpiryLabel = client.escort_expire
+        ? new Date(client.escort_expire * 1000).toLocaleDateString()
+        : (isUntrackedForeverPlan ? 'Forever' : '—');
+    const subscriptionExpiryDetailLabel = client.escort_expire
+        ? new Date(client.escort_expire * 1000).toLocaleString()
+        : (isUntrackedForeverPlan ? 'Forever' : '—');
 
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canDispatchCredentials = Number(client.wp_post_id || 0) > 0;
@@ -851,6 +866,14 @@ export default function ClientDetail() {
                                 {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
                                 {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
                                 {client.verified ? <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
+                                {isUntrackedForeverPlan ? (
+                                    <span
+                                        className="inline-flex cursor-help items-center rounded-md bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
+                                        title={FOREVER_PLAN_TOOLTIP}
+                                    >
+                                        Forever plan
+                                    </span>
+                                ) : null}
                             </div>
                         </div>
                     </div>
@@ -911,13 +934,23 @@ export default function ClientDetail() {
                     <dl className="space-y-2.5">
                         <DefinitionRow
                             label="Active Subscription"
-                            value={client.active_deal ? (client.active_deal.product?.name || client.active_deal.plan_type) : 'None'}
+                            value={isUntrackedForeverPlan && !client.active_deal ? (
+                                <span className="inline-flex items-center gap-1">
+                                    <span>Forever plan</span>
+                                    <span
+                                        className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-200 text-[10px] font-semibold text-slate-400"
+                                        title={FOREVER_PLAN_TOOLTIP}
+                                    >
+                                        ?
+                                    </span>
+                                </span>
+                            ) : activeSubscriptionLabel}
                         />
                         <DefinitionRow
                             label="Expires"
                             value={client.escort_expire ? (
-                                <span className={isExpired ? 'text-rose-700' : 'text-slate-900'}>{new Date(client.escort_expire * 1000).toLocaleDateString()}</span>
-                            ) : '—'}
+                                <span className={isExpired ? 'text-rose-700' : 'text-slate-900'}>{subscriptionExpiryLabel}</span>
+                            ) : subscriptionExpiryLabel}
                         />
                         <DefinitionRow label="WP Post ID" value={client.wp_post_id || '—'} mono />
                         <DefinitionRow label="WP User ID" value={client.wp_user_id || '—'} mono />
@@ -997,8 +1030,17 @@ export default function ClientDetail() {
                                 {client.deals.slice(0, 5).map((deal) => (
                                     <div key={deal.id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2.5">
                                         <div>
-                                    <p className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type} - {deal.duration}</p>
-                                            <p className="text-xs text-slate-500">{formatCurrency(deal.amount, deal.currency || 'KES')} • Activation enables subscription access.</p>
+                                            <div className="flex items-center gap-1.5">
+                                                <p className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type} - {deal.duration}</p>
+                                                {deal.origin === 'mpesa_import' && (
+                                                    <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA</span>
+                                                )}
+                                            </div>
+                                            <p className="text-xs text-slate-500">
+                                                {formatCurrency(deal.amount, deal.currency || 'KES')}
+                                                {deal.activated_at ? ` • Paid ${new Date(deal.activated_at).toLocaleDateString()}` : ''}
+                                                {deal.payment_reference ? ` • Ref: ${deal.payment_reference}` : ' • Activation enables subscription access.'}
+                                            </p>
                                         </div>
                                         <StatusBadge status={deal.status} />
                                     </div>
@@ -1031,10 +1073,15 @@ export default function ClientDetail() {
                                     <div className="flex flex-wrap items-center gap-2">
                                         <h4 className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type}</h4>
                                         <StatusBadge status={deal.status} />
+                                        {deal.origin === 'mpesa_import' && (
+                                            <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA Import</span>
+                                        )}
                                     </div>
                                     <p className="mt-1 text-sm text-slate-500">
                                         {formatCurrency(deal.amount, deal.currency || 'KES')} - {deal.duration}
+                                        {deal.activated_at ? ` - Paid ${new Date(deal.activated_at).toLocaleDateString()}` : ''}
                                         {deal.expires_at ? ` - Expires ${new Date(deal.expires_at).toLocaleDateString()}` : ''}
+                                        {deal.payment_reference ? ` - Ref: ${deal.payment_reference}` : ''}
                                     </p>
                                 </div>
 
@@ -1357,8 +1404,18 @@ export default function ClientDetail() {
                                     <div className="grid gap-2 md:grid-cols-2">
                                         <p className="text-xs text-slate-600">Status: <span className="font-semibold text-slate-900">{client.profile_status}</span></p>
                                         <p className="text-xs text-slate-600">Plan: <span className="font-semibold text-slate-900">{client.plan_label || 'Basic'}</span></p>
-                                        <p className="text-xs text-slate-600">Expires: <span className="font-semibold text-slate-900">{client.escort_expire ? new Date(client.escort_expire * 1000).toLocaleString() : '—'}</span></p>
-                                        <p className="text-xs text-slate-600">Active subscription: <span className="font-semibold text-slate-900">{client.active_deal?.product?.name || client.active_deal?.plan_type || 'None'}</span></p>
+                                        <p className="text-xs text-slate-600">Expires: <span className="font-semibold text-slate-900">{subscriptionExpiryDetailLabel}</span></p>
+                                        <p className="text-xs text-slate-600">
+                                            Active subscription: <span className="font-semibold text-slate-900">{activeSubscriptionLabel}</span>
+                                            {isUntrackedForeverPlan && !client.active_deal ? (
+                                                <span
+                                                    className="ml-1 inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-200 text-[10px] font-semibold text-slate-400"
+                                                    title={FOREVER_PLAN_TOOLTIP}
+                                                >
+                                                    ?
+                                                </span>
+                                            ) : null}
+                                        </p>
                                     </div>
                                     <button
                                         type="button"

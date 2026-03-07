@@ -52,4 +52,6 @@ final class CrmAuditAction
     public const PUSH_CAMPAIGN_SCHEDULE = 'push_campaign_schedule';
     public const PUSH_NOTIFICATION_SENT = 'push_notification_sent';
     public const PUSH_NOTIFICATION_FAILED = 'push_notification_failed';
+    public const PAYMENT_IMPORT_MPESA_XML = 'payment_import_mpesa_xml';
+    public const PAYMENT_MPESA_CONFIRM_SUBSCRIPTION = 'payment_mpesa_confirm_subscription';
 }

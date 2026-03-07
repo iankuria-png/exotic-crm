@@ -15,6 +15,7 @@ class Deal extends Model
         'duration', 'status', 'activated_at', 'expires_at',
         'assigned_to', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
+        'origin',
     ];
 
     protected $casts = [

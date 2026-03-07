@@ -15,11 +15,12 @@ use InvalidArgumentException;
 
 class PaymentImportService
 {
-    private const MAX_ROWS_PER_IMPORT = 5000;
+    private const MAX_ROWS_PER_IMPORT = 12000;
 
     public function __construct(
         private readonly PaymentImportParserService $parserService,
-        private readonly PaymentReconciliationConfidenceService $confidenceService
+        private readonly PaymentReconciliationConfidenceService $confidenceService,
+        private readonly PaymentMatchingService $matchingService
     ) {
     }
 
@@ -29,9 +30,14 @@ class PaymentImportService
         int $actorId,
         bool $hasHeader = true,
         ?string $reason = null,
-        ?string $defaultCurrency = null
+        ?string $defaultCurrency = null,
+        ?string $dateFrom = null,
+        ?string $dateTo = null
     ): array {
-        $parsed = $this->parserService->parseUploadedFile($file, $hasHeader);
+        $dateFromCarbon = $dateFrom ? Carbon::parse($dateFrom)->startOfDay() : null;
+        $dateToCarbon = $dateTo ? Carbon::parse($dateTo)->endOfDay() : null;
+
+        $parsed = $this->parserService->parseUploadedFile($file, $hasHeader, $dateFromCarbon, $dateToCarbon);
         $rows = $parsed['rows'] ?? [];
 
         if (count($rows) === 0) {
@@ -39,8 +45,12 @@ class PaymentImportService
         }
 
         if (count($rows) > self::MAX_ROWS_PER_IMPORT) {
-            throw new InvalidArgumentException('Import preview supports up to 5000 rows per file.');
+            throw new InvalidArgumentException('Import preview supports up to ' . self::MAX_ROWS_PER_IMPORT . ' rows per file.');
         }
+
+        $extension = strtolower((string) ($file->getClientOriginalExtension() ?: $file->extension()));
+        $isMpesaXml = $extension === 'xml';
+        $parseMeta = $parsed['meta'] ?? null;
 
         $currency = $this->parseCurrency($defaultCurrency, $platform->currency_code ?: 'KES');
         $batch = PaymentImportBatch::query()->create([
@@ -54,6 +64,8 @@ class PaymentImportService
                 'has_header' => $hasHeader,
                 'columns' => $parsed['headers'] ?? [],
                 'default_currency' => $currency,
+                'source_type' => $isMpesaXml ? 'mpesa_xml' : 'spreadsheet',
+                ...($parseMeta ? ['parse_meta' => $parseMeta] : []),
             ],
         ]);
 
@@ -193,7 +205,7 @@ class PaymentImportService
                 'suggested_match' => $suggestedMatch,
             ]);
 
-            $responseRows[] = [
+            $rowData = [
                 'id' => $rowModel->id,
                 'row_number' => $rowModel->row_number,
                 'status' => $rowModel->status,
@@ -203,6 +215,17 @@ class PaymentImportService
                 'duplicate_payment_id' => $rowModel->duplicate_payment_id,
                 'suggested_match' => $rowModel->suggested_match,
             ];
+
+            if ($isMpesaXml && $rowModel->status === 'valid') {
+                $rowAmount = isset($rowModel->normalized_row['amount'])
+                    ? (float) $rowModel->normalized_row['amount']
+                    : 0;
+                $rowData['product_estimates'] = $rowAmount > 0
+                    ? $this->matchingService->estimateProductByAmount($rowAmount, (int) $platform->id, $currency)
+                    : [];
+            }
+
+            $responseRows[] = $rowData;
         }
 
         $batch->update([
@@ -216,15 +239,17 @@ class PaymentImportService
         return [
             'batch_id' => $batch->id,
             'status' => $batch->status,
+            'source_type' => $isMpesaXml ? 'mpesa_xml' : 'spreadsheet',
             'summary' => $totals,
             'headers' => $parsed['headers'] ?? [],
             'rows' => $responseRows,
+            ...($parseMeta ? ['parse_meta' => $parseMeta] : []),
         ];
     }
 
     public function commitImport(PaymentImportBatch $batch, int $actorId, ?string $reason = null): array
     {
-        return DB::transaction(function () use ($batch, $actorId, $reason) {
+        return DB::transaction(function () use ($batch, $actorId, $reason): array {
             /** @var PaymentImportBatch $lockedBatch */
             $lockedBatch = PaymentImportBatch::query()
                 ->whereKey($batch->id)
@@ -302,8 +327,13 @@ class PaymentImportService
                 $status = $this->parseStatus($normalized['status'] ?? null);
                 $paidAt = $this->parseDate($normalized['paid_at'] ?? null);
 
+                $batchMeta = is_array($lockedBatch->metadata) ? $lockedBatch->metadata : [];
+                $sourceType = ($batchMeta['source_type'] ?? '') === 'mpesa_xml'
+                    ? 'mpesa_xml_import'
+                    : 'excel_import';
+
                 $rawPayload = [
-                    'source' => 'excel_import',
+                    'source' => $sourceType,
                     'import' => [
                         'batch_id' => $lockedBatch->id,
                         'row_id' => $row->id,
@@ -323,7 +353,7 @@ class PaymentImportService
                     'currency' => $currency,
                     'transaction_reference' => $reference !== '' ? $reference : null,
                     'status' => $status,
-                    'source' => 'excel_import',
+                    'source' => $sourceType,
                     'import_batch_id' => $lockedBatch->id,
                     'import_legacy_hash' => $legacyHash !== '' ? $legacyHash : null,
                     'reconciliation_confidence' => $this->confidenceService->fromImportSuggestion(
@@ -336,6 +366,14 @@ class PaymentImportService
                 $payload['reconciliation_state'] = $payload['reconciliation_confidence'] === 'low'
                     ? 'manual_review'
                     : 'open';
+
+                $suggestedMatch = is_array($row->suggested_match) ? $row->suggested_match : null;
+                if ($suggestedMatch && !empty($suggestedMatch['client_id'])) {
+                    $payload['client_id'] = (int) $suggestedMatch['client_id'];
+                    $payload['match_confidence'] = $suggestedMatch['confidence'] ?? 'manual';
+                    $payload['confirmed_by'] = $actorId;
+                    $payload['confirmed_at'] = now();
+                }
 
                 if (!empty($normalized['product_id']) && is_numeric($normalized['product_id'])) {
                     $payload['product_id'] = (int) $normalized['product_id'];
@@ -454,6 +492,8 @@ class PaymentImportService
             $errors[] = 'Phone number could not be normalized for this market.';
         }
 
+        $rawSenderName = $this->firstNonEmpty($row, ['sender_name']);
+
         $normalizedRow = [
             'phone' => $phone,
             'amount' => $amount,
@@ -463,6 +503,7 @@ class PaymentImportService
             'paid_at' => $paidAt?->toDateTimeString(),
             'profile_url' => $profileUrl !== '' ? $profileUrl : null,
             'subscription_type' => $subscriptionType !== '' ? $subscriptionType : null,
+            'sender_name' => $rawSenderName,
         ];
 
         if ($rawProductId !== null && trim((string) $rawProductId) !== '' && is_numeric($rawProductId)) {

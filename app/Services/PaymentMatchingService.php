@@ -6,6 +6,7 @@ use App\Models\Payment;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Product;
+use App\Models\ProductPrice;
 use App\Support\PhoneNormalizer;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -400,6 +401,107 @@ class PaymentMatchingService
         $payment->update(['deal_id' => $deal->id]);
 
         return $deal;
+    }
+
+    /**
+     * Estimate product candidates by amount with closest-match and multi-candidate support.
+     * Returns all matches within 30% tolerance, sorted by distance.
+     */
+    public function estimateProductByAmount(
+        float $amount,
+        ?int $platformId = null,
+        ?string $currency = null
+    ): array {
+        $products = Product::query()
+            ->where('is_active', true)
+            ->when($platformId, fn(Builder $q) => $q->where('platform_id', $platformId))
+            ->when(
+                !empty($currency),
+                fn(Builder $q) => $q->whereRaw('UPPER(currency) = ?', [strtoupper((string) $currency)])
+            )
+            ->get();
+
+        if ($products->isEmpty()) {
+            return [];
+        }
+
+        $productIds = $products->pluck('id')->all();
+        $dynamicPrices = ProductPrice::query()
+            ->whereIn('product_id', $productIds)
+            ->where('is_active', true)
+            ->where('price', '>', 0)
+            ->get();
+
+        $candidates = [];
+        $durationMap = [
+            'weekly_price' => ['key' => 'weekly', 'days' => 7],
+            'biweekly_price' => ['key' => 'biweekly', 'days' => 14],
+            'monthly_price' => ['key' => 'monthly', 'days' => 30],
+        ];
+
+        foreach ($products as $product) {
+            foreach ($durationMap as $column => $info) {
+                $price = (float) $product->$column;
+                if ($price <= 0) {
+                    continue;
+                }
+
+                $distance = abs($amount - $price);
+                $candidates[] = [
+                    'product_id' => $product->id,
+                    'product_name' => $product->name,
+                    'price' => $price,
+                    'duration_key' => $info['key'],
+                    'duration_days' => $info['days'],
+                    'distance' => $distance,
+                    'exact_match' => $distance < 0.01,
+                    'confidence' => $distance < 0.01
+                        ? 'exact'
+                        : ($distance <= $amount * 0.10 ? 'high' : 'low'),
+                    'plan_type' => $this->resolvePlanTypeFromProduct($product),
+                ];
+            }
+
+            foreach ($dynamicPrices->where('product_id', $product->id) as $dp) {
+                $price = (float) $dp->price;
+                $distance = abs($amount - $price);
+                $candidates[] = [
+                    'product_id' => $product->id,
+                    'product_name' => $product->name,
+                    'price' => $price,
+                    'duration_key' => $dp->duration_key,
+                    'duration_days' => (int) $dp->duration_days,
+                    'distance' => $distance,
+                    'exact_match' => $distance < 0.01,
+                    'confidence' => $distance < 0.01
+                        ? 'exact'
+                        : ($distance <= $amount * 0.10 ? 'high' : 'low'),
+                    'plan_type' => $this->resolvePlanTypeFromProduct($product),
+                ];
+            }
+        }
+
+        if (empty($candidates)) {
+            return [];
+        }
+
+        usort($candidates, fn($a, $b) => $a['distance'] <=> $b['distance']);
+
+        $maxDistance = $amount * 0.30;
+        $filtered = array_filter($candidates, fn($c) => $c['distance'] <= $maxDistance);
+
+        $seen = [];
+        $deduped = [];
+        foreach ($filtered as $c) {
+            $key = $c['product_id'] . ':' . number_format($c['price'], 2, '.', '');
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $deduped[] = $c;
+        }
+
+        return array_values($deduped);
     }
 
     private function resolvePlanTypeFromProduct(?Product $product): string

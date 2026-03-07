@@ -50,7 +50,8 @@ class RenewalService
                 'deals.plan_type as deal_plan_type',
                 'deals.duration as deal_duration',
                 'deals.amount as deal_amount',
-                'deals.currency as deal_currency'
+                'deals.currency as deal_currency',
+                'deals.origin as deal_origin'
             )
             ->where(function ($q) use ($includeUntracked) {
                 $q->whereNotNull('deals.id')
@@ -157,7 +158,9 @@ class RenewalService
 
                 $originType = $isUntracked
                     ? 'untracked'
-                    : ($client->deal_id ? 'modern' : 'legacy');
+                    : ($client->deal_id
+                        ? ($client->deal_origin === 'mpesa_import' ? 'mpesa_import' : 'modern')
+                        : 'legacy');
                 $paymentStatus = $client->deal_id && $paidDealIds->has((int) $client->deal_id) ? 'verified' : 'unlinked';
                 $telemetryKey = $client->deal_id ? 'deal_' . $client->deal_id : 'client_' . $client->id;
                 $telemetry = $telemetryByKey->get($telemetryKey, [
@@ -1260,6 +1263,11 @@ class RenewalService
                             ->whereNull('clients.featured_expire');
                     });
             });
+            return;
+        }
+
+        if ($bucket === 'mpesa_history') {
+            $query->where('deals.origin', 'mpesa_import');
         }
     }
 

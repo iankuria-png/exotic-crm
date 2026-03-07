@@ -14,13 +14,15 @@ use App\Models\ClientNote;
 use App\Models\RenewalCampaign;
 use App\Models\TimelineEvent;
 use App\Services\MarketAuthorizationService;
+use App\Services\RenewalService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 
 class DashboardController extends Controller
 {
     public function __construct(
-        private readonly MarketAuthorizationService $marketAuthorizationService
+        private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly RenewalService $renewalService
     ) {
     }
 
@@ -65,19 +67,7 @@ class DashboardController extends Controller
                 && $requestedToDate === $defaultTo->toDateString()
             );
 
-        $expiringDealsQuery = Deal::expiringSoon(7)
-            ->with(['client', 'product'])
-            ->orderBy('expires_at');
-        if (is_array($platformIds)) {
-            $expiringDealsQuery->whereIn('platform_id', $platformIds);
-        }
-        if ($search !== '') {
-            $expiringDealsQuery->whereHas('client', function ($query) use ($search) {
-                $query->where('name', 'like', "%{$search}%")
-                    ->orWhere('phone_normalized', 'like', "%{$search}%");
-            });
-        }
-        $expiringDeals = $expiringDealsQuery->limit(10)->get();
+        $expiringDeals = $this->buildExpiringSubscriptionsWidget($platformIds, $search);
 
         $paymentReviewQueueQuery = Payment::where('status', 'completed')
             ->whereNull('client_id')
@@ -184,7 +174,9 @@ class DashboardController extends Controller
 
         $activeCampaignsQuery = RenewalCampaign::enabled();
         if (is_array($platformIds)) {
-            $activeCampaignsQuery->whereIn('platform_id', $platformIds);
+            $activeCampaignsQuery->whereHas('product', function ($query) use ($platformIds) {
+                $query->whereIn('platform_id', $platformIds);
+            });
         }
         $activeCampaignsCount = $activeCampaignsQuery->count();
 
@@ -344,6 +336,81 @@ class DashboardController extends Controller
         usort($result, fn($a, $b) => $b['current_revenue'] <=> $a['current_revenue']);
 
         return $result;
+    }
+
+    /**
+     * Build the expiring subscriptions list for the dashboard widget.
+     * Uses the same COALESCE expiry logic as the Subscriptions page to include
+     * both modern CRM deals and legacy WP-based subscriptions.
+     */
+    private function buildExpiringSubscriptionsWidget(?array $platformIds, string $search = ''): array
+    {
+        $nowTs = now()->timestamp;
+        $expiryExpr = 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire, clients.premium_expire, clients.featured_expire)';
+
+        $query = Client::query()
+            ->leftJoin('deals', function ($join) {
+                $join->on('clients.id', '=', 'deals.client_id')
+                    ->whereRaw('deals.id = (SELECT id FROM deals d2 WHERE d2.client_id = clients.id ORDER BY d2.created_at DESC LIMIT 1)');
+            })
+            ->leftJoin('products as deal_products', 'deal_products.id', '=', 'deals.product_id')
+            ->select(
+                'clients.id as client_id',
+                'clients.name as client_name',
+                'clients.platform_id',
+                'deals.id as deal_id',
+                'deals.plan_type',
+                'deal_products.name as product_name',
+                \Illuminate\Support\Facades\DB::raw("{$expiryExpr} as expiry_ts")
+            )
+            ->where(function ($q) use ($expiryExpr, $nowTs) {
+                $q->where('deals.status', 'active')
+                    ->orWhere(function ($legacy) use ($expiryExpr, $nowTs) {
+                        $legacy->whereNull('deals.id')
+                            ->whereRaw("{$expiryExpr} >= ?", [$nowTs]);
+                    });
+            })
+            ->whereBetween(\Illuminate\Support\Facades\DB::raw($expiryExpr), [$nowTs, $nowTs + (14 * 86400)])
+            ->orderByRaw("{$expiryExpr} ASC");
+
+        if (is_array($platformIds)) {
+            $query->whereIn('clients.platform_id', $platformIds);
+        }
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('clients.name', 'like', "%{$search}%")
+                    ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
+            });
+        }
+
+        return $query->limit(10)->get()->map(function ($row) {
+            $expiresAt = $row->expiry_ts ? Carbon::createFromTimestamp((int) $row->expiry_ts) : null;
+            $planType = $row->plan_type;
+
+            if (!$row->deal_id) {
+                if ($row->getAttribute('featured') || $row->getAttribute('featured_expire')) {
+                    $planType = 'vip';
+                } elseif ($row->getAttribute('premium') || $row->getAttribute('premium_expire')) {
+                    $planType = 'premium';
+                } else {
+                    $planType = 'basic';
+                }
+            }
+
+            return [
+                'id' => $row->deal_id ?: ('virtual_' . $row->client_id),
+                'client_id' => $row->client_id,
+                'client' => [
+                    'id' => $row->client_id,
+                    'name' => $row->client_name,
+                ],
+                'product' => $row->product_name ? ['name' => $row->product_name] : null,
+                'plan_type' => $planType,
+                'expires_at' => $expiresAt ? $expiresAt->toDateTimeString() : null,
+                'is_virtual' => !$row->deal_id,
+            ];
+        })->all();
     }
 
     private function resolveOldestDashboardRecordAt(?array $platformIds): ?Carbon
