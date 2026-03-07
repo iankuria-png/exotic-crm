@@ -92,6 +92,22 @@ class WpSyncService
     }
 
     /**
+     * Push wallet balance state to WordPress for one client.
+     */
+    public function pushWalletBalance(int $postId, array $payload): array
+    {
+        return $this->post("/clients/{$postId}/wallet-balance", $payload);
+    }
+
+    /**
+     * Push wallet config state to WordPress for one platform/site.
+     */
+    public function pushWalletConfig(int $postId, array $payload): array
+    {
+        return $this->post("/clients/{$postId}/wallet-config", $payload);
+    }
+
+    /**
      * Deactivate a client profile
      */
     public function deactivateClient(int $postId): array

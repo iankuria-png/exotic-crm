@@ -162,6 +162,8 @@ class BillingGatewayService
         }
 
         if ($payment->wallet_transaction_id) {
+            app(WalletSyncService::class)->syncClientBalance($payment->client);
+
             return [
                 'payment' => $payment->fresh(['platform', 'client']),
                 'credited' => false,

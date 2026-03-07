@@ -7,6 +7,7 @@ use App\Models\Client;
 use App\Models\Product;
 use App\Models\Platform;
 use App\Services\WalletCheckoutService;
+use App\Services\WalletPayloadService;
 use App\Services\WalletService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -17,7 +18,8 @@ class WalletController extends Controller
 {
     public function __construct(
         private readonly WalletService $walletService,
-        private readonly WalletCheckoutService $walletCheckoutService
+        private readonly WalletCheckoutService $walletCheckoutService,
+        private readonly WalletPayloadService $walletPayloadService
     ) {
     }
 
@@ -40,7 +42,7 @@ class WalletController extends Controller
             'wallet_last_synced_at' => $summary['wallet_last_synced_at'],
             'last_topup' => $summary['last_topup'],
             'transactions' => $summary['transactions'],
-            'config' => $this->walletConfigPayload($platform, $context),
+            'config' => $this->walletPayloadService->config($platform, $context),
         ]);
     }
 
@@ -152,46 +154,5 @@ class WalletController extends Controller
         $client = $query->latest('id')->firstOrFail();
 
         return [$client, $platform, $context];
-    }
-
-    private function walletConfigPayload(Platform $platform, array $context): array
-    {
-        $wallet = $context['wallet'];
-        $system = $context['system'];
-
-        $providers = collect($wallet['providers'] ?? [])
-            ->filter(fn (array $provider) => (bool) ($provider['enabled'] ?? false))
-            ->map(function (array $provider, string $providerKey) use ($wallet, $context) {
-                $payload = [
-                    'enabled' => true,
-                    'min_amount' => $provider['min_amount'] ?? null,
-                    'max_amount' => $provider['max_amount'] ?? null,
-                ];
-
-                if ($providerKey === 'mpesa_stk') {
-                    $payload['transport'] = data_get($wallet, "credentials.mpesa_stk.{$context['environment']}.transport");
-                }
-
-                return $payload;
-            })
-            ->all();
-
-        return [
-            'market' => [
-                'platform_id' => (int) $platform->id,
-                'currency' => $wallet['currency_code'] ?? $platform->currency_code,
-            ],
-            'topup_presets' => $wallet['topup_presets'] ?? [],
-            'providers' => $providers,
-            'show_refresh_button' => (bool) ($wallet['show_refresh_button'] ?? false),
-            'allow_combined_topup_subscribe' => (bool) ($wallet['allow_combined_topup_subscribe'] ?? false),
-            'recent_transactions_limit' => (int) ($wallet['recent_transactions_limit'] ?? 10),
-            'wallet_refresh_rate_limit_seconds' => (int) ($system['wallet_refresh_rate_limit_seconds'] ?? 15),
-            'wallet_refresh_timeout_seconds' => (int) ($system['wallet_refresh_timeout_seconds'] ?? 15),
-            'topup_poll_interval_seconds' => (int) ($system['topup_poll_interval_seconds'] ?? 10),
-            'sandbox_badge' => ($context['mode'] ?? 'disabled') === 'sandbox',
-            'business_name' => data_get($system, 'billing_branding.' . $context['environment'] . '.business_name'),
-            'description' => data_get($system, 'billing_branding.' . $context['environment'] . '.description'),
-        ];
     }
 }

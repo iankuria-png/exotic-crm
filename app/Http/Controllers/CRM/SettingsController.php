@@ -18,6 +18,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ScraperSourceService;
+use App\Services\WalletSyncService;
 use App\Services\WalletSettingsService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
@@ -38,7 +39,8 @@ class SettingsController extends Controller
         private readonly NotificationService $notificationService,
         private readonly PushProviderService $pushProviderService,
         private readonly ScraperSourceService $scraperSourceService,
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly WalletSyncService $walletSyncService
     ) {
     }
 
@@ -523,6 +525,7 @@ class SettingsController extends Controller
 
         $before = $this->walletSettingsService->currentSystemConfig(masked: true);
         $saved = $this->walletSettingsService->saveSystemConfig($validated, (int) $request->user()->id);
+        $syncResults = $this->walletSyncService->syncAllPlatformConfigs();
 
         $this->auditService->fromRequest(
             $request,
@@ -537,6 +540,7 @@ class SettingsController extends Controller
 
         return response()->json([
             'system' => $saved,
+            'wallet_config_sync' => $syncResults,
         ]);
     }
 
@@ -580,6 +584,7 @@ class SettingsController extends Controller
         $beforeState = $this->platformAuditState($platform);
         $platformWallet = $this->walletSettingsService->savePlatformConfig($platform, $validated);
         $platform->refresh();
+        $syncResult = $this->walletSyncService->syncPlatformConfig($platform);
 
         $this->auditService->fromRequest(
             $request,
@@ -595,6 +600,7 @@ class SettingsController extends Controller
         return response()->json([
             'platform' => $this->serializePlatformIntegration($platform),
             'wallet' => $platformWallet,
+            'wallet_config_sync' => $syncResult,
         ]);
     }
 
@@ -638,6 +644,7 @@ class SettingsController extends Controller
 
         $beforeState = $this->platformAuditState($platform);
         $platformWallet = $this->walletSettingsService->savePlatformProviderCredentials($platform, $validated, (int) $request->user()->id);
+        $syncResult = $this->walletSyncService->syncPlatformConfig($platform);
 
         $this->auditService->fromRequest(
             $request,
@@ -653,6 +660,7 @@ class SettingsController extends Controller
         return response()->json([
             'platform' => $this->serializePlatformIntegration($platform->fresh()),
             'wallet' => $platformWallet,
+            'wallet_config_sync' => $syncResult,
         ]);
     }
 

@@ -101,6 +101,10 @@ class WalletService
                     ->first();
 
                 if ($existing) {
+                    DB::afterCommit(function () use ($client) {
+                        app(WalletSyncService::class)->syncClientBalanceById((int) $client->id);
+                    });
+
                     return [
                         'client' => $client->fresh(['platform']),
                         'transaction' => $existing->fresh(),
@@ -160,6 +164,10 @@ class WalletService
                     'wallet_transaction_id' => (int) $transaction->id,
                 ])->save();
             }
+
+            DB::afterCommit(function () use ($lockedClient) {
+                app(WalletSyncService::class)->syncClientBalanceById((int) $lockedClient->id);
+            });
 
             return [
                 'client' => $lockedClient->fresh(['platform']),

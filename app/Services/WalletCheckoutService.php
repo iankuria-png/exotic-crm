@@ -177,6 +177,8 @@ class WalletCheckoutService
 
         $payment = $result['payment'];
         if ($result['replayed'] && $payment) {
+            app(WalletSyncService::class)->syncClientBalance($client);
+
             return $this->hydrateResult($result);
         }
 
