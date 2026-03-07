@@ -12,6 +12,15 @@ class KopokopoService
 
     public function __construct()
     {
+        $this->k2 = null;
+    }
+
+    protected function client()
+    {
+        if ($this->k2 !== null) {
+            return $this->k2;
+        }
+
         $options = [
             'clientId' => config('services.kopokopo.client_id'),
             'clientSecret' => config('services.kopokopo.client_secret'),
@@ -19,13 +28,22 @@ class KopokopoService
             'baseUrl' => config('services.kopokopo.base_url'),
         ];
 
+        $requiredKeys = ['clientId', 'clientSecret', 'apiKey', 'baseUrl'];
+        foreach ($requiredKeys as $key) {
+            if (empty($options[$key])) {
+                throw new \InvalidArgumentException("KopoKopo configuration is incomplete: missing {$key}.");
+            }
+        }
+
         $this->k2 = new K2($options);
+
+        return $this->k2;
     }
 
     public function getAccessToken()
     {
         try {
-            $tokenService = $this->k2->TokenService();
+            $tokenService = $this->client()->TokenService();
             $result = $tokenService->getToken();
 
             if ($result['status'] === 'success') {
@@ -52,7 +70,7 @@ class KopokopoService
         }
 
         try {
-            $stkService = $this->k2->StkService();
+            $stkService = $this->client()->StkService();
             
             $response = $stkService->initiateIncomingPayment([
                 'paymentChannel' => 'M-PESA STK Push',
@@ -97,7 +115,7 @@ class KopokopoService
     public function handleWebhook($payload, $signature)
     {
         try {
-            $webhooks = $this->k2->Webhooks();
+            $webhooks = $this->client()->Webhooks();
             return $webhooks->webhookHandler($payload, $signature);
         } catch (\Exception $e) {
             Log::error('Webhook handling error: ' . $e->getMessage());

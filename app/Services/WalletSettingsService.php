@@ -67,6 +67,18 @@ class WalletSettingsService
         return $config;
     }
 
+    public function runtimePlatformConfig(Platform $platform): array
+    {
+        $settings = $this->resolvePlatformSettings($platform);
+        $credentials = $this->resolvePlatformCredentials($platform);
+        $system = $this->resolveSystemConfig();
+
+        return array_merge($settings, [
+            'effective_mode' => $this->effectiveMode($system['mode'], $settings),
+            'credentials' => $this->runtimePlatformCredentials($credentials),
+        ]);
+    }
+
     public function savePlatformConfig(Platform $platform, array $payload): array
     {
         $current = $this->resolvePlatformSettings($platform);
@@ -263,6 +275,23 @@ class WalletSettingsService
             'mailer' => 'wallet_smtp',
             'message' => 'Wallet test email sent.',
         ];
+    }
+
+    public function verifyWpToCrmBearer(Platform $platform, string $environment, string $plainBearer): bool
+    {
+        $environment = $this->normalizeEnvironment($environment);
+        $credentials = $this->resolvePlatformCredentials($platform);
+        $hash = (string) data_get($credentials, "wp_to_crm.{$environment}.bearer_key_hash", '');
+
+        return $hash !== '' && Hash::check($plainBearer, $hash);
+    }
+
+    public function wpToCrmHmacSecret(Platform $platform, string $environment): string
+    {
+        $environment = $this->normalizeEnvironment($environment);
+        $credentials = $this->resolvePlatformCredentials($platform);
+
+        return $this->decryptOrEmpty((string) data_get($credentials, "wp_to_crm.{$environment}.hmac_secret_encrypted", ''));
     }
 
     private function resolveSystemConfig(): array
@@ -733,6 +762,40 @@ class WalletSettingsService
         return $masked;
     }
 
+    private function runtimePlatformCredentials(array $credentials): array
+    {
+        $runtime = $credentials;
+
+        foreach (self::ENVIRONMENTS as $environment) {
+            $runtime['wp_to_crm'][$environment] = [
+                'bearer_key_hash' => (string) ($credentials['wp_to_crm'][$environment]['bearer_key_hash'] ?? ''),
+                'bearer_last_rotated_at' => $credentials['wp_to_crm'][$environment]['bearer_last_rotated_at'] ?? null,
+                'hmac_secret' => $this->decryptOrEmpty((string) ($credentials['wp_to_crm'][$environment]['hmac_secret_encrypted'] ?? '')),
+                'hmac_last_rotated_at' => $credentials['wp_to_crm'][$environment]['hmac_last_rotated_at'] ?? null,
+            ];
+
+            $runtime['pesapal'][$environment] = [
+                'consumer_key' => $this->decryptOrEmpty((string) ($credentials['pesapal'][$environment]['consumer_key_encrypted'] ?? '')),
+                'consumer_secret' => $this->decryptOrEmpty((string) ($credentials['pesapal'][$environment]['consumer_secret_encrypted'] ?? '')),
+                'ipn_id' => (string) ($credentials['pesapal'][$environment]['ipn_id'] ?? ''),
+            ];
+
+            $runtime['paystack'][$environment] = [
+                'public_key' => $this->decryptOrEmpty((string) ($credentials['paystack'][$environment]['public_key_encrypted'] ?? '')),
+                'secret_key' => $this->decryptOrEmpty((string) ($credentials['paystack'][$environment]['secret_key_encrypted'] ?? '')),
+            ];
+
+            $runtime['mpesa_stk'][$environment] = [
+                'transport' => (string) ($credentials['mpesa_stk'][$environment]['transport'] ?? 'django_proxy'),
+                'payment_service_base_url' => (string) ($credentials['mpesa_stk'][$environment]['payment_service_base_url'] ?? ''),
+                'organization_code' => (string) ($credentials['mpesa_stk'][$environment]['organization_code'] ?? ''),
+                'callback_base_url' => (string) ($credentials['mpesa_stk'][$environment]['callback_base_url'] ?? ''),
+            ];
+        }
+
+        return $runtime;
+    }
+
     private function effectiveMode(string $systemMode, array $platformConfig): string
     {
         if ($systemMode === 'disabled') {
@@ -811,8 +874,32 @@ class WalletSettingsService
         $paymentServiceBaseUrl = trim((string) ($config['payment_service_base_url'] ?? ''));
         $callbackBaseUrl = trim((string) ($config['callback_base_url'] ?? ''));
 
+        if ($transport === 'direct_provider') {
+            $kopokopoBaseUrl = trim((string) config('services.kopokopo.base_url', ''));
+            $configured = $kopokopoBaseUrl !== ''
+                && trim((string) config('services.kopokopo.client_id', '')) !== ''
+                && trim((string) config('services.kopokopo.client_secret', '')) !== ''
+                && trim((string) config('services.kopokopo.api_key', '')) !== '';
+
+            return [
+                'provider' => 'mpesa_stk',
+                'environment' => $environment,
+                'transport' => $transport,
+                'ok' => $configured,
+                'status' => $configured ? 'success' : 'failed',
+                'http_status' => $configured ? 200 : 422,
+                'message' => $configured
+                    ? 'Direct KopoKopo M-Pesa configuration is present.'
+                    : 'Direct KopoKopo M-Pesa configuration is incomplete.',
+                'provider_response' => [
+                    'base_url' => $kopokopoBaseUrl,
+                    'till_number' => (string) config('services.kopokopo.till_number', ''),
+                ],
+            ];
+        }
+
         if ($transport !== 'django_proxy') {
-            throw new InvalidArgumentException('Only django_proxy transport is supported in the current wallet MVP.');
+            throw new InvalidArgumentException('Unsupported M-Pesa STK transport.');
         }
 
         if ($paymentServiceBaseUrl === '') {

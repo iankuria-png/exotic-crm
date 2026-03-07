@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\API\PaymentController;
+use App\Http\Controllers\API\BillingController;
 
 
 /*
@@ -23,6 +24,7 @@ Route::get('/success/{id}', [PaymentController::class, 'paymentSuccess'])->name(
 Route::get('/failed/{id}', [PaymentController::class, 'paymentFailed'])->name('payment.failed');
 Route::get('/canceled', [PaymentController::class, 'paymentCanceled'])->name('payment.canceled');
 Route::get('error', [PaymentController::class, 'paymentError'])->name('payment.error');
+Route::get('/billing/complete', [BillingController::class, 'complete'])->name('billing.complete');
 
 Route::get('/api/payment-status/{transaction_uuid}', [PaymentController::class, 'checkPaymentStatus']);
 
@@ -51,6 +53,5 @@ Route::get('/google-auth-success', [GoogleAuthController::class, 'googleAuthSucc
 // CRM SPA — serve React for all frontend routes after explicit web endpoints.
 Route::get('/{any?}', function () {
     return view('crm');
-})->where('any', '^(?!api|response|cancel|success|failed|error|auth|debug).*$');
-
+})->where('any', '^(?!api|response|cancel|success|failed|error|auth|debug|billing).*$');
 
