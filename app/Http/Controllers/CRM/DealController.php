@@ -1184,7 +1184,7 @@ class DealController extends Controller
     {
         $query = Payment::query()
             ->where('platform_id', $deal->platform_id)
-            ->whereIn('status', ['completed', 'success']);
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
 
         if ($paymentId) {
             $payment = $query->where('id', (int) $paymentId)->first();

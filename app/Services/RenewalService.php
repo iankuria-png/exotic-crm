@@ -104,7 +104,7 @@ class RenewalService
 
         $paidDealIds = Payment::query()
             ->whereIn('deal_id', $dealIds)
-            ->whereIn('status', ['completed', 'success'])
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->pluck('deal_id')
             ->map(fn($id) => (int) $id)
             ->flip();

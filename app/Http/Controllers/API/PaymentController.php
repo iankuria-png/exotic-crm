@@ -125,6 +125,28 @@ class PaymentController extends Controller
         }
     }
 
+    public function initiatePayment(Request $request)
+    {
+        if (!$request->filled('platform_id')) {
+            $platformId = $this->inferPlatformIdForLegacyPaymentRequest($request->input('product_id'));
+            if ($platformId) {
+                $request->merge(['platform_id' => $platformId]);
+            }
+        }
+
+        $phone = preg_replace('/\D/', '', (string) $request->input('phone'));
+        if (strlen($phone) === 9 && str_starts_with($phone, '7')) {
+            $request->merge(['phone' => '254' . $phone]);
+        }
+
+        return $this->manualStkPush($request);
+    }
+
+    public function callback(Request $request)
+    {
+        return $this->updatePaymentStatus($request);
+    }
+
 
     
    #callback
@@ -149,8 +171,9 @@ class PaymentController extends Controller
             $resource = $request->input('resource', []);
             $metadata = $request->input('metadata', []);
             $rawData  = $request->input('rawData', []);
+            $incomingStatus = $this->normalizePaymentStatus($request->input('status'));
     
-            if (($resource['status'] ?? null) === "Success" || $request->status === "completed") {
+            if (($resource['status'] ?? null) === "Success" || $incomingStatus === "completed") {
                 $payment->status = 'completed';
                 $payment->transaction_reference = $request->transaction_reference ?? ($resource['reference'] ?? null);
                 $payment->save();
@@ -159,7 +182,7 @@ class PaymentController extends Controller
                 $this->handleSuccessfulPayment($payment, $resource, $metadata, $rawData);
                 $this->recordCallbackAttempt($request, $payment, 'success', $resource, $rawData);
     
-            } elseif (($resource['status'] ?? null) === "Reversed" || $request->status === "reversed") {
+            } elseif (($resource['status'] ?? null) === "Reversed" || $incomingStatus === "reversed") {
                 $payment->status = 'reversed';
                 $payment->transaction_reference = $request->transaction_reference ?? ($resource['reference'] ?? null);
                 $payment->save();
@@ -187,7 +210,7 @@ class PaymentController extends Controller
                     'failed',
                     $resource,
                     $rawData,
-                    (string) ($resource['status'] ?? $request->status ?? 'Payment failed'),
+                    (string) ($resource['status'] ?? $incomingStatus ?? 'Payment failed'),
                     'callback_failed'
                 );
             }
@@ -744,7 +767,162 @@ class PaymentController extends Controller
     /**
      * Check payment status
      */
- 
+    public function checkStatus(Request $request)
+    {
+        $validated = $request->validate([
+            'payment_id' => 'nullable|integer',
+            'transaction_uuid' => 'nullable|string',
+            'reference_number' => 'nullable|string',
+        ]);
+
+        $payment = $this->resolvePaymentForStatusLookup(
+            $validated['payment_id'] ?? null,
+            $validated['transaction_uuid'] ?? null,
+            $validated['reference_number'] ?? null
+        );
+
+        if (!$payment) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Payment not found',
+            ], 404);
+        }
+
+        return response()->json($this->statusResponseForPayment($payment));
+    }
+
+    public function checkPaymentStatus(string $transactionUuid)
+    {
+        $payment = $this->resolvePaymentForStatusLookup(
+            ctype_digit($transactionUuid) ? (int) $transactionUuid : null,
+            $transactionUuid,
+            null
+        );
+
+        if (!$payment) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Payment not found',
+            ], 404);
+        }
+
+        return response()->json($this->statusResponseForPayment($payment));
+    }
+
+    public function debugKopokopo()
+    {
+        return response()->json([
+            'status' => true,
+            'config' => [
+                'base_url' => config('kopokopo.base_url'),
+                'till_number' => config('kopokopo.till_number'),
+                'callback_url' => url('/api/payment-callback'),
+                'webhook_test_url' => url('/api/test-webhook'),
+                'is_production' => config('kopokopo.base_url') === 'https://api.kopokopo.com',
+            ],
+        ]);
+    }
+
+    public function clearPendingPayments(Request $request)
+    {
+        if (!config('app.debug')) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Debug mode required',
+            ], 403);
+        }
+
+        $minutes = max(1, min(1440, (int) $request->input('minutes', 10)));
+        $expiredBefore = now()->subMinutes($minutes);
+        $payments = Payment::query()
+            ->where('status', 'pending')
+            ->where('created_at', '<', $expiredBefore)
+            ->get();
+
+        foreach ($payments as $payment) {
+            $payment->update([
+                'status' => 'failed',
+                'failure_reason' => 'Pending payment timed out',
+            ]);
+        }
+
+        return response()->json([
+            'status' => true,
+            'cleared_count' => $payments->count(),
+            'timeout_minutes' => $minutes,
+        ]);
+    }
+
+    private function statusResponseForPayment(Payment $payment): array
+    {
+        $payment->loadMissing(['platform:id,name', 'product:id,name']);
+        $status = $this->normalizePaymentStatus($payment->status) ?? $payment->status;
+
+        return [
+            'status' => true,
+            'payment_status' => $status,
+            'payment_id' => $payment->id,
+            'data' => [
+                'id' => $payment->id,
+                'status' => $status,
+                'transaction_uuid' => $payment->transaction_uuid,
+                'transaction_reference' => $payment->transaction_reference,
+                'reference_number' => $payment->reference_number,
+                'amount' => $payment->amount,
+                'currency' => $payment->currency,
+                'duration' => $payment->duration,
+                'platform_name' => $payment->platform->name ?? null,
+                'product_name' => $payment->product->name ?? null,
+                'completed_at' => optional($payment->completed_at)->toDateTimeString(),
+                'updated_at' => optional($payment->updated_at)->toDateTimeString(),
+            ],
+        ];
+    }
+
+    private function resolvePaymentForStatusLookup(?int $paymentId, ?string $transactionUuid, ?string $referenceNumber): ?Payment
+    {
+        $query = Payment::query()->with(['platform:id,name', 'product:id,name']);
+
+        if ($paymentId) {
+            return $query->find($paymentId);
+        }
+
+        if (!empty($transactionUuid)) {
+            $payment = $query->where('transaction_uuid', $transactionUuid)->first();
+            if ($payment) {
+                return $payment;
+            }
+        }
+
+        if (!empty($referenceNumber)) {
+            return $query->where('reference_number', $referenceNumber)->first();
+        }
+
+        return null;
+    }
+
+    private function normalizePaymentStatus(?string $status): ?string
+    {
+        $normalized = strtolower(trim((string) $status));
+
+        return match ($normalized) {
+            '', null => null,
+            'success' => 'completed',
+            'cancelled' => 'canceled',
+            default => $normalized,
+        };
+    }
+
+    private function inferPlatformIdForLegacyPaymentRequest($productId): ?int
+    {
+        if (!$productId) {
+            return null;
+        }
+
+        return Product::query()
+            ->whereKey($productId)
+            ->value('platform_id');
+    }
 
     private function generateSuccessMessage($payment, $transactionId)
     {
@@ -1146,7 +1324,7 @@ class PaymentController extends Controller
     {
         $request->validate([
             'limit' => 'nullable|integer|min:1|max:100',
-            'status' => 'nullable|in:pending,success,failed,cancelled'
+            'status' => 'nullable|in:initiated,pending,completed,success,failed,cancelled,canceled,reversed,activated,deactivated,under_review,error'
         ]);
 
         $query = Payment::where('user_id', $userId)
@@ -1154,7 +1332,12 @@ class PaymentController extends Controller
             ->orderBy('created_at', 'desc');
 
         if ($request->status) {
-            $query->where('status', $request->status);
+            $status = $this->normalizePaymentStatus($request->status);
+            if ($status === 'completed') {
+                $query->whereIn('status', ['completed', 'success']);
+            } else {
+                $query->where('status', $status);
+            }
         }
 
         $limit = $request->limit ?? 10;
@@ -1167,7 +1350,7 @@ class PaymentController extends Controller
                     'id' => $payment->id,
                     'amount' => $payment->amount,
                     'duration' => $payment->duration,
-                    'status' => $payment->status,
+                    'status' => $this->normalizePaymentStatus($payment->status) ?? $payment->status,
                     'transaction_reference' => $payment->transaction_reference,
                     'platform_name' => $payment->platform->name ?? 'N/A',
                     'product_name' => $payment->product->name ?? 'N/A',
@@ -2209,7 +2392,7 @@ class PaymentController extends Controller
                 'status' => 'pending',
                 'transaction_uuid' => $data['payment_data']['transaction_uuid'] ?? null,
                 'reference_number' => $data['payment_data']['reference_number'] ?? null,
-                'payment_data' => json_encode($data['payment_data']),
+                'payment_data' => $data['payment_data'] ?? null,
             ]);
 
             Log::info('Payment record created in Laravel', ['payment_id' => $payment->id]);
@@ -2267,6 +2450,261 @@ class PaymentController extends Controller
             default:
                 return 'unknown';
         }
+    }
+
+    public function handleNotification(Request $request)
+    {
+        try {
+            $result = $this->processCybersourceResponse($request);
+
+            return response()->json([
+                'status' => $result['ok'],
+                'payment_id' => $result['payment']?->id,
+                'payment_status' => $result['status'],
+                'message' => $result['message'],
+            ], $result['ok'] ? 200 : 404);
+        } catch (\Throwable $exception) {
+            Log::error('CyberSource notification handling failed', [
+                'error' => $exception->getMessage(),
+                'payload' => $request->all(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to process payment notification',
+            ], 500);
+        }
+    }
+
+    public function paymentResponse(Request $request)
+    {
+        try {
+            $result = $this->processCybersourceResponse($request);
+
+            return $this->renderLegacyPaymentResult(
+                $result['status'],
+                $result['payment'],
+                $result['reason']
+            );
+        } catch (\Throwable $exception) {
+            Log::error('CyberSource browser response handling failed', [
+                'error' => $exception->getMessage(),
+                'payload' => $request->all(),
+            ]);
+
+            return $this->renderLegacyPaymentResult('error', null, 'Payment processing failed. Please contact support.');
+        }
+    }
+
+    public function paymentCancel(Request $request)
+    {
+        $payment = $this->resolveLegacyBrowserPayment(
+            $request->input('payment_id')
+                ?? $request->input('req_reference_number')
+                ?? $request->input('reference_number')
+                ?? $request->input('transaction_uuid')
+        );
+
+        if ($payment && $this->normalizePaymentStatus($payment->status) !== 'completed') {
+            $payment->forceFill([
+                'status' => 'canceled',
+                'failure_reason' => 'Payment canceled by customer',
+            ])->save();
+        }
+
+        return $this->renderLegacyPaymentResult(
+            'canceled',
+            $payment,
+            'Payment was canceled before completion.'
+        );
+    }
+
+    public function paymentSuccess(string $id)
+    {
+        return view('payments.success', [
+            'payment' => $this->resolveLegacyBrowserPayment($id)
+                ?? $this->placeholderPayment([
+                    'status' => 'completed',
+                    'reference_number' => $id,
+                    'transaction_uuid' => $id,
+                ]),
+        ]);
+    }
+
+    public function paymentFailed(string $id)
+    {
+        return $this->renderLegacyPaymentResult(
+            'failed',
+            $this->resolveLegacyBrowserPayment($id),
+            'Payment failed. Please try again.'
+        );
+    }
+
+    public function paymentCanceled(Request $request)
+    {
+        $identifier = $request->input('payment_id')
+            ?? $request->input('req_reference_number')
+            ?? $request->input('reference_number')
+            ?? $request->input('transaction_uuid');
+
+        return $this->renderLegacyPaymentResult(
+            'canceled',
+            $this->resolveLegacyBrowserPayment($identifier),
+            'Payment was canceled before completion.'
+        );
+    }
+
+    public function paymentError(Request $request)
+    {
+        $identifier = $request->input('payment_id')
+            ?? $request->input('req_reference_number')
+            ?? $request->input('reference_number')
+            ?? $request->input('transaction_uuid');
+
+        return $this->renderLegacyPaymentResult(
+            'error',
+            $this->resolveLegacyBrowserPayment($identifier),
+            (string) ($request->input('reason') ?? 'Payment processing failed.')
+        );
+    }
+
+    private function processCybersourceResponse(Request $request): array
+    {
+        $decision = strtoupper((string) $request->input('decision', ''));
+        $status = $this->mapDecisionToStatus($decision !== '' ? $decision : 'ERROR');
+        $payment = $this->resolveLegacyBrowserPayment(
+            $request->input('payment_id')
+                ?? $request->input('req_reference_number')
+                ?? $request->input('reference_number')
+                ?? $request->input('transaction_uuid')
+        );
+        $reason = (string) (
+            $request->input('message')
+                ?? $request->input('reason')
+                ?? $request->input('auth_response')
+                ?? ($status === 'completed' ? 'Payment completed successfully.' : 'Payment could not be completed.')
+        );
+
+        if (!$payment) {
+            Log::warning('CyberSource response could not be matched to a payment', [
+                'decision' => $decision,
+                'payload' => $request->all(),
+            ]);
+
+            return [
+                'ok' => false,
+                'status' => $status,
+                'payment' => null,
+                'reason' => $reason,
+                'message' => 'Payment not found',
+            ];
+        }
+
+        $referenceNumber = (string) ($request->input('req_reference_number') ?? $payment->reference_number ?? '');
+        $transactionReference = (string) (
+            $request->input('transaction_id')
+                ?? $request->input('transaction_uuid')
+                ?? $request->input('request_id')
+                ?? $payment->transaction_reference
+                ?? ''
+        );
+
+        if ($status === 'completed') {
+            if ($this->normalizePaymentStatus($payment->status) !== 'completed') {
+                $payment->forceFill([
+                    'reference_number' => $referenceNumber !== '' ? $referenceNumber : $payment->reference_number,
+                    'transaction_reference' => $transactionReference !== '' ? $transactionReference : $payment->transaction_reference,
+                ])->save();
+
+                $this->handleSuccessfulPayment($payment, [
+                    'reference' => $transactionReference !== '' ? $transactionReference : $referenceNumber,
+                ], null, [
+                    'cybersource_response' => $request->all(),
+                    'processed_at' => now()->toDateTimeString(),
+                ]);
+            }
+        } else {
+            $payment->forceFill([
+                'status' => $status === 'unknown' ? 'error' : $status,
+                'failure_reason' => $reason,
+                'reference_number' => $referenceNumber !== '' ? $referenceNumber : $payment->reference_number,
+                'transaction_reference' => $transactionReference !== '' ? $transactionReference : $payment->transaction_reference,
+                'raw_payload' => array_merge($payment->raw_payload ?? [], [
+                    'cybersource_response' => $request->all(),
+                    'processed_at' => now()->toDateTimeString(),
+                ]),
+            ])->save();
+        }
+
+        return [
+            'ok' => true,
+            'status' => $this->normalizePaymentStatus($payment->fresh()->status) ?? $status,
+            'payment' => $payment->fresh(['product']),
+            'reason' => $reason,
+            'message' => 'Payment notification processed',
+        ];
+    }
+
+    private function resolveLegacyBrowserPayment($identifier): ?Payment
+    {
+        if ($identifier === null || $identifier === '') {
+            return null;
+        }
+
+        $query = Payment::query()->with(['product']);
+
+        if (is_numeric($identifier)) {
+            $payment = $query->find((int) $identifier);
+            if ($payment) {
+                return $payment;
+            }
+        }
+
+        $identifier = (string) $identifier;
+
+        return $query->where('transaction_uuid', $identifier)
+            ->orWhere('reference_number', $identifier)
+            ->orWhere('transaction_reference', $identifier)
+            ->first();
+    }
+
+    private function renderLegacyPaymentResult(string $status, ?Payment $payment, ?string $reason = null)
+    {
+        $payment = $payment ?? $this->placeholderPayment([
+            'status' => $status,
+        ]);
+
+        if ($reason !== null && $reason !== '') {
+            session()->flash('reason', $reason);
+        }
+
+        if ($status === 'completed') {
+            return view('payments.success', ['payment' => $payment]);
+        }
+
+        $view = $status === 'canceled' ? 'payments.canceled' : 'payments.failed';
+
+        return response()
+            ->view($view, ['payment' => $payment])
+            ->withCookie(cookie()->forever('legacy_payment_status', $status))
+            ->withHeaders(['Cache-Control' => 'no-store']);
+    }
+
+    private function placeholderPayment(array $attributes = []): Payment
+    {
+        $payment = new Payment();
+        $payment->forceFill(array_merge([
+            'amount' => 0,
+            'currency' => 'KES',
+            'status' => 'failed',
+            'reference_number' => 'N/A',
+            'transaction_uuid' => null,
+            'transaction_reference' => null,
+        ], $attributes));
+        $payment->created_at = now();
+        $payment->updated_at = now();
+
+        return $payment;
     }
 
 

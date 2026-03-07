@@ -238,6 +238,7 @@ Route::delete('/products/{id}', [ProductController::class, 'destroy']);
 Route::post('/initiate-stk-payment', [PaymentController::class, 'initiate']);
 Route::post('/initiate-payment', [PaymentController::class, 'initiatePayment']);
 Route::post('/initiate-card-payment', [PaymentController::class, 'initiateCardPayment']);
+Route::post('/cybersource/initiate-payment', [PaymentController::class, 'initiateCardPayment']);
 Route::get('/payments', [PaymentController::class, 'list']);
 Route::get('/payments/{user_id}', [PaymentController::class, 'getPayments'])->name('payment.history');
 

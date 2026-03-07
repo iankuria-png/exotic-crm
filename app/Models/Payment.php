@@ -8,6 +8,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class Payment extends Model
 {
+    use HasFactory;
+
+    public const SUCCESSFUL_STATUSES = ['completed'];
+    public const ACTIVE_SUBSCRIPTION_STATUSES = ['completed', 'activated'];
+
     protected $fillable = [
         'user_id',
         'product_id',
@@ -23,13 +28,17 @@ class Payment extends Model
         'currency',
         'transaction_uuid',
         'transaction_reference',
+        'reference_number',
         'status',
+        'failure_reason',
+        'completed_at',
         'source',
         'import_batch_id',
         'import_legacy_hash',
         'reconciliation_confidence',
         'reconciliation_state',
         'raw_payload',
+        'payment_data',
         'duration',
         'start_date',
         'end_date'
@@ -37,7 +46,11 @@ class Payment extends Model
 
     protected $casts = [
         'raw_payload' => 'array',
+        'payment_data' => 'array',
         'confirmed_at' => 'datetime',
+        'completed_at' => 'datetime',
+        'start_date' => 'datetime',
+        'end_date' => 'datetime',
     ];
     
     public function product()
@@ -48,7 +61,7 @@ class Payment extends Model
     public static function hasActiveSubscription($userId)
     {
         return Payment::where('user_id', $userId)
-            ->where('status', 'success')
+            ->whereIn('status', self::ACTIVE_SUBSCRIPTION_STATUSES)
             ->where('end_date', '>', now())
             ->exists();
     }
