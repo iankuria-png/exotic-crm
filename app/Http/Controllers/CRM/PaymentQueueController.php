@@ -17,6 +17,7 @@ use App\Services\NotificationService;
 use App\Services\PaymentImportService;
 use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
+use App\Services\LegacyStkService;
 use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Support\CrmAuditAction;
@@ -35,6 +36,7 @@ class PaymentQueueController extends Controller
         private readonly NotificationService $notificationService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly PaymentImportService $paymentImportService,
+        private readonly LegacyStkService $legacyStkService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
@@ -958,14 +960,6 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $baseUrl = rtrim((string) config('services.django.base_url'), '/');
-        if ($baseUrl === '') {
-            Log::error('Retry STK: Django base URL not configured.');
-            return response()->json([
-                'message' => 'Payment service URL is not configured.',
-            ], 503);
-        }
-
         $firstName = null;
         $lastName = null;
         $email = null;
@@ -979,20 +973,6 @@ class PaymentQueueController extends Controller
         $payment->status = 'initiated';
         $payment->save();
 
-        $payload = [
-            'organization_code' => '76',
-            'payment_id' => $payment->id,
-            'product_id' => $payment->product_id,
-            'platform_id' => $payment->platform_id,
-            'user_id' => $payment->user_id,
-            'phone' => $phone,
-            'amount' => $amount,
-            'duration' => $duration,
-            'first_name' => $firstName,
-            'last_name' => $lastName,
-            'email' => $email,
-        ];
-
         $requestMeta = $this->paymentAttemptService->requestMetaFromRequest($request, [
             'channel' => 'stk',
             'phone' => $phone,
@@ -1000,56 +980,64 @@ class PaymentQueueController extends Controller
             'duration' => $duration,
         ]);
         $attemptStartedAt = microtime(true);
-        $response = Http::timeout(30)->post("{$baseUrl}/initiate/", $payload);
-        $latencyMs = (int) round((microtime(true) - $attemptStartedAt) * 1000);
 
-        if ($response->successful()) {
-            $data = $response->json();
-            if (isset($data['message']) && $data['message'] === 'Payment initiated') {
-                $payment->status = 'pending';
-                $payment->save();
-
-                $this->paymentAttemptService->record($payment, 'retry_stk', 'success', [
-                    'provider' => 'django_stk',
-                    'http_status' => $response->status(),
-                    'latency_ms' => $latencyMs,
-                    'request_meta' => $requestMeta,
-                    'response_meta' => [
-                        'message' => $data['message'] ?? null,
-                        'payment_id' => $data['payment_id'] ?? null,
-                    ],
-                    'created_by' => optional($request->user())->id,
-                ]);
-
-                $this->auditService->fromRequest(
-                    $request,
-                    (int) $payment->platform_id,
-                    CrmAuditAction::PAYMENT_RETRY_STK,
-                    'payment',
-                    (int) $payment->id,
-                    ['before_status' => $beforeStatus],
-                    ['after_status' => 'pending', 'django_response' => $data],
-                    (string) ($validated['reason'] ?? 'Retry STK from CRM')
-                );
-
-                return response()->json([
-                    'message' => 'STK push sent. Customer should complete the request on their phone.',
-                    'payment' => $payment->fresh(['platform', 'product']),
-                ]);
-            }
-
-            Log::warning('Retry STK: Django returned non-success message', ['data' => $data]);
+        try {
+            $result = $this->legacyStkService->initiate($payment, [
+                'phone' => $phone,
+                'duration' => $duration,
+                'first_name' => $firstName,
+                'last_name' => $lastName,
+                'email' => $email,
+            ]);
+        } catch (InvalidArgumentException $exception) {
             $payment->status = 'failed';
             $payment->save();
 
-            $this->paymentAttemptService->record($payment, 'retry_stk', 'failed', [
-                'provider' => 'django_stk',
-                'error_code' => $data['code'] ?? $data['error_code'] ?? null,
-                'error_message' => $data['error'] ?? $data['message'] ?? 'STK push could not be initiated.',
-                'http_status' => $response->status(),
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Retry STK: initiation crashed', [
+                'payment_id' => $payment->id,
+                'error' => $exception->getMessage(),
+            ]);
+            $payment->status = 'failed';
+            $payment->save();
+
+            return response()->json([
+                'message' => 'STK push could not be initiated.',
+            ], 500);
+        }
+
+        $latencyMs = (int) round((microtime(true) - $attemptStartedAt) * 1000);
+
+        if ($result['success']) {
+            $updates = [
+                'status' => 'pending',
+                'failure_reason' => null,
+                'provider_key' => 'mpesa_stk',
+                'provider_environment' => $result['provider_environment'] ?? null,
+                'raw_payload' => array_merge($payment->raw_payload ?? [], [
+                    'legacy_stk' => $result['provider_response'] ?? null,
+                ]),
+            ];
+            if (!empty($result['provider_reference'])) {
+                $updates['transaction_reference'] = $result['provider_reference'];
+            }
+            $payment->forceFill($updates)->save();
+
+            $this->paymentAttemptService->record($payment, 'retry_stk', 'success', [
+                'provider' => $result['provider'] ?? 'django_stk',
+                'http_status' => $result['http_status'] ?? null,
                 'latency_ms' => $latencyMs,
                 'request_meta' => $requestMeta,
-                'response_meta' => is_array($data) ? $data : ['response' => $data],
+                'response_meta' => [
+                    'message' => $result['message'] ?? null,
+                    'provider_environment' => $result['provider_environment'] ?? null,
+                    'transport' => $result['transport'] ?? null,
+                    'upstream_url' => $result['upstream_url'] ?? null,
+                    'provider_response' => $result['provider_response'] ?? null,
+                ],
                 'created_by' => optional($request->user())->id,
             ]);
 
@@ -1060,32 +1048,66 @@ class PaymentQueueController extends Controller
                 'payment',
                 (int) $payment->id,
                 ['before_status' => $beforeStatus],
-                ['after_status' => 'failed', 'django_response' => $data],
+                [
+                    'after_status' => 'pending',
+                    'provider' => $result['provider'] ?? null,
+                    'provider_environment' => $result['provider_environment'] ?? null,
+                    'transport' => $result['transport'] ?? null,
+                    'upstream_url' => $result['upstream_url'] ?? null,
+                    'provider_response' => $result['provider_response'] ?? null,
+                ],
                 (string) ($validated['reason'] ?? 'Retry STK from CRM')
             );
 
             return response()->json([
-                'message' => $data['error'] ?? $data['message'] ?? 'STK push could not be initiated.',
-            ], 400);
+                'message' => $result['message'] ?? 'STK push sent. Customer should complete the request on their phone.',
+                'payment' => $payment->fresh(['platform', 'product']),
+            ]);
         }
 
-        Log::error('Retry STK: Django HTTP error', [
+        Log::warning('Retry STK: upstream rejected initiation', [
             'payment_id' => $payment->id,
-            'status' => $response->status(),
-            'body' => $response->body(),
+            'provider' => $result['provider'] ?? null,
+            'transport' => $result['transport'] ?? null,
+            'upstream_url' => $result['upstream_url'] ?? null,
+            'http_status' => $result['http_status'] ?? null,
+            'redirect_location' => $result['redirect_location'] ?? null,
+            'response_body' => $result['response_body'] ?? null,
+            'provider_response' => $result['provider_response'] ?? null,
         ]);
-        $payment->status = 'failed';
-        $payment->save();
+
+        $payment->forceFill([
+            'status' => 'failed',
+            'failure_reason' => mb_substr((string) ($result['message'] ?? 'STK push could not be initiated.'), 0, 190),
+            'provider_key' => 'mpesa_stk',
+            'provider_environment' => $result['provider_environment'] ?? null,
+            'raw_payload' => array_merge($payment->raw_payload ?? [], [
+                'legacy_stk_failure' => [
+                    'provider' => $result['provider'] ?? null,
+                    'transport' => $result['transport'] ?? null,
+                    'upstream_url' => $result['upstream_url'] ?? null,
+                    'http_status' => $result['http_status'] ?? null,
+                    'redirect_location' => $result['redirect_location'] ?? null,
+                    'response_body' => $result['response_body'] ?? null,
+                    'provider_response' => $result['provider_response'] ?? null,
+                ],
+            ]),
+        ])->save();
 
         $this->paymentAttemptService->record($payment, 'retry_stk', 'failed', [
-            'provider' => 'django_stk',
-            'error_code' => 'http_error',
-            'error_message' => 'Payment service unavailable.',
-            'http_status' => $response->status(),
+            'provider' => $result['provider'] ?? 'django_stk',
+            'error_code' => $result['http_status'] ? 'upstream_http_' . $result['http_status'] : 'upstream_error',
+            'error_message' => $result['message'] ?? 'STK push could not be initiated.',
+            'http_status' => $result['http_status'] ?? null,
             'latency_ms' => $latencyMs,
             'request_meta' => $requestMeta,
             'response_meta' => [
-                'body' => mb_substr($response->body(), 0, 2000),
+                'provider_environment' => $result['provider_environment'] ?? null,
+                'transport' => $result['transport'] ?? null,
+                'upstream_url' => $result['upstream_url'] ?? null,
+                'redirect_location' => $result['redirect_location'] ?? null,
+                'response_body' => $result['response_body'] ?? null,
+                'provider_response' => $result['provider_response'] ?? null,
             ],
             'created_by' => optional($request->user())->id,
         ]);
@@ -1097,13 +1119,23 @@ class PaymentQueueController extends Controller
             'payment',
             (int) $payment->id,
             ['before_status' => $beforeStatus],
-            ['after_status' => 'failed', 'http_status' => $response->status()],
+            [
+                'after_status' => 'failed',
+                'provider' => $result['provider'] ?? null,
+                'provider_environment' => $result['provider_environment'] ?? null,
+                'transport' => $result['transport'] ?? null,
+                'upstream_url' => $result['upstream_url'] ?? null,
+                'http_status' => $result['http_status'] ?? null,
+                'redirect_location' => $result['redirect_location'] ?? null,
+                'response_body' => $result['response_body'] ?? null,
+                'provider_response' => $result['provider_response'] ?? null,
+            ],
             (string) ($validated['reason'] ?? 'Retry STK from CRM')
         );
 
         return response()->json([
-            'message' => 'Payment service unavailable. Please try again later.',
-        ], 502);
+            'message' => $result['message'] ?? 'STK push could not be initiated.',
+        ], 400);
     }
 
     /**

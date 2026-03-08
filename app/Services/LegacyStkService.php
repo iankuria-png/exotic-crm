@@ -1,0 +1,205 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\Payment;
+use App\Models\Platform;
+use Illuminate\Support\Facades\Http;
+use InvalidArgumentException;
+use RuntimeException;
+
+class LegacyStkService
+{
+    public function __construct(
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly KopokopoService $kopokopoService
+    ) {
+    }
+
+    public function initiate(Payment $payment, array $attributes = []): array
+    {
+        $payment->loadMissing(['platform', 'client', 'product']);
+        $platform = $payment->platform ?: Platform::query()->findOrFail((int) $payment->platform_id);
+        $environment = $this->resolveEnvironment($platform, $payment, $attributes['environment'] ?? null);
+        $runtimeWallet = $this->walletSettingsService->runtimePlatformConfig($platform);
+        $credentials = data_get($runtimeWallet, "credentials.mpesa_stk.{$environment}", []);
+        $transport = (string) ($credentials['transport'] ?? 'django_proxy');
+        $phone = trim((string) ($attributes['phone'] ?? $payment->phone ?? ''));
+
+        if ($phone === '') {
+            throw new InvalidArgumentException('Payment has no valid phone number for STK push.');
+        }
+
+        $payload = [
+            'payment_id' => (int) $payment->id,
+            'product_id' => (int) $payment->product_id,
+            'platform_id' => (int) $payment->platform_id,
+            'user_id' => (int) $payment->user_id,
+            'phone' => $phone,
+            'amount' => (float) $payment->amount,
+            'duration' => (string) ($attributes['duration'] ?? $payment->duration ?? 'monthly'),
+            'first_name' => $attributes['first_name'] ?? null,
+            'last_name' => $attributes['last_name'] ?? null,
+            'email' => $attributes['email'] ?? null,
+        ];
+
+        if ($transport === 'direct_provider') {
+            return $this->initiateDirectProvider($payment, $platform, $environment, $payload);
+        }
+
+        return $this->initiateDjangoProxy($environment, $credentials, $payload);
+    }
+
+    private function initiateDjangoProxy(string $environment, array $credentials, array $payload): array
+    {
+        $baseUrl = rtrim((string) ($credentials['payment_service_base_url'] ?? config('services.django.base_url', '')), '/');
+        $organizationCode = trim((string) ($credentials['organization_code'] ?? config('services.sms.org_code', '76')));
+
+        if ($baseUrl === '') {
+            throw new InvalidArgumentException('Payment service URL is not configured.');
+        }
+
+        if ($organizationCode === '') {
+            throw new InvalidArgumentException('Organization code is not configured for STK push.');
+        }
+
+        $response = Http::timeout(30)->post("{$baseUrl}/initiate/", array_merge($payload, [
+            'organization_code' => $organizationCode,
+        ]));
+        $body = trim((string) $response->body());
+        $decoded = json_decode($body, true);
+        $data = is_array($decoded) ? $decoded : null;
+        $redirectLocation = trim((string) ($response->header('Location') ?? ''));
+
+        if ($response->successful() && ($data['message'] ?? null) === 'Payment initiated') {
+            return [
+                'success' => true,
+                'provider' => 'django_stk',
+                'provider_environment' => $environment,
+                'transport' => 'django_proxy',
+                'upstream_url' => $baseUrl,
+                'message' => 'STK push sent. Customer should complete the request on their phone.',
+                'http_status' => $response->status(),
+                'provider_response' => $data,
+            ];
+        }
+
+        return [
+            'success' => false,
+            'provider' => 'django_stk',
+            'provider_environment' => $environment,
+            'transport' => 'django_proxy',
+            'upstream_url' => $baseUrl,
+            'message' => $this->proxyFailureMessage($data, $body, $response->status(), $baseUrl, $redirectLocation),
+            'http_status' => $response->status(),
+            'provider_response' => $data,
+            'redirect_location' => $redirectLocation !== '' ? $redirectLocation : null,
+            'response_body' => $body !== '' ? mb_substr($body, 0, 2000) : null,
+        ];
+    }
+
+    private function initiateDirectProvider(Payment $payment, Platform $platform, string $environment, array $payload): array
+    {
+        $result = $this->kopokopoService->initiateStkPush(
+            $payload['phone'],
+            $payload['amount'],
+            url('/api/payment-callback'),
+            [
+                'payment_id' => (int) $payment->id,
+                'platform_id' => (int) $platform->id,
+                'product_id' => (int) $payment->product_id,
+                'user_id' => (int) $payment->user_id,
+                'client_id' => (int) $payment->client_id,
+                'duration' => $payload['duration'],
+            ]
+        );
+
+        $status = $result['status'] ?? null;
+        $successful = $status === 'success' || $status === true || $status === 1;
+
+        if (!$successful) {
+            return [
+                'success' => false,
+                'provider' => 'kopokopo_direct',
+                'provider_environment' => $environment,
+                'transport' => 'direct_provider',
+                'upstream_url' => (string) config('services.kopokopo.base_url', ''),
+                'message' => (string) ($result['error'] ?? $result['message'] ?? $result['data'] ?? 'STK push could not be initiated.'),
+                'http_status' => null,
+                'provider_response' => is_array($result) ? $result : null,
+            ];
+        }
+
+        return [
+            'success' => true,
+            'provider' => 'kopokopo_direct',
+            'provider_environment' => $environment,
+            'transport' => 'direct_provider',
+            'upstream_url' => (string) config('services.kopokopo.base_url', ''),
+            'message' => 'STK push sent. Customer should complete the request on their phone.',
+            'http_status' => null,
+            'provider_reference' => (string) ($result['location'] ?? ''),
+            'provider_response' => is_array($result) ? $result : null,
+        ];
+    }
+
+    private function resolveEnvironment(Platform $platform, Payment $payment, mixed $preferredEnvironment): string
+    {
+        $candidate = strtolower(trim((string) $preferredEnvironment));
+        if (in_array($candidate, WalletSettingsService::ENVIRONMENTS, true)) {
+            return $candidate;
+        }
+
+        $paymentEnvironment = strtolower(trim((string) ($payment->provider_environment ?? '')));
+        if (in_array($paymentEnvironment, WalletSettingsService::ENVIRONMENTS, true)) {
+            return $paymentEnvironment;
+        }
+
+        $platformModeOverride = strtolower(trim((string) data_get($platform->wallet_settings, 'mode_override', '')));
+        if (in_array($platformModeOverride, WalletSettingsService::ENVIRONMENTS, true)) {
+            return $platformModeOverride;
+        }
+
+        $systemMode = strtolower(trim((string) data_get($this->walletSettingsService->currentSystemConfig(masked: false), 'mode', '')));
+        if (in_array($systemMode, WalletSettingsService::ENVIRONMENTS, true)) {
+            return $systemMode;
+        }
+
+        return app()->environment('production') ? 'production' : 'sandbox';
+    }
+
+    private function proxyFailureMessage(?array $data, string $body, int $status, string $baseUrl, string $redirectLocation = ''): string
+    {
+        $knownMessage = trim((string) ($data['error'] ?? $data['message'] ?? ''));
+        if ($knownMessage !== '') {
+            return $knownMessage;
+        }
+
+        $normalizedBody = strtolower($body);
+        $normalizedRedirect = strtolower($redirectLocation);
+        if (
+            ($normalizedBody !== '' && (str_contains($normalizedBody, 'suspendedpage') || str_contains($normalizedBody, 'account has been suspended')))
+            || ($normalizedRedirect !== '' && str_contains($normalizedRedirect, 'suspendedpage.cgi'))
+        ) {
+            return sprintf('Configured payment service is suspended or unavailable: %s', $baseUrl);
+        }
+
+        if (
+            $status === 522
+            || $status === 524
+            || ($normalizedBody !== '' && str_contains($normalizedBody, 'connection timed out'))
+        ) {
+            return sprintf('Configured payment service timed out: %s', $baseUrl);
+        }
+
+        if ($status >= 500) {
+            return 'Payment service is unavailable.';
+        }
+
+        if ($body !== '') {
+            return 'Payment service returned an invalid response.';
+        }
+
+        return 'STK push could not be initiated.';
+    }
+}

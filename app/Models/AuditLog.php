@@ -14,7 +14,7 @@ class AuditLog extends Model
         'platform_id', 'actor_id', 'action',
         'entity_type', 'entity_id',
         'before_state', 'after_state',
-        'reason', 'ip_address',
+        'reason', 'ip_address', 'created_at',
     ];
 
     protected $casts = [

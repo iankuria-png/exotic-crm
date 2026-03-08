@@ -105,8 +105,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/clients/{client}/health', [ClientController::class, 'health'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/wallet', [ClientWalletController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/wallet/transactions', [ClientWalletController::class, 'transactions'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::post('/clients/{client}/wallet/topup', [ClientWalletController::class, 'topup'])->middleware('role:admin,sub_admin');
-    Route::post('/clients/{client}/wallet/adjustment', [ClientWalletController::class, 'adjustment'])->middleware('role:admin,sub_admin');
+    Route::post('/clients/{client}/wallet/topup', [ClientWalletController::class, 'topup'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/wallet/adjustment', [ClientWalletController::class, 'adjustment'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials'])->middleware('role:admin,sub_admin,sales');

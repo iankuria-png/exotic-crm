@@ -15,6 +15,7 @@ use App\Models\Platform;
 use App\Services\AuditService;
 use App\Services\WpSyncService;
 use App\Services\ClientSyncService;
+use App\Services\LegacyStkService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\SubscriptionProvisioningService;
@@ -33,6 +34,7 @@ class DealController extends Controller
         private readonly AuditService $auditService,
         private readonly \App\Services\RenewalService $renewalService,
         private readonly NotificationService $notificationService,
+        private readonly LegacyStkService $legacyStkService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
@@ -929,49 +931,52 @@ class DealController extends Controller
         ]);
 
         if ($method === 'stk') {
-            $baseUrl = rtrim((string) config('services.django.base_url'), '/');
-            if ($baseUrl === '') {
+            $nameParts = preg_split('/\s+/', trim((string) $client->name), 2) ?: [];
+            try {
+                $result = $this->legacyStkService->initiate($payment, [
+                    'phone' => $phone,
+                    'duration' => $payment->duration ?: $deal->duration ?: 'monthly',
+                    'first_name' => $nameParts[0] ?? null,
+                    'last_name' => $nameParts[1] ?? null,
+                    'email' => $client->email,
+                ]);
+            } catch (\Throwable $exception) {
                 $payment->update([
                     'status' => 'failed',
+                    'failure_reason' => mb_substr($exception->getMessage(), 0, 190),
+                    'provider_key' => 'mpesa_stk',
                     'raw_payload' => [
                         'source' => 'deal_payment_initiation',
                         'method' => 'stk',
-                        'error' => 'Django base URL not configured',
+                        'error' => $exception->getMessage(),
                     ],
                 ]);
 
                 return [
                     'success' => false,
-                    'message' => 'Payment service URL is not configured.',
+                    'message' => $exception->getMessage(),
                     'payment' => $payment,
                 ];
             }
 
-            $nameParts = preg_split('/\s+/', trim((string) $client->name), 2) ?: [];
-            $payload = [
-                'organization_code' => '76',
-                'payment_id' => $payment->id,
-                'product_id' => $payment->product_id,
-                'platform_id' => $payment->platform_id,
-                'user_id' => $payment->user_id,
-                'phone' => $phone,
-                'amount' => (float) $payment->amount,
-                'duration' => $payment->duration ?: $deal->duration ?: 'monthly',
-                'first_name' => $nameParts[0] ?? null,
-                'last_name' => $nameParts[1] ?? null,
-                'email' => $client->email,
-            ];
-
-            $response = Http::timeout(30)->post("{$baseUrl}/initiate/", $payload);
-            if ($response->successful() && ($response->json('message') === 'Payment initiated')) {
-                $payment->update([
+            if ($result['success']) {
+                $updates = [
                     'status' => 'initiated',
+                    'failure_reason' => null,
+                    'provider_key' => 'mpesa_stk',
+                    'provider_environment' => $result['provider_environment'] ?? null,
                     'raw_payload' => [
                         'source' => 'deal_payment_initiation',
                         'method' => 'stk',
-                        'django_response' => $response->json(),
+                        'transport' => $result['transport'] ?? null,
+                        'upstream_url' => $result['upstream_url'] ?? null,
+                        'provider_response' => $result['provider_response'] ?? null,
                     ],
-                ]);
+                ];
+                if (!empty($result['provider_reference'])) {
+                    $updates['transaction_reference'] = $result['provider_reference'];
+                }
+                $payment->update($updates);
 
                 return [
                     'success' => true,
@@ -980,21 +985,38 @@ class DealController extends Controller
                 ];
             }
 
+            Log::warning('Deal STK initiation failed', [
+                'deal_id' => $deal->id,
+                'payment_id' => $payment->id,
+                'provider' => $result['provider'] ?? null,
+                'transport' => $result['transport'] ?? null,
+                'upstream_url' => $result['upstream_url'] ?? null,
+                'http_status' => $result['http_status'] ?? null,
+                'redirect_location' => $result['redirect_location'] ?? null,
+                'response_body' => $result['response_body'] ?? null,
+                'provider_response' => $result['provider_response'] ?? null,
+            ]);
+
             $payment->update([
                 'status' => 'failed',
+                'failure_reason' => mb_substr((string) ($result['message'] ?? 'STK push could not be initiated.'), 0, 190),
+                'provider_key' => 'mpesa_stk',
+                'provider_environment' => $result['provider_environment'] ?? null,
                 'raw_payload' => [
                     'source' => 'deal_payment_initiation',
                     'method' => 'stk',
-                    'http_status' => $response->status(),
-                    'response' => $response->json(),
+                    'transport' => $result['transport'] ?? null,
+                    'upstream_url' => $result['upstream_url'] ?? null,
+                    'http_status' => $result['http_status'] ?? null,
+                    'redirect_location' => $result['redirect_location'] ?? null,
+                    'response_body' => $result['response_body'] ?? null,
+                    'provider_response' => $result['provider_response'] ?? null,
                 ],
             ]);
 
             return [
                 'success' => false,
-                'message' => $response->json('error')
-                    ?? $response->json('message')
-                    ?? 'STK push could not be initiated.',
+                'message' => $result['message'] ?? 'STK push could not be initiated.',
                 'payment' => $payment,
             ];
         }

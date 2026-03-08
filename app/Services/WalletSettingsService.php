@@ -907,6 +907,7 @@ class WalletSettingsService
         }
 
         $response = Http::timeout(10)->get($paymentServiceBaseUrl);
+        $body = strtolower(trim((string) $response->body()));
         $callbackResult = null;
         if ($callbackBaseUrl !== '') {
             $callbackResponse = Http::timeout(10)->get($callbackBaseUrl);
@@ -926,7 +927,11 @@ class WalletSettingsService
             'http_status' => $response->status(),
             'message' => $response->successful()
                 ? 'M-Pesa STK transport reachability test passed.'
-                : 'M-Pesa STK transport reachability test failed.',
+                : ($response->status() === 522 || $response->status() === 524 || str_contains($body, 'connection timed out')
+                    ? 'M-Pesa STK transport timed out at the upstream host.'
+                    : ((str_contains($body, 'suspendedpage') || str_contains($body, 'account has been suspended'))
+                        ? 'M-Pesa STK transport points to a suspended host.'
+                        : 'M-Pesa STK transport reachability test failed.')),
             'provider_response' => [
                 'payment_service_base_url' => $paymentServiceBaseUrl,
                 'callback_base_url' => $callbackBaseUrl,

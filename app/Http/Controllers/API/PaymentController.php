@@ -13,6 +13,7 @@ use App\Models\Activation;
 use App\Models\SmsLog;
 use App\Models\WordpressPost;
 use App\Services\DynamicDatabaseService;
+use App\Services\LegacyStkService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentMatchingService;
 use App\Services\SubscriptionProvisioningService;
@@ -21,12 +22,12 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
-use Services\KopokopoService;
 
 class PaymentController extends Controller
 {
     public function __construct(
-        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly LegacyStkService $legacyStkService
     ) {
     }
 
@@ -71,55 +72,69 @@ class PaymentController extends Controller
                 'status' => 'initiated'
             ]);
     
-            // 4. Use base URL from .env
-            $paymentServiceBaseUrl = config('services.django.base_url');
-    
-            $response = Http::post("{$paymentServiceBaseUrl}/initiate/", [
-                "organization_code" => "76", // ✅ Hardcoded org_code
-                "payment_id"   => $payment->id,
-                "product_id"   => $product->id,
-                "platform_id"  => $platform->id,
-                "user_id"      => $request->user_id,
-                "phone"        => $request->phone,
-                "amount"       => $price,
-                "duration"     => $request->duration,
-                "first_name"   => $request->first_name,
-                "last_name"    => $request->last_name,
-                "email"        => $request->email,
+            $result = $this->legacyStkService->initiate($payment, [
+                'phone' => $request->phone,
+                'duration' => $request->duration,
+                'first_name' => $request->first_name,
+                'last_name' => $request->last_name,
+                'email' => $request->email,
             ]);
-    
-            if ($response->successful()) {
-                $data = $response->json();
-    
-                if (isset($data['message']) && $data['message'] === "Payment initiated") {
-                    $payment->status = "pending";
-                    $payment->save();
-    
-                    return response()->json([
-                        "status"     => true,
-                        "message"    => "Payment initiated successfully",
-                        "payment_id" => $payment->id
-                    ]);
-                } else {
-                    \Log::error("STK push failed response", ["data" => $data]);
-                    $payment->status = "failed";
-                    $payment->save();
-    
-                    return response()->json([
-                        "status" => false,
-                        "error"  => $data
-                    ], 400);
+
+            if ($result['success']) {
+                $updates = [
+                    'status' => 'pending',
+                    'failure_reason' => null,
+                    'provider_key' => 'mpesa_stk',
+                    'provider_environment' => $result['provider_environment'] ?? null,
+                    'raw_payload' => [
+                        'source' => 'legacy_payment_initiate',
+                        'transport' => $result['transport'] ?? null,
+                        'upstream_url' => $result['upstream_url'] ?? null,
+                        'provider_response' => $result['provider_response'] ?? null,
+                    ],
+                ];
+                if (!empty($result['provider_reference'])) {
+                    $updates['transaction_reference'] = $result['provider_reference'];
                 }
-            } else {
-                \Log::error("STK push HTTP error", ["response" => $response->body()]);
-                $payment->status = "failed";
-                $payment->save();
-    
+                $payment->forceFill($updates)->save();
+
                 return response()->json([
-                    "status" => false,
-                    "error"  => "Failed to connect to payment service"
-                ], 500);
+                    "status"     => true,
+                    "message"    => "Payment initiated successfully",
+                    "payment_id" => $payment->id
+                ]);
             }
+
+            \Log::warning("STK push failed response", [
+                "payment_id" => $payment->id,
+                "provider" => $result['provider'] ?? null,
+                "transport" => $result['transport'] ?? null,
+                "upstream_url" => $result['upstream_url'] ?? null,
+                "http_status" => $result['http_status'] ?? null,
+                "redirect_location" => $result['redirect_location'] ?? null,
+                "response_body" => $result['response_body'] ?? null,
+                "provider_response" => $result['provider_response'] ?? null,
+            ]);
+            $payment->forceFill([
+                'status' => 'failed',
+                'failure_reason' => mb_substr((string) ($result['message'] ?? 'STK push could not be initiated.'), 0, 190),
+                'provider_key' => 'mpesa_stk',
+                'provider_environment' => $result['provider_environment'] ?? null,
+                'raw_payload' => [
+                    'source' => 'legacy_payment_initiate',
+                    'transport' => $result['transport'] ?? null,
+                    'upstream_url' => $result['upstream_url'] ?? null,
+                    'http_status' => $result['http_status'] ?? null,
+                    'redirect_location' => $result['redirect_location'] ?? null,
+                    'response_body' => $result['response_body'] ?? null,
+                    'provider_response' => $result['provider_response'] ?? null,
+                ],
+            ])->save();
+
+            return response()->json([
+                "status" => false,
+                "error"  => $result['message'] ?? 'STK push could not be initiated.'
+            ], 400);
     
         } catch (\Exception $e) {
             \Log::error("STK push error", ["exception" => $e->getMessage()]);
@@ -2215,59 +2230,72 @@ class PaymentController extends Controller
                 'status'      => 'initiated'
             ]);
     
-            // 5. Use base URL from .env
-            $paymentServiceBaseUrl = config('services.django.base_url');
-    
-            // 6. Send to Django with hardcoded organization_code
-            $response = Http::post("{$paymentServiceBaseUrl}/initiate/", [
-                "organization_code" => "76", // ✅ same as initiate()
-                "payment_id"        => $payment->id,
-                "product_id"        => $product->id,
-                "platform_id"       => $platform->id,
-                "user_id"           => $validated['user_id'],
-                "phone"             => $phone, // Use formatted phone consistently
-                "amount"            => $price,
-                "duration"          => $validated['duration'],
-                "first_name"        => $validated['first_name'] ?? null,
-                "last_name"         => $validated['last_name'] ?? null,
-                "email"             => $validated['email'] ?? null,
+            $result = $this->legacyStkService->initiate($payment, [
+                'phone' => $phone,
+                'duration' => $validated['duration'],
+                'first_name' => $validated['first_name'] ?? null,
+                'last_name' => $validated['last_name'] ?? null,
+                'email' => $validated['email'] ?? null,
             ]);
-    
-            if ($response->successful()) {
-                $data = $response->json();
-    
-                if (isset($data['message']) && $data['message'] === "Payment initiated") {
-                    $payment->status = "pending";
-                    $payment->save();
-    
-                    return response()->json([
-                        "status"     => true,
-                        "message"    => "STK push initiated successfully",
-                        "payment_id" => $payment->id,
-                        "amount"     => $price,
-                        "duration"   => $validated['duration'],
-                        "phone"      => $phone // Use formatted phone
-                    ]);
-                } else {
-                    \Log::error("STK push failed response", ["data" => $data]);
-                    $payment->status = "failed";
-                    $payment->save();
-    
-                    return response()->json([
-                        "status" => false,
-                        "error"  => $data
-                    ], 400);
+
+            if ($result['success']) {
+                $updates = [
+                    'status' => 'pending',
+                    'failure_reason' => null,
+                    'provider_key' => 'mpesa_stk',
+                    'provider_environment' => $result['provider_environment'] ?? null,
+                    'raw_payload' => [
+                        'source' => 'legacy_payment_initiate_v2',
+                        'transport' => $result['transport'] ?? null,
+                        'upstream_url' => $result['upstream_url'] ?? null,
+                        'provider_response' => $result['provider_response'] ?? null,
+                    ],
+                ];
+                if (!empty($result['provider_reference'])) {
+                    $updates['transaction_reference'] = $result['provider_reference'];
                 }
-            } else {
-                \Log::error("STK push HTTP error", ["response" => $response->body()]);
-                $payment->status = "failed";
-                $payment->save();
-    
+                $payment->forceFill($updates)->save();
+
                 return response()->json([
-                    "status" => false,
-                    "error"  => "Failed to connect to payment service"
-                ], 500);
+                    "status"     => true,
+                    "message"    => "STK push initiated successfully",
+                    "payment_id" => $payment->id,
+                    "amount"     => $price,
+                    "duration"   => $validated['duration'],
+                    "phone"      => $phone
+                ]);
             }
+
+            \Log::warning("STK push failed response", [
+                "payment_id" => $payment->id,
+                "provider" => $result['provider'] ?? null,
+                "transport" => $result['transport'] ?? null,
+                "upstream_url" => $result['upstream_url'] ?? null,
+                "http_status" => $result['http_status'] ?? null,
+                "redirect_location" => $result['redirect_location'] ?? null,
+                "response_body" => $result['response_body'] ?? null,
+                "provider_response" => $result['provider_response'] ?? null,
+            ]);
+            $payment->forceFill([
+                'status' => 'failed',
+                'failure_reason' => mb_substr((string) ($result['message'] ?? 'STK push could not be initiated.'), 0, 190),
+                'provider_key' => 'mpesa_stk',
+                'provider_environment' => $result['provider_environment'] ?? null,
+                'raw_payload' => [
+                    'source' => 'legacy_payment_initiate_v2',
+                    'transport' => $result['transport'] ?? null,
+                    'upstream_url' => $result['upstream_url'] ?? null,
+                    'http_status' => $result['http_status'] ?? null,
+                    'redirect_location' => $result['redirect_location'] ?? null,
+                    'response_body' => $result['response_body'] ?? null,
+                    'provider_response' => $result['provider_response'] ?? null,
+                ],
+            ])->save();
+
+            return response()->json([
+                "status" => false,
+                "error"  => $result['message'] ?? 'STK push could not be initiated.'
+            ], 400);
     
         } catch (\Exception $e) {
             \Log::error("STK push error", ["exception" => $e->getMessage()]);

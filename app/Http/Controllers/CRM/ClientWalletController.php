@@ -56,7 +56,7 @@ class ClientWalletController extends Controller
 
     public function topup(Request $request, Client $client)
     {
-        $this->authorizeManager($request, $client);
+        $this->authorizeWalletOperator($request, $client);
         $validated = $request->validate([
             'amount' => 'required|numeric|min:0.01',
             'reason' => 'required|string|max:500',
@@ -67,9 +67,10 @@ class ClientWalletController extends Controller
             'reference_type' => 'admin_topup',
             'reference_id' => (int) $client->id,
             'performed_by' => (int) $request->user()->id,
-            'description' => 'CRM admin wallet top-up',
+            'description' => 'CRM wallet top-up',
             'metadata' => [
                 'reason' => $validated['reason'],
+                'performed_by_role' => (string) $request->user()->role,
             ],
         ]);
 
@@ -93,7 +94,7 @@ class ClientWalletController extends Controller
 
     public function adjustment(Request $request, Client $client)
     {
-        $this->authorizeManager($request, $client);
+        $this->authorizeWalletOperator($request, $client);
         $validated = $request->validate([
             'type' => 'required|in:credit,debit',
             'amount' => 'required|numeric|min:0.01',
@@ -108,15 +109,21 @@ class ClientWalletController extends Controller
                     'reference_type' => 'admin_adjustment',
                     'reference_id' => (int) $client->id,
                     'performed_by' => (int) $request->user()->id,
-                    'description' => 'CRM admin wallet debit adjustment',
-                    'metadata' => ['reason' => $validated['reason']],
+                    'description' => 'CRM wallet debit adjustment',
+                    'metadata' => [
+                        'reason' => $validated['reason'],
+                        'performed_by_role' => (string) $request->user()->role,
+                    ],
                 ])
                 : $this->walletService->credit($client, (float) $validated['amount'], [
                     'reference_type' => 'admin_adjustment',
                     'reference_id' => (int) $client->id,
                     'performed_by' => (int) $request->user()->id,
-                    'description' => 'CRM admin wallet credit adjustment',
-                    'metadata' => ['reason' => $validated['reason']],
+                    'description' => 'CRM wallet credit adjustment',
+                    'metadata' => [
+                        'reason' => $validated['reason'],
+                        'performed_by_role' => (string) $request->user()->role,
+                    ],
                 ]);
         } catch (RuntimeException|InvalidArgumentException $exception) {
             return response()->json([
@@ -153,11 +160,12 @@ class ClientWalletController extends Controller
         );
     }
 
-    private function authorizeManager(Request $request, Client $client): void
+    private function authorizeWalletOperator(Request $request, Client $client): void
     {
-        $this->marketAuthorizationService->ensureManager(
+        $this->marketAuthorizationService->ensureRole(
             $request->user(),
-            'Only admin or sub-admin users can update client wallets.'
+            ['admin', 'sub_admin', 'sales'],
+            'Only admin, sub-admin, or sales users can update client wallets.'
         );
         $this->authorizeClient($request, $client);
     }

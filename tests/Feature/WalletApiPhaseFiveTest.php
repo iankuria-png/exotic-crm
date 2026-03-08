@@ -47,7 +47,7 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertDatabaseHas('wallet_transactions', [
             'client_id' => $client->id,
             'type' => 'credit',
-            'description' => 'CRM admin wallet credit adjustment',
+            'description' => 'CRM wallet credit adjustment',
         ]);
         $this->assertDatabaseHas('audit_log', [
             'platform_id' => $platform->id,
@@ -55,6 +55,47 @@ class WalletApiPhaseFiveTest extends TestCase
             'entity_id' => $client->id,
             'action' => 'client_wallet_adjustment',
         ]);
+    }
+
+    public function test_sales_client_wallet_routes_allow_adjustments_but_marketing_remains_read_only(): void
+    {
+        ['platform' => $platform, 'client' => $client] = $this->seedWalletContext([
+            'client_balance' => 700,
+        ]);
+
+        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+
+        $salesResponse = $this->postJson("/api/crm/clients/{$client->id}/wallet/adjustment", [
+            'type' => 'credit',
+            'amount' => '200.00',
+            'reason' => 'Sales support correction',
+        ]);
+
+        $salesResponse->assertOk()
+            ->assertJsonPath('wallet.balance', '900.00')
+            ->assertJsonPath('transaction.type', 'credit');
+
+        $this->assertDatabaseHas('wallet_transactions', [
+            'client_id' => $client->id,
+            'type' => 'credit',
+            'description' => 'CRM wallet credit adjustment',
+        ]);
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'action' => 'client_wallet_adjustment',
+        ]);
+
+        Sanctum::actingAs($this->createUser('marketing', [$platform->id]));
+
+        $marketingResponse = $this->postJson("/api/crm/clients/{$client->id}/wallet/adjustment", [
+            'type' => 'credit',
+            'amount' => '50.00',
+            'reason' => 'Should be rejected',
+        ]);
+
+        $marketingResponse->assertForbidden();
     }
 
     public function test_wallet_balance_endpoint_returns_live_summary_for_authenticated_request(): void
@@ -584,7 +625,7 @@ class WalletApiPhaseFiveTest extends TestCase
         ]);
     }
 
-    private function createUser(string $role): User
+    private function createUser(string $role, array $assignedMarketIds = []): User
     {
         return User::query()->create([
             'name' => ucfirst($role) . ' User',
@@ -592,7 +633,7 @@ class WalletApiPhaseFiveTest extends TestCase
             'password' => bcrypt('password'),
             'role' => $role,
             'status' => 'active',
-            'assigned_market_ids' => [],
+            'assigned_market_ids' => $assignedMarketIds,
         ]);
     }
 }

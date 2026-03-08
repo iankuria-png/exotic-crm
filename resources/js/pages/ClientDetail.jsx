@@ -320,7 +320,7 @@ export default function ClientDetail() {
     const queryClient = useQueryClient();
     const toast = useToast();
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
-    const initialTab = ['overview', 'deals', 'notes', 'timeline', 'payments', 'edit_profile', 'profile_health']
+    const initialTab = ['overview', 'deals', 'notes', 'timeline', 'wallet', 'payments', 'edit_profile', 'profile_health']
         .includes(requestedTab)
         ? requestedTab
         : 'overview';
@@ -350,6 +350,15 @@ export default function ClientDetail() {
     const [updatePhoneTargetId, setUpdatePhoneTargetId] = useState('');
     const [updatePhoneValue, setUpdatePhoneValue] = useState('');
     const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
+    const [walletTopupForm, setWalletTopupForm] = useState({
+        amount: '',
+        reason: 'Manual wallet top-up from client profile',
+    });
+    const [walletAdjustmentForm, setWalletAdjustmentForm] = useState({
+        type: 'debit',
+        amount: '',
+        reason: 'Wallet adjustment from client profile',
+    });
 
     const { data: client, isLoading } = useQuery({
         queryKey: ['client', id],
@@ -364,6 +373,7 @@ export default function ClientDetail() {
     });
     const currentUser = meData?.user || null;
     const isReadOnly = currentUser?.role === 'marketing';
+    const canManageWallet = ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
 
     const { data: timelineData } = useQuery({
         queryKey: ['client-timeline', id],
@@ -393,6 +403,17 @@ export default function ClientDetail() {
         queryKey: ['client-health', id],
         queryFn: () => api.get(`/crm/clients/${id}/health`).then((r) => r.data),
         enabled: activeTab === 'profile_health',
+    });
+
+    const {
+        data: walletData,
+        isLoading: walletLoading,
+        refetch: refetchWallet,
+        isFetching: walletFetching,
+    } = useQuery({
+        queryKey: ['client-wallet', id],
+        queryFn: () => api.get(`/crm/clients/${id}/wallet`).then((r) => r.data),
+        enabled: activeTab === 'wallet',
     });
 
     const addNoteMutation = useMutation({
@@ -561,12 +582,46 @@ export default function ClientDetail() {
         },
     });
 
+    const walletTopupMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/clients/${id}/wallet/topup`, payload).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client-wallet', id] });
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            setWalletTopupForm({
+                amount: '',
+                reason: 'Manual wallet top-up from client profile',
+            });
+            toast.success('Wallet top-up recorded.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Wallet top-up failed.');
+        },
+    });
+
+    const walletAdjustmentMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/clients/${id}/wallet/adjustment`, payload).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client-wallet', id] });
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            setWalletAdjustmentForm((current) => ({
+                ...current,
+                amount: '',
+                reason: 'Wallet adjustment from client profile',
+            }));
+            toast.success('Wallet adjustment recorded.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Wallet adjustment failed.');
+        },
+    });
+
     const tabLinks = useMemo(() => {
         const links = [
             { key: 'overview', label: 'Overview' },
             { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
             { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
             { key: 'timeline', label: 'Timeline' },
+            { key: 'wallet', label: 'Wallet' },
             { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
             { key: 'edit_profile', label: 'Edit Profile' },
             { key: 'profile_health', label: `Profile Health (${healthData?.summary?.duplicate_count || 0})` },
@@ -695,6 +750,8 @@ export default function ClientDetail() {
     const supportChatUrl = client?.platform?.support_chat_url || DEFAULT_SUPPORT_CHAT_URL;
     const mediaItems = mediaData?.data || [];
     const healthDuplicates = healthData?.duplicates || [];
+    const walletSummary = walletData?.wallet || null;
+    const walletTransactions = walletSummary?.transactions || [];
     const activationRequiresReference = activationPaymentMethod === 'manual';
     const activationRequiresApprovedBy = activationPaymentMethod === 'free_trial';
     const activationTargetPhone = client?.phone_normalized || '';
@@ -1184,6 +1241,188 @@ export default function ClientDetail() {
                 <section className="crm-surface p-5">
                     <Timeline events={timelineData?.data} isLoading={!timelineData} />
                 </section>
+            ) : null}
+
+            {activeTab === 'wallet' ? (
+                <div className="space-y-4">
+                    <section className="crm-surface p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                                <h3 className="crm-panel-title">Client Wallet</h3>
+                                <p className="crm-panel-subtitle">Balance, recent wallet activity, and manual wallet actions for this escort profile.</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => refetchWallet()}
+                                disabled={walletFetching}
+                                className="crm-btn-secondary self-start disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {walletFetching ? 'Refreshing...' : 'Refresh wallet'}
+                            </button>
+                        </div>
+
+                        {walletLoading ? (
+                            <p className="mt-4 text-sm text-slate-500">Loading wallet...</p>
+                        ) : walletSummary ? (
+                            <div className="mt-4 grid gap-3 md:grid-cols-3">
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Balance</p>
+                                    <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrency(walletSummary.balance, walletSummary.currency || 'KES')}</p>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Last Top-up</p>
+                                    <p className="mt-2 text-sm font-semibold text-slate-900">
+                                        {walletSummary.last_topup
+                                            ? formatCurrency(walletSummary.last_topup.amount, walletSummary.last_topup.currency || walletSummary.currency || 'KES')
+                                            : 'No top-ups yet'}
+                                    </p>
+                                    <p className="mt-1 text-xs text-slate-500">{formatDateTime(walletSummary.last_topup?.created_at)}</p>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Synced</p>
+                                    <p className="mt-2 text-sm font-semibold text-slate-900">{formatDateTime(walletSummary.wallet_last_synced_at)}</p>
+                                    <p className="mt-1 text-xs text-slate-500">Refreshed {formatDateTime(walletSummary.refreshed_at)}</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <p className="mt-4 text-sm text-slate-500">Wallet data is not available for this client yet.</p>
+                        )}
+                    </section>
+
+                    {canManageWallet ? (
+                        <section className="grid gap-4 lg:grid-cols-2">
+                            <div className="crm-surface p-4">
+                                <h4 className="text-sm font-semibold text-slate-900">Manual Top-up</h4>
+                                <p className="mt-1 text-xs text-slate-500">Use this for verified offline credits or support-side balance corrections.</p>
+                                <div className="mt-4 space-y-3">
+                                    <input
+                                        type="number"
+                                        min="0.01"
+                                        step="0.01"
+                                        value={walletTopupForm.amount}
+                                        onChange={(event) => setWalletTopupForm((current) => ({ ...current, amount: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Top-up amount"
+                                    />
+                                    <textarea
+                                        rows={3}
+                                        value={walletTopupForm.reason}
+                                        onChange={(event) => setWalletTopupForm((current) => ({ ...current, reason: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Reason for wallet top-up"
+                                    />
+                                    <div className="flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => walletTopupMutation.mutate({
+                                                amount: walletTopupForm.amount,
+                                                reason: walletTopupForm.reason.trim(),
+                                            })}
+                                            disabled={!walletTopupForm.amount || !walletTopupForm.reason.trim() || walletTopupMutation.isPending}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {walletTopupMutation.isPending ? 'Recording...' : 'Record top-up'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="crm-surface p-4">
+                                <h4 className="text-sm font-semibold text-slate-900">Balance Adjustment</h4>
+                                <p className="mt-1 text-xs text-slate-500">Debit or credit the wallet directly when support needs to correct a balance.</p>
+                                <div className="mt-4 space-y-3">
+                                    <select
+                                        value={walletAdjustmentForm.type}
+                                        onChange={(event) => setWalletAdjustmentForm((current) => ({ ...current, type: event.target.value }))}
+                                        className="crm-select"
+                                    >
+                                        <option value="debit">Debit wallet</option>
+                                        <option value="credit">Credit wallet</option>
+                                    </select>
+                                    <input
+                                        type="number"
+                                        min="0.01"
+                                        step="0.01"
+                                        value={walletAdjustmentForm.amount}
+                                        onChange={(event) => setWalletAdjustmentForm((current) => ({ ...current, amount: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Adjustment amount"
+                                    />
+                                    <textarea
+                                        rows={3}
+                                        value={walletAdjustmentForm.reason}
+                                        onChange={(event) => setWalletAdjustmentForm((current) => ({ ...current, reason: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Reason for wallet adjustment"
+                                    />
+                                    <div className="flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => walletAdjustmentMutation.mutate({
+                                                type: walletAdjustmentForm.type,
+                                                amount: walletAdjustmentForm.amount,
+                                                reason: walletAdjustmentForm.reason.trim(),
+                                            })}
+                                            disabled={!walletAdjustmentForm.amount || !walletAdjustmentForm.reason.trim() || walletAdjustmentMutation.isPending}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {walletAdjustmentMutation.isPending ? 'Recording...' : 'Record adjustment'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    ) : null}
+
+                    <section className="crm-surface">
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Recent Wallet Transactions</h3>
+                                <p className="crm-panel-subtitle">Latest balance changes for this escort wallet.</p>
+                            </div>
+                        </header>
+                        <div className="p-4">
+                            {walletLoading ? (
+                                <p className="text-sm text-slate-500">Loading wallet transactions...</p>
+                            ) : walletTransactions.length > 0 ? (
+                                <div className="space-y-2">
+                                    {walletTransactions.map((transaction) => (
+                                        <div key={transaction.id} className="flex flex-col gap-2 rounded-md border border-slate-200 px-3 py-3 md:flex-row md:items-start md:justify-between">
+                                            <div>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                                                        transaction.type === 'credit'
+                                                            ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                                                            : 'bg-rose-50 text-rose-700 ring-rose-200'
+                                                    }`}>
+                                                        {transaction.type}
+                                                    </span>
+                                                    <p className="text-sm font-semibold text-slate-900">{formatCurrency(transaction.amount, transaction.currency || walletSummary?.currency || 'KES')}</p>
+                                                </div>
+                                                <p className="mt-1 text-sm text-slate-600">{transaction.description || 'Wallet transaction'}</p>
+                                                <p className="mt-1 text-xs text-slate-500">
+                                                    Ref: {transaction.reference_type || '—'}
+                                                    {transaction.reference_id ? ` #${transaction.reference_id}` : ''}
+                                                    {transaction.payment_id ? ` • Payment #${transaction.payment_id}` : ''}
+                                                    {transaction.deal_id ? ` • Deal #${transaction.deal_id}` : ''}
+                                                </p>
+                                            </div>
+                                            <div className="text-left md:text-right">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Balance After</p>
+                                                <p className="mt-1 text-sm font-semibold text-slate-900">{formatCurrency(transaction.balance_after, transaction.currency || walletSummary?.currency || 'KES')}</p>
+                                                <p className="mt-1 text-xs text-slate-500">{formatDateTime(transaction.created_at)}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+                                    No wallet transactions recorded for this client yet.
+                                </p>
+                            )}
+                        </div>
+                    </section>
+                </div>
             ) : null}
 
             {activeTab === 'payments' ? (
