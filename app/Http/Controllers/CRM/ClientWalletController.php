@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Services\AuditService;
 use App\Services\MarketAuthorizationService;
+use App\Services\WalletSettingsService;
 use App\Services\WalletService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
@@ -17,6 +18,7 @@ class ClientWalletController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
+        private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletService $walletService
     ) {
     }
@@ -60,7 +62,12 @@ class ClientWalletController extends Controller
         $validated = $request->validate([
             'amount' => 'required|numeric|min:0.01',
             'reason' => 'required|string|max:500',
+            'pin' => ['required', 'regex:/^\d{4,6}$/'],
         ]);
+        $pinError = $this->validateOperatorPin((string) $validated['pin']);
+        if ($pinError) {
+            return $pinError;
+        }
 
         $before = $this->walletService->summary($client, 5);
         $result = $this->walletService->credit($client, (float) $validated['amount'], [
@@ -99,7 +106,12 @@ class ClientWalletController extends Controller
             'type' => 'required|in:credit,debit',
             'amount' => 'required|numeric|min:0.01',
             'reason' => 'required|string|max:500',
+            'pin' => ['required', 'regex:/^\d{4,6}$/'],
         ]);
+        $pinError = $this->validateOperatorPin((string) $validated['pin']);
+        if ($pinError) {
+            return $pinError;
+        }
 
         $before = $this->walletService->summary($client, 5);
 
@@ -168,5 +180,24 @@ class ClientWalletController extends Controller
             'Only admin, sub-admin, or sales users can update client wallets.'
         );
         $this->authorizeClient($request, $client);
+    }
+
+    private function validateOperatorPin(string $pin)
+    {
+        if (!$this->walletSettingsService->operatorPinIsConfigured()) {
+            return response()->json([
+                'message' => 'Wallet PIN is not configured. Ask an admin to set it in Settings.',
+                'error_code' => 'wallet_pin_not_configured',
+            ], 422);
+        }
+
+        if (!$this->walletSettingsService->verifyOperatorPin($pin)) {
+            return response()->json([
+                'message' => 'Wallet PIN is invalid.',
+                'error_code' => 'wallet_pin_invalid',
+            ], 403);
+        }
+
+        return null;
     }
 }

@@ -33,6 +33,7 @@ Route::get('/ping', function () {
 
 // CRM Auth (public)
 Route::post('/crm/login', [CrmAuthController::class, 'login']);
+Route::get('/billing/health', [BillingController::class, 'health']);
 
 // CRM Protected Routes (Sanctum token required)
 Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
@@ -183,8 +184,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
     Route::get('/settings/wallet', [SettingsController::class, 'wallet']);
     Route::patch('/settings/wallet', [SettingsController::class, 'updateWallet'])->middleware('role:admin');
+    Route::patch('/settings/wallet/pin', [SettingsController::class, 'updateWalletPin'])->middleware('role:admin');
     Route::post('/settings/wallet/test-email', [SettingsController::class, 'testWalletEmail'])->middleware('role:admin');
     Route::post('/settings/wallet/test-domain', [SettingsController::class, 'testWalletDomain'])->middleware('role:admin');
+    Route::post('/settings/wallet/test-app', [SettingsController::class, 'testWalletApp'])->middleware('role:admin');
     Route::post('/settings/wallet/test-ssl', [SettingsController::class, 'testWalletSsl'])->middleware('role:admin');
     Route::get('/settings/integrations/push-provider', [SettingsController::class, 'pushProviderConfig']);
     Route::patch('/settings/integrations/push-provider', [SettingsController::class, 'updatePushProvider'])->middleware('role:admin,sub_admin');

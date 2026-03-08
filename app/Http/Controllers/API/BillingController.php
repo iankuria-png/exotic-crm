@@ -216,6 +216,18 @@ class BillingController extends Controller
         ]);
     }
 
+    public function health(Request $request)
+    {
+        return response()->json([
+            'ok' => true,
+            'service' => 'billing',
+            'app' => config('app.name', 'ExoticCRM'),
+            'environment' => app()->environment(),
+            'timestamp' => now()->toIso8601String(),
+            'host' => $request->getHost(),
+        ]);
+    }
+
     private function resolveWalletClient(Request $request): array
     {
         /** @var Platform $platform */

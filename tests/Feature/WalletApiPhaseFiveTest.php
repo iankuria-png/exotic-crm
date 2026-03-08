@@ -21,11 +21,12 @@ class WalletApiPhaseFiveTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_admin_client_wallet_routes_return_summary_and_allow_adjustments(): void
+    public function test_admin_client_wallet_routes_return_summary_and_allow_topups_and_adjustments_with_pin(): void
     {
         ['platform' => $platform, 'client' => $client] = $this->seedWalletContext([
             'client_balance' => 700,
         ]);
+        $this->configureWalletPin();
 
         Sanctum::actingAs($this->createUser('admin'));
 
@@ -34,9 +35,20 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('wallet.balance', '700.00')
             ->assertJsonPath('wallet.currency', 'KES');
 
+        $topupResponse = $this->postJson("/api/crm/clients/{$client->id}/wallet/topup", [
+            'amount' => '250.00',
+            'pin' => '1234',
+            'reason' => 'Manual QA top-up',
+        ]);
+
+        $topupResponse->assertCreated()
+            ->assertJsonPath('wallet.balance', '950.00')
+            ->assertJsonPath('transaction.type', 'credit');
+
         $adjustmentResponse = $this->postJson("/api/crm/clients/{$client->id}/wallet/adjustment", [
             'type' => 'credit',
-            'amount' => '300.00',
+            'amount' => '50.00',
+            'pin' => '1234',
             'reason' => 'Manual QA credit',
         ]);
 
@@ -62,12 +74,14 @@ class WalletApiPhaseFiveTest extends TestCase
         ['platform' => $platform, 'client' => $client] = $this->seedWalletContext([
             'client_balance' => 700,
         ]);
+        $this->configureWalletPin();
 
         Sanctum::actingAs($this->createUser('sales', [$platform->id]));
 
         $salesResponse = $this->postJson("/api/crm/clients/{$client->id}/wallet/adjustment", [
             'type' => 'credit',
             'amount' => '200.00',
+            'pin' => '1234',
             'reason' => 'Sales support correction',
         ]);
 
@@ -92,10 +106,50 @@ class WalletApiPhaseFiveTest extends TestCase
         $marketingResponse = $this->postJson("/api/crm/clients/{$client->id}/wallet/adjustment", [
             'type' => 'credit',
             'amount' => '50.00',
+            'pin' => '1234',
             'reason' => 'Should be rejected',
         ]);
 
         $marketingResponse->assertForbidden();
+    }
+
+    public function test_client_wallet_adjustment_requires_configured_pin(): void
+    {
+        ['client' => $client] = $this->seedWalletContext([
+            'client_balance' => 700,
+        ]);
+
+        Sanctum::actingAs($this->createUser('admin'));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/wallet/adjustment", [
+            'type' => 'credit',
+            'amount' => '200.00',
+            'pin' => '1234',
+            'reason' => 'Attempt without configured PIN',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error_code', 'wallet_pin_not_configured');
+    }
+
+    public function test_client_wallet_adjustment_rejects_invalid_pin(): void
+    {
+        ['client' => $client] = $this->seedWalletContext([
+            'client_balance' => 700,
+        ]);
+        $this->configureWalletPin();
+
+        Sanctum::actingAs($this->createUser('admin'));
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/wallet/adjustment", [
+            'type' => 'credit',
+            'amount' => '200.00',
+            'pin' => '9999',
+            'reason' => 'Attempt with wrong PIN',
+        ]);
+
+        $response->assertStatus(403)
+            ->assertJsonPath('error_code', 'wallet_pin_invalid');
     }
 
     public function test_wallet_balance_endpoint_returns_live_summary_for_authenticated_request(): void
@@ -623,6 +677,11 @@ class WalletApiPhaseFiveTest extends TestCase
                 'main_image_url' => 'https://images.example.test/profile.jpg',
             ], $profileOverrides), 200),
         ]);
+    }
+
+    private function configureWalletPin(string $pin = '1234'): void
+    {
+        app(WalletSettingsService::class)->updateOperatorPin($pin);
     }
 
     private function createUser(string $role, array $assignedMarketIds = []): User

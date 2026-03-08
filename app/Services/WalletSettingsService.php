@@ -31,6 +31,8 @@ class WalletSettingsService
         $maskedConfig = $config;
         $maskedConfig['smtp']['password_configured'] = !empty($config['smtp']['password']);
         $maskedConfig['smtp']['password'] = '';
+        $maskedConfig['pin_hash'] = '';
+        $maskedConfig['pin_set'] = !empty($config['pin_hash']);
 
         return $maskedConfig;
     }
@@ -49,6 +51,40 @@ class WalletSettingsService
         );
 
         return $this->currentSystemConfig(masked: true);
+    }
+
+    public function updateOperatorPin(string $pin, ?int $updatedBy = null): array
+    {
+        $pin = trim($pin);
+        if (!preg_match('/^\d{4,6}$/', $pin)) {
+            throw new InvalidArgumentException('Wallet PIN must be 4 to 6 digits.');
+        }
+
+        $current = $this->resolveSystemConfig();
+        $current['pin_hash'] = Hash::make($pin);
+        $current['pin_last_updated_at'] = now()->toIso8601String();
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => self::SYSTEM_SETTINGS_KEY],
+            [
+                'value' => $this->systemConfigForStorage($current),
+                'updated_by' => $updatedBy,
+            ]
+        );
+
+        return $this->currentSystemConfig(masked: true);
+    }
+
+    public function operatorPinIsConfigured(): bool
+    {
+        return !empty($this->resolveSystemConfig()['pin_hash'] ?? '');
+    }
+
+    public function verifyOperatorPin(string $pin): bool
+    {
+        $hash = (string) ($this->resolveSystemConfig()['pin_hash'] ?? '');
+
+        return $hash !== '' && Hash::check(trim($pin), $hash);
     }
 
     public function currentPlatformConfig(Platform $platform, bool $masked = true): array
@@ -229,6 +265,33 @@ class WalletSettingsService
         ];
     }
 
+    public function testBillingApp(string $environment): array
+    {
+        $environment = $this->normalizeEnvironment($environment);
+        $system = $this->resolveSystemConfig();
+        $url = trim((string) ($system['billing_domains'][$environment] ?? ''));
+
+        if ($url === '') {
+            throw new InvalidArgumentException("No {$environment} billing domain is configured.");
+        }
+
+        $healthUrl = rtrim($url, '/') . '/api/billing/health';
+        $response = Http::timeout(10)->get($healthUrl);
+        $payload = $response->json();
+
+        return [
+            'environment' => $environment,
+            'url' => $healthUrl,
+            'ok' => $response->successful(),
+            'status' => $response->successful() ? 'success' : 'failed',
+            'http_status' => $response->status(),
+            'message' => $response->successful()
+                ? 'Billing app reachability test passed.'
+                : 'Billing app reachability test failed.',
+            'provider_response' => is_array($payload) ? $payload : null,
+        ];
+    }
+
     public function sendTestEmail(string $toEmail): array
     {
         $system = $this->resolveSystemConfig();
@@ -335,6 +398,8 @@ class WalletSettingsService
             'wallet_refresh_rate_limit_seconds' => 15,
             'wallet_refresh_timeout_seconds' => 15,
             'topup_poll_interval_seconds' => 10,
+            'pin_hash' => '',
+            'pin_last_updated_at' => null,
             'smtp' => [
                 'enabled' => false,
                 'host' => '',
@@ -540,6 +605,15 @@ class WalletSettingsService
             }
         }
 
+        if (array_key_exists('pin_hash', $incoming) && trim((string) $incoming['pin_hash']) !== '') {
+            $merged['pin_hash'] = (string) $incoming['pin_hash'];
+        }
+        if (array_key_exists('pin_last_updated_at', $incoming)) {
+            $merged['pin_last_updated_at'] = $incoming['pin_last_updated_at']
+                ? (string) $incoming['pin_last_updated_at']
+                : null;
+        }
+
         return $merged;
     }
 
@@ -692,6 +766,8 @@ class WalletSettingsService
     private function systemConfigForStorage(array $config): array
     {
         $stored = $config;
+        $stored['pin_hash'] = (string) ($config['pin_hash'] ?? '');
+        $stored['pin_last_updated_at'] = $config['pin_last_updated_at'] ?? null;
         $stored['smtp'] = [
             'enabled' => (bool) ($config['smtp']['enabled'] ?? false),
             'host' => (string) ($config['smtp']['host'] ?? ''),
@@ -711,6 +787,8 @@ class WalletSettingsService
     private function systemConfigFromStorage(array $stored): array
     {
         $config = $stored;
+        $config['pin_hash'] = (string) ($stored['pin_hash'] ?? '');
+        $config['pin_last_updated_at'] = $stored['pin_last_updated_at'] ?? null;
         $smtp = is_array($stored['smtp'] ?? null) ? $stored['smtp'] : [];
         $config['smtp'] = [
             'enabled' => (bool) ($smtp['enabled'] ?? false),

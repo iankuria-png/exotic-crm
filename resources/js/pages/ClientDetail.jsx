@@ -352,11 +352,13 @@ export default function ClientDetail() {
     const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
     const [walletTopupForm, setWalletTopupForm] = useState({
         amount: '',
+        pin: '',
         reason: 'Manual wallet top-up from client profile',
     });
     const [walletAdjustmentForm, setWalletAdjustmentForm] = useState({
         type: 'debit',
         amount: '',
+        pin: '',
         reason: 'Wallet adjustment from client profile',
     });
 
@@ -589,6 +591,7 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             setWalletTopupForm({
                 amount: '',
+                pin: '',
                 reason: 'Manual wallet top-up from client profile',
             });
             toast.success('Wallet top-up recorded.');
@@ -606,6 +609,7 @@ export default function ClientDetail() {
             setWalletAdjustmentForm((current) => ({
                 ...current,
                 amount: '',
+                pin: '',
                 reason: 'Wallet adjustment from client profile',
             }));
             toast.success('Wallet adjustment recorded.');
@@ -1304,6 +1308,15 @@ export default function ClientDetail() {
                                         className="crm-input"
                                         placeholder="Top-up amount"
                                     />
+                                    <input
+                                        type="password"
+                                        inputMode="numeric"
+                                        maxLength={6}
+                                        value={walletTopupForm.pin}
+                                        onChange={(event) => setWalletTopupForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                        className="crm-input"
+                                        placeholder="Wallet PIN"
+                                    />
                                     <textarea
                                         rows={3}
                                         value={walletTopupForm.reason}
@@ -1316,9 +1329,10 @@ export default function ClientDetail() {
                                             type="button"
                                             onClick={() => walletTopupMutation.mutate({
                                                 amount: walletTopupForm.amount,
+                                                pin: walletTopupForm.pin,
                                                 reason: walletTopupForm.reason.trim(),
                                             })}
-                                            disabled={!walletTopupForm.amount || !walletTopupForm.reason.trim() || walletTopupMutation.isPending}
+                                            disabled={!walletTopupForm.amount || !walletTopupForm.pin.trim() || !walletTopupForm.reason.trim() || walletTopupMutation.isPending}
                                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {walletTopupMutation.isPending ? 'Recording...' : 'Record top-up'}
@@ -1348,6 +1362,15 @@ export default function ClientDetail() {
                                         className="crm-input"
                                         placeholder="Adjustment amount"
                                     />
+                                    <input
+                                        type="password"
+                                        inputMode="numeric"
+                                        maxLength={6}
+                                        value={walletAdjustmentForm.pin}
+                                        onChange={(event) => setWalletAdjustmentForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                        className="crm-input"
+                                        placeholder="Wallet PIN"
+                                    />
                                     <textarea
                                         rows={3}
                                         value={walletAdjustmentForm.reason}
@@ -1361,9 +1384,10 @@ export default function ClientDetail() {
                                             onClick={() => walletAdjustmentMutation.mutate({
                                                 type: walletAdjustmentForm.type,
                                                 amount: walletAdjustmentForm.amount,
+                                                pin: walletAdjustmentForm.pin,
                                                 reason: walletAdjustmentForm.reason.trim(),
                                             })}
-                                            disabled={!walletAdjustmentForm.amount || !walletAdjustmentForm.reason.trim() || walletAdjustmentMutation.isPending}
+                                            disabled={!walletAdjustmentForm.amount || !walletAdjustmentForm.pin.trim() || !walletAdjustmentForm.reason.trim() || walletAdjustmentMutation.isPending}
                                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {walletAdjustmentMutation.isPending ? 'Recording...' : 'Record adjustment'}

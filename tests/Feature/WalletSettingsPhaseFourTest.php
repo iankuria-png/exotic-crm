@@ -212,6 +212,30 @@ class WalletSettingsPhaseFourTest extends TestCase
         );
     }
 
+    public function test_admin_can_update_wallet_pin_and_response_remains_masked(): void
+    {
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson('/api/crm/settings/wallet/pin', [
+            'pin' => '4821',
+            'pin_confirmation' => '4821',
+            'reason' => 'Set wallet PIN before sales QA',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('system.pin_set', true)
+            ->assertJsonPath('system.pin_hash', '');
+
+        $this->assertNotEmpty($response->json('system.pin_last_updated_at'));
+
+        $stored = IntegrationSetting::query()
+            ->where('key', WalletSettingsService::SYSTEM_SETTINGS_KEY)
+            ->firstOrFail();
+
+        $this->assertTrue(Hash::check('4821', (string) data_get($stored->value, 'pin_hash')));
+    }
+
     public function test_wallet_provider_ssl_and_email_tests_use_configured_values(): void
     {
         $platform = $this->createPlatform('Tanzania');
@@ -261,6 +285,10 @@ class WalletSettingsPhaseFourTest extends TestCase
                 'status' => true,
                 'message' => 'Banks returned',
             ], 200),
+            'https://billing-sandbox.example.test/api/billing/health' => Http::response([
+                'ok' => true,
+                'service' => 'wallet_billing',
+            ], 200),
             'https://billing-sandbox.example.test' => Http::response('ok', 200),
         ]);
         Mail::fake();
@@ -290,6 +318,18 @@ class WalletSettingsPhaseFourTest extends TestCase
             ->assertJsonPath('result.environment', 'sandbox')
             ->assertJsonPath('result.ok', true)
             ->assertJsonPath('result.http_status', 200);
+
+        $appResponse = $this->postJson('/api/crm/settings/wallet/test-app', [
+            'environment' => 'sandbox',
+            'reason' => 'Verify sandbox billing app',
+        ]);
+
+        $appResponse->assertOk()
+            ->assertJsonPath('result.environment', 'sandbox')
+            ->assertJsonPath('result.ok', true)
+            ->assertJsonPath('result.http_status', 200)
+            ->assertJsonPath('result.url', 'https://billing-sandbox.example.test/api/billing/health')
+            ->assertJsonPath('result.provider_response.ok', true);
 
         $emailResponse = $this->postJson('/api/crm/settings/wallet/test-email', [
             'to_email' => 'ops@example.test',

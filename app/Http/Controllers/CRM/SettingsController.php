@@ -544,6 +544,48 @@ class SettingsController extends Controller
         ]);
     }
 
+    public function updateWalletPin(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can update the wallet PIN.'
+        );
+
+        $validated = $request->validate([
+            'pin' => ['required', 'regex:/^\d{4,6}$/'],
+            'pin_confirmation' => 'required|string|same:pin',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $before = $this->walletSettingsService->currentSystemConfig(masked: true);
+        $saved = $this->walletSettingsService->updateOperatorPin(
+            (string) $validated['pin'],
+            (int) $request->user()->id
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId([]) ?? 1,
+            CrmAuditAction::WALLET_PIN_UPDATE,
+            'integration_setting',
+            1,
+            [
+                'pin_set' => (bool) ($before['pin_set'] ?? false),
+                'pin_last_updated_at' => $before['pin_last_updated_at'] ?? null,
+            ],
+            [
+                'pin_set' => (bool) ($saved['pin_set'] ?? false),
+                'pin_last_updated_at' => $saved['pin_last_updated_at'] ?? null,
+            ],
+            $validated['reason'] ?? 'Updated wallet operator PIN'
+        );
+
+        return response()->json([
+            'system' => $saved,
+        ]);
+    }
+
     public function updatePlatformWallet(Request $request, Platform $platform)
     {
         $this->marketAuthorizationService->ensureRole(
@@ -885,6 +927,62 @@ class SettingsController extends Controller
                     'status' => 'failed',
                     'message' => $exception->getMessage(),
                 ],
+            ], 422);
+        }
+    }
+
+    public function testWalletApp(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can test wallet billing app reachability.'
+        );
+
+        $validated = $request->validate([
+            'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $result = $this->walletSettingsService->testBillingApp($validated['environment']);
+
+            $this->auditService->fromRequest(
+                $request,
+                $this->resolveAuditPlatformId([]) ?? 1,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'integration_setting',
+                1,
+                null,
+                ['wallet_billing_app_test' => $result],
+                $validated['reason'] ?? 'Wallet billing app test executed'
+            );
+
+            return response()->json([
+                'result' => $result,
+            ], ($result['ok'] ?? false) ? 200 : 422);
+        } catch (\Throwable $exception) {
+            $result = [
+                'environment' => $validated['environment'],
+                'ok' => false,
+                'status' => 'failed',
+                'message' => $exception->getMessage(),
+            ];
+
+            $this->auditService->fromRequest(
+                $request,
+                $this->resolveAuditPlatformId([]) ?? 1,
+                CrmAuditAction::INTEGRATION_CONNECTION_TEST,
+                'integration_setting',
+                1,
+                null,
+                ['wallet_billing_app_test' => $result],
+                $validated['reason'] ?? 'Wallet billing app test executed'
+            );
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'result' => $result,
             ], 422);
         }
     }

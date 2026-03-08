@@ -397,6 +397,8 @@ function defaultWalletSystemForm() {
             from_address: '',
             from_name: '',
         },
+        pin_set: false,
+        pin_last_updated_at: null,
         reason: 'Updated wallet system settings',
     };
 }
@@ -442,7 +444,17 @@ function buildWalletSystemForm(systemConfig) {
             from_address: systemConfig.smtp?.from_address || '',
             from_name: systemConfig.smtp?.from_name || '',
         },
+        pin_set: Boolean(systemConfig.pin_set),
+        pin_last_updated_at: systemConfig.pin_last_updated_at || null,
         reason: 'Updated wallet system settings',
+    };
+}
+
+function defaultWalletPinForm() {
+    return {
+        pin: '',
+        pin_confirmation: '',
+        reason: 'Updated wallet operator PIN',
     };
 }
 
@@ -660,6 +672,7 @@ function IntegrationsWorkspace({
     const [pushTestConfirmOpen, setPushTestConfirmOpen] = useState(false);
     const [latestPushTestResult, setLatestPushTestResult] = useState(null);
     const [walletSystemForm, setWalletSystemForm] = useState(defaultWalletSystemForm());
+    const [walletPinForm, setWalletPinForm] = useState(defaultWalletPinForm());
     const [walletPlatformForm, setWalletPlatformForm] = useState(defaultWalletPlatformForm());
     const [walletProvidersForm, setWalletProvidersForm] = useState(buildWalletProvidersForm(null));
     const [walletProviderTestForm, setWalletProviderTestForm] = useState({
@@ -667,6 +680,7 @@ function IntegrationsWorkspace({
         environment: 'sandbox',
         reason: 'Wallet provider connectivity test',
     });
+    const [walletGuideEnvironment, setWalletGuideEnvironment] = useState('sandbox');
     const [walletDomainTestForm, setWalletDomainTestForm] = useState({
         environment: 'sandbox',
         reason: 'Wallet billing domain DNS check',
@@ -674,6 +688,10 @@ function IntegrationsWorkspace({
     const [walletSslTestForm, setWalletSslTestForm] = useState({
         environment: 'sandbox',
         reason: 'Wallet billing SSL reachability check',
+    });
+    const [walletAppTestForm, setWalletAppTestForm] = useState({
+        environment: 'sandbox',
+        reason: 'Wallet billing app reachability check',
     });
     const [walletEmailTestForm, setWalletEmailTestForm] = useState({
         to_email: currentUserEmail || '',
@@ -687,6 +705,7 @@ function IntegrationsWorkspace({
     const [latestWalletProviderTest, setLatestWalletProviderTest] = useState(null);
     const [latestWalletDomainTest, setLatestWalletDomainTest] = useState(null);
     const [latestWalletSslTest, setLatestWalletSslTest] = useState(null);
+    const [latestWalletAppTest, setLatestWalletAppTest] = useState(null);
     const [latestWalletEmailTest, setLatestWalletEmailTest] = useState(null);
     const [walletCredentialReveal, setWalletCredentialReveal] = useState(null);
     const [selectedScraperSourceId, setSelectedScraperSourceId] = useState(null);
@@ -801,6 +820,16 @@ function IntegrationsWorkspace({
     useEffect(() => {
         setWalletSystemForm(buildWalletSystemForm(walletSystemConfig));
     }, [walletSystemConfig]);
+
+    useEffect(() => {
+        if (!walletEnvironmentOptions.length) {
+            return;
+        }
+
+        if (!walletEnvironmentOptions.includes(walletGuideEnvironment)) {
+            setWalletGuideEnvironment(walletEnvironmentOptions[0]);
+        }
+    }, [walletEnvironmentOptions, walletGuideEnvironment]);
 
     useEffect(() => {
         if (!selectedPlatform) {
@@ -1095,6 +1124,24 @@ function IntegrationsWorkspace({
         },
     });
 
+    const updateWalletPinMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/wallet/pin', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            const system = buildWalletSystemForm(response?.system || null);
+            setWalletSystemForm((current) => ({
+                ...current,
+                pin_set: system.pin_set,
+                pin_last_updated_at: system.pin_last_updated_at,
+            }));
+            setWalletPinForm(defaultWalletPinForm());
+            toast.success('Wallet PIN updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update wallet PIN.');
+        },
+    });
+
     const saveWalletPlatformMutation = useMutation({
         mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}/wallet`, payload).then((response) => response.data),
         onSuccess: (response) => {
@@ -1182,6 +1229,21 @@ function IntegrationsWorkspace({
                 setLatestWalletSslTest(result);
             }
             toast.error(error?.response?.data?.message || result?.message || 'Wallet SSL test failed.');
+        },
+    });
+
+    const testWalletAppMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/wallet/test-app', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestWalletAppTest(response?.result || null);
+            toast.success('Wallet billing app test completed.');
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestWalletAppTest(result);
+            }
+            toast.error(error?.response?.data?.message || result?.message || 'Wallet billing app test failed.');
         },
     });
 
@@ -1275,6 +1337,14 @@ function IntegrationsWorkspace({
                 from_name: walletSystemForm.smtp.from_name.trim(),
             },
             reason: walletSystemForm.reason.trim(),
+        });
+    };
+
+    const saveWalletPin = () => {
+        updateWalletPinMutation.mutate({
+            pin: walletPinForm.pin.trim(),
+            pin_confirmation: walletPinForm.pin_confirmation.trim(),
+            reason: walletPinForm.reason.trim(),
         });
     };
 
@@ -1440,7 +1510,7 @@ function IntegrationsWorkspace({
         });
     };
 
-    const copyWalletReveal = async (label, value) => {
+    const copyToClipboard = async (value, successMessage, failureMessage) => {
         if (!value) {
             return;
         }
@@ -1451,10 +1521,30 @@ function IntegrationsWorkspace({
             }
 
             await navigator.clipboard.writeText(value);
-            toast.success(`${label} copied to clipboard.`);
+            toast.success(successMessage);
         } catch (_error) {
-            toast.error(`Copy ${label.toLowerCase()} manually from the reveal panel.`);
+            toast.error(failureMessage);
         }
+    };
+
+    const copyWalletReveal = async (label, value) => {
+        if (!value) {
+            return;
+        }
+
+        await copyToClipboard(
+            value,
+            `${label} copied to clipboard.`,
+            `Copy ${label.toLowerCase()} manually from the reveal panel.`
+        );
+    };
+
+    const copyWalletGuideValue = async (label, value) => {
+        await copyToClipboard(
+            value,
+            `${label} copied to clipboard.`,
+            `Copy ${label.toLowerCase()} manually from the setup guide.`
+        );
     };
 
     const testPushProviderMutation = useMutation({
@@ -1926,6 +2016,37 @@ function IntegrationsWorkspace({
     const selectedWalletEffectiveMode = selectedWalletConfig?.effective_mode || 'disabled';
     const selectedWalletProvidersEnabled = Object.values(walletPlatformForm.providers || {}).filter((provider) => provider?.enabled).length;
     const selectedWalletWpCredentials = walletProvidersForm.wp_to_crm || {};
+    const walletGuideDomain = walletSystemForm.billing_domains?.[walletGuideEnvironment]?.trim() || '';
+    const walletGuideBaseUrl = walletGuideDomain || 'https://billing.example.com';
+    const walletGuideProxyTarget = (typeof window !== 'undefined' ? window.location.origin : '') || 'https://crm.example.com';
+    const walletGuideHealthUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/health`;
+    const walletGuideCompleteUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/billing/complete?payment={transaction_uuid}`;
+    const walletGuidePaystackWebhookUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/paystack/webhook`;
+    const walletGuidePesapalWebhookUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/pesapal/webhook`;
+    const walletGuideMpesaCallbackUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/mpesa/callback`;
+    const walletGuideDomainResult = latestWalletDomainTest?.environment === walletGuideEnvironment ? latestWalletDomainTest : null;
+    const walletGuideSslResult = latestWalletSslTest?.environment === walletGuideEnvironment ? latestWalletSslTest : null;
+    const walletGuideAppResult = latestWalletAppTest?.environment === walletGuideEnvironment ? latestWalletAppTest : null;
+    const walletGuideNginxSnippet = [
+        'server {',
+        `    server_name ${walletGuideDomain || 'billing.example.com'};`,
+        '    location / {',
+        `        proxy_pass ${walletGuideProxyTarget};`,
+        '        proxy_set_header Host $host;',
+        '        proxy_set_header X-Forwarded-Proto $scheme;',
+        '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+        '    }',
+        '}',
+    ].join('\n');
+    const walletGuideApacheSnippet = [
+        '<VirtualHost *:443>',
+        `    ServerName ${walletGuideDomain || 'billing.example.com'}`,
+        '    SSLProxyEngine On',
+        '    ProxyPreserveHost On',
+        `    ProxyPass / ${walletGuideProxyTarget}/`,
+        `    ProxyPassReverse / ${walletGuideProxyTarget}/`,
+        '</VirtualHost>',
+    ].join('\n');
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
     const selectedPackageSetup = selectedPlatform?.package_setup || null;
@@ -2760,6 +2881,186 @@ function IntegrationsWorkspace({
                             </section>
 
                             <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-slate-900">Billing Domain Setup Guide</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Step-by-step launch notes for DNS, SSL, reverse proxy, and provider callbacks for each billing environment.</p>
+                                    </div>
+                                    <select
+                                        value={walletGuideEnvironment}
+                                        onChange={(event) => setWalletGuideEnvironment(event.target.value)}
+                                        className="crm-select w-full max-w-[220px]"
+                                    >
+                                        {walletEnvironmentOptions.map((environment) => (
+                                            <option key={`wallet-guide-${environment}`} value={environment}>{environment}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {!walletGuideDomain ? (
+                                    <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                        Enter a {walletGuideEnvironment} billing domain above before copying callback URLs or running the app reachability check.
+                                    </p>
+                                ) : null}
+
+                                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">DNS</p>
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${statusChip(walletGuideDomainResult?.status || 'pending')}`}>
+                                                {(walletGuideDomainResult?.status || 'pending').replaceAll('_', ' ')}
+                                            </span>
+                                        </div>
+                                        <p className="mt-2 break-all text-xs text-slate-600">{walletGuideDomain || 'Billing domain not configured yet.'}</p>
+                                    </div>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">SSL</p>
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${statusChip(walletGuideSslResult ? (walletGuideSslResult.ok ? 'success' : 'failed') : 'pending')}`}>
+                                                {walletGuideSslResult ? (walletGuideSslResult.ok ? 'success' : 'failed') : 'pending'}
+                                            </span>
+                                        </div>
+                                        <p className="mt-2 text-xs text-slate-600">{walletGuideSslResult?.message || 'Run the SSL test after the certificate is issued.'}</p>
+                                    </div>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">App</p>
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${statusChip(walletGuideAppResult ? (walletGuideAppResult.ok ? 'success' : 'failed') : 'pending')}`}>
+                                                {walletGuideAppResult ? (walletGuideAppResult.ok ? 'success' : 'failed') : 'pending'}
+                                            </span>
+                                        </div>
+                                        <p className="mt-2 break-all text-xs text-slate-600">{walletGuideAppResult?.url || walletGuideHealthUrl}</p>
+                                    </div>
+                                </div>
+
+                                <div className="mt-3 space-y-3">
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <p className="text-sm font-semibold text-slate-900">1. DNS</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => copyWalletGuideValue('Billing domain', walletGuideDomain)}
+                                                disabled={!walletGuideDomain}
+                                                className="text-xs font-semibold text-teal-700 hover:text-teal-900 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                Copy domain
+                                            </button>
+                                        </div>
+                                        <p className="mt-2 text-xs text-slate-600">Create an A or CNAME record for the billing hostname and point it to the CRM host that serves browser flows and `/api/billing/*` endpoints.</p>
+                                        <code className="mt-2 block break-all rounded bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100">{walletGuideDomain || 'https://billing.example.com'}</code>
+                                    </div>
+
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-sm font-semibold text-slate-900">2. Web server / reverse proxy</p>
+                                        <p className="mt-2 text-xs text-slate-600">Route the billing hostname to the CRM app so both browser pages (`/billing/*`) and API callbacks (`/api/billing/*`) resolve on the same host.</p>
+                                        <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                                            <div>
+                                                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Nginx example</p>
+                                                <pre className="mt-2 overflow-x-auto rounded bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-100"><code>{walletGuideNginxSnippet}</code></pre>
+                                            </div>
+                                            <div>
+                                                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Apache example</p>
+                                                <pre className="mt-2 overflow-x-auto rounded bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-100"><code>{walletGuideApacheSnippet}</code></pre>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-sm font-semibold text-slate-900">3. SSL</p>
+                                        <p className="mt-2 text-xs text-slate-600">Issue a certificate for the billing hostname, force HTTPS, then run both the SSL and app tests from the panel on the right.</p>
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => copyWalletGuideValue('Billing health URL', walletGuideHealthUrl)}
+                                                disabled={!walletGuideDomain}
+                                                className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                Copy health URL
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => copyWalletGuideValue('Completion URL', walletGuideCompleteUrl)}
+                                                disabled={!walletGuideDomain}
+                                                className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                Copy completion URL
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-sm font-semibold text-slate-900">4. Provider account registration</p>
+                                        <p className="mt-2 text-xs text-slate-600">Register the billing callbacks with each provider, then store the market-specific credentials below in the provider credentials section.</p>
+                                        <div className="mt-3 space-y-2">
+                                            <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <p className="text-xs font-semibold text-slate-800">Paystack browser callback</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyWalletGuideValue('Paystack callback URL', walletGuideCompleteUrl)}
+                                                        disabled={!walletGuideDomain}
+                                                        className="text-xs font-semibold text-teal-700 hover:text-teal-900 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                                <code className="mt-2 block break-all rounded bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100">{walletGuideCompleteUrl}</code>
+                                            </div>
+                                            <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <p className="text-xs font-semibold text-slate-800">Pesapal return/IPN setup</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyWalletGuideValue('Pesapal callback URL', walletGuideCompleteUrl)}
+                                                        disabled={!walletGuideDomain}
+                                                        className="text-xs font-semibold text-teal-700 hover:text-teal-900 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                                <code className="mt-2 block break-all rounded bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100">{walletGuideCompleteUrl}</code>
+                                                <p className="mt-2 text-[11px] text-slate-500">Current selected-market IPN ID: {walletProvidersForm.pesapal?.[walletGuideEnvironment]?.ipn_id || 'not configured'}</p>
+                                            </div>
+                                            <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <p className="text-xs font-semibold text-slate-800">M-Pesa callback</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyWalletGuideValue('M-Pesa callback URL', walletGuideMpesaCallbackUrl)}
+                                                        disabled={!walletGuideDomain}
+                                                        className="text-xs font-semibold text-teal-700 hover:text-teal-900 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                                <code className="mt-2 block break-all rounded bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100">{walletGuideMpesaCallbackUrl}</code>
+                                                <p className="mt-2 text-[11px] text-slate-500">
+                                                    Transport: {walletProvidersForm.mpesa_stk?.[walletGuideEnvironment]?.transport || 'django_proxy'}
+                                                    {' • '}
+                                                    Upstream: {walletProvidersForm.mpesa_stk?.[walletGuideEnvironment]?.payment_service_base_url || 'not configured'}
+                                                </p>
+                                            </div>
+                                            <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <p className="text-xs font-semibold text-slate-800">Generic webhook/API host</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyWalletGuideValue('Billing API host', walletGuidePaystackWebhookUrl)}
+                                                        disabled={!walletGuideDomain}
+                                                        className="text-xs font-semibold text-teal-700 hover:text-teal-900 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        Copy Paystack URL
+                                                    </button>
+                                                </div>
+                                                <p className="mt-2 break-all text-[11px] text-slate-600">Paystack: {walletGuidePaystackWebhookUrl}</p>
+                                                <p className="mt-1 break-all text-[11px] text-slate-600">Pesapal: {walletGuidePesapalWebhookUrl}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
                                 <h4 className="text-sm font-semibold text-slate-900">Wallet SMTP</h4>
                                 <p className="mt-1 text-xs text-slate-500">Used for wallet billing test messages and recovery notifications where SMTP delivery is enabled.</p>
 
@@ -2835,6 +3136,77 @@ function IntegrationsWorkspace({
                                         ? 'SMTP password is already stored. Leave the password field blank to keep it.'
                                         : 'No SMTP password is currently stored.'}
                                 </p>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-slate-900">Wallet PIN</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Required for manual wallet top-ups and balance adjustments from CRM client profiles.</p>
+                                    </div>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(walletSystemForm.pin_set ? 'success' : 'pending')}`}>
+                                        {walletSystemForm.pin_set ? 'configured' : 'not set'}
+                                    </span>
+                                </div>
+
+                                {!canManageWalletSystem ? (
+                                    <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                        Only admin can rotate the wallet PIN. Sales and sub-admin users will use the configured PIN on client wallet actions.
+                                    </p>
+                                ) : null}
+
+                                <fieldset disabled={walletSystemReadOnly || updateWalletPinMutation.isPending} className={`mt-3 ${walletSystemReadOnly ? 'opacity-70' : ''}`}>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Last rotated</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(walletSystemForm.pin_last_updated_at)}</p>
+                                        </div>
+
+                                        <input
+                                            type="password"
+                                            inputMode="numeric"
+                                            maxLength={6}
+                                            value={walletPinForm.pin}
+                                            onChange={(event) => setWalletPinForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                            className="crm-input"
+                                            placeholder="New wallet PIN"
+                                        />
+                                        <input
+                                            type="password"
+                                            inputMode="numeric"
+                                            maxLength={6}
+                                            value={walletPinForm.pin_confirmation}
+                                            onChange={(event) => setWalletPinForm((current) => ({ ...current, pin_confirmation: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                            className="crm-input"
+                                            placeholder="Confirm wallet PIN"
+                                        />
+
+                                        <textarea
+                                            rows={2}
+                                            value={walletPinForm.reason}
+                                            onChange={(event) => setWalletPinForm((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="Reason for wallet PIN rotation"
+                                        />
+                                    </div>
+                                </fieldset>
+
+                                <div className="mt-3 flex justify-end">
+                                    <button
+                                        type="button"
+                                        onClick={saveWalletPin}
+                                        disabled={
+                                            walletSystemReadOnly
+                                            || updateWalletPinMutation.isPending
+                                            || walletPinForm.pin.length < 4
+                                            || walletPinForm.pin_confirmation.length < 4
+                                            || !walletPinForm.reason.trim()
+                                        }
+                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {updateWalletPinMutation.isPending ? 'Saving...' : (walletSystemForm.pin_set ? 'Rotate wallet PIN' : 'Set wallet PIN')}
+                                    </button>
+                                </div>
                             </section>
 
                             <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -3304,12 +3676,17 @@ function IntegrationsWorkspace({
                                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Selected providers</p>
                                         <p className="mt-1 text-lg font-semibold text-slate-900">{selectedWalletProvidersEnabled}</p>
                                     </div>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Operator PIN</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{walletSystemForm.pin_set ? 'Configured' : 'Missing'}</p>
+                                        <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(walletSystemForm.pin_last_updated_at)}</p>
+                                    </div>
                                 </div>
                             </section>
 
                             <section className="rounded-lg border border-slate-200 bg-white p-3">
                                 <h4 className="text-sm font-semibold text-slate-900">Connectivity Tests</h4>
-                                <p className="mt-1 text-xs text-slate-500">Run DNS, SSL, provider, and SMTP checks against the current configuration.</p>
+                                <p className="mt-1 text-xs text-slate-500">Run DNS, SSL, app, provider, and SMTP checks against the current configuration.</p>
 
                                 <div className="mt-3 space-y-3">
                                     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -3372,6 +3749,38 @@ function IntegrationsWorkspace({
                                                 onChange={(event) => setWalletSslTestForm((current) => ({ ...current, reason: event.target.value }))}
                                                 className="crm-input md:col-span-2"
                                                 placeholder="Reason for billing SSL test"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Billing app</p>
+                                        <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
+                                            <select
+                                                value={walletAppTestForm.environment}
+                                                onChange={(event) => setWalletAppTestForm((current) => ({ ...current, environment: event.target.value }))}
+                                                className="crm-select"
+                                            >
+                                                {walletEnvironmentOptions.map((environment) => (
+                                                    <option key={`wallet-app-${environment}`} value={environment}>{environment}</option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() => testWalletAppMutation.mutate({
+                                                    environment: walletAppTestForm.environment,
+                                                    reason: walletAppTestForm.reason.trim(),
+                                                })}
+                                                disabled={testWalletAppMutation.isPending || !walletAppTestForm.reason.trim()}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {testWalletAppMutation.isPending ? 'Testing...' : 'Run app test'}
+                                            </button>
+                                            <input
+                                                value={walletAppTestForm.reason}
+                                                onChange={(event) => setWalletAppTestForm((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input md:col-span-2"
+                                                placeholder="Reason for billing app test"
                                             />
                                         </div>
                                     </div>
@@ -3519,6 +3928,26 @@ function IntegrationsWorkspace({
                                         <p><span className="font-semibold text-slate-800">Environment:</span> {latestWalletSslTest.environment || '--'}</p>
                                         <p><span className="font-semibold text-slate-800">HTTP status:</span> {latestWalletSslTest.http_status || '--'}</p>
                                         <p className="break-all"><span className="font-semibold text-slate-800">Message:</span> {latestWalletSslTest.message || '--'}</p>
+                                    </div>
+                                </section>
+                            ) : null}
+
+                            {latestWalletAppTest ? (
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <h4 className="text-sm font-semibold text-slate-900">Latest App Test</h4>
+                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(latestWalletAppTest.ok ? 'success' : 'failed')}`}>
+                                            {latestWalletAppTest.ok ? 'success' : 'failed'}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                                        <p><span className="font-semibold text-slate-800">Environment:</span> {latestWalletAppTest.environment || '--'}</p>
+                                        <p className="break-all"><span className="font-semibold text-slate-800">URL:</span> {latestWalletAppTest.url || '--'}</p>
+                                        <p><span className="font-semibold text-slate-800">HTTP status:</span> {latestWalletAppTest.http_status || '--'}</p>
+                                        <p className="break-all"><span className="font-semibold text-slate-800">Message:</span> {latestWalletAppTest.message || '--'}</p>
+                                        {latestWalletAppTest.provider_response ? (
+                                            <p className="break-all"><span className="font-semibold text-slate-800">Response:</span> {JSON.stringify(latestWalletAppTest.provider_response)}</p>
+                                        ) : null}
                                     </div>
                                 </section>
                             ) : null}
