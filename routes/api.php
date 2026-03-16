@@ -24,6 +24,7 @@ use App\Http\Controllers\CRM\ConversationController;
 use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
+use App\Http\Controllers\CRM\SetupController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -34,6 +35,21 @@ Route::get('/ping', function () {
 // CRM Auth (public)
 Route::post('/crm/login', [CrmAuthController::class, 'login']);
 Route::get('/billing/health', [BillingController::class, 'health']);
+
+Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
+    Route::get('/status', [SetupController::class, 'status']);
+    Route::post('/check-env', [SetupController::class, 'checkEnv']);
+    Route::post('/check-database', [SetupController::class, 'checkDatabase']);
+    Route::post('/run-migrations', [SetupController::class, 'runMigrations']);
+    Route::post('/create-admin', [SetupController::class, 'createAdmin']);
+
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/check-platform', [SetupController::class, 'checkPlatform']);
+        Route::post('/run-sync', [SetupController::class, 'runSync']);
+        Route::post('/run-diagnostics', [SetupController::class, 'runDiagnostics']);
+        Route::post('/complete', [SetupController::class, 'complete']);
+    });
+});
 
 // CRM Protected Routes (Sanctum token required)
 Route::middleware('auth:sanctum')->prefix('crm')->group(function () {

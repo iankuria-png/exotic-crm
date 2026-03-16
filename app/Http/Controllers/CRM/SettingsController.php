@@ -2576,7 +2576,7 @@ class SettingsController extends Controller
         ];
     }
 
-    private function serializePlatformIntegration(Platform $platform): array
+    public function serializePlatformIntegration(Platform $platform): array
     {
         $packageRows = $this->platformPackageRows($platform);
         $packageSetup = $this->platformPackageSetup($platform, $packageRows);
