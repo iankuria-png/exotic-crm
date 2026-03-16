@@ -13,6 +13,7 @@ import Campaigns from './pages/Campaigns';
 import PushCampaigns from './pages/PushCampaigns';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import Setup from './pages/Setup';
 import { useAuth } from './hooks/useAuth';
 
 function ProtectedRoute({ children }) {
@@ -51,6 +52,7 @@ export default function AppRouter() {
     return (
         <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/setup" element={<Setup />} />
             <Route
                 path="/*"
                 element={

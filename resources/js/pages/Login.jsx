@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import api from '../services/api';
 
 const brandLogo = '/Exotic%20Online%20Adv%20Logo-01-ChOpI09X.png';
 
@@ -15,8 +16,35 @@ export default function Login() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [checkingSetup, setCheckingSetup] = useState(true);
     const { login } = useAuth();
     const navigate = useNavigate();
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const checkSetupStatus = async () => {
+            try {
+                const { data } = await api.get('/crm/setup/status');
+                if (!cancelled && data?.is_first_run) {
+                    navigate('/setup', { replace: true });
+                    return;
+                }
+            } catch {
+                // Fall through to the login form if setup status cannot be determined.
+            } finally {
+                if (!cancelled) {
+                    setCheckingSetup(false);
+                }
+            }
+        };
+
+        checkSetupStatus();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [navigate]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -35,6 +63,14 @@ export default function Login() {
 
     return (
         <div className="relative min-h-screen overflow-hidden bg-slate-950">
+            {checkingSetup ? (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/90">
+                    <div className="rounded-2xl border border-white/10 bg-slate-900/85 px-5 py-4 text-center shadow-xl backdrop-blur">
+                        <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-teal-400 border-t-transparent" />
+                        <p className="mt-3 text-sm text-slate-200">Checking installation status...</p>
+                    </div>
+                </div>
+            ) : null}
             <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-slate-900 to-teal-950" aria-hidden="true" />
             <div className="absolute -left-12 top-10 h-56 w-56 rounded-full bg-teal-300/20 blur-3xl" aria-hidden="true" />
             <div className="absolute -bottom-20 right-0 h-72 w-72 rounded-full bg-cyan-400/20 blur-3xl" aria-hidden="true" />
