@@ -360,9 +360,13 @@ class SetupController extends Controller
 
     private function setupCompleted(): bool
     {
-        return IntegrationSetting::query()
-            ->where('key', self::SETUP_COMPLETED_KEY)
-            ->exists();
+        try {
+            return IntegrationSetting::query()
+                ->where('key', self::SETUP_COMPLETED_KEY)
+                ->exists();
+        } catch (QueryException) {
+            return false;
+        }
     }
 
     private function resolveAccessiblePlatform(Request $request, ?int $platformId = null): Platform
