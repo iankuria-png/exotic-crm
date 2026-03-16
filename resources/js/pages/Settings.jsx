@@ -6,6 +6,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import { useAuth } from '../hooks/useAuth';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import { useToast } from '../components/ToastProvider';
@@ -16,6 +17,7 @@ const baseTabs = [
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
     { id: 'dashboard', label: 'Dashboard' },
+    { id: 'health', label: 'System Health' },
 ];
 const defaultDurationOptions = [
     { key: '1_week', label: '1 Week', days: 7 },
@@ -794,16 +796,23 @@ function IntegrationsWorkspace({
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const requestedArea = params.get('integrationArea');
+        const shouldOpenCreate = params.get('createMarket');
         const allowedAreas = new Set(['overview', 'wallet', 'markets', 'payment_links', 'sms', 'push', 'scraper']);
         if (requestedArea && allowedAreas.has(requestedArea)) {
             setIntegrationArea(requestedArea);
+        }
+        if (shouldOpenCreate === '1' && canCreateMarkets) {
+            setCreateOpen(true);
+            params.delete('createMarket');
+            const nextSearch = params.toString();
+            window.history.replaceState({}, '', `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}`);
         }
 
         const requestedPlatform = Number(params.get('platform_id'));
         if (requestedPlatform > 0) {
             setSelectedPlatformId(requestedPlatform);
         }
-    }, []);
+    }, [canCreateMarkets]);
 
     useEffect(() => {
         if (!platformRows.length) {
@@ -6317,10 +6326,12 @@ export default function Settings() {
     const canManageTemplates = ['admin', 'sub_admin'].includes(user?.role || '');
     const canViewRoles = (user?.role || '') === 'admin';
     const canCreateMarkets = (user?.role || '') === 'admin';
+    const canManageMarkets = ['admin', 'sub_admin'].includes(user?.role || '');
     const canEditPaymentLinks = ['admin', 'sub_admin'].includes(user?.role || '');
     const canManagePushProviders = ['admin', 'sub_admin'].includes(user?.role || '');
     const canManageWalletSystem = (user?.role || '') === 'admin';
     const canManageWalletPlatforms = ['admin', 'sub_admin'].includes(user?.role || '');
+    const canManageSms = (user?.role || '') === 'admin';
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
@@ -6366,6 +6377,20 @@ export default function Settings() {
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
             {activeTab === 'dashboard' ? <DashboardSettingsPanel /> : null}
+            {activeTab === 'health' ? (
+                <SystemHealthWorkspace
+                    canCreateMarkets={canCreateMarkets}
+                    canManageMarkets={canManageMarkets}
+                    canManageSms={canManageSms}
+                    onOpenMarketSetup={() => {
+                        const params = new URLSearchParams(window.location.search);
+                        params.set('integrationArea', 'markets');
+                        params.set('createMarket', '1');
+                        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+                        setActiveTab('integrations');
+                    }}
+                />
+            ) : null}
         </div>
     );
 }

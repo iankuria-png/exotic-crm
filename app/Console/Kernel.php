@@ -14,6 +14,19 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
+        try {
+            file_put_contents(
+                storage_path('app/scheduler-heartbeat.json'),
+                json_encode([
+                    'ran_at' => now()->toIso8601String(),
+                ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+            );
+        } catch (\Throwable $exception) {
+            Log::warning('Unable to update scheduler heartbeat file.', [
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
         // Subscription check command - RUNS DAILY AT 12:05 AM
         $schedule->command('subscriptions:check')
                  ->name('check_subscriptions')
