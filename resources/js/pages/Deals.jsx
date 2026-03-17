@@ -1117,7 +1117,7 @@ export default function Deals() {
                                         <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
                                             {paymentMethod === 'stk'
                                                 ? 'An STK push will be sent to the client phone. Subscription will activate after payment confirmation.'
-                                                : 'A payment link will be sent to the client phone. Subscription will activate after payment confirmation.'}
+                                                : 'A CRM-managed payment link will be sent to the client phone. Checkout routing comes from Payment Links settings, and the subscription will activate after payment confirmation.'}
                                             <span className="mt-1 block crm-mono text-[11px] text-slate-500">
                                                 Target phone: {selectedClientLoading ? 'Loading...' : (selectedClientPhone || 'Unavailable')}
                                             </span>

@@ -94,6 +94,15 @@ function titleize(value) {
         .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function paymentLinkModeLabel(mode) {
+    return mode === 'proxy_hosted_checkout' ? 'CRM proxy' : 'Static URL';
+}
+
+function paymentLinkProviderOptionLabel(providerKey, providerConfig = {}) {
+    const baseLabel = providerConfig?.label?.trim() || providerKey;
+    return `${baseLabel} (${paymentLinkModeLabel(providerConfig?.mode)})`;
+}
+
 export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'initiated', 'pending', 'failed', 'recovery_queue']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
@@ -587,6 +596,22 @@ export default function Payments() {
     };
 
     const diagnosticsPayment = diagnosticsData?.payment || diagnosticsDrawer.payment;
+    const sendLinkProviderEntries = useMemo(() => {
+        const providers = sendLinkDialog.payment?.platform?.payment_link_providers?.providers || {};
+        return Object.entries(providers).filter(([, providerConfig]) => providerConfig?.enabled !== false);
+    }, [sendLinkDialog.payment]);
+    const activeSendLinkProviderKey = sendLinkDialog.payment?.platform?.payment_link_providers?.active_provider || '';
+    const activeSendLinkProviderEntry = useMemo(
+        () => sendLinkProviderEntries.find(([providerKey]) => providerKey === activeSendLinkProviderKey) || null,
+        [activeSendLinkProviderKey, sendLinkProviderEntries],
+    );
+    const effectiveSendLinkProviderEntry = useMemo(() => {
+        if (sendLinkDialog.provider) {
+            return sendLinkProviderEntries.find(([providerKey]) => providerKey === sendLinkDialog.provider) || null;
+        }
+
+        return activeSendLinkProviderEntry;
+    }, [activeSendLinkProviderEntry, sendLinkDialog.provider, sendLinkProviderEntries]);
 
     const modalCandidates = useMemo(() => {
         const candidates = candidatesData?.data || [];
@@ -1415,13 +1440,33 @@ export default function Payments() {
                             onChange={(event) => setSendLinkDialog((current) => ({ ...current, provider: event.target.value }))}
                             className="crm-select"
                         >
-                            <option value="">Default configured provider</option>
-                            {Object.entries(sendLinkDialog.payment?.platform?.payment_link_providers?.providers || {}).map(([providerKey, providerConfig]) => (
+                            <option value="">
+                                {activeSendLinkProviderEntry
+                                    ? `Default configured provider: ${paymentLinkProviderOptionLabel(activeSendLinkProviderEntry[0], activeSendLinkProviderEntry[1])}`
+                                    : 'Default configured provider'}
+                            </option>
+                            {sendLinkProviderEntries.map(([providerKey, providerConfig]) => (
                                 <option key={providerKey} value={providerKey}>
-                                    {providerConfig?.label || providerKey}
+                                    {paymentLinkProviderOptionLabel(providerKey, providerConfig)}
                                 </option>
                             ))}
                         </select>
+                        {effectiveSendLinkProviderEntry ? (
+                            <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                <p className="text-xs font-semibold text-slate-800">
+                                    {sendLinkDialog.provider ? 'Selected route' : 'Current default'}
+                                    {' '}
+                                    · {paymentLinkProviderOptionLabel(effectiveSendLinkProviderEntry[0], effectiveSendLinkProviderEntry[1])}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-600">
+                                    {effectiveSendLinkProviderEntry[1]?.mode === 'proxy_hosted_checkout'
+                                        ? `This sends a CRM-owned link that opens hosted checkout through ${effectiveSendLinkProviderEntry[1]?.label || effectiveSendLinkProviderEntry[0]}${effectiveSendLinkProviderEntry[1]?.environment ? ` (${effectiveSendLinkProviderEntry[1].environment})` : ''}.`
+                                        : 'This sends the external pay-page URL configured for this provider.'}
+                                </p>
+                            </div>
+                        ) : (
+                            <p className="mt-2 text-xs text-amber-700">No enabled payment-link providers are configured for this market yet.</p>
+                        )}
                         <div className="mt-2 flex items-center justify-between gap-2">
                             <p className="text-xs text-slate-500">Need to edit provider URLs or active routing?</p>
                             <button
