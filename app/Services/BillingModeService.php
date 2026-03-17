@@ -36,7 +36,12 @@ class BillingModeService
         return $context;
     }
 
-    public function providerContext(Platform $platform, string $provider, bool $requireEnabled = true): array
+    public function providerContext(
+        Platform $platform,
+        string $provider,
+        bool $requireEnabled = true,
+        ?string $environmentOverride = null
+    ): array
     {
         $normalizedProvider = strtolower(trim($provider));
         if (!in_array($normalizedProvider, WalletSettingsService::PROVIDERS, true)) {
@@ -47,7 +52,7 @@ class BillingModeService
             ? $this->assertWalletAvailable($platform)
             : $this->walletContext($platform);
         $wallet = $context['wallet'];
-        $environment = $context['environment'];
+        $environment = $this->resolveProviderEnvironment((string) ($context['environment'] ?? 'sandbox'), $environmentOverride);
         $providerConfig = data_get($wallet, "providers.{$normalizedProvider}", []);
         $providerCredentials = data_get($wallet, "credentials.{$normalizedProvider}.{$environment}", []);
 
@@ -58,6 +63,7 @@ class BillingModeService
         $this->assertCredentialsPresent($normalizedProvider, $providerCredentials);
 
         return array_merge($context, [
+            'environment' => $environment,
             'provider' => $normalizedProvider,
             'provider_config' => is_array($providerConfig) ? $providerConfig : [],
             'provider_credentials' => is_array($providerCredentials) ? $providerCredentials : [],
@@ -140,5 +146,16 @@ class BillingModeService
     private function resolveEnvironment(string $mode): string
     {
         return $mode === 'production' ? 'production' : 'sandbox';
+    }
+
+    private function resolveProviderEnvironment(string $defaultEnvironment, ?string $environmentOverride): string
+    {
+        $candidate = strtolower(trim((string) $environmentOverride));
+
+        if (in_array($candidate, WalletSettingsService::ENVIRONMENTS, true)) {
+            return $candidate;
+        }
+
+        return $this->resolveEnvironment($defaultEnvironment);
     }
 }

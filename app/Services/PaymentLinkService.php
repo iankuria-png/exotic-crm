@@ -7,6 +7,7 @@ use App\Models\Platform;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class PaymentLinkService
 {
@@ -16,7 +17,8 @@ class PaymentLinkService
     public function __construct(
         private readonly NotificationService $notificationService,
         private readonly PaymentAttemptService $paymentAttemptService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly BillingModeService $billingModeService
     ) {
     }
 
@@ -26,68 +28,61 @@ class PaymentLinkService
             return null;
         }
 
-        if (is_array($platform->payment_link_providers)) {
-            $configuredProvider = trim((string) ($platform->payment_link_providers['active_provider'] ?? ''));
-            $activeProvider = trim((string) ($requestedProvider ?: $configuredProvider));
-            $providers = $platform->payment_link_providers['providers'] ?? [];
-
-            if ($activeProvider !== '' && is_array($providers) && isset($providers[$activeProvider]) && is_array($providers[$activeProvider])) {
-                $provider = $providers[$activeProvider];
-                $enabled = array_key_exists('enabled', $provider) ? (bool) $provider['enabled'] : true;
-                if (!$enabled) {
-                    return null;
-                }
-
-                $mode = trim((string) ($provider['mode'] ?? self::MODE_STATIC_URL));
-                if ($mode === self::MODE_PROXY_HOSTED_CHECKOUT) {
-                    return null;
-                }
-
-                $directUrl = rtrim(trim((string) ($provider['url'] ?? '')), '/');
-                if ($directUrl !== '') {
-                    return $directUrl;
-                }
-
-                $baseUrl = rtrim(trim((string) ($provider['base_url'] ?? '')), '/');
-                if ($baseUrl !== '') {
-                    $path = trim((string) ($provider['path'] ?? config('services.payment_link.path', '/pay')));
-                    if ($path === '') {
-                        $path = '/pay';
-                    }
-                    if (!str_starts_with($path, '/')) {
-                        $path = '/' . $path;
-                    }
-
-                    return $baseUrl . $path;
-                }
+        $resolvedProvider = $this->resolveProviderConfig($platform, $requestedProvider);
+        if (is_array($resolvedProvider)) {
+            $mode = (string) ($resolvedProvider['config']['mode'] ?? self::MODE_STATIC_URL);
+            if ($mode === self::MODE_PROXY_HOSTED_CHECKOUT) {
+                return null;
             }
+
+            return $this->buildStaticUrl($platform, $resolvedProvider['config']);
         }
 
-        $baseUrl = null;
+        return $this->buildStaticUrl($platform);
+    }
 
-        if (!empty($platform->wp_api_url)) {
-            $baseUrl = preg_replace('#/wp-json/.*$#', '', (string) $platform->wp_api_url);
-            $baseUrl = rtrim((string) $baseUrl, '/');
-        }
-
-        if (!$baseUrl && !empty($platform->domain)) {
-            $domain = trim((string) $platform->domain);
-            $baseUrl = str_starts_with($domain, 'http') ? $domain : 'https://' . $domain;
-            $baseUrl = rtrim($baseUrl, '/');
-        }
-
-        if ($baseUrl === '' || $baseUrl === null) {
+    public function resolveProviderConfig(?Platform $platform, ?string $requestedProvider = null): ?array
+    {
+        if (!$platform || !is_array($platform->payment_link_providers)) {
             return null;
         }
 
-        $path = config('services.payment_link.path', '/pay');
+        $configuredProvider = trim((string) ($platform->payment_link_providers['active_provider'] ?? ''));
+        $activeProvider = trim((string) ($requestedProvider ?: $configuredProvider));
+        $providers = $platform->payment_link_providers['providers'] ?? [];
 
-        return $baseUrl . $path;
+        if ($activeProvider === '' || !is_array($providers) || !isset($providers[$activeProvider]) || !is_array($providers[$activeProvider])) {
+            return null;
+        }
+
+        $provider = $providers[$activeProvider];
+        $enabled = array_key_exists('enabled', $provider) ? (bool) $provider['enabled'] : true;
+        if (!$enabled) {
+            return null;
+        }
+
+        return [
+            'key' => $activeProvider,
+            'config' => array_merge($provider, [
+                'mode' => trim((string) ($provider['mode'] ?? self::MODE_STATIC_URL)) ?: self::MODE_STATIC_URL,
+                'enabled' => $enabled,
+            ]),
+        ];
+    }
+
+    public function generateProxyToken(Payment $payment, array $providerConfig): string
+    {
+        return $this->storeProxyToken($payment, $providerConfig);
+    }
+
+    public function rotateProxyToken(Payment $payment, array $providerConfig): string
+    {
+        return $this->storeProxyToken($payment, $providerConfig);
     }
 
     public function sendLink(Payment $payment, array $options = []): array
     {
-        $payment->loadMissing(['platform', 'product']);
+        $payment->loadMissing(['platform', 'product', 'client']);
         $platform = $payment->platform;
 
         if (!$platform) {
@@ -117,7 +112,25 @@ class PaymentLinkService
             ];
         }
 
-        $paymentUrl = $this->resolveUrl($platform, $requestedProvider);
+        $resolvedProvider = $this->resolveProviderConfig($platform, $requestedProvider);
+        $providerMode = (string) ($resolvedProvider['config']['mode'] ?? self::MODE_STATIC_URL);
+        $providerKey = $resolvedProvider['key'] ?? $requestedProvider;
+
+        if ($providerMode === self::MODE_PROXY_HOSTED_CHECKOUT && is_array($resolvedProvider)) {
+            $token = $this->rotateProxyToken($payment, array_merge($resolvedProvider['config'], [
+                'key' => $resolvedProvider['key'],
+            ]));
+            $environment = (string) ($resolvedProvider['config']['environment'] ?? 'sandbox');
+            $paymentUrl = $this->billingModeService->buildAbsoluteUrl(
+                $platform,
+                '/api/payments/link/' . $token,
+                [],
+                $environment
+            );
+        } else {
+            $paymentUrl = $this->resolveUrl($platform, $requestedProvider);
+        }
+
         if (!$paymentUrl) {
             return [
                 'success' => false,
@@ -137,7 +150,7 @@ class PaymentLinkService
         $request = $options['request'] ?? null;
         $requestMetaExtra = array_filter([
             'channel' => $channel,
-            'requested_provider' => $requestedProvider,
+            'requested_provider' => $providerKey,
             'phone' => $phone,
         ], static fn($value) => $value !== null && $value !== '');
         $requestMeta = $request instanceof Request
@@ -157,7 +170,7 @@ class PaymentLinkService
         $attemptStatus = ($result['success'] ?? false) === true
             ? (($result['status'] ?? '') === 'disabled' ? 'disabled' : 'success')
             : 'failed';
-        $providerForAttempt = $result['provider'] ?? ($requestedProvider ?: 'payment_link');
+        $providerForAttempt = $result['provider'] ?? ($providerKey ?: 'payment_link');
 
         $this->paymentAttemptService->record(
             $payment,
@@ -181,12 +194,13 @@ class PaymentLinkService
         $beforeState = [
             'channel' => $channel,
             'phone' => $phone,
-            'provider' => $requestedProvider,
+            'provider' => $providerKey,
         ];
         $afterState = [
             'sms_success' => $result['success'] ?? false,
             'sms_status' => $result['status'] ?? null,
-            'provider' => $requestedProvider,
+            'provider' => $providerKey,
+            'mode' => $providerMode,
         ];
         $reason = (string) ($options['reason'] ?? 'Send payment link from CRM');
 
@@ -240,5 +254,78 @@ class PaymentLinkService
             'request_meta' => $requestMeta,
             'latency_ms' => $latencyMs,
         ];
+    }
+
+    private function buildStaticUrl(Platform $platform, ?array $provider = null): ?string
+    {
+        if (is_array($provider)) {
+            $directUrl = rtrim(trim((string) ($provider['url'] ?? '')), '/');
+            if ($directUrl !== '') {
+                return $directUrl;
+            }
+
+            $baseUrl = rtrim(trim((string) ($provider['base_url'] ?? '')), '/');
+            if ($baseUrl !== '') {
+                $path = trim((string) ($provider['path'] ?? config('services.payment_link.path', '/pay')));
+                if ($path === '') {
+                    $path = '/pay';
+                }
+                if (!str_starts_with($path, '/')) {
+                    $path = '/' . $path;
+                }
+
+                return $baseUrl . $path;
+            }
+        }
+
+        $baseUrl = null;
+
+        if (!empty($platform->wp_api_url)) {
+            $baseUrl = preg_replace('#/wp-json/.*$#', '', (string) $platform->wp_api_url);
+            $baseUrl = rtrim((string) $baseUrl, '/');
+        }
+
+        if (!$baseUrl && !empty($platform->domain)) {
+            $domain = trim((string) $platform->domain);
+            $baseUrl = str_starts_with($domain, 'http') ? $domain : 'https://' . $domain;
+            $baseUrl = rtrim($baseUrl, '/');
+        }
+
+        if ($baseUrl === '' || $baseUrl === null) {
+            return null;
+        }
+
+        $path = config('services.payment_link.path', '/pay');
+
+        return $baseUrl . $path;
+    }
+
+    private function storeProxyToken(Payment $payment, array $providerConfig): string
+    {
+        $token = Str::random(64);
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+
+        $paymentData['link_proxy'] = [
+            'token_hash' => hash('sha256', $token),
+            'token_expires_at' => now()->addHours(24)->toIso8601String(),
+            'provider_key' => $providerConfig['wallet_provider_key'] ?? null,
+            'provider_config_key' => $providerConfig['key'] ?? null,
+            'mode' => $providerConfig['mode'] ?? self::MODE_PROXY_HOSTED_CHECKOUT,
+            'environment' => $providerConfig['environment'] ?? 'sandbox',
+            'redirect_url' => null,
+            'provider_reference' => null,
+            'initialized_at' => null,
+            'opened_at' => null,
+            'open_count' => 0,
+            'sent_at' => now()->toIso8601String(),
+        ];
+
+        $payment->forceFill([
+            'provider_key' => $providerConfig['wallet_provider_key'] ?? $payment->provider_key,
+            'provider_environment' => $providerConfig['environment'] ?? $payment->provider_environment,
+            'payment_data' => $paymentData,
+        ])->save();
+
+        return $token;
     }
 }

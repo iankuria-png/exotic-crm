@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
@@ -14,6 +13,7 @@ class BillingGatewayService
 {
     public function __construct(
         private readonly BillingModeService $billingModeService,
+        private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly KopokopoService $kopokopoService
@@ -296,19 +296,12 @@ class BillingGatewayService
             throw new RuntimeException('Invalid Paystack signature.');
         }
 
-        $verification = Http::withToken($secretKey)
-            ->timeout(20)
-            ->get('https://api.paystack.co/transaction/verify/' . urlencode($reference));
-
-        if (!$verification->successful()) {
-            throw new RuntimeException('Could not verify the Paystack transaction.');
-        }
-
-        $verifiedData = $verification->json('data') ?? [];
-        if (($verifiedData['status'] ?? null) !== 'success') {
+        $verification = $this->hostedCheckoutService->verifyPaystackTransaction($payment, $context, $reference);
+        $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
+        if (($verification['status'] ?? 'failed') !== 'completed') {
             $failed = $this->failTopupPayment(
                 $payment,
-                (string) ($verifiedData['gateway_response'] ?? 'Paystack transaction did not complete successfully.'),
+                (string) ($verification['message'] ?? 'Paystack transaction did not complete successfully.'),
                 $verifiedData
             );
 
@@ -350,25 +343,13 @@ class BillingGatewayService
             throw new InvalidArgumentException('Pesapal IPN payload is missing the tracking ID.');
         }
 
-        $accessToken = $this->fetchPesapalAccessToken($context);
-        $verification = Http::timeout(20)
-            ->withToken($accessToken)
-            ->get($this->pesapalBaseUrl($payment->provider_environment) . '/Transactions/GetTransactionStatus', [
-                'orderTrackingId' => $trackingId,
-            ]);
+        $verification = $this->hostedCheckoutService->verifyPesapalTransaction($payment, $context, $trackingId);
+        $verified = is_array($verification['data'] ?? null) ? $verification['data'] : [];
 
-        if (!$verification->successful()) {
-            throw new RuntimeException('Could not verify the Pesapal transaction.');
-        }
-
-        $verified = $verification->json();
-        $statusDescription = strtolower((string) ($verified['payment_status_description'] ?? $verified['status'] ?? ''));
-        $statusCode = (int) ($verified['status_code'] ?? 0);
-
-        if ($statusCode !== 1 && !str_contains($statusDescription, 'completed')) {
+        if (($verification['status'] ?? 'failed') !== 'completed') {
             $failed = $this->failTopupPayment(
                 $payment,
-                (string) ($verified['payment_status_description'] ?? 'Pesapal transaction did not complete successfully.'),
+                (string) ($verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
                 $verified
             );
 
@@ -447,109 +428,57 @@ class BillingGatewayService
 
     private function initiatePaystack(Payment $payment, array $context): array
     {
-        $secretKey = (string) data_get($context, 'provider_credentials.secret_key', '');
-        $publicKey = (string) data_get($context, 'provider_credentials.public_key', '');
-        $email = $payment->client?->email
-            ?: ('wallet+' . (int) $payment->client_id . '@' . ($payment->platform?->domain ?: 'example.test'));
-
-        $response = Http::timeout(20)
-            ->withToken($secretKey)
-            ->post('https://api.paystack.co/transaction/initialize', [
-                'reference' => $payment->reference_number,
-                'email' => $email,
-                'amount' => (int) round(((float) $payment->amount) * 100),
-                'currency' => $payment->currency ?: 'KES',
-                'callback_url' => $this->billingModeService->buildAbsoluteUrl(
-                    $payment->platform,
-                    '/billing/complete',
-                    ['payment' => $payment->transaction_uuid]
-                ),
-                'metadata' => [
-                    'payment_id' => (int) $payment->id,
-                    'purpose' => $payment->purpose,
-                    'platform_id' => (int) $payment->platform_id,
-                    'client_id' => (int) $payment->client_id,
-                    'auto_subscribe' => data_get($payment->payment_data, 'auto_subscribe'),
-                ],
-            ]);
-
-        if (!$response->successful() || !($response->json('status') === true)) {
-            $message = (string) ($response->json('message') ?? 'Paystack payment initialization failed.');
-            $this->failTopupPayment($payment, $message, $response->json() ?? []);
-            throw new RuntimeException($message);
+        try {
+            $action = $this->hostedCheckoutService->initializePaystack($payment, $context);
+        } catch (RuntimeException $exception) {
+            $this->failTopupPayment($payment, $exception->getMessage());
+            throw $exception;
         }
 
-        $action = [
-            'type' => 'redirect',
-            'url' => (string) $response->json('data.authorization_url'),
-            'provider_reference' => (string) $response->json('data.reference', $payment->reference_number),
-            'access_code' => (string) $response->json('data.access_code', ''),
-            'public_key' => $publicKey,
-        ];
+        $storedAction = $action;
+        unset($storedAction['provider_payload']);
 
         $payment->forceFill([
             'status' => 'pending',
             'raw_payload' => array_merge($payment->raw_payload ?? [], [
-                'paystack' => $response->json(),
+                'paystack' => $action['provider_payload'] ?? null,
             ]),
             'payment_data' => array_merge($payment->payment_data ?? [], [
-                'resume' => $action,
+                'resume' => $storedAction,
             ]),
         ])->save();
+
+        unset($action['provider_payload']);
 
         return $action;
     }
 
     private function initiatePesapal(Payment $payment, array $context): array
     {
-        $accessToken = $this->fetchPesapalAccessToken($context);
-        $providerCredentials = $context['provider_credentials'];
-        $callbackUrl = $this->billingModeService->buildAbsoluteUrl(
-            $payment->platform,
-            '/billing/complete',
-            ['payment' => $payment->transaction_uuid]
-        );
-
-        $response = Http::timeout(20)
-            ->withToken($accessToken)
-            ->post($this->pesapalBaseUrl($payment->provider_environment) . '/Transactions/SubmitOrderRequest', [
-                'id' => $payment->reference_number,
-                'currency' => $payment->currency ?: 'KES',
-                'amount' => (float) $payment->amount,
+        try {
+            $action = $this->hostedCheckoutService->initializePesapal($payment, $context, [
                 'description' => 'Wallet top-up',
-                'callback_url' => $callbackUrl,
-                'notification_id' => (string) ($providerCredentials['ipn_id'] ?? ''),
-                'billing_address' => [
-                    'email_address' => $payment->client?->email ?: 'wallet@example.test',
-                    'phone_number' => $payment->phone,
-                    'country_code' => strtoupper(substr((string) ($payment->platform?->country ?: 'KE'), 0, 2)),
-                    'first_name' => $payment->client?->name ?: 'Wallet',
-                    'last_name' => 'Customer',
-                ],
             ]);
-
-        if (!$response->successful()) {
-            $message = (string) ($response->json('error.message') ?? $response->json('message') ?? 'Pesapal payment initialization failed.');
-            $this->failTopupPayment($payment, $message, $response->json() ?? []);
-            throw new RuntimeException($message);
+        } catch (RuntimeException $exception) {
+            $this->failTopupPayment($payment, $exception->getMessage());
+            throw $exception;
         }
 
-        $action = [
-            'type' => 'redirect',
-            'url' => (string) $response->json('redirect_url'),
-            'provider_reference' => (string) $response->json('order_tracking_id', ''),
-        ];
+        $storedAction = $action;
+        unset($storedAction['provider_payload']);
 
         $payment->forceFill([
             'status' => 'pending',
             'transaction_reference' => $action['provider_reference'] !== '' ? $action['provider_reference'] : $payment->transaction_reference,
             'raw_payload' => array_merge($payment->raw_payload ?? [], [
-                'pesapal' => $response->json(),
+                'pesapal' => $action['provider_payload'] ?? null,
             ]),
             'payment_data' => array_merge($payment->payment_data ?? [], [
-                'resume' => $action,
+                'resume' => $storedAction,
             ]),
         ])->save();
+
+        unset($action['provider_payload']);
 
         return $action;
     }
@@ -627,27 +556,6 @@ class BillingGatewayService
         ];
     }
 
-    private function fetchPesapalAccessToken(array $context): string
-    {
-        $credentials = $context['provider_credentials'];
-        $response = Http::timeout(20)
-            ->post($this->pesapalBaseUrl($context['environment']) . '/Auth/RequestToken', [
-                'consumer_key' => (string) ($credentials['consumer_key'] ?? ''),
-                'consumer_secret' => (string) ($credentials['consumer_secret'] ?? ''),
-            ]);
-
-        if (!$response->successful()) {
-            throw new RuntimeException('Pesapal authentication failed.');
-        }
-
-        $token = (string) ($response->json('token') ?? '');
-        if ($token === '') {
-            throw new RuntimeException('Pesapal authentication did not return an access token.');
-        }
-
-        return $token;
-    }
-
     private function normalizeAutoSubscribe(Platform $platform, array $walletConfig, mixed $payload): ?array
     {
         if (!is_array($payload) || empty($payload['enabled'])) {
@@ -700,13 +608,6 @@ class BillingGatewayService
         if ($maxWalletBalance > 0 && ($currentBalance + $amount) > $maxWalletBalance) {
             throw new InvalidArgumentException('Top-up would exceed the wallet balance limit for this market.');
         }
-    }
-
-    private function pesapalBaseUrl(?string $environment): string
-    {
-        return $environment === 'production'
-            ? 'https://pay.pesapal.com/v3/api'
-            : 'https://cybqa.pesapal.com/pesapalv3/api';
     }
 
     private function resumeActionForPayment(Payment $payment): array

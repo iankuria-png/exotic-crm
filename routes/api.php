@@ -18,6 +18,7 @@ use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\PaymentQueueController;
+use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
@@ -35,6 +36,7 @@ Route::get('/ping', function () {
 // CRM Auth (public)
 Route::post('/crm/login', [CrmAuthController::class, 'login']);
 Route::get('/billing/health', [BillingController::class, 'health']);
+Route::get('/payments/link/{token}', [PaymentLinkProxyController::class, 'handle']);
 
 Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
     Route::get('/status', [SetupController::class, 'status']);

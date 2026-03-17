@@ -111,7 +111,8 @@ class PaymentLinkServiceTest extends TestCase
         return new PaymentLinkService(
             new NotificationService(),
             new PaymentAttemptService(),
-            new AuditService()
+            new AuditService(),
+            app(\App\Services\BillingModeService::class)
         );
     }
 }
