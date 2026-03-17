@@ -13,7 +13,17 @@ class WalletPayloadService
         $system = $context['system'];
 
         $providers = collect($wallet['providers'] ?? [])
-            ->filter(fn (array $provider) => (bool) ($provider['enabled'] ?? false))
+            ->filter(function (array $provider, string $providerKey) use ($wallet, $context) {
+                if (!(bool) ($provider['enabled'] ?? false)) {
+                    return false;
+                }
+
+                if ($providerKey === 'mpesa_stk') {
+                    return data_get($wallet, "credentials.mpesa_stk.{$context['environment']}.transport") === 'direct_provider';
+                }
+
+                return true;
+            })
             ->map(function (array $provider, string $providerKey) use ($wallet, $context) {
                 $payload = [
                     'enabled' => true,

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\ClientCredentialDispatch;
 use App\Models\Platform;
+use App\Models\Template;
 use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -337,30 +338,37 @@ class CredentialDeliveryService
 
         $clientName = trim((string) ($client->name ?: 'there'));
 
-        if ($method === 'temporary_password') {
-            $subject = 'Your Exotic profile temporary credentials';
-            $smsBody = trim(implode("\n", array_filter([
-                "Hi {$clientName},",
-                'Your CRM onboarding is complete.',
-                $wpUsername ? "Username: {$wpUsername}" : null,
-                $temporaryPassword ? "Temporary password: {$temporaryPassword}" : null,
-                $loginUrl ? "Login: {$loginUrl}" : null,
-                $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
-                'Please change your password after login.',
-            ])));
+        $placeholders = [
+            'clientName' => $clientName,
+            'wpUsername' => (string) ($wpUsername ?? ''),
+            'temporaryPassword' => (string) ($temporaryPassword ?? ''),
+            'loginUrl' => (string) ($loginUrl ?? ''),
+            'setupUrl' => (string) ($setupUrl ?? ''),
+            'profileUrl' => (string) ($profileUrl ?? ''),
+            'supportChatUrl' => $supportChatUrl,
+        ];
 
-            $emailBody = trim(implode("\n", array_filter([
-                "Hi {$clientName},",
-                '',
-                'Your profile onboarding is complete and your login credentials are ready.',
-                $wpUsername ? "Username: {$wpUsername}" : null,
-                $temporaryPassword ? "Temporary password: {$temporaryPassword}" : null,
-                $loginUrl ? "Login URL: {$loginUrl}" : null,
-                $profileUrl ? "Profile URL: {$profileUrl}" : null,
-                $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
-                '',
-                'For security, please sign in and change this password immediately.',
-            ])));
+        $category = $method === 'temporary_password'
+            ? 'credential_temp_password'
+            : 'credential_setup_link';
+
+        $emailTemplate = $this->resolveTemplate((int) $platform->id, $category, 'email');
+        $smsTemplate = $this->resolveTemplate((int) $platform->id, $category, 'sms');
+
+        if ($emailTemplate || $smsTemplate) {
+            $subject = $emailTemplate
+                ? $this->interpolate((string) ($emailTemplate->subject ?? ''), $placeholders)
+                : ($method === 'temporary_password'
+                    ? 'Your Exotic profile temporary credentials'
+                    : 'Set up your Exotic profile access');
+
+            $emailBody = $emailTemplate
+                ? $this->interpolate((string) $emailTemplate->body, $placeholders)
+                : $this->buildDefaultEmailBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl);
+
+            $smsBody = $smsTemplate
+                ? $this->interpolate((string) $smsTemplate->body, $placeholders)
+                : $this->buildDefaultSmsBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl);
 
             return [
                 'subject' => $subject,
@@ -373,8 +381,76 @@ class CredentialDeliveryService
             ];
         }
 
-        $subject = 'Set up your Exotic profile access';
-        $smsBody = trim(implode("\n", array_filter([
+        // Fallback: hardcoded defaults (no templates configured)
+        return [
+            'subject' => $method === 'temporary_password'
+                ? 'Your Exotic profile temporary credentials'
+                : 'Set up your Exotic profile access',
+            'sms_body' => $this->buildDefaultSmsBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl),
+            'email_body' => $this->buildDefaultEmailBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl),
+            'profile_url' => $profileUrl,
+            'login_url' => $loginUrl,
+            'setup_url' => $setupUrl,
+            'wp_username' => $wpUsername,
+        ];
+    }
+
+    private function resolveTemplate(int $platformId, string $category, string $channel): ?Template
+    {
+        // Platform-specific template first
+        $template = Template::where('platform_id', $platformId)
+            ->where('category', $category)
+            ->where('channel', $channel)
+            ->where('status', 'active')
+            ->first();
+
+        if ($template) {
+            return $template;
+        }
+
+        // Global default (platform_id IS NULL)
+        return Template::whereNull('platform_id')
+            ->where('category', $category)
+            ->where('channel', $channel)
+            ->where('status', 'active')
+            ->first();
+    }
+
+    private function interpolate(string $text, array $vars): string
+    {
+        $search = [];
+        $replace = [];
+        foreach ($vars as $key => $value) {
+            $search[] = '{' . $key . '}';
+            $replace[] = (string) $value;
+        }
+
+        return str_replace($search, $replace, $text);
+    }
+
+    private function buildDefaultSmsBody(
+        string $method,
+        string $clientName,
+        ?string $wpUsername,
+        ?string $temporaryPassword,
+        ?string $loginUrl,
+        ?string $setupUrl,
+        ?string $profileUrl,
+        string $supportChatUrl
+    ): string {
+        if ($method === 'temporary_password') {
+            return trim(implode("\n", array_filter([
+                "Hi {$clientName},",
+                'Your CRM onboarding is complete.',
+                $wpUsername ? "Username: {$wpUsername}" : null,
+                $temporaryPassword ? "Temporary password: {$temporaryPassword}" : null,
+                $loginUrl ? "Login: {$loginUrl}" : null,
+                $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
+                'Please change your password after login.',
+            ])));
+        }
+
+        return trim(implode("\n", array_filter([
             "Hi {$clientName},",
             'Your profile is ready. Set your password and sign in:',
             $setupUrl ? "Set password: {$setupUrl}" : null,
@@ -382,8 +458,34 @@ class CredentialDeliveryService
             $profileUrl ? "Profile: {$profileUrl}" : null,
             $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
         ])));
+    }
 
-        $emailBody = trim(implode("\n", array_filter([
+    private function buildDefaultEmailBody(
+        string $method,
+        string $clientName,
+        ?string $wpUsername,
+        ?string $temporaryPassword,
+        ?string $loginUrl,
+        ?string $setupUrl,
+        ?string $profileUrl,
+        string $supportChatUrl
+    ): string {
+        if ($method === 'temporary_password') {
+            return trim(implode("\n", array_filter([
+                "Hi {$clientName},",
+                '',
+                'Your profile onboarding is complete and your login credentials are ready.',
+                $wpUsername ? "Username: {$wpUsername}" : null,
+                $temporaryPassword ? "Temporary password: {$temporaryPassword}" : null,
+                $loginUrl ? "Login URL: {$loginUrl}" : null,
+                $profileUrl ? "Profile URL: {$profileUrl}" : null,
+                $supportChatUrl !== '' ? "Support chat: {$supportChatUrl}" : null,
+                '',
+                'For security, please sign in and change this password immediately.',
+            ])));
+        }
+
+        return trim(implode("\n", array_filter([
             "Hi {$clientName},",
             '',
             'Your profile onboarding is complete.',
@@ -395,16 +497,6 @@ class CredentialDeliveryService
             '',
             'If you did not request this, contact support immediately.',
         ])));
-
-        return [
-            'subject' => $subject,
-            'sms_body' => $smsBody,
-            'email_body' => $emailBody,
-            'profile_url' => $profileUrl,
-            'login_url' => $loginUrl,
-            'setup_url' => $setupUrl,
-            'wp_username' => $wpUsername,
-        ];
     }
 
     private function findRecentIdempotentDispatch(Client $client, string $idempotencyKey): ?ClientCredentialDispatch

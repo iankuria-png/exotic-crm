@@ -986,6 +986,8 @@ class WalletSettingsService
 
         $response = Http::timeout(10)->get($paymentServiceBaseUrl);
         $body = strtolower(trim((string) $response->body()));
+        $isSuspended = str_contains($body, 'suspendedpage')
+            || str_contains($body, 'account has been suspended');
         $callbackResult = null;
         if ($callbackBaseUrl !== '') {
             $callbackResponse = Http::timeout(10)->get($callbackBaseUrl);
@@ -996,19 +998,21 @@ class WalletSettingsService
             ];
         }
 
+        $ok = $response->successful() && !$isSuspended;
+
         return [
             'provider' => 'mpesa_stk',
             'environment' => $environment,
             'transport' => $transport,
-            'ok' => $response->successful(),
-            'status' => $response->successful() ? 'success' : 'failed',
+            'ok' => $ok,
+            'status' => $ok ? 'success' : 'failed',
             'http_status' => $response->status(),
-            'message' => $response->successful()
-                ? 'M-Pesa STK transport reachability test passed.'
-                : ($response->status() === 522 || $response->status() === 524 || str_contains($body, 'connection timed out')
-                    ? 'M-Pesa STK transport timed out at the upstream host.'
-                    : ((str_contains($body, 'suspendedpage') || str_contains($body, 'account has been suspended'))
-                        ? 'M-Pesa STK transport points to a suspended host.'
+            'message' => $isSuspended
+                ? 'M-Pesa STK transport points to a suspended host.'
+                : ($ok
+                    ? 'M-Pesa STK transport reachability test passed.'
+                    : ($response->status() === 522 || $response->status() === 524 || str_contains($body, 'connection timed out')
+                        ? 'M-Pesa STK transport timed out at the upstream host.'
                         : 'M-Pesa STK transport reachability test failed.')),
             'provider_response' => [
                 'payment_service_base_url' => $paymentServiceBaseUrl,

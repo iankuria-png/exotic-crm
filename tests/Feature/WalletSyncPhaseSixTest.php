@@ -124,7 +124,8 @@ class WalletSyncPhaseSixTest extends TestCase
                 && $request['mode'] === 'sandbox'
                 && ($config['market']['platform_id'] ?? null) === $platform->id
                 && ($config['show_refresh_button'] ?? null) === true
-                && isset($config['providers']['paystack']);
+                && isset($config['providers']['paystack'])
+                && !isset($config['providers']['mpesa_stk']);
         });
     }
 

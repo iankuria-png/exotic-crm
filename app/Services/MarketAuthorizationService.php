@@ -135,11 +135,7 @@ class MarketAuthorizationService
             ->filter(fn (User $user) => $this->userCanAccessPlatform($user, $platformId))
             ->values();
 
-        $preferred = $scoped
-            ->filter(fn (User $user) => in_array($user->role, [self::ROLE_SALES, self::ROLE_SUB_ADMIN], true))
-            ->values();
-
-        return $preferred->isNotEmpty() ? $preferred : $scoped;
+        return $scoped;
     }
 
     private function decodeMarketIds($value): array

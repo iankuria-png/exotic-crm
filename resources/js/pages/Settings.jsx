@@ -5600,7 +5600,7 @@ function TemplatesWorkspace({ canManageTemplates }) {
         {
             key: 'category',
             label: 'Category',
-            render: (row) => <span className="text-xs capitalize text-slate-700">{row.category.replace('_', ' ')}</span>,
+            render: (row) => <span className="text-xs capitalize text-slate-700">{({ credential_setup_link: 'Credential: Setup Link', credential_temp_password: 'Credential: Temp Password' }[row.category] || row.category.replace('_', ' '))}</span>,
         },
         {
             key: 'channel',
@@ -5690,6 +5690,8 @@ function TemplatesWorkspace({ canManageTemplates }) {
                         <option value="follow_up">Follow-up</option>
                         <option value="welcome">Welcome</option>
                         <option value="win_back">Win-back</option>
+                        <option value="credential_setup_link">Credential: Setup Link</option>
+                        <option value="credential_temp_password">Credential: Temp Password</option>
                     </select>
                     <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="crm-select">
                         <option value="">All statuses</option>
@@ -5771,6 +5773,8 @@ function TemplatesWorkspace({ canManageTemplates }) {
                                     <option value="follow_up">Follow-up</option>
                                     <option value="welcome">Welcome</option>
                                     <option value="win_back">Win-back</option>
+                                    <option value="credential_setup_link">Credential: Setup Link</option>
+                                    <option value="credential_temp_password">Credential: Temp Password</option>
                                 </select>
                                 <select value={editorForm.status} onChange={(event) => setEditorForm({ ...editorForm, status: event.target.value })} className="crm-select">
                                     <option value="active">Active</option>
@@ -5791,6 +5795,25 @@ function TemplatesWorkspace({ canManageTemplates }) {
                                 className="crm-input min-h-[240px] resize-y"
                                 placeholder="Template body"
                             />
+
+                            {editorForm.category.startsWith('credential_') ? (
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="mb-1.5 text-xs font-semibold text-slate-700">Available placeholders</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {[
+                                            '{clientName}',
+                                            '{wpUsername}',
+                                            '{loginUrl}',
+                                            '{setupUrl}',
+                                            '{profileUrl}',
+                                            '{supportChatUrl}',
+                                            ...(editorForm.category === 'credential_temp_password' ? ['{temporaryPassword}'] : []),
+                                        ].map((tag) => (
+                                            <code key={tag} className="rounded bg-white px-1.5 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">{tag}</code>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
                         </div>
 
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
