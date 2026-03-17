@@ -35,6 +35,7 @@ export default function Clients() {
     const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending']);
     const allowedPlans = new Set(['premium', 'featured', 'basic']);
     const allowedVerifiedFilters = new Set(['1', '0']);
+    const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -57,6 +58,10 @@ export default function Clients() {
     const [verifiedFilter, setVerifiedFilter] = useState(() => {
         const requested = (searchParams.get('verified') || '').trim();
         return allowedVerifiedFilters.has(requested) ? requested : '';
+    });
+    const [onlineFilter, setOnlineFilter] = useState(() => {
+        const requested = (searchParams.get('online_within') || '').trim();
+        return allowedOnlineFilters.has(requested) ? requested : '';
     });
     const [platformFilter, setPlatformFilter] = useState(() => {
         const requested = normalizePlatformFilter(searchParams.get('platform_id'));
@@ -100,7 +105,7 @@ export default function Clients() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, platformFilter],
+        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, onlineFilter, platformFilter],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
@@ -110,6 +115,7 @@ export default function Clients() {
                     ...(statusFilter && { status: statusFilter }),
                     ...(planFilter && { plan: planFilter }),
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
+                    ...(onlineFilter && { online_within: Number(onlineFilter) }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                 },
             }).then((response) => response.data),
@@ -325,17 +331,18 @@ export default function Clients() {
     }), [stats]);
 
     const activeMetric = useMemo(() => {
-        if (statusFilter === 'publish' && planFilter === '' && verifiedFilter === '') return 'active';
-        if (planFilter === 'premium' && statusFilter === '' && verifiedFilter === '') return 'premium';
-        if (verifiedFilter === '1' && statusFilter === '' && planFilter === '') return 'verified';
+        if (statusFilter === 'publish' && planFilter === '' && verifiedFilter === '' && onlineFilter === '') return 'active';
+        if (planFilter === 'premium' && statusFilter === '' && verifiedFilter === '' && onlineFilter === '') return 'premium';
+        if (verifiedFilter === '1' && statusFilter === '' && planFilter === '' && onlineFilter === '') return 'verified';
         return '';
-    }, [statusFilter, planFilter, verifiedFilter]);
+    }, [statusFilter, planFilter, verifiedFilter, onlineFilter]);
 
     const applyMetricFilter = (metricKey) => {
         if (activeMetric === metricKey) {
             setStatusFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
+            setOnlineFilter('');
             setPage(1);
             return;
         }
@@ -354,6 +361,7 @@ export default function Clients() {
             setVerifiedFilter('1');
         }
 
+        setOnlineFilter('');
         setPage(1);
     };
 
@@ -568,7 +576,23 @@ export default function Clients() {
                         ]}
                     />
 
-                    {(search || statusFilter || planFilter || verifiedFilter !== '' || platformFilter) ? (
+                    <FilterSelect
+                        label="Online"
+                        value={onlineFilter}
+                        onChange={(event) => { setOnlineFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'Any time' },
+                            { value: '5', label: 'Last 5 min' },
+                            { value: '15', label: 'Last 15 min' },
+                            { value: '30', label: 'Last 30 min' },
+                            { value: '60', label: 'Last 1 hour' },
+                            { value: '360', label: 'Last 6 hours' },
+                            { value: '1440', label: 'Last 24 hours' },
+                            { value: '10080', label: 'Last 7 days' },
+                        ]}
+                    />
+
+                    {(search || statusFilter || planFilter || verifiedFilter !== '' || onlineFilter || platformFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -577,6 +601,7 @@ export default function Clients() {
                                 setStatusFilter('');
                                 setPlanFilter('');
                                 setVerifiedFilter('');
+                                setOnlineFilter('');
                                 setPlatformFilter('');
                                 setPage(1);
                             }}

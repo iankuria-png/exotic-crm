@@ -87,6 +87,14 @@ class ClientController extends Controller
             $query->where('verified', $request->boolean('verified'));
         }
 
+        if ($request->filled('online_within')) {
+            $minutes = (int) $request->online_within;
+            if ($minutes > 0) {
+                $cutoff = now()->subMinutes($minutes)->timestamp;
+                $query->where('last_online_at', '>=', $cutoff);
+            }
+        }
+
         $statsQuery = clone $query;
         $stats = [
             'total' => (clone $statsQuery)->count(),
@@ -94,6 +102,7 @@ class ClientController extends Controller
             'premium' => (clone $statsQuery)->where('premium', true)->count(),
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
             'inactive' => (clone $statsQuery)->where('profile_status', 'private')->count(),
+            'online_now' => (clone $statsQuery)->where('last_online_at', '>=', now()->subMinutes(15)->timestamp)->count(),
         ];
 
         $clients = $query->orderBy('updated_at', 'desc')
