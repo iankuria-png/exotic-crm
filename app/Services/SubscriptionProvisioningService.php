@@ -298,7 +298,11 @@ class SubscriptionProvisioningService
     private function resolveProductForPayment(Payment $payment): ?Product
     {
         $product = $payment->product_id ? Product::find((int) $payment->product_id) : null;
-        if ($product && (int) $product->platform_id === (int) $payment->platform_id) {
+        if ($product && (
+            (int) $product->platform_id === 0
+            || (int) $payment->platform_id === 0
+            || (int) $product->platform_id === (int) $payment->platform_id
+        )) {
             return $product;
         }
 
@@ -306,7 +310,10 @@ class SubscriptionProvisioningService
             ->where('is_active', true)
             ->when(
                 !empty($payment->platform_id),
-                fn (Builder $builder) => $builder->where('platform_id', (int) $payment->platform_id)
+                fn (Builder $builder) => $builder->where(function (Builder $platformScoped) use ($payment) {
+                    $platformScoped->where('platform_id', (int) $payment->platform_id)
+                        ->orWhereNull('platform_id');
+                })
             )
             ->when(
                 !empty($payment->currency),

@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Support\CrmAuditAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -57,6 +58,8 @@ class PaymentReconciliationConfidenceTest extends TestCase
             'reconciliation_confidence' => 'high',
             'reconciliation_state' => 'resolved',
         ]);
+
+        $this->fakeProvisioningApis($platform, $client);
 
         $allowed = $this->postJson("/api/crm/payments/{$highConfidencePayment->id}/create-subscription", [
             'reason' => 'Create subscription for high-confidence payment',
@@ -273,6 +276,36 @@ class PaymentReconciliationConfidenceTest extends TestCase
             'weekly_price' => 900,
             'currency' => 'KES',
             'is_active' => true,
+        ]);
+    }
+
+    private function fakeProvisioningApis(Platform $platform, Client $client): void
+    {
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+
+        Http::fake([
+            "{$baseUrl}/clients/{$client->wp_post_id}/activate" => Http::response([
+                'success' => true,
+                'crm_deal_id' => null,
+            ], 200),
+            "{$baseUrl}/clients/{$client->wp_post_id}" => Http::response([
+                'wp_post_id' => (int) $client->wp_post_id,
+                'wp_user_id' => (int) $client->wp_user_id,
+                'name' => (string) $client->name,
+                'phone' => (string) $client->phone_normalized,
+                'email' => (string) $client->email,
+                'city' => (string) $client->city,
+                'post_status' => 'publish',
+                'premium' => false,
+                'featured' => false,
+                'verified' => false,
+                'main_image_url' => (string) ($client->main_image_url ?? ''),
+                'premium_expire' => null,
+                'featured_expire' => null,
+                'escort_expire' => now()->addDays(30)->timestamp,
+                'last_online' => null,
+            ], 200),
+            '*' => Http::response([], 200),
         ]);
     }
 }

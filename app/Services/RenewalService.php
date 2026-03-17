@@ -1315,7 +1315,15 @@ class RenewalService
 
     private function expiryDateExpr(): string
     {
-        return 'COALESCE(UNIX_TIMESTAMP(deals.expires_at), clients.escort_expire, clients.premium_expire, clients.featured_expire)';
+        $driver = DB::connection()->getDriverName();
+
+        $dealExpiryExpr = match ($driver) {
+            'sqlite' => "CAST(strftime('%s', deals.expires_at) AS INTEGER)",
+            'pgsql' => 'EXTRACT(EPOCH FROM deals.expires_at)',
+            default => 'UNIX_TIMESTAMP(deals.expires_at)',
+        };
+
+        return "COALESCE({$dealExpiryExpr}, clients.escort_expire, clients.premium_expire, clients.featured_expire)";
     }
 
     private function alreadyAttemptedToday(string $entityType, int $entityId, int $campaignId): bool
