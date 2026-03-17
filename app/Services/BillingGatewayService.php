@@ -190,7 +190,12 @@ class BillingGatewayService
             ->firstOrFail();
 
         $payment->loadMissing(['client.platform', 'platform']);
-        $context = $this->billingModeService->providerContext($payment->platform, 'paystack', requireEnabled: false);
+        $context = $this->billingModeService->providerContext(
+            $payment->platform,
+            'paystack',
+            requireEnabled: false,
+            environmentOverride: $payment->provider_environment
+        );
         $secretKey = (string) data_get($context, 'provider_credentials.secret_key', '');
         $expected = hash_hmac('sha512', $rawBody, $secretKey);
         if (!hash_equals($expected, $signature)) {
@@ -237,7 +242,12 @@ class BillingGatewayService
             ->firstOrFail();
 
         $payment->loadMissing(['client.platform', 'platform']);
-        $context = $this->billingModeService->providerContext($payment->platform, 'pesapal', requireEnabled: false);
+        $context = $this->billingModeService->providerContext(
+            $payment->platform,
+            'pesapal',
+            requireEnabled: false,
+            environmentOverride: $payment->provider_environment
+        );
         $trackingId = (string) ($payload['OrderTrackingId'] ?? $payload['order_tracking_id'] ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id', ''));
         if ($trackingId === '') {
             throw new InvalidArgumentException('Pesapal IPN payload is missing the tracking ID.');
