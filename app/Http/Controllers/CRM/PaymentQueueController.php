@@ -14,11 +14,13 @@ use App\Models\PaymentImportRow;
 use App\Models\TimelineEvent;
 use App\Models\AuditLog;
 use App\Services\AuditService;
+use App\Services\BillingGatewayService;
 use App\Services\BillingModeService;
 use App\Services\NotificationService;
 use App\Services\PaymentImportService;
 use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
+use App\Services\PaymentCompletionService;
 use App\Services\PaymentLinkService;
 use App\Services\HostedCheckoutService;
 use App\Services\LegacyStkService;
@@ -42,8 +44,10 @@ class PaymentQueueController extends Controller
         private readonly PaymentLinkService $paymentLinkService,
         private readonly PaymentImportService $paymentImportService,
         private readonly BillingModeService $billingModeService,
+        private readonly BillingGatewayService $billingGatewayService,
         private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly LegacyStkService $legacyStkService,
+        private readonly PaymentCompletionService $paymentCompletionService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
@@ -898,6 +902,140 @@ class PaymentQueueController extends Controller
         }
     }
 
+    public function sandboxReconcile(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $reason = trim((string) ($validated['reason'] ?? ''));
+        $beforeState = $this->sandboxReconcileState($payment);
+
+        try {
+            $this->assertSandboxReconcileEligibility($payment);
+
+            if ($this->isSandboxReconcileTerminal($payment)) {
+                $freshPayment = $payment->fresh(['platform', 'product', 'client']);
+                $this->paymentAttemptService->record($freshPayment, 'sandbox_reconcile', (string) data_get($freshPayment->payment_data, 'test_result', $freshPayment->status), [
+                    'provider' => $freshPayment->provider_key,
+                    'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                        'provider_environment' => $freshPayment->provider_environment,
+                        'reference_number' => $freshPayment->reference_number,
+                        'already_reconciled' => true,
+                    ]),
+                    'response_meta' => [
+                        'already_reconciled' => true,
+                        'payment_status' => $freshPayment->status,
+                        'test_result' => data_get($freshPayment->payment_data, 'test_result'),
+                    ],
+                    'created_by' => optional($request->user())->id,
+                ]);
+
+                return response()->json([
+                    'message' => 'Sandbox payment was already reconciled.',
+                    'already_reconciled' => true,
+                    'reconciled' => false,
+                    'payment' => $freshPayment,
+                    'provider_snapshot' => null,
+                ]);
+            }
+
+            $snapshot = $this->verifyProviderStatus($payment);
+            $providerStatus = (string) ($snapshot['status'] ?? 'failed');
+            $updatedPayment = $payment->fresh(['platform', 'product', 'client']);
+            $reconciled = false;
+            $message = 'Provider still reports this sandbox payment as pending.';
+
+            if ($providerStatus === 'completed') {
+                $completion = $this->paymentCompletionService->complete($payment, is_array($snapshot['data'] ?? null) ? $snapshot['data'] : [], [
+                    'transaction_reference' => $snapshot['provider_reference'] ?? null,
+                ]);
+                $updatedPayment = $completion['payment'] ?? $payment->fresh(['platform', 'product', 'client']);
+                $reconciled = true;
+                $message = 'Sandbox payment reconciled as completed.';
+            } elseif ($providerStatus === 'failed') {
+                $updatedPayment = $this->billingGatewayService->failPayment(
+                    $payment,
+                    (string) ($snapshot['message'] ?? 'Sandbox provider verification failed.'),
+                    is_array($snapshot['data'] ?? null) ? $snapshot['data'] : []
+                );
+                $reconciled = true;
+                $message = 'Sandbox payment reconciled as failed.';
+            }
+
+            $afterState = $this->sandboxReconcileState($updatedPayment);
+            $this->paymentAttemptService->record($updatedPayment, 'sandbox_reconcile', $providerStatus, [
+                'provider' => $updatedPayment->provider_key,
+                'error_message' => $snapshot['message'] ?? null,
+                'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                    'provider_environment' => $updatedPayment->provider_environment,
+                    'reference_number' => $updatedPayment->reference_number,
+                    'provider_reference' => $snapshot['provider_reference'] ?? null,
+                ]),
+                'response_meta' => [
+                    'provider_status' => $providerStatus,
+                    'provider_message' => $snapshot['message'] ?? null,
+                    'provider_payload' => $snapshot['data'] ?? null,
+                    'reconciled' => $reconciled,
+                    'before_state' => $beforeState,
+                    'after_state' => $afterState,
+                ],
+                'created_by' => optional($request->user())->id,
+            ]);
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $updatedPayment->platform_id,
+                CrmAuditAction::PAYMENT_SANDBOX_RECONCILE,
+                'payment',
+                (int) $updatedPayment->id,
+                $beforeState,
+                $afterState,
+                $reason !== '' ? $reason : $message
+            );
+
+            return response()->json([
+                'message' => $message,
+                'already_reconciled' => false,
+                'reconciled' => $reconciled,
+                'payment' => $updatedPayment->fresh(['platform', 'product', 'client']),
+                'provider_snapshot' => $snapshot,
+            ]);
+        } catch (InvalidArgumentException $exception) {
+            $this->paymentAttemptService->record($payment, 'sandbox_reconcile', 'failed', [
+                'provider' => $payment->provider_key,
+                'error_code' => 'sandbox_reconcile_unavailable',
+                'error_message' => $exception->getMessage(),
+                'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                    'provider_environment' => $payment->provider_environment,
+                    'reference_number' => $payment->reference_number,
+                ]),
+                'created_by' => optional($request->user())->id,
+            ]);
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            $this->paymentAttemptService->record($payment, 'sandbox_reconcile', 'failed', [
+                'provider' => $payment->provider_key,
+                'error_code' => 'sandbox_reconcile_failed',
+                'error_message' => $exception->getMessage(),
+                'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                    'provider_environment' => $payment->provider_environment,
+                    'reference_number' => $payment->reference_number,
+                ]),
+                'created_by' => optional($request->user())->id,
+            ]);
+
+            return response()->json([
+                'message' => 'Sandbox reconcile could not be completed right now.',
+            ], 502);
+        }
+    }
+
     public function updateReviewState(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
@@ -1456,7 +1594,7 @@ class PaymentQueueController extends Controller
         $rotationCount = max(0, $sendLinkAttemptCount - 1);
         $tokenExpiresAt = $this->safeDateTimeString($linkProxy['token_expires_at'] ?? null);
         $latestProviderCheck = $attempts->first(function ($attempt) {
-            return in_array($attempt->attempt_type, ['provider_status_check', 'reconciliation_check'], true);
+            return in_array($attempt->attempt_type, ['provider_status_check', 'reconciliation_check', 'sandbox_reconcile'], true);
         });
 
         return [
@@ -1604,6 +1742,43 @@ class PaymentQueueController extends Controller
         }
 
         return $trackingId;
+    }
+
+    private function assertSandboxReconcileEligibility(Payment $payment): void
+    {
+        if (strtolower(trim((string) $payment->source)) !== 'gateway') {
+            throw new InvalidArgumentException('Sandbox reconcile is available only for gateway payments.');
+        }
+
+        if (strtolower(trim((string) $payment->provider_environment)) !== 'sandbox' && !data_get($payment->payment_data, 'test_mode')) {
+            throw new InvalidArgumentException('Sandbox reconcile is available only for sandbox payments.');
+        }
+
+        if (!in_array(strtolower(trim((string) $payment->provider_key)), ['paystack', 'pesapal'], true)) {
+            throw new InvalidArgumentException('Sandbox reconcile is available only for Paystack and Pesapal hosted checkout payments.');
+        }
+
+        if (!in_array((string) $payment->status, ['initiated', 'pending'], true) && !$this->isSandboxReconcileTerminal($payment)) {
+            throw new InvalidArgumentException('Only initiated or pending sandbox payments can be reconciled.');
+        }
+    }
+
+    private function isSandboxReconcileTerminal(Payment $payment): bool
+    {
+        return (bool) data_get($payment->payment_data, 'test_mode', false)
+            && in_array((string) $payment->status, ['completed', 'failed'], true);
+    }
+
+    private function sandboxReconcileState(Payment $payment): array
+    {
+        return [
+            'status' => $payment->status,
+            'transaction_reference' => $payment->transaction_reference,
+            'failure_reason' => $payment->failure_reason,
+            'test_mode' => (bool) data_get($payment->payment_data, 'test_mode', false),
+            'test_result' => data_get($payment->payment_data, 'test_result'),
+            'side_effects_skipped' => (bool) data_get($payment->payment_data, 'side_effects_skipped', false),
+        ];
     }
 
     private function authorizePaymentAccess(Request $request, Payment $payment): void

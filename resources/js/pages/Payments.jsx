@@ -246,6 +246,7 @@ export default function Payments() {
     const [createSubDialog, setCreateSubDialog] = useState({ open: false, payment: null, reason: 'Create subscription from matched payment' });
     const [diagnosticsDrawer, setDiagnosticsDrawer] = useState({ open: false, payment: null });
     const [providerStatusSnapshot, setProviderStatusSnapshot] = useState(null);
+    const [sandboxReconcileSnapshot, setSandboxReconcileSnapshot] = useState(null);
     const [manualCloseDialog, setManualCloseDialog] = useState({
         open: false,
         payment: null,
@@ -440,11 +441,45 @@ export default function Payments() {
             api.post(`/crm/payments/${paymentId}/check-provider-status`).then((response) => response.data),
         onSuccess: (result, paymentId) => {
             setProviderStatusSnapshot(result);
+            setSandboxReconcileSnapshot(null);
             queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', paymentId] });
             toast.success(`Provider currently reports this payment as ${titleize(result.status)}.`);
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Provider status check failed.');
+        },
+    });
+
+    const sandboxReconcileMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/sandbox-reconcile`, {
+                reason: reason || undefined,
+            }).then((response) => response.data),
+        onSuccess: (result, variables) => {
+            setSandboxReconcileSnapshot(result);
+            setProviderStatusSnapshot(result.provider_snapshot || null);
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+
+            if (result.already_reconciled) {
+                toast.info(result.message || 'Sandbox payment was already reconciled.');
+                return;
+            }
+
+            if (result.provider_snapshot?.status === 'failed') {
+                toast.warning(result.message || 'Sandbox payment was reconciled as failed.');
+                return;
+            }
+
+            if (result.provider_snapshot?.status === 'pending') {
+                toast.info(result.message || 'Provider still reports this sandbox payment as pending.');
+                return;
+            }
+
+            toast.success(result.message || 'Sandbox payment reconciled.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Sandbox reconcile failed.');
         },
     });
 
@@ -621,6 +656,14 @@ export default function Payments() {
             return;
         }
 
+        if (actionKey === 'sandbox_reconcile') {
+            sandboxReconcileMutation.mutate({
+                paymentId: paymentRow.id,
+                reason: 'Sandbox reconcile from diagnostics drawer',
+            });
+            return;
+        }
+
         if (actionKey === 'wait_callback') {
             toast.info('Keep monitoring callback updates for this payment before retrying.');
         }
@@ -691,6 +734,9 @@ export default function Payments() {
     const providerCheckEligible = ['paystack', 'pesapal'].includes(String(diagnosticsPayment?.provider_key || '').toLowerCase())
         && ['initiated', 'pending'].includes(diagnosticsPayment?.status);
     const providerCheckReady = providerCheckEligible && (!linkProxyData || !!linkProxyData.initialized_at || !!linkProxyData.provider_reference);
+    const sandboxReconcileEligible = providerCheckReady
+        && String(diagnosticsPayment?.source || '').toLowerCase() === 'gateway'
+        && String(diagnosticsPayment?.provider_environment || '').toLowerCase() === 'sandbox';
     const providerReference = providerStatusSnapshot?.provider_reference
         || linkProxyData?.provider_reference
         || diagnosticsPayment?.transaction_reference
@@ -854,6 +900,7 @@ export default function Payments() {
 
     useEffect(() => {
         setProviderStatusSnapshot(null);
+        setSandboxReconcileSnapshot(null);
     }, [diagnosticsDrawer.open, diagnosticsDrawer.payment?.id]);
 
     const columns = [
@@ -1265,22 +1312,45 @@ export default function Payments() {
                                                 <div>
                                                     <h4 className="text-sm font-semibold text-slate-900">Live Provider Status</h4>
                                                     <p className="mt-1 text-xs text-slate-500">
-                                                        Read-only verification against the current Paystack or Pesapal session.
+                                                        {sandboxReconcileEligible
+                                                            ? 'Read-only verification plus sandbox-safe reconcile for hosted checkout tests.'
+                                                            : 'Read-only verification against the current Paystack or Pesapal session.'}
                                                     </p>
                                                 </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => diagnosticsPayment?.id && providerStatusMutation.mutate(diagnosticsPayment.id)}
-                                                    disabled={!providerCheckReady || providerStatusMutation.isPending}
-                                                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    {providerStatusMutation.isPending ? 'Checking...' : 'Check Provider Status'}
-                                                </button>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => diagnosticsPayment?.id && providerStatusMutation.mutate(diagnosticsPayment.id)}
+                                                        disabled={!providerCheckReady || providerStatusMutation.isPending}
+                                                        className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        {providerStatusMutation.isPending ? 'Checking...' : 'Check Provider Status'}
+                                                    </button>
+                                                    {sandboxReconcileEligible ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => diagnosticsPayment?.id && sandboxReconcileMutation.mutate({
+                                                                paymentId: diagnosticsPayment.id,
+                                                                reason: 'Sandbox reconcile from diagnostics drawer',
+                                                            })}
+                                                            disabled={sandboxReconcileMutation.isPending}
+                                                            className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            {sandboxReconcileMutation.isPending ? 'Reconciling...' : 'Sandbox Reconcile'}
+                                                        </button>
+                                                    ) : null}
+                                                </div>
                                             </div>
 
                                             {!providerCheckReady && providerCheckEligible ? (
                                                 <p className="mt-2 text-xs text-amber-700">
                                                     Hosted checkout needs to initialize before CRM can verify provider-side status.
+                                                </p>
+                                            ) : null}
+
+                                            {sandboxReconcileSnapshot?.message && sandboxReconcileEligible ? (
+                                                <p className="mt-2 text-xs text-slate-600">
+                                                    {sandboxReconcileSnapshot.message}
                                                 </p>
                                             ) : null}
 
