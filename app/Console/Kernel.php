@@ -83,6 +83,13 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_dispatch_scheduled_pushes.log'));
 
+        $schedule->command('crm:reconcile-pending-payments')
+            ->name('crm_reconcile_pending_payments')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_reconcile_pending_payments.log'));
+
         // Daily subscriber snapshot sync across configured push providers.
         $schedule->command('crm:sync-push-subscribers')
             ->name('crm_sync_push_subscribers')
