@@ -218,6 +218,7 @@ export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'initiated', 'pending', 'failed', 'recovery_queue']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import']);
+    const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
     const allowedReviewStateFilters = new Set(['open', 'manual_review', 'resolved']);
     const queryClient = useQueryClient();
@@ -240,6 +241,10 @@ export default function Payments() {
         const requested = (searchParams.get('source') || '').trim();
         return allowedSourceFilters.has(requested) ? requested : '';
     });
+    const [environmentFilter, setEnvironmentFilter] = useState(() => {
+        const requested = (searchParams.get('environment') || '').trim().toLowerCase();
+        return allowedEnvironmentFilters.has(requested) ? requested : '';
+    });
     const [confidenceFilter, setConfidenceFilter] = useState(() => {
         const requested = (searchParams.get('match_confidence') || '').trim();
         return allowedConfidenceFilters.has(requested) ? requested : '';
@@ -260,7 +265,7 @@ export default function Payments() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
-    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || confidenceFilter || reviewStateFilter));
+    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter));
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
@@ -313,7 +318,7 @@ export default function Payments() {
     const resolveCurrency = (currencyCode) => currencyCode || selectedPlatformCurrency || 'KES';
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, confidenceFilter, reviewStateFilter],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, confidenceFilter, reviewStateFilter],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -324,6 +329,7 @@ export default function Payments() {
                     ...(matchFilter && { matched: matchFilter }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(sourceFilter && { source: sourceFilter }),
+                    ...(environmentFilter && { environment: environmentFilter }),
                     ...(confidenceFilter && { match_confidence: confidenceFilter }),
                     ...(reviewStateFilter && { review_state: reviewStateFilter }),
                 },
@@ -1154,6 +1160,12 @@ export default function Payments() {
                 </button>
             </section>
 
+            <section className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
+                {environmentFilter === 'sandbox'
+                    ? 'Sandbox filter active: summary cards and the table now reflect sandbox/test payments only.'
+                    : 'Summary cards stay live-only by default. Sandbox/test rows remain visible in the table unless you filter them out.'}
+            </section>
+
             <section className="crm-filter-row space-y-3">
                 <div className="flex flex-wrap items-end gap-3">
                     <form onSubmit={handleSearch} className="min-w-[220px] flex-1">
@@ -1209,7 +1221,7 @@ export default function Payments() {
                         ]}
                     />
 
-                    {(sourceFilter || confidenceFilter || reviewStateFilter) || showAdvancedFilters ? (
+                    {(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter) || showAdvancedFilters ? (
                         <>
                             <FilterSelect
                                 label="Source"
@@ -1219,6 +1231,17 @@ export default function Payments() {
                                     { value: '', label: 'All sources' },
                                     { value: 'gateway', label: 'Gateway/API' },
                                     { value: 'excel_import', label: 'Excel import' },
+                                ]}
+                            />
+
+                            <FilterSelect
+                                label="Environment"
+                                value={environmentFilter}
+                                onChange={(event) => { setEnvironmentFilter(event.target.value); setPage(1); }}
+                                options={[
+                                    { value: '', label: 'All rows / live KPIs' },
+                                    { value: 'production', label: 'Production only' },
+                                    { value: 'sandbox', label: 'Sandbox only' },
                                 ]}
                             />
 
@@ -1257,7 +1280,7 @@ export default function Payments() {
                         </button>
                     )}
 
-                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || confidenceFilter || reviewStateFilter) ? (
+                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -1267,6 +1290,7 @@ export default function Payments() {
                                 setMatchFilter('');
                                 setPlatformFilter('');
                                 setSourceFilter('');
+                                setEnvironmentFilter('');
                                 setConfidenceFilter('');
                                 setReviewStateFilter('');
                                 setShowAdvancedFilters(false);

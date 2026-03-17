@@ -75,7 +75,18 @@ class PaymentQueueController extends Controller
             });
         }
 
+        $environmentFilter = strtolower(trim((string) $request->input('environment', '')));
+        if ($environmentFilter === 'production') {
+            $query->liveOnly();
+        } elseif ($environmentFilter === 'sandbox') {
+            $query->sandboxTest();
+        }
+
         $statsQuery = clone $query;
+        if ($environmentFilter === '') {
+            $statsQuery->liveOnly();
+        }
+
         $statusFilter = trim((string) $request->input('status', ''));
         if ($statusFilter !== '') {
             if ($statusFilter === 'awaiting_payment') {
@@ -160,6 +171,8 @@ class PaymentQueueController extends Controller
 
         $payload = $payments->toArray();
         $payload['stats'] = $stats;
+        $payload['environment_filter'] = $environmentFilter !== '' ? $environmentFilter : null;
+        $payload['stats_scope'] = $environmentFilter === 'sandbox' ? 'sandbox' : 'live';
 
         return response()->json($payload);
     }

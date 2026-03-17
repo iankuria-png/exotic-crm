@@ -40,10 +40,10 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
                         'gateway_response' => 'Successful',
                     ],
                 ], 200),
-                'https://cybqa.pesapal.com/pesapalv3/api/Auth/RequestToken' => Http::response([
+                'https://pay.pesapal.com/v3/api/Auth/RequestToken' => Http::response([
                     'token' => 'pesapal-access-token',
                 ], 200),
-                'https://cybqa.pesapal.com/pesapalv3/api/Transactions/GetTransactionStatus*' => Http::response([
+                'https://pay.pesapal.com/v3/api/Transactions/GetTransactionStatus*' => Http::response([
                     'status_code' => 1,
                     'payment_status_description' => 'Completed',
                 ], 200),
@@ -57,7 +57,7 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
             'purpose' => 'wallet_topup',
             'source' => 'gateway',
             'provider_key' => 'paystack',
-            'provider_environment' => 'sandbox',
+            'provider_environment' => 'production',
             'amount' => 1200,
             'currency' => 'KES',
             'reference_number' => 'WTU-RECON-001',
@@ -73,7 +73,7 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
             'purpose' => 'subscription',
             'source' => 'gateway',
             'provider_key' => 'pesapal',
-            'provider_environment' => 'sandbox',
+            'provider_environment' => 'production',
             'amount' => 2400,
             'currency' => 'KES',
             'duration' => 'monthly',
@@ -135,10 +135,10 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
                         'gateway_response' => 'Declined',
                     ],
                 ], 200),
-                'https://cybqa.pesapal.com/pesapalv3/api/Auth/RequestToken' => Http::response([
+                'https://pay.pesapal.com/v3/api/Auth/RequestToken' => Http::response([
                     'token' => 'pesapal-access-token',
                 ], 200),
-                'https://cybqa.pesapal.com/pesapalv3/api/Transactions/GetTransactionStatus*' => Http::response([
+                'https://pay.pesapal.com/v3/api/Transactions/GetTransactionStatus*' => Http::response([
                     'status_code' => 0,
                     'payment_status_description' => 'Pending',
                 ], 200),
@@ -153,7 +153,7 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
             'purpose' => 'subscription',
             'source' => 'gateway',
             'provider_key' => 'paystack',
-            'provider_environment' => 'sandbox',
+            'provider_environment' => 'production',
             'amount' => 2400,
             'currency' => 'KES',
             'duration' => 'monthly',
@@ -173,7 +173,7 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
             'purpose' => 'subscription',
             'source' => 'gateway',
             'provider_key' => 'pesapal',
-            'provider_environment' => 'sandbox',
+            'provider_environment' => 'production',
             'amount' => 2400,
             'currency' => 'KES',
             'duration' => 'monthly',
@@ -204,6 +204,69 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
             'payment_id' => $pendingPayment->id,
             'attempt_type' => 'reconciliation_check',
             'status' => 'pending',
+        ]);
+    }
+
+    public function test_command_skips_sandbox_payments_unless_explicitly_included(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedBillingContext([
+            'client_balance' => 400,
+        ]);
+
+        Http::fake([
+            'https://api.paystack.co/transaction/verify/*' => Http::response([
+                'status' => true,
+                'data' => [
+                    'status' => 'success',
+                    'reference' => 'WTU-SANDBOX-RECON-001',
+                    'gateway_response' => 'Successful',
+                ],
+            ], 200),
+        ]);
+
+        $sandboxPayment = $this->createStalePayment([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'paystack',
+            'provider_environment' => 'sandbox',
+            'amount' => 1200,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-SANDBOX-RECON-001',
+            'transaction_reference' => 'WTU-SANDBOX-RECON-001',
+            'status' => 'pending',
+        ]);
+
+        $this->artisan('crm:reconcile-pending-payments', [
+            '--delay-ms' => 0,
+        ])->assertExitCode(0);
+
+        $sandboxPayment->refresh();
+        $this->assertSame('pending', $sandboxPayment->status);
+        $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        $this->assertDatabaseMissing('payment_attempts', [
+            'payment_id' => $sandboxPayment->id,
+            'attempt_type' => 'reconciliation_check',
+        ]);
+
+        $this->artisan('crm:reconcile-pending-payments', [
+            '--delay-ms' => 0,
+            '--include-sandbox' => true,
+        ])->assertExitCode(0);
+
+        $sandboxPayment->refresh();
+        $this->assertSame('completed', $sandboxPayment->status);
+        $this->assertTrue((bool) data_get($sandboxPayment->payment_data, 'test_mode'));
+        $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $sandboxPayment->id,
+            'attempt_type' => 'reconciliation_check',
+            'status' => 'completed',
         ]);
     }
 
@@ -313,12 +376,21 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
                     'public_key' => 'pk_test_wallet',
                     'secret_key' => 'sk_test_wallet',
                 ],
+                'production' => [
+                    'public_key' => 'pk_live_wallet',
+                    'secret_key' => 'sk_live_wallet',
+                ],
             ],
             'pesapal' => [
                 'sandbox' => [
                     'consumer_key' => 'pesapal-key',
                     'consumer_secret' => 'pesapal-secret',
                     'ipn_id' => 'ipn-test-001',
+                ],
+                'production' => [
+                    'consumer_key' => 'pesapal-live-key',
+                    'consumer_secret' => 'pesapal-live-secret',
+                    'ipn_id' => 'ipn-live-001',
                 ],
             ],
         ]);

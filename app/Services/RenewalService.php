@@ -103,6 +103,7 @@ class RenewalService
         $clientIds = $targetRows->pluck('id')->filter()->map(fn($id) => (int) $id)->values();
 
         $paidDealIds = Payment::query()
+            ->liveOnly()
             ->whereIn('deal_id', $dealIds)
             ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->pluck('deal_id')

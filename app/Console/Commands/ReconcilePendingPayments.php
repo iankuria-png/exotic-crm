@@ -16,7 +16,8 @@ class ReconcilePendingPayments extends Command
     protected $signature = 'crm:reconcile-pending-payments
         {--limit=50 : Maximum number of stale payments to inspect}
         {--stale-minutes=60 : Minimum age in minutes since last update}
-        {--delay-ms=1000 : Delay between provider API calls in milliseconds}';
+        {--delay-ms=1000 : Delay between provider API calls in milliseconds}
+        {--include-sandbox : Include sandbox/test payments in this reconciliation run}';
 
     protected $description = 'Verify stale pending Paystack/Pesapal payments and reconcile missed callbacks.';
 
@@ -34,16 +35,22 @@ class ReconcilePendingPayments extends Command
         $limit = max(1, min(50, (int) $this->option('limit')));
         $staleMinutes = max(1, (int) $this->option('stale-minutes'));
         $delayMs = max(0, (int) $this->option('delay-ms'));
+        $includeSandbox = (bool) $this->option('include-sandbox');
 
-        $payments = Payment::query()
+        $paymentsQuery = Payment::query()
             ->with(['platform', 'client', 'product'])
             ->where('status', 'pending')
             ->whereIn('provider_key', ['paystack', 'pesapal'])
             ->whereIn('purpose', ['wallet_topup', 'subscription'])
             ->where('updated_at', '<', now()->subMinutes($staleMinutes))
             ->orderBy('updated_at')
-            ->limit($limit)
-            ->get();
+            ->limit($limit);
+
+        if (!$includeSandbox) {
+            $paymentsQuery->liveOnly();
+        }
+
+        $payments = $paymentsQuery->get();
 
         $totals = [
             'processed' => 0,

@@ -47,10 +47,12 @@ class ReportController extends Controller
             : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         $paymentsQuery = Payment::query()
+            ->liveOnly()
             ->where('status', 'completed')
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to]);
         $walletTopupsQuery = Payment::query()
+            ->liveOnly()
             ->where('status', 'completed')
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
@@ -124,12 +126,14 @@ class ReportController extends Controller
             : 0;
 
         $revenueMtd = Payment::query()
+            ->liveOnly()
             ->where('status', 'completed')
             ->excludingWalletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
             ->sum('amount');
         $walletTopupRevenueMtd = Payment::query()
+            ->liveOnly()
             ->where('status', 'completed')
             ->walletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
@@ -155,6 +159,7 @@ class ReportController extends Controller
             : "DATE_FORMAT(created_at, '%Y-%m')";
 
         $revenueTrendRows = Payment::query()
+            ->liveOnly()
             ->selectRaw("{$monthKeyExpression} as month_key")
             ->selectRaw('SUM(amount) as total_revenue')
             ->where('status', 'completed')

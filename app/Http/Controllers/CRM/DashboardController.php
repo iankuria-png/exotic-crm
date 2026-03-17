@@ -70,7 +70,9 @@ class DashboardController extends Controller
 
         $expiringDeals = $this->buildExpiringSubscriptionsWidget($platformIds, $search);
 
-        $paymentReviewQueueQuery = Payment::where('status', 'completed')
+        $paymentReviewQueueQuery = Payment::query()
+            ->liveOnly()
+            ->where('status', 'completed')
             ->whereNull('client_id')
             ->with(['platform', 'product'])
             ->orderBy('created_at', 'desc');
@@ -117,17 +119,19 @@ class DashboardController extends Controller
         $activeDealsQuery = Deal::active();
         $expiringSoonQuery = Deal::expiringSoon(7);
         $paymentsWindowQuery = Payment::query()
+            ->liveOnly()
             ->where('status', 'completed')
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to]);
         $walletTopupsWindowQuery = Payment::query()
+            ->liveOnly()
             ->where('status', 'completed')
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
-        $unmatchedPaymentsWindowQuery = Payment::whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
-        $awaitingPaymentsQuery = Payment::whereIn('status', ['initiated', 'pending']);
-        $failedPaymentsQuery = Payment::where('status', 'failed');
-        $unmatchedQueueQuery = Payment::whereNull('client_id')->where('status', 'completed');
+        $unmatchedPaymentsWindowQuery = Payment::query()->liveOnly()->whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
+        $awaitingPaymentsQuery = Payment::query()->liveOnly()->whereIn('status', ['initiated', 'pending']);
+        $failedPaymentsQuery = Payment::query()->liveOnly()->where('status', 'failed');
+        $unmatchedQueueQuery = Payment::query()->liveOnly()->whereNull('client_id')->where('status', 'completed');
         $renewalRisk72hQuery = Deal::active()
             ->where('expires_at', '>', now())
             ->where('expires_at', '<=', now()->copy()->addDays(3));
@@ -155,6 +159,7 @@ class DashboardController extends Controller
         $previousFrom = (clone $from)->subSeconds($windowSeconds);
         $previousTo = (clone $from)->subSecond();
         $previousRevenueQuery = Payment::query()
+            ->liveOnly()
             ->where('status', 'completed')
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$previousFrom, $previousTo]);
@@ -324,12 +329,14 @@ class DashboardController extends Controller
         $result = [];
         foreach ($platforms as $platform) {
             $currentRevenue = (float) Payment::where('platform_id', $platform->id)
+                ->liveOnly()
                 ->where('status', 'completed')
                 ->excludingWalletTopups()
                 ->whereBetween('created_at', [$currentFrom, $currentTo])
                 ->sum('amount');
 
             $previousRevenue = (float) Payment::where('platform_id', $platform->id)
+                ->liveOnly()
                 ->where('status', 'completed')
                 ->excludingWalletTopups()
                 ->whereBetween('created_at', [$previousFrom, $previousTo])
@@ -445,7 +452,7 @@ class DashboardController extends Controller
         $clientsQuery = Client::query();
         $leadsQuery = Lead::query();
         $dealsQuery = Deal::query();
-        $paymentsQuery = Payment::query();
+        $paymentsQuery = Payment::query()->liveOnly();
         $notesQuery = ClientNote::query();
 
         if (is_array($platformIds)) {

@@ -368,6 +368,24 @@ class WalletSettingsPhaseFourTest extends TestCase
 
         $this->createCompletedPayment($platform, 5000, 'subscription');
         $this->createCompletedPayment($platform, 1200, 'wallet_topup');
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700999999',
+            'amount' => 2200,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'provider_environment' => 'sandbox',
+            'payment_data' => [
+                'test_mode' => true,
+                'test_result' => 'completed',
+                'side_effects_skipped' => true,
+            ],
+            'created_at' => now()->subMinutes(4),
+            'updated_at' => now()->subMinutes(4),
+        ]);
 
         $dashboard = $this->getJson('/api/crm/dashboard?platform_id=' . $platform->id);
 

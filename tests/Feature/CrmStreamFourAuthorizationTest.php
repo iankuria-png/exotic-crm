@@ -230,6 +230,40 @@ class CrmStreamFourAuthorizationTest extends TestCase
         $this->assertNotNull($response->json('targets.data.0.last_renewal_reminder_at'));
     }
 
+    public function test_renewal_overview_does_not_mark_sandbox_payments_as_verified_revenue(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $salesUser = $this->createUser('sales', [$platform->id]);
+        $deal = $this->createDeal($platform, [
+            'status' => 'active',
+            'expires_at' => now()->addDays(6),
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'deal_id' => $deal->id,
+            'client_id' => $deal->client_id,
+            'phone' => '0711222333',
+            'amount' => 1800,
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'provider_environment' => 'sandbox',
+            'payment_data' => [
+                'test_mode' => true,
+                'test_result' => 'completed',
+                'side_effects_skipped' => true,
+            ],
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/renewals?platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonPath('targets.data.0.id', $deal->id)
+            ->assertJsonPath('targets.data.0.payment_status', 'unlinked');
+    }
+
     public function test_sales_user_can_pause_and_resume_renewal_reminders_in_scope(): void
     {
         $platform = $this->createPlatform('Kenya');

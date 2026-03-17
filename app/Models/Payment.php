@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
@@ -121,5 +122,32 @@ class Payment extends Model
     public function scopeWalletTopups($query)
     {
         return $query->where('purpose', 'wallet_topup');
+    }
+
+    public function scopeSandboxTest(Builder $query): Builder
+    {
+        return $query->where(function (Builder $builder) {
+            $builder->whereRaw("LOWER(COALESCE(provider_environment, '')) = ?", ['sandbox'])
+                ->orWhere('payment_data->test_mode', true);
+        });
+    }
+
+    public function scopeLiveOnly(Builder $query): Builder
+    {
+        return $query
+            ->where(function (Builder $builder) {
+                $builder->whereNull('provider_environment')
+                    ->orWhereRaw("LOWER(provider_environment) != ?", ['sandbox']);
+            })
+            ->where(function (Builder $builder) {
+                $builder->whereNull('payment_data->test_mode')
+                    ->orWhere('payment_data->test_mode', false);
+            });
+    }
+
+    public function isSandboxTest(): bool
+    {
+        return strtolower(trim((string) $this->provider_environment)) === 'sandbox'
+            || (bool) data_get($this->payment_data, 'test_mode', false);
     }
 }
