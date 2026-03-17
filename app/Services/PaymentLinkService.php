@@ -2,10 +2,21 @@
 
 namespace App\Services;
 
+use App\Models\Payment;
 use App\Models\Platform;
+use App\Support\CrmAuditAction;
+use App\Support\PhoneNormalizer;
+use Illuminate\Http\Request;
 
 class PaymentLinkService
 {
+    public function __construct(
+        private readonly NotificationService $notificationService,
+        private readonly PaymentAttemptService $paymentAttemptService,
+        private readonly AuditService $auditService
+    ) {
+    }
+
     public function resolveUrl(?Platform $platform, ?string $requestedProvider = null): ?string
     {
         if (!$platform) {
@@ -59,5 +70,162 @@ class PaymentLinkService
         $path = config('services.payment_link.path', '/pay');
 
         return $baseUrl . $path;
+    }
+
+    public function sendLink(Payment $payment, array $options = []): array
+    {
+        $payment->loadMissing(['platform', 'product']);
+        $platform = $payment->platform;
+
+        if (!$platform) {
+            return [
+                'success' => false,
+                'http_status' => 422,
+                'message' => 'Payment has no platform.',
+            ];
+        }
+
+        $channel = trim((string) ($options['channel'] ?? 'sms'));
+        if ($channel === '') {
+            $channel = 'sms';
+        }
+
+        $requestedProvider = isset($options['provider']) ? trim((string) $options['provider']) : null;
+        $phone = PhoneNormalizer::normalize(
+            $options['phone'] ?? $payment->phone,
+            (string) ($platform->phone_prefix ?: '254')
+        );
+
+        if (!$phone) {
+            return [
+                'success' => false,
+                'http_status' => 422,
+                'message' => 'No valid phone number to send the link to.',
+            ];
+        }
+
+        $paymentUrl = $this->resolveUrl($platform, $requestedProvider);
+        if (!$paymentUrl) {
+            return [
+                'success' => false,
+                'http_status' => 422,
+                'message' => 'Payment page URL could not be determined for this market.',
+            ];
+        }
+
+        $currency = $payment->currency ?: ($platform->currency_code ?: 'KES');
+        $message = sprintf(
+            'Complete your payment of %s %s here: %s',
+            $currency,
+            number_format((float) $payment->amount),
+            $paymentUrl
+        );
+
+        $request = $options['request'] ?? null;
+        $requestMetaExtra = array_filter([
+            'channel' => $channel,
+            'requested_provider' => $requestedProvider,
+            'phone' => $phone,
+        ], static fn($value) => $value !== null && $value !== '');
+        $requestMeta = $request instanceof Request
+            ? $this->paymentAttemptService->requestMetaFromRequest($request, $requestMetaExtra)
+            : $requestMetaExtra;
+
+        $attemptStartedAt = microtime(true);
+        $notificationContext = array_merge([
+            'purpose' => (string) ($options['notification_purpose'] ?? 'payment_link'),
+            'payment_id' => $payment->id,
+            'platform_id' => $payment->platform_id,
+            'phone_prefix' => $platform->phone_prefix ?: '254',
+        ], is_array($options['notification_context'] ?? null) ? $options['notification_context'] : []);
+        $result = $this->notificationService->sendSms($phone, $message, $notificationContext);
+        $latencyMs = (int) round((microtime(true) - $attemptStartedAt) * 1000);
+
+        $attemptStatus = ($result['success'] ?? false) === true
+            ? (($result['status'] ?? '') === 'disabled' ? 'disabled' : 'success')
+            : 'failed';
+        $providerForAttempt = $result['provider'] ?? ($requestedProvider ?: 'payment_link');
+
+        $this->paymentAttemptService->record(
+            $payment,
+            (string) ($options['attempt_type'] ?? 'send_payment_link'),
+            $attemptStatus,
+            [
+                'provider' => $providerForAttempt,
+                'error_code' => ($result['success'] ?? false) === true ? null : 'sms_send_failed',
+                'error_message' => ($result['success'] ?? false) === true ? null : ($result['provider_response'] ?? 'SMS could not be sent.'),
+                'latency_ms' => $latencyMs,
+                'request_meta' => $requestMeta,
+                'response_meta' => [
+                    'sms_status' => $result['status'] ?? null,
+                    'provider_response' => $result['provider_response'] ?? null,
+                    'payment_url' => $paymentUrl,
+                ],
+                'created_by' => $request instanceof Request ? optional($request->user())->id : ($options['actor_id'] ?? null),
+            ]
+        );
+
+        $beforeState = [
+            'channel' => $channel,
+            'phone' => $phone,
+            'provider' => $requestedProvider,
+        ];
+        $afterState = [
+            'sms_success' => $result['success'] ?? false,
+            'sms_status' => $result['status'] ?? null,
+            'provider' => $requestedProvider,
+        ];
+        $reason = (string) ($options['reason'] ?? 'Send payment link from CRM');
+
+        if ($request instanceof Request) {
+            $this->auditService->fromRequest(
+                $request,
+                (int) $payment->platform_id,
+                CrmAuditAction::PAYMENT_SEND_LINK,
+                'payment',
+                (int) $payment->id,
+                $beforeState,
+                $afterState,
+                $reason
+            );
+        } else {
+            $this->auditService->record([
+                'platform_id' => (int) $payment->platform_id,
+                'actor_id' => $options['actor_id'] ?? null,
+                'action' => CrmAuditAction::PAYMENT_SEND_LINK,
+                'entity_type' => 'payment',
+                'entity_id' => (int) $payment->id,
+                'before_state' => $beforeState,
+                'after_state' => $afterState,
+                'reason' => $reason,
+                'ip_address' => $options['ip_address'] ?? null,
+            ]);
+        }
+
+        if (($result['success'] ?? false) !== true && ($result['status'] ?? '') !== 'disabled') {
+            return [
+                'success' => false,
+                'http_status' => 502,
+                'message' => $result['provider_response'] ?? ((string) ($options['failure_message'] ?? 'SMS could not be sent.')),
+                'payment_url' => $paymentUrl,
+                'phone' => $phone,
+                'notification_result' => $result,
+                'request_meta' => $requestMeta,
+                'latency_ms' => $latencyMs,
+            ];
+        }
+
+        return [
+            'success' => true,
+            'http_status' => 200,
+            'message' => ($result['status'] ?? '') === 'disabled'
+                ? (string) ($options['disabled_message'] ?? 'Payment link prepared (SMS disabled).')
+                : (string) ($options['success_message'] ?? 'Payment link sent by SMS.'),
+            'payment_url' => $paymentUrl,
+            'phone' => $phone,
+            'notification_result' => $result,
+            'request_meta' => $requestMeta,
+            'latency_ms' => $latencyMs,
+        ];
     }
 }

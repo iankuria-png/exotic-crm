@@ -1161,101 +1161,25 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $payment->load(['product', 'platform']);
-        $platform = $payment->platform;
-
-        if (!$platform) {
-            return response()->json([
-                'message' => 'Payment has no platform.',
-            ], 422);
-        }
-
-        $phone = PhoneNormalizer::normalize(
-            $validated['phone'] ?? $payment->phone,
-            (string) ($platform->phone_prefix ?: '254')
-        );
-        if (!$phone) {
-            return response()->json([
-                'message' => 'No valid phone number to send the link to.',
-            ], 422);
-        }
-
-        $paymentUrl = $this->paymentLinkService->resolveUrl($platform, $validated['provider'] ?? null);
-        if (!$paymentUrl) {
-            return response()->json([
-                'message' => 'Payment page URL could not be determined for this market.',
-            ], 422);
-        }
-
-        $amount = (float) $payment->amount;
-        $currency = $payment->currency ?: ($platform->currency_code ?: 'KES');
-        $message = sprintf(
-            'Complete your payment of %s %s here: %s',
-            $currency,
-            number_format($amount),
-            $paymentUrl
-        );
-
-        $requestMeta = $this->paymentAttemptService->requestMetaFromRequest($request, [
+        $sendResult = $this->paymentLinkService->sendLink($payment, [
+            'request' => $request,
             'channel' => $validated['channel'],
-            'requested_provider' => $validated['provider'] ?? null,
-            'phone' => $phone,
-        ]);
-        $attemptStartedAt = microtime(true);
-        $result = $this->notificationService->sendSms($phone, $message, [
-            'purpose' => 'payment_link',
-            'payment_id' => $payment->id,
-            'platform_id' => $payment->platform_id,
-        ]);
-        $latencyMs = (int) round((microtime(true) - $attemptStartedAt) * 1000);
-
-        $attemptStatus = ($result['success'] ?? false) === true
-            ? (($result['status'] ?? '') === 'disabled' ? 'disabled' : 'success')
-            : 'failed';
-
-        $this->paymentAttemptService->record($payment, 'send_payment_link', $attemptStatus, [
-            'provider' => $result['provider'] ?? ($validated['provider'] ?? 'payment_link'),
-            'error_code' => ($result['success'] ?? false) === true ? null : 'sms_send_failed',
-            'error_message' => ($result['success'] ?? false) === true ? null : ($result['provider_response'] ?? 'SMS could not be sent.'),
-            'latency_ms' => $latencyMs,
-            'request_meta' => $requestMeta,
-            'response_meta' => [
-                'sms_status' => $result['status'] ?? null,
-                'provider_response' => $result['provider_response'] ?? null,
-                'payment_url' => $paymentUrl,
-            ],
-            'created_by' => optional($request->user())->id,
+            'phone' => $validated['phone'] ?? null,
+            'provider' => $validated['provider'] ?? null,
+            'reason' => (string) ($validated['reason'] ?? 'Send payment link from CRM'),
+            'notification_purpose' => 'payment_link',
+            'success_message' => 'Payment link sent by SMS.',
+            'disabled_message' => 'Payment link message prepared (SMS is disabled in settings).',
         ]);
 
-        $this->auditService->fromRequest(
-            $request,
-            (int) $payment->platform_id,
-            CrmAuditAction::PAYMENT_SEND_LINK,
-            'payment',
-            (int) $payment->id,
-            [
-                'channel' => $validated['channel'],
-                'phone' => $phone,
-                'provider' => $validated['provider'] ?? null,
-            ],
-            [
-                'sms_success' => $result['success'] ?? false,
-                'sms_status' => $result['status'] ?? null,
-                'provider' => $validated['provider'] ?? null,
-            ],
-            (string) ($validated['reason'] ?? 'Send payment link from CRM')
-        );
-
-        if ($result['success'] !== true && ($result['status'] ?? '') !== 'disabled') {
+        if (!($sendResult['success'] ?? false)) {
             return response()->json([
-                'message' => $result['provider_response'] ?? 'SMS could not be sent.',
-            ], 502);
+                'message' => $sendResult['message'] ?? 'SMS could not be sent.',
+            ], (int) ($sendResult['http_status'] ?? 500));
         }
 
         return response()->json([
-            'message' => $result['status'] === 'disabled'
-                ? 'Payment link message prepared (SMS is disabled in settings).'
-                : 'Payment link sent by SMS.',
+            'message' => $sendResult['message'],
             'payment' => $payment->fresh(['platform', 'product']),
         ]);
     }

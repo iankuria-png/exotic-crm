@@ -1024,73 +1024,52 @@ class DealController extends Controller
         }
 
         if ($method === 'link') {
-            $paymentUrl = $this->paymentLinkService->resolveUrl($client->platform);
-            if (!$paymentUrl) {
+            $sendResult = $this->paymentLinkService->sendLink($payment, [
+                'request' => $request,
+                'channel' => 'sms',
+                'phone' => $phone,
+                'reason' => (string) ($request->input('reason') ?: 'Send payment link from deal flow'),
+                'notification_purpose' => 'deal_activation_payment_link',
+                'notification_context' => [
+                    'deal_id' => $deal->id,
+                ],
+                'success_message' => 'Payment link sent by SMS. Subscription will activate after payment confirmation.',
+                'disabled_message' => 'Payment link prepared (SMS disabled). Subscription will activate after payment confirmation.',
+            ]);
+
+            if (!($sendResult['success'] ?? false)) {
                 $payment->update([
                     'status' => 'failed',
                     'raw_payload' => [
                         'source' => 'deal_payment_initiation',
                         'method' => 'link',
-                        'error' => 'Payment link URL unavailable',
+                        'payment_url' => $sendResult['payment_url'] ?? null,
+                        'error' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
+                        'sms_result' => $sendResult['notification_result'] ?? null,
                     ],
                 ]);
 
                 return [
                     'success' => false,
-                    'message' => 'Payment page URL could not be determined for this market.',
+                    'message' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
                     'payment' => $payment,
                 ];
             }
 
-            $message = sprintf(
-                'Complete your payment of %s %s here: %s',
-                $payment->currency ?: 'KES',
-                number_format((float) $payment->amount),
-                $paymentUrl
-            );
-
-            $smsResult = $this->notificationService->sendSms($phone, $message, [
-                'purpose' => 'deal_activation_payment_link',
-                'deal_id' => $deal->id,
-                'payment_id' => $payment->id,
-                'platform_id' => $deal->platform_id,
-                'phone_prefix' => $client->platform?->phone_prefix ?: '254',
-            ]);
-
-            if (($smsResult['success'] ?? false) === true || ($smsResult['status'] ?? '') === 'disabled') {
-                $payment->update([
-                    'status' => 'initiated',
-                    'raw_payload' => [
-                        'source' => 'deal_payment_initiation',
-                        'method' => 'link',
-                        'payment_url' => $paymentUrl,
-                        'sms_status' => $smsResult['status'] ?? null,
-                    ],
-                ]);
-
-                return [
-                    'success' => true,
-                    'message' => ($smsResult['status'] ?? '') === 'disabled'
-                        ? 'Payment link prepared (SMS disabled). Subscription will activate after payment confirmation.'
-                        : 'Payment link sent by SMS. Subscription will activate after payment confirmation.',
-                    'payment' => $payment->fresh(['platform', 'product', 'client']),
-                ];
-            }
-
             $payment->update([
-                'status' => 'failed',
+                'status' => 'initiated',
                 'raw_payload' => [
                     'source' => 'deal_payment_initiation',
                     'method' => 'link',
-                    'payment_url' => $paymentUrl,
-                    'sms_result' => $smsResult,
+                    'payment_url' => $sendResult['payment_url'] ?? null,
+                    'sms_status' => data_get($sendResult, 'notification_result.status'),
                 ],
             ]);
 
             return [
-                'success' => false,
-                'message' => $smsResult['provider_response'] ?? 'Payment link SMS could not be sent.',
-                'payment' => $payment,
+                'success' => true,
+                'message' => $sendResult['message'] ?? 'Payment link sent by SMS. Subscription will activate after payment confirmation.',
+                'payment' => $payment->fresh(['platform', 'product', 'client']),
             ];
         }
 

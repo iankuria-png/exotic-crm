@@ -3,14 +3,17 @@
 namespace Tests\Unit;
 
 use App\Models\Platform;
+use App\Services\AuditService;
 use App\Services\PaymentLinkService;
+use App\Services\PaymentAttemptService;
+use App\Services\NotificationService;
 use Tests\TestCase;
 
 class PaymentLinkServiceTest extends TestCase
 {
     public function test_it_prefers_provider_direct_url(): void
     {
-        $service = new PaymentLinkService();
+        $service = $this->makeService();
         $platform = Platform::factory()->make([
             'payment_link_providers' => [
                 'active_provider' => 'checkout',
@@ -30,7 +33,7 @@ class PaymentLinkServiceTest extends TestCase
 
     public function test_it_builds_provider_url_from_base_url_and_path(): void
     {
-        $service = new PaymentLinkService();
+        $service = $this->makeService();
         $platform = Platform::factory()->make([
             'payment_link_providers' => [
                 'active_provider' => 'site_pay_page',
@@ -51,7 +54,7 @@ class PaymentLinkServiceTest extends TestCase
 
     public function test_it_falls_back_to_wp_api_origin_when_provider_config_is_missing(): void
     {
-        $service = new PaymentLinkService();
+        $service = $this->makeService();
         $platform = Platform::factory()->make([
             'wp_api_url' => 'https://crm.example.test/wp-json/exotic-crm-sync/v1',
             'domain' => 'fallback.example.test',
@@ -69,7 +72,7 @@ class PaymentLinkServiceTest extends TestCase
 
     public function test_it_falls_back_to_domain_when_wp_api_url_is_unavailable(): void
     {
-        $service = new PaymentLinkService();
+        $service = $this->makeService();
         $platform = Platform::factory()->make([
             'wp_api_url' => null,
             'domain' => 'market.example.test',
@@ -79,6 +82,15 @@ class PaymentLinkServiceTest extends TestCase
         $this->assertSame(
             'https://market.example.test/pay',
             $service->resolveUrl($platform)
+        );
+    }
+
+    private function makeService(): PaymentLinkService
+    {
+        return new PaymentLinkService(
+            new NotificationService(),
+            new PaymentAttemptService(),
+            new AuditService()
         );
     }
 }
