@@ -122,7 +122,7 @@ class PaymentMatchingService
         $payment = $payment->fresh();
 
         // Automatically create deal if payment is completed
-        if ($payment->status === 'completed' && !$payment->deal_id) {
+        if ($payment->status === 'completed' && !$payment->deal_id && !$this->isSandboxPayment($payment)) {
             try {
                 $this->createDealFromPayment($payment, $confirmedBy);
             } catch (\Exception $e) {
@@ -340,6 +340,10 @@ class PaymentMatchingService
      */
     public function createDealFromPayment(Payment $payment, int $actorId): Deal
     {
+        if ($this->isSandboxPayment($payment)) {
+            throw new \InvalidArgumentException('Sandbox payments cannot create live subscriptions.');
+        }
+
         return DB::transaction(fn () => $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
             'actor_id' => $actorId,
             'confirmed_by' => $actorId,
@@ -469,5 +473,14 @@ class PaymentMatchingService
         }
 
         return 'basic';
+    }
+
+    private function isSandboxPayment(Payment $payment): bool
+    {
+        return (bool) data_get($payment->payment_data, 'test_mode', false)
+            || (
+                strtolower(trim((string) $payment->source)) === 'gateway'
+                && strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+            );
     }
 }

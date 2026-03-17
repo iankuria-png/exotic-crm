@@ -71,7 +71,10 @@ class HostedCheckoutWebhookEnvironmentTest extends TestCase
         $client->refresh();
 
         $this->assertSame('completed', $payment->status);
-        $this->assertSame('1500.00', number_format((float) $client->wallet_balance, 2, '.', ''));
+        $this->assertSame('0.00', number_format((float) $client->wallet_balance, 2, '.', ''));
+        $this->assertTrue((bool) data_get($payment->payment_data, 'test_mode'));
+        $this->assertSame('completed', data_get($payment->payment_data, 'test_result'));
+        $this->assertTrue((bool) data_get($payment->payment_data, 'side_effects_skipped'));
 
         Http::assertSent(fn ($request) => $request->url() === 'https://api.paystack.co/transaction/verify/WTU-SANDBOX-VERIFY-001'
             && $request->hasHeader('Authorization', 'Bearer sk_test_wallet'));
@@ -121,7 +124,10 @@ class HostedCheckoutWebhookEnvironmentTest extends TestCase
         $client->refresh();
 
         $this->assertSame('completed', $payment->status);
-        $this->assertSame('1800.00', number_format((float) $client->wallet_balance, 2, '.', ''));
+        $this->assertSame('0.00', number_format((float) $client->wallet_balance, 2, '.', ''));
+        $this->assertTrue((bool) data_get($payment->payment_data, 'test_mode'));
+        $this->assertSame('completed', data_get($payment->payment_data, 'test_result'));
+        $this->assertTrue((bool) data_get($payment->payment_data, 'side_effects_skipped'));
 
         Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://cybqa.pesapal.com/pesapalv3/api/Auth/RequestToken'));
         Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://cybqa.pesapal.com/pesapalv3/api/Transactions/GetTransactionStatus')

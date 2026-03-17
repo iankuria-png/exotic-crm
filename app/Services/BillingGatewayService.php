@@ -166,12 +166,29 @@ class BillingGatewayService
             return $payment->fresh() ?? $payment;
         }
 
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+        if (
+            !empty($paymentData['test_mode'])
+            || (
+                strtolower(trim((string) $payment->source)) === 'gateway'
+                && strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+            )
+        ) {
+            $paymentData = array_merge($paymentData, [
+                'test_mode' => true,
+                'test_result' => 'failed',
+                'side_effects_skipped' => true,
+                'verified_at' => (string) ($paymentData['verified_at'] ?? now()->toIso8601String()),
+            ]);
+        }
+
         $payment->forceFill([
             'status' => 'failed',
             'failure_reason' => mb_substr($reason, 0, 190),
             'raw_payload' => array_merge($payment->raw_payload ?? [], [
                 'failure_payload' => $providerPayload,
             ]),
+            'payment_data' => !empty($paymentData) ? $paymentData : $payment->payment_data,
         ])->save();
 
         return $payment->fresh();

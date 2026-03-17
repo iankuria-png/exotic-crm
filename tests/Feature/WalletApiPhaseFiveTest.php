@@ -315,7 +315,7 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('error_code', 'provider_not_supported');
     }
 
-    public function test_paystack_webhook_credits_wallet_once_after_verification(): void
+    public function test_paystack_webhook_credits_wallet_once_after_verification_for_production_payments(): void
     {
         [
             'platform' => $platform,
@@ -331,7 +331,7 @@ class WalletApiPhaseFiveTest extends TestCase
             'purpose' => 'wallet_topup',
             'source' => 'gateway',
             'provider_key' => 'paystack',
-            'provider_environment' => 'sandbox',
+            'provider_environment' => 'production',
             'amount' => 1600,
             'currency' => 'KES',
             'reference_number' => 'WTU-PAYSTACK-001',
@@ -357,7 +357,7 @@ class WalletApiPhaseFiveTest extends TestCase
             ],
         ];
         $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
-        $signature = hash_hmac('sha512', $rawBody, 'sk_test_wallet');
+        $signature = hash_hmac('sha512', $rawBody, 'sk_live_wallet');
 
         $response = $this->call('POST', '/api/billing/paystack/webhook', [], [], [], [
             'CONTENT_TYPE' => 'application/json',
@@ -383,7 +383,7 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertDatabaseCount('wallet_transactions', 1);
     }
 
-    public function test_paystack_webhook_completes_subscription_payments_without_wallet_credit_side_effects(): void
+    public function test_paystack_webhook_completes_subscription_payments_without_wallet_credit_side_effects_for_production_payments(): void
     {
         [
             'platform' => $platform,
@@ -418,7 +418,7 @@ class WalletApiPhaseFiveTest extends TestCase
             'purpose' => 'subscription',
             'source' => 'gateway',
             'provider_key' => 'paystack',
-            'provider_environment' => 'sandbox',
+            'provider_environment' => 'production',
             'amount' => 2400,
             'currency' => 'KES',
             'duration' => 'monthly',
@@ -437,7 +437,7 @@ class WalletApiPhaseFiveTest extends TestCase
             ],
         ];
         $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
-        $signature = hash_hmac('sha512', $rawBody, 'sk_test_wallet');
+        $signature = hash_hmac('sha512', $rawBody, 'sk_live_wallet');
 
         $response = $this->call('POST', '/api/billing/paystack/webhook', [], [], [], [
             'CONTENT_TYPE' => 'application/json',
@@ -461,7 +461,7 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
     }
 
-    public function test_pesapal_ipn_completes_subscription_payments_without_wallet_credit_side_effects(): void
+    public function test_pesapal_ipn_completes_subscription_payments_without_wallet_credit_side_effects_for_production_payments(): void
     {
         [
             'platform' => $platform,
@@ -477,10 +477,10 @@ class WalletApiPhaseFiveTest extends TestCase
                 'premium_expire' => now()->addDays(30)->timestamp,
             ]),
             [
-                'https://cybqa.pesapal.com/pesapalv3/api/Auth/RequestToken' => Http::response([
+                'https://pay.pesapal.com/v3/api/Auth/RequestToken' => Http::response([
                     'token' => 'pesapal-access-token',
                 ], 200),
-                'https://cybqa.pesapal.com/pesapalv3/api/Transactions/GetTransactionStatus*' => Http::response([
+                'https://pay.pesapal.com/v3/api/Transactions/GetTransactionStatus*' => Http::response([
                     'status_code' => 1,
                     'payment_status_description' => 'Completed',
                 ], 200),
@@ -495,7 +495,7 @@ class WalletApiPhaseFiveTest extends TestCase
             'purpose' => 'subscription',
             'source' => 'gateway',
             'provider_key' => 'pesapal',
-            'provider_environment' => 'sandbox',
+            'provider_environment' => 'production',
             'amount' => 2400,
             'currency' => 'KES',
             'duration' => 'monthly',
@@ -732,12 +732,21 @@ class WalletApiPhaseFiveTest extends TestCase
                     'public_key' => 'pk_test_wallet',
                     'secret_key' => 'sk_test_wallet',
                 ],
+                'production' => [
+                    'public_key' => 'pk_live_wallet',
+                    'secret_key' => 'sk_live_wallet',
+                ],
             ],
             'pesapal' => [
                 'sandbox' => [
                     'consumer_key' => 'pesapal-key',
                     'consumer_secret' => 'pesapal-secret',
                     'ipn_id' => 'ipn-test-001',
+                ],
+                'production' => [
+                    'consumer_key' => 'pesapal-live-key',
+                    'consumer_secret' => 'pesapal-live-secret',
+                    'ipn_id' => 'ipn-live-001',
                 ],
             ],
             'mpesa_stk' => [

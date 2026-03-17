@@ -36,6 +36,24 @@ class PaymentCompletionService
             throw new InvalidArgumentException('Only wallet top-up payments can credit a wallet balance.');
         }
 
+        if ($this->isSandboxPayment($payment)) {
+            $alreadyCompleted = (string) $payment->status === 'completed'
+                && (bool) data_get($payment->payment_data, 'test_mode', false);
+
+            $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+                'payment_data' => $this->sandboxMetadata($payment, 'completed'),
+            ]));
+
+            return [
+                'payment' => $payment,
+                'credited' => false,
+                'replayed' => $alreadyCompleted,
+                'wallet' => $payment->client
+                    ? $this->walletService->summary($payment->client, (int) data_get($payment->platform?->wallet_settings, 'recent_transactions_limit', 10))
+                    : null,
+            ];
+        }
+
         if ($payment->wallet_transaction_id) {
             if ($payment->client) {
                 $this->walletSyncService->syncClientBalance($payment->client);
@@ -137,6 +155,19 @@ class PaymentCompletionService
             $client = $options['client'] ?? $this->resolveClientForPayment($payment);
             $deal = null;
 
+            if ($this->isSandboxPayment($payment)) {
+                $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+                    'payment_data' => $this->sandboxMetadata($payment, 'completed'),
+                ]));
+
+                return [
+                    'payment' => $payment->fresh(['platform', 'client', 'deal', 'product']),
+                    'client' => $client,
+                    'deal' => null,
+                    'provisioned' => false,
+                ];
+            }
+
             if ($client) {
                 $deal = $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
                     'client' => $client,
@@ -176,6 +207,10 @@ class PaymentCompletionService
 
     public function completeGenericPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
+        if ($this->isSandboxPayment($payment)) {
+            $options['payment_data'] = $this->sandboxMetadata($payment, 'completed');
+        }
+
         return [
             'payment' => $this->markPaymentCompleted($payment, $providerPayload, $options),
             'replayed' => false,
@@ -233,12 +268,18 @@ class PaymentCompletionService
     private function markPaymentCompleted(Payment $payment, array $providerPayload = [], array $options = []): Payment
     {
         $payment->loadMissing(['client.platform', 'platform', 'product', 'deal']);
+        $paymentData = array_merge(
+            is_array($payment->payment_data) ? $payment->payment_data : [],
+            is_array($options['payment_data'] ?? null) ? $options['payment_data'] : []
+        );
+
         $payment->forceFill([
             'status' => 'completed',
             'failure_reason' => null,
             'completed_at' => $payment->completed_at ?? now(),
             'transaction_reference' => (string) $this->resolveTransactionReference($payment, $providerPayload, $options),
             'raw_payload' => $this->mergeRawPayload($payment, $providerPayload, $options),
+            'payment_data' => !empty($paymentData) ? $paymentData : $payment->payment_data,
         ])->save();
 
         return $payment->fresh(['platform', 'client', 'deal', 'product']);
@@ -268,5 +309,26 @@ class PaymentCompletionService
         }
 
         return $rawPayload;
+    }
+
+    private function isSandboxPayment(Payment $payment): bool
+    {
+        return (bool) data_get($payment->payment_data, 'test_mode', false)
+            || (
+                strtolower(trim((string) $payment->source)) === 'gateway'
+                && strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+            );
+    }
+
+    private function sandboxMetadata(Payment $payment, string $result): array
+    {
+        $existing = is_array($payment->payment_data) ? $payment->payment_data : [];
+
+        return array_merge($existing, [
+            'test_mode' => true,
+            'test_result' => $result,
+            'side_effects_skipped' => true,
+            'verified_at' => (string) ($existing['verified_at'] ?? now()->toIso8601String()),
+        ]);
     }
 }

@@ -145,6 +145,10 @@ class SubscriptionProvisioningService
             throw new InvalidArgumentException('Payment must be completed to create a subscription.');
         }
 
+        if ($this->isSandboxPayment($payment)) {
+            throw new InvalidArgumentException('Sandbox payments cannot provision live subscriptions.');
+        }
+
         $client = $options['client'] ?? $payment->client;
         if ($client !== null && !$client instanceof Client) {
             throw new InvalidArgumentException('Provisioning client must be a Client model.');
@@ -362,5 +366,14 @@ class SubscriptionProvisioningService
             '', 'provider', 'callback', 'system' => 'provider',
             default => $normalized !== '' ? $normalized : 'provider',
         };
+    }
+
+    private function isSandboxPayment(Payment $payment): bool
+    {
+        return (bool) data_get($payment->payment_data, 'test_mode', false)
+            || (
+                strtolower(trim((string) $payment->source)) === 'gateway'
+                && strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+            );
     }
 }
