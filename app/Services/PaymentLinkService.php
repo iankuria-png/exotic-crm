@@ -10,6 +10,9 @@ use Illuminate\Http\Request;
 
 class PaymentLinkService
 {
+    public const MODE_STATIC_URL = 'static_url';
+    public const MODE_PROXY_HOSTED_CHECKOUT = 'proxy_hosted_checkout';
+
     public function __construct(
         private readonly NotificationService $notificationService,
         private readonly PaymentAttemptService $paymentAttemptService,
@@ -30,6 +33,16 @@ class PaymentLinkService
 
             if ($activeProvider !== '' && is_array($providers) && isset($providers[$activeProvider]) && is_array($providers[$activeProvider])) {
                 $provider = $providers[$activeProvider];
+                $enabled = array_key_exists('enabled', $provider) ? (bool) $provider['enabled'] : true;
+                if (!$enabled) {
+                    return null;
+                }
+
+                $mode = trim((string) ($provider['mode'] ?? self::MODE_STATIC_URL));
+                if ($mode === self::MODE_PROXY_HOSTED_CHECKOUT) {
+                    return null;
+                }
+
                 $directUrl = rtrim(trim((string) ($provider['url'] ?? '')), '/');
                 if ($directUrl !== '') {
                     return $directUrl;

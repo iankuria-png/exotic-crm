@@ -70,6 +70,27 @@ class PaymentLinkServiceTest extends TestCase
         );
     }
 
+    public function test_it_returns_null_for_proxy_hosted_checkout_providers_until_proxy_links_are_implemented(): void
+    {
+        $service = $this->makeService();
+        $platform = Platform::factory()->make([
+            'payment_link_providers' => [
+                'active_provider' => 'paystack_checkout',
+                'providers' => [
+                    'paystack_checkout' => [
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'paystack',
+                        'environment' => 'sandbox',
+                    ],
+                ],
+            ],
+            'wp_api_url' => 'https://crm.example.test/wp-json/exotic-crm-sync/v1',
+        ]);
+
+        $this->assertNull($service->resolveUrl($platform));
+    }
+
     public function test_it_falls_back_to_domain_when_wp_api_url_is_unavailable(): void
     {
         $service = $this->makeService();

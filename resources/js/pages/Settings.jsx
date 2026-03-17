@@ -28,6 +28,11 @@ const defaultDurationOptions = [
     { key: '6_months', label: '6 Months', days: 180 },
     { key: '1_year', label: '1 Year', days: 365 },
 ];
+const paymentLinkModeOptions = [
+    { value: 'static_url', label: 'Static URL' },
+    { value: 'proxy_hosted_checkout', label: 'CRM Proxy Checkout' },
+];
+const paymentLinkProxyWalletProviders = ['paystack', 'pesapal'];
 
 function statusChip(status) {
     if (['connected', 'healthy', 'success'].includes(status)) return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
@@ -199,6 +204,63 @@ function walletProviderLabel(providerId) {
     return providerId?.replaceAll('_', ' ') || 'Unknown';
 }
 
+function paymentLinkModeLabel(mode) {
+    if (mode === 'proxy_hosted_checkout') return 'CRM proxy';
+    return 'Static URL';
+}
+
+function paymentLinkProviderOptionLabel(provider) {
+    const baseLabel = provider?.label?.trim() || provider?.key?.trim() || 'Provider';
+
+    return `${baseLabel} (${paymentLinkModeLabel(provider?.mode)})`;
+}
+
+function paymentLinkReadinessState(provider, selectedPlatform, walletSystemConfig) {
+    if (provider?.mode !== 'proxy_hosted_checkout') {
+        return null;
+    }
+
+    const walletProviderKey = provider?.wallet_provider_key || '';
+    const environment = provider?.environment || 'sandbox';
+    const credentials = selectedPlatform?.wallet?.credentials?.[walletProviderKey]?.[environment] || {};
+    const billingDomain = String(walletSystemConfig?.billing_domains?.[environment] || '').trim();
+
+    const credentialsReady = walletProviderKey === 'paystack'
+        ? Boolean(credentials.public_key_configured && credentials.secret_key_configured)
+        : walletProviderKey === 'pesapal'
+            ? Boolean(credentials.consumer_key_configured && credentials.consumer_secret_configured)
+            : false;
+    const billingReady = billingDomain !== '';
+
+    if (credentialsReady && billingReady) {
+        return {
+            tone: 'emerald',
+            label: 'Ready',
+            detail: `${walletProviderLabel(walletProviderKey)} ${environment} credentials and billing domain are configured.`,
+        };
+    }
+
+    const missing = [];
+    if (!credentialsReady) {
+        missing.push(`${walletProviderLabel(walletProviderKey || 'provider')} ${environment} credentials`);
+    }
+    if (!billingReady) {
+        missing.push(`${environment} billing domain`);
+    }
+
+    return {
+        tone: credentialsReady || billingReady ? 'amber' : 'rose',
+        label: credentialsReady || billingReady ? 'Needs setup' : 'Blocked',
+        detail: `Missing ${missing.join(' and ')}.`,
+    };
+}
+
+function paymentLinkReadinessClasses(tone) {
+    if (tone === 'emerald') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+    if (tone === 'amber') return 'border-amber-200 bg-amber-50 text-amber-800';
+    return 'border-rose-200 bg-rose-50 text-rose-800';
+}
+
 function defaultPushPlatformConfig(defaultProvider = 'webpushr') {
     return {
         active_provider: defaultProvider,
@@ -324,6 +386,10 @@ function defaultPaymentLinkProviderForm() {
             {
                 key: 'primary',
                 label: 'Primary',
+                mode: 'static_url',
+                enabled: true,
+                wallet_provider_key: 'paystack',
+                environment: 'sandbox',
                 url: '',
                 base_url: '',
                 path: '/pay',
@@ -344,6 +410,10 @@ function buildPaymentLinkProviderForm(platform) {
         .map(([key, provider]) => ({
             key,
             label: provider?.label || key,
+            mode: provider?.mode || 'static_url',
+            enabled: provider?.enabled !== false,
+            wallet_provider_key: provider?.wallet_provider_key || 'paystack',
+            environment: provider?.environment || 'sandbox',
             url: provider?.url || '',
             base_url: provider?.base_url || '',
             path: provider?.path || '/pay',
@@ -353,9 +423,10 @@ function buildPaymentLinkProviderForm(platform) {
         return fallback;
     }
 
-    const active = config.active_provider && providerEntries.some((provider) => provider.key === config.active_provider)
+    const enabledProviders = providerEntries.filter((provider) => provider.enabled);
+    const active = config.active_provider && enabledProviders.some((provider) => provider.key === config.active_provider)
         ? config.active_provider
-        : providerEntries[0].key;
+        : (enabledProviders[0]?.key || providerEntries[0].key);
 
     return {
         active_provider: active,
@@ -786,6 +857,15 @@ function IntegrationsWorkspace({
 
     const platformRows = data?.platforms || [];
     const selectedPlatform = platformRows.find((platform) => platform.platform_id === selectedPlatformId) || null;
+    const enabledPaymentLinkProviders = useMemo(() => (
+        (paymentLinkForm.providers || [])
+            .map((provider) => ({
+                ...provider,
+                key: provider.key.trim(),
+                label: provider.label?.trim() || provider.key.trim(),
+            }))
+            .filter((provider) => provider.key !== '' && Boolean(provider.enabled))
+    ), [paymentLinkForm.providers]);
     const scraperSources = data?.scraper?.sources || [];
     const scraperRuns = data?.scraper?.recent_runs || [];
     const scraperProfiles = data?.scraper?.parser_profiles || ['contact_cards', 'profile_links'];
@@ -853,6 +933,21 @@ function IntegrationsWorkspace({
         setWalletProvidersForm(buildWalletProvidersForm(selectedPlatform));
         setWalletCredentialReveal(null);
     }, [selectedPlatformId, selectedPlatform]);
+
+    useEffect(() => {
+        const nextActiveProvider = enabledPaymentLinkProviders.some((provider) => provider.key === paymentLinkForm.active_provider)
+            ? paymentLinkForm.active_provider
+            : (enabledPaymentLinkProviders[0]?.key || '');
+
+        if (nextActiveProvider === paymentLinkForm.active_provider) {
+            return;
+        }
+
+        setPaymentLinkForm((current) => ({
+            ...current,
+            active_provider: nextActiveProvider,
+        }));
+    }, [enabledPaymentLinkProviders, paymentLinkForm.active_provider]);
 
     useEffect(() => {
         if (!scraperSources.length) {
@@ -1749,6 +1844,10 @@ function IntegrationsWorkspace({
                 {
                     key: '',
                     label: '',
+                    mode: 'static_url',
+                    enabled: true,
+                    wallet_provider_key: 'paystack',
+                    environment: 'sandbox',
                     url: '',
                     base_url: '',
                     path: '/pay',
@@ -1764,10 +1863,14 @@ function IntegrationsWorkspace({
             }
 
             const nextProviders = current.providers.filter((_, providerIndex) => providerIndex !== index);
-            const nextKeys = new Set(nextProviders.map((provider) => provider.key).filter(Boolean));
+            const nextKeys = new Set(
+                nextProviders
+                    .filter((provider) => provider.enabled && provider.key.trim() !== '')
+                    .map((provider) => provider.key.trim())
+            );
             const nextActive = nextKeys.has(current.active_provider)
                 ? current.active_provider
-                : (nextProviders[0]?.key || '');
+                : (nextProviders.find((provider) => provider.enabled && provider.key.trim() !== '')?.key || '');
 
             return {
                 ...current,
@@ -1786,14 +1889,18 @@ function IntegrationsWorkspace({
             .map((provider) => ({
                 key: provider.key.trim(),
                 label: provider.label.trim(),
+                mode: provider.mode || 'static_url',
+                enabled: Boolean(provider.enabled),
+                wallet_provider_key: provider.wallet_provider_key || 'paystack',
+                environment: provider.environment || 'sandbox',
                 url: provider.url.trim(),
                 base_url: provider.base_url.trim(),
                 path: provider.path.trim(),
             }))
-            .filter((provider) => provider.key && (provider.url || provider.base_url));
+            .filter((provider) => provider.key);
 
         if (!normalizedProviders.length) {
-            toast.error('Add at least one provider with a key and URL/base URL.');
+            toast.error('Add at least one payment link provider before saving.');
             return;
         }
 
@@ -1803,16 +1910,48 @@ function IntegrationsWorkspace({
             return;
         }
 
-        const activeProvider = keySet.has(paymentLinkForm.active_provider)
+        const invalidStaticProvider = normalizedProviders.find((provider) => (
+            provider.mode === 'static_url' && !provider.url && !provider.base_url
+        ));
+        if (invalidStaticProvider) {
+            toast.error(`${invalidStaticProvider.label || invalidStaticProvider.key} needs a direct URL or base URL.`);
+            return;
+        }
+
+        const invalidProxyProvider = normalizedProviders.find((provider) => (
+            provider.mode === 'proxy_hosted_checkout'
+            && (!provider.wallet_provider_key || !provider.environment)
+        ));
+        if (invalidProxyProvider) {
+            toast.error(`${invalidProxyProvider.label || invalidProxyProvider.key} needs a wallet provider and environment.`);
+            return;
+        }
+
+        const enabledProviders = normalizedProviders.filter((provider) => provider.enabled);
+        if (!enabledProviders.length) {
+            toast.error('Enable at least one payment link provider before saving.');
+            return;
+        }
+
+        const enabledKeys = new Set(enabledProviders.map((provider) => provider.key));
+        const activeProvider = enabledKeys.has(paymentLinkForm.active_provider)
             ? paymentLinkForm.active_provider
-            : normalizedProviders[0].key;
+            : enabledProviders[0].key;
 
         const providersPayload = normalizedProviders.reduce((acc, provider) => {
             acc[provider.key] = {
                 label: provider.label || provider.key,
-                url: provider.url || null,
-                base_url: provider.base_url || null,
-                path: provider.path || null,
+                mode: provider.mode,
+                enabled: provider.enabled,
+                wallet_provider_key: provider.mode === 'proxy_hosted_checkout'
+                    ? provider.wallet_provider_key
+                    : null,
+                environment: provider.mode === 'proxy_hosted_checkout'
+                    ? provider.environment
+                    : null,
+                url: provider.mode === 'static_url' ? (provider.url || null) : null,
+                base_url: provider.mode === 'static_url' ? (provider.base_url || null) : null,
+                path: provider.mode === 'static_url' ? (provider.path || null) : null,
             };
             return acc;
         }, {});
@@ -4515,7 +4654,7 @@ function IntegrationsWorkspace({
                                 </option>
                             ))}
                         </select>
-                        <p className="mt-2 text-xs text-slate-500">Active provider is used by default when operators send payment links from the Payments workspace.</p>
+                        <p className="mt-2 text-xs text-slate-500">Active provider is used by default when operators send payment links from the Payments workspace. Only enabled providers can be selected as active.</p>
                         {paymentLinkReadOnly ? (
                             <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
                                 Read-only access: only admin and sub-admin roles can update payment link provider settings.
@@ -4530,7 +4669,7 @@ function IntegrationsWorkspace({
                     ) : (
                         <section className="rounded-lg border border-slate-200 bg-white p-3">
                             <h4 className="text-sm font-semibold text-slate-900">Providers</h4>
-                            <p className="mt-1 text-xs text-slate-500">Add one or more providers, choose the active provider, and keep an audit reason for every change.</p>
+                            <p className="mt-1 text-xs text-slate-500">Add one or more providers, choose between direct URLs and CRM proxy checkout, and keep an audit reason for every change.</p>
 
                             <fieldset disabled={paymentLinkReadOnly || savePaymentLinkProvidersMutation.isPending} className={`${paymentLinkReadOnly ? 'opacity-70' : ''}`}>
                                 <div className="mt-3 space-y-3">
@@ -4549,24 +4688,91 @@ function IntegrationsWorkspace({
                                                     className="crm-input"
                                                     placeholder="Provider label"
                                                 />
-                                                <input
-                                                    value={provider.url}
-                                                    onChange={(event) => updatePaymentLinkProvider(index, 'url', event.target.value)}
-                                                    className="crm-input md:col-span-2"
-                                                    placeholder="Direct URL (optional)"
-                                                />
-                                                <input
-                                                    value={provider.base_url}
-                                                    onChange={(event) => updatePaymentLinkProvider(index, 'base_url', event.target.value)}
-                                                    className="crm-input"
-                                                    placeholder="Base URL"
-                                                />
-                                                <input
-                                                    value={provider.path}
-                                                    onChange={(event) => updatePaymentLinkProvider(index, 'path', event.target.value)}
-                                                    className="crm-input"
-                                                    placeholder="Path (e.g. /pay)"
-                                                />
+                                                <select
+                                                    value={provider.mode || 'static_url'}
+                                                    onChange={(event) => updatePaymentLinkProvider(index, 'mode', event.target.value)}
+                                                    className="crm-select"
+                                                >
+                                                    {paymentLinkModeOptions.map((option) => (
+                                                        <option key={option.value} value={option.value}>
+                                                            {option.label}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={Boolean(provider.enabled)}
+                                                        onChange={(event) => updatePaymentLinkProvider(index, 'enabled', event.target.checked)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    Enabled for operator use
+                                                </label>
+                                                {provider.mode === 'proxy_hosted_checkout' ? (
+                                                    <>
+                                                        <select
+                                                            value={provider.wallet_provider_key || 'paystack'}
+                                                            onChange={(event) => updatePaymentLinkProvider(index, 'wallet_provider_key', event.target.value)}
+                                                            className="crm-select"
+                                                        >
+                                                            {walletProviderKeys
+                                                                .filter((providerKey) => paymentLinkProxyWalletProviders.includes(providerKey))
+                                                                .map((providerKey) => (
+                                                                    <option key={providerKey} value={providerKey}>
+                                                                        {walletProviderLabel(providerKey)}
+                                                                    </option>
+                                                                ))}
+                                                        </select>
+                                                        <select
+                                                            value={provider.environment || 'sandbox'}
+                                                            onChange={(event) => updatePaymentLinkProvider(index, 'environment', event.target.value)}
+                                                            className="crm-select"
+                                                        >
+                                                            {walletEnvironmentOptions.map((environment) => (
+                                                                <option key={environment} value={environment}>
+                                                                    {environment}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        {(() => {
+                                                            const readiness = paymentLinkReadinessState(provider, selectedPlatform, walletSystemConfig);
+
+                                                            return readiness ? (
+                                                                <div className={`md:col-span-2 rounded-md border px-3 py-2 text-xs ${paymentLinkReadinessClasses(readiness.tone)}`}>
+                                                                    <p className="font-semibold">{readiness.label}</p>
+                                                                    <p className="mt-1">{readiness.detail}</p>
+                                                                </div>
+                                                            ) : null;
+                                                        })()}
+                                                        <p className="md:col-span-2 text-xs text-slate-500">
+                                                            CRM proxy checkout will generate a CRM-owned link and hand off to the configured wallet provider in the selected environment.
+                                                        </p>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <input
+                                                            value={provider.url}
+                                                            onChange={(event) => updatePaymentLinkProvider(index, 'url', event.target.value)}
+                                                            className="crm-input md:col-span-2"
+                                                            placeholder="Direct URL (optional)"
+                                                        />
+                                                        <input
+                                                            value={provider.base_url}
+                                                            onChange={(event) => updatePaymentLinkProvider(index, 'base_url', event.target.value)}
+                                                            className="crm-input"
+                                                            placeholder="Base URL"
+                                                        />
+                                                        <input
+                                                            value={provider.path}
+                                                            onChange={(event) => updatePaymentLinkProvider(index, 'path', event.target.value)}
+                                                            className="crm-input"
+                                                            placeholder="Path (e.g. /pay)"
+                                                        />
+                                                        <p className="md:col-span-2 text-xs text-slate-500">
+                                                            Static URL providers send operators directly to the configured market payment page.
+                                                        </p>
+                                                    </>
+                                                )}
                                             </div>
                                             <div className="mt-2 flex justify-end">
                                                 <button
@@ -4589,15 +4795,19 @@ function IntegrationsWorkspace({
                                             value={paymentLinkForm.active_provider}
                                             onChange={(event) => setPaymentLinkForm((current) => ({ ...current, active_provider: event.target.value }))}
                                             className="crm-select"
+                                            disabled={enabledPaymentLinkProviders.length === 0}
                                         >
-                                            {(paymentLinkForm.providers || [])
-                                                .filter((provider) => provider.key.trim() !== '')
-                                                .map((provider) => (
-                                                    <option key={provider.key} value={provider.key}>
-                                                        {provider.label || provider.key}
-                                                    </option>
-                                                ))}
+                                            {enabledPaymentLinkProviders.length === 0 ? (
+                                                <option value="">No enabled providers</option>
+                                            ) : enabledPaymentLinkProviders.map((provider) => (
+                                                <option key={provider.key} value={provider.key}>
+                                                    {paymentLinkProviderOptionLabel(provider)}
+                                                </option>
+                                            ))}
                                         </select>
+                                        {enabledPaymentLinkProviders.length === 0 ? (
+                                            <p className="mt-1 text-xs text-amber-700">Enable at least one provider to make payment-link routing available.</p>
+                                        ) : null}
                                     </div>
                                     <div>
                                         <label className="mb-1 block text-sm font-medium text-slate-700">Audit reason</label>

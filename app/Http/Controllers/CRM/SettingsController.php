@@ -1465,6 +1465,17 @@ class SettingsController extends Controller
 
         $validated = $request->validate([
             'payment_link_providers' => 'required|array',
+            'payment_link_providers.active_provider' => 'required|string|max:120',
+            'payment_link_providers.providers' => 'required|array|min:1',
+            'payment_link_providers.providers.*' => 'required|array',
+            'payment_link_providers.providers.*.label' => 'nullable|string|max:120',
+            'payment_link_providers.providers.*.mode' => ['nullable', Rule::in(['static_url', 'proxy_hosted_checkout'])],
+            'payment_link_providers.providers.*.enabled' => 'nullable|boolean',
+            'payment_link_providers.providers.*.url' => 'nullable|url|max:500',
+            'payment_link_providers.providers.*.base_url' => 'nullable|url|max:500',
+            'payment_link_providers.providers.*.path' => 'nullable|string|max:255',
+            'payment_link_providers.providers.*.wallet_provider_key' => ['nullable', Rule::in(['paystack', 'pesapal'])],
+            'payment_link_providers.providers.*.environment' => ['nullable', Rule::in(['sandbox', 'production'])],
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -2704,6 +2715,8 @@ class SettingsController extends Controller
         }
 
         $normalizedProviders = [];
+        $enabledProviderKeys = [];
+        $errors = [];
         foreach ($providers as $key => $provider) {
             if (!is_array($provider)) {
                 continue;
@@ -2715,28 +2728,84 @@ class SettingsController extends Controller
             }
 
             $label = trim((string) ($provider['label'] ?? $providerKey));
+            $mode = strtolower(trim((string) ($provider['mode'] ?? 'static_url')));
+            $enabled = array_key_exists('enabled', $provider) ? (bool) $provider['enabled'] : true;
             $url = trim((string) ($provider['url'] ?? ''));
             $baseUrl = trim((string) ($provider['base_url'] ?? ''));
             $path = trim((string) ($provider['path'] ?? ''));
+            $walletProviderKey = strtolower(trim((string) ($provider['wallet_provider_key'] ?? '')));
+            $environment = strtolower(trim((string) ($provider['environment'] ?? '')));
 
-            if ($url === '' && $baseUrl === '') {
+            if (!in_array($mode, ['static_url', 'proxy_hosted_checkout'], true)) {
+                $errors["payment_link_providers.providers.{$providerKey}.mode"] = 'Provider mode must be static_url or proxy_hosted_checkout.';
                 continue;
             }
 
-            $normalizedProviders[$providerKey] = [
-                'label' => mb_substr($label, 0, 120),
-                'url' => $url !== '' ? mb_substr($url, 0, 500) : null,
-                'base_url' => $baseUrl !== '' ? mb_substr($baseUrl, 0, 500) : null,
-                'path' => $path !== '' ? mb_substr($path, 0, 255) : null,
-            ];
+            if ($mode === 'proxy_hosted_checkout') {
+                if (!in_array($walletProviderKey, ['paystack', 'pesapal'], true)) {
+                    $errors["payment_link_providers.providers.{$providerKey}.wallet_provider_key"] = 'Proxy providers require wallet_provider_key of paystack or pesapal.';
+                }
+
+                if (!in_array($environment, ['sandbox', 'production'], true)) {
+                    $errors["payment_link_providers.providers.{$providerKey}.environment"] = 'Proxy providers require environment of sandbox or production.';
+                }
+
+                if (
+                    isset($errors["payment_link_providers.providers.{$providerKey}.wallet_provider_key"])
+                    || isset($errors["payment_link_providers.providers.{$providerKey}.environment"])
+                ) {
+                    continue;
+                }
+
+                $normalizedProviders[$providerKey] = [
+                    'label' => mb_substr($label, 0, 120),
+                    'mode' => $mode,
+                    'enabled' => $enabled,
+                    'wallet_provider_key' => $walletProviderKey,
+                    'environment' => $environment,
+                ];
+            } else {
+                if ($url === '' && $baseUrl === '') {
+                    $errors["payment_link_providers.providers.{$providerKey}.url"] = 'Static URL providers require either url or base_url.';
+                    continue;
+                }
+
+                $normalizedProviders[$providerKey] = [
+                    'label' => mb_substr($label, 0, 120),
+                    'mode' => $mode,
+                    'enabled' => $enabled,
+                    'url' => $url !== '' ? mb_substr($url, 0, 500) : null,
+                    'base_url' => $baseUrl !== '' ? mb_substr($baseUrl, 0, 500) : null,
+                    'path' => $path !== '' ? mb_substr($path, 0, 255) : null,
+                ];
+            }
+
+            if ($enabled) {
+                $enabledProviderKeys[] = $providerKey;
+            }
         }
 
-        if (empty($normalizedProviders) || !array_key_exists($activeProvider, $normalizedProviders)) {
+        if (!empty($errors)) {
+            throw ValidationException::withMessages($errors);
+        }
+
+        if (empty($normalizedProviders)) {
             return null;
         }
 
+        if (empty($enabledProviderKeys)) {
+            throw ValidationException::withMessages([
+                'payment_link_providers.providers' => 'At least one enabled payment link provider is required.',
+            ]);
+        }
+
+        $normalizedActiveProvider = array_key_exists($activeProvider, $normalizedProviders)
+            && (bool) ($normalizedProviders[$activeProvider]['enabled'] ?? false)
+            ? $activeProvider
+            : $enabledProviderKeys[0];
+
         return [
-            'active_provider' => $activeProvider,
+            'active_provider' => $normalizedActiveProvider,
             'providers' => $normalizedProviders,
         ];
     }
