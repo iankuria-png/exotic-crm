@@ -1,22 +1,51 @@
-/.phpunit.cache
+## Laravel
+/vendor
 /node_modules
-/public/build
 /public/hot
 /public/storage
 /storage/*.key
-/vendor
+/storage/app/deployment/backups/
+/storage/logs/*.log
+/bootstrap/cache/config.php
+/bootstrap/cache/routes-v7.php
+/bootstrap/cache/packages.php
+/bootstrap/cache/services.php
+
+## Environment files (never commit real credentials)
 .env
 .env.backup
 .env.production
-Homestead.json
-Homestead.yaml
-auth.json
-npm-debug.log
-yarn-error.log
+.env.staging
+.env.local
+.env.*.local
+
+## IDE & OS
 /.fleet
 /.idea
 /.vscode
 .DS_Store
+Thumbs.db
+
+## Testing
+/.phpunit.cache
 .phpunit.result.cache
 /.playwright-cli
 /output/playwright
+/coverage
+
+## Homestead / Vagrant
+Homestead.json
+Homestead.yaml
+
+## Package manager logs
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+
+## Composer auth (may contain tokens)
+auth.json
+
+## Misc
+*.swp
+*.swo
+*~

@@ -1,0 +1,5 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/d9410/crm.exotic-online.com
+    - /bin/bash $DEPLOYPATH/deploy.sh

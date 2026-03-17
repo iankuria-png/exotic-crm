@@ -26,6 +26,7 @@ use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
 use App\Http\Controllers\CRM\SetupController;
+use App\Http\Controllers\CRM\SystemHealthUpdateController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -202,6 +203,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
+    Route::get('/settings/system-health/updates', [SystemHealthUpdateController::class, 'show'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/system-health/updates/log', [SystemHealthUpdateController::class, 'log'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/system-health/updates/deploy', [SystemHealthUpdateController::class, 'deploy'])->middleware('role:admin');
     Route::get('/settings/wallet', [SettingsController::class, 'wallet']);
     Route::patch('/settings/wallet', [SettingsController::class, 'updateWallet'])->middleware('role:admin');
     Route::patch('/settings/wallet/pin', [SettingsController::class, 'updateWalletPin'])->middleware('role:admin');

@@ -7,7 +7,7 @@ function statusChip(status) {
     if (['connected', 'healthy', 'success', 'complete'].includes(status)) {
         return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
     }
-    if (['configured_disabled', 'partial', 'degraded', 'pending', 'stale', 'missing', 'skipped'].includes(status)) {
+    if (['configured_disabled', 'partial', 'degraded', 'pending', 'stale', 'missing', 'skipped', 'running', 'idle'].includes(status)) {
         return 'bg-amber-50 text-amber-700 ring-amber-200';
     }
     return 'bg-rose-50 text-rose-700 ring-rose-200';
@@ -53,6 +53,8 @@ export default function SystemHealthWorkspace({
     canCreateMarkets,
     canManageMarkets,
     canManageSms,
+    canViewUpdates,
+    canDeployUpdates,
     onOpenMarketSetup,
 }) {
     const queryClient = useQueryClient();
@@ -91,6 +93,20 @@ export default function SystemHealthWorkspace({
         queryFn: () => api.post('/crm/setup/run-diagnostics').then((response) => response.data),
     });
 
+    const updatesQuery = useQuery({
+        queryKey: ['system-health-updates'],
+        queryFn: () => api.get('/crm/settings/system-health/updates').then((response) => response.data),
+        enabled: canViewUpdates,
+        refetchInterval: (query) => query.state.data?.manual_deploy?.in_progress ? 4000 : 30000,
+    });
+
+    const updatesLogQuery = useQuery({
+        queryKey: ['system-health-updates-log'],
+        queryFn: () => api.get('/crm/settings/system-health/updates/log').then((response) => response.data),
+        enabled: canViewUpdates,
+        refetchInterval: (query) => query.state.data?.manual_deploy?.in_progress ? 4000 : false,
+    });
+
     useEffect(() => {
         if (diagnosticsQuery.data?.data_baseline) {
             setBaseline(diagnosticsQuery.data.data_baseline);
@@ -101,6 +117,8 @@ export default function SystemHealthWorkspace({
     const smsGateway = diagnosticsQuery.data?.sms || null;
     const paymentProxy = diagnosticsQuery.data?.payment_proxy || null;
     const scheduler = diagnosticsQuery.data?.scheduler || null;
+    const updates = updatesQuery.data || null;
+    const updatesLog = updatesLogQuery.data || null;
 
     const platformTestMutation = useMutation({
         mutationFn: (platformId) => api.post(`/crm/settings/integrations/platforms/${platformId}/test-connection`, {
@@ -176,7 +194,25 @@ export default function SystemHealthWorkspace({
         },
     });
 
-    const loading = settingsQuery.isLoading || envQuery.isLoading || databaseQuery.isLoading || diagnosticsQuery.isLoading;
+    const deployMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/system-health/updates/deploy', {
+            reason: 'Manual deployment triggered from CRM System Health',
+        }).then((response) => response.data),
+        onSuccess: () => {
+            updatesQuery.refetch();
+            updatesLogQuery.refetch();
+            toast.success('Deployment has been queued.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || error?.response?.data?.errors?.deploy?.[0] || 'Unable to start deployment.');
+        },
+    });
+
+    const loading = settingsQuery.isLoading
+        || envQuery.isLoading
+        || databaseQuery.isLoading
+        || diagnosticsQuery.isLoading
+        || (canViewUpdates && updatesQuery.isLoading);
 
     const environmentChecks = envQuery.data?.checks || {};
     const database = databaseQuery.data || {};
@@ -346,6 +382,143 @@ export default function SystemHealthWorkspace({
                     </div>
                 ))}
             </section>
+
+            {canViewUpdates ? (
+                <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                        <div>
+                            <h3 className="text-base font-semibold text-slate-900">Updates</h3>
+                            <p className="text-xs text-slate-500">Track deployed code, compare the tracked branch, and trigger the shared deploy script when needed.</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(updates?.manual_deploy?.state || 'pending')}`}>
+                                {(updates?.manual_deploy?.state || 'pending').replaceAll('_', ' ')}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    updatesQuery.refetch();
+                                    updatesLogQuery.refetch();
+                                }}
+                                className="crm-btn-secondary px-3 py-2"
+                            >
+                                Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <div className="space-y-4">
+                            <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Deployed version</p>
+                                    <p className="mt-2 text-lg font-semibold text-slate-900">{updates?.deployed_version?.short_sha || 'Unknown'}</p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                        {updates?.deployed_version?.inferred ? 'Inferred from current checkout' : formatDateTime(updates?.deployed_version?.deployed_at)}
+                                    </p>
+                                </div>
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Current checkout</p>
+                                    <p className="mt-2 text-lg font-semibold text-slate-900">{updates?.current_checkout_version?.short_sha || 'Unknown'}</p>
+                                    <p className="mt-1 text-xs text-slate-500">{updates?.tracked_branch || 'No tracked branch set'}</p>
+                                </div>
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Pending commits</p>
+                                    <p className="mt-2 text-lg font-semibold text-slate-900">{updates?.ahead_by ?? 0}</p>
+                                    <p className="mt-1 text-xs text-slate-500">{updates?.remote?.message || 'Remote compare unavailable.'}</p>
+                                </div>
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Last deploy</p>
+                                    <p className="mt-2 text-lg font-semibold text-slate-900">{updates?.last_deploy?.short_sha || 'Unknown'}</p>
+                                    <p className="mt-1 text-xs text-slate-500">{formatDateTime(updates?.last_deploy?.deployed_at)}</p>
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-200 bg-white p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-900">Manual deploy</p>
+                                        <p className="mt-1 text-xs text-slate-500">{updates?.manual_deploy?.message || updates?.deploy_available?.message || 'No deployment has been recorded yet.'}</p>
+                                        {updates?.manual_deploy?.requested_by ? (
+                                            <p className="mt-2 text-xs text-slate-500">
+                                                Requested by {updates.manual_deploy.requested_by.name || updates.manual_deploy.requested_by.email || 'Unknown operator'}
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                    {canDeployUpdates ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => deployMutation.mutate()}
+                                            disabled={deployMutation.isPending || !updates?.deploy_available?.available || updates?.manual_deploy?.in_progress}
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {deployMutation.isPending || updates?.manual_deploy?.in_progress ? 'Deploying...' : 'Deploy Update'}
+                                        </button>
+                                    ) : (
+                                        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                                            Read-only access: only admin can trigger a deployment.
+                                        </p>
+                                    )}
+                                </div>
+
+                                {updates?.deploy_available?.issues?.length ? (
+                                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+                                        {updates.deploy_available.issues[0]}
+                                    </div>
+                                ) : null}
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="rounded-lg border border-slate-200 bg-white p-4">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-900">Pending changelog</p>
+                                        <p className="mt-1 text-xs text-slate-500">Latest commits waiting to be reflected in the deployed version.</p>
+                                    </div>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(updates?.remote?.available ? 'healthy' : 'degraded')}`}>
+                                        {updates?.remote?.available ? 'GitHub compare ready' : 'GitHub compare unavailable'}
+                                    </span>
+                                </div>
+                                <div className="mt-3 space-y-3">
+                                    {(updates?.commits || []).length ? updates.commits.map((commit) => (
+                                        <div key={commit.sha} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="text-sm font-semibold text-slate-900">{commit.message || 'Untitled commit'}</p>
+                                                <span className="rounded-md bg-slate-900 px-2 py-1 font-mono text-xs text-slate-50">{commit.short_sha}</span>
+                                            </div>
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                {commit.author || 'Unknown author'} • {formatDateTime(commit.authored_at)}
+                                            </p>
+                                        </div>
+                                    )) : (
+                                        <p className="rounded-md border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500">
+                                            {updates?.remote?.message || 'No pending commits detected.'}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-200 bg-white p-4">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-900">Deploy output</p>
+                                        <p className="mt-1 text-xs text-slate-500">Live output from the shared deploy script.</p>
+                                    </div>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(updatesLog?.manual_deploy?.state || updates?.manual_deploy?.state || 'pending')}`}>
+                                        {(updatesLog?.manual_deploy?.state || updates?.manual_deploy?.state || 'pending').replaceAll('_', ' ')}
+                                    </span>
+                                </div>
+                                <div className="mt-3 rounded-lg bg-slate-950 p-3">
+                                    <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-emerald-200">
+                                        {(updatesLog?.log_lines || []).length ? updatesLog.log_lines.join('\n') : 'No deployment output recorded yet.'}
+                                    </pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            ) : null}
 
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">

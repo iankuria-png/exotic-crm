@@ -6565,6 +6565,8 @@ export default function Settings() {
     const canManageWalletSystem = (user?.role || '') === 'admin';
     const canManageWalletPlatforms = ['admin', 'sub_admin'].includes(user?.role || '');
     const canManageSms = (user?.role || '') === 'admin';
+    const canViewUpdates = ['admin', 'sub_admin'].includes(user?.role || '');
+    const canDeployUpdates = (user?.role || '') === 'admin';
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
@@ -6615,6 +6617,8 @@ export default function Settings() {
                     canCreateMarkets={canCreateMarkets}
                     canManageMarkets={canManageMarkets}
                     canManageSms={canManageSms}
+                    canViewUpdates={canViewUpdates}
+                    canDeployUpdates={canDeployUpdates}
                     onOpenMarketSetup={() => {
                         const params = new URLSearchParams(window.location.search);
                         params.set('integrationArea', 'markets');
