@@ -114,9 +114,9 @@
         <h1>Payment processing</h1>
         <p>
             @if($payment)
-                We are finishing your wallet payment and will return you to the profile page shortly.
+                We are finishing your {{ $payment->purpose === 'wallet_topup' ? 'wallet payment' : ($payment->purpose === 'subscription' ? 'subscription payment' : 'payment') }} and will return you to the profile page shortly.
             @else
-                We could not match this return to a wallet payment. You can go back to your profile and refresh the wallet card.
+                We could not match this return to a payment. You can go back to your profile and refresh the page.
             @endif
         </p>
 

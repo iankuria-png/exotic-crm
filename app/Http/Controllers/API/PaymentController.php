@@ -7,16 +7,14 @@ use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Models\Payment;
 use App\Models\Platform;
-use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Activation;
 use App\Models\SmsLog;
 use App\Models\WordpressPost;
 use App\Services\DynamicDatabaseService;
 use App\Services\LegacyStkService;
+use App\Services\PaymentCompletionService;
 use App\Services\PaymentAttemptService;
-use App\Services\PaymentMatchingService;
-use App\Services\SubscriptionProvisioningService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -26,7 +24,7 @@ use Illuminate\Support\Facades\Validator;
 class PaymentController extends Controller
 {
     public function __construct(
-        private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly PaymentCompletionService $paymentCompletionService,
         private readonly LegacyStkService $legacyStkService
     ) {
     }
@@ -417,49 +415,46 @@ class PaymentController extends Controller
                     'platform_id' => $payment->platform_id
                 ]);
     
-                $payment->update([
-                    'status' => 'completed',
-                    'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
-                    'completed_at' => now(),
-                    'raw_payload' => array_merge($payment->raw_payload ?? [], [
-                        'webhook_data' => $rawData,
-                    'processed_at' => now()->toDateTimeString()
+                $completion = $payment->purpose === 'wallet_topup'
+                    ? $this->paymentCompletionService->completeTopupPayment($payment, $resource, [
+                        'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
+                        'raw_payload' => [
+                            'webhook_data' => $rawData,
+                            'processed_at' => now()->toDateTimeString(),
+                        ],
                     ])
-                ]);
-
-                $client = $this->resolveClientForSuccessfulPayment($payment);
-                $deal = null;
-
-                if ($client) {
-                    $deal = $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
-                        'client' => $client,
+                    : $this->paymentCompletionService->completeSubscriptionPayment($payment, $resource, [
+                        'transaction_reference' => $resource['reference'] ?? $payment->transaction_reference,
+                        'raw_payload' => [
+                            'webhook_data' => $rawData,
+                            'processed_at' => now()->toDateTimeString(),
+                        ],
+                        'metadata' => $metadata,
+                        'raw_context' => $rawData,
                         'confirmed_at' => $payment->confirmed_at ?? now(),
                         'match_confidence' => $payment->match_confidence ?: 'auto_high',
                         'reconciliation_confidence' => 'high',
                         'reconciliation_state' => 'resolved',
-                        'payment_method' => $this->resolveProvisioningPaymentMethod($payment, $metadata, $rawData),
+                        'payment_method' => $this->paymentCompletionService->resolvePaymentMethod($payment, $metadata, $rawData),
                         'emit_payment_received_timeline' => true,
                         'emit_profile_activated_timeline' => false,
                         'emit_deal_activated_timeline' => true,
                     ]);
-                } else {
-                    Log::warning('Successful payment could not be linked to a CRM client', [
-                        'payment_id' => $payment->id,
-                        'platform_id' => $payment->platform_id,
-                        'user_id' => $payment->user_id,
-                    ]);
-                }
+
+                $payment = $completion['payment'];
+                $deal = $completion['deal'] ?? null;
 
                 \Log::info('Services activation result', [
                     'payment_id' => $payment->id,
                     'deal_id' => $deal?->id,
                     'success' => $deal !== null
                 ]);
-    
-                // Generate and send success message (without icon)
-                $message = $this->generateSuccessMessage($payment, $payment->transaction_reference);
-                $this->saveSMSLog($payment, $message, 'sent');
-    
+
+                if ((string) $payment->purpose !== 'wallet_topup') {
+                    $message = $this->generateSuccessMessage($payment, $payment->transaction_reference);
+                    $this->saveSMSLog($payment, $message, 'sent');
+                }
+
                 Log::info('Payment completed and activated successfully', [
                     'payment_id' => $payment->id,
                     'user_id' => $payment->user_id,
@@ -477,71 +472,6 @@ class PaymentController extends Controller
         }
     }
 
-    private function resolveClientForSuccessfulPayment(Payment $payment): ?Client
-    {
-        if ($payment->client_id) {
-            return Client::find($payment->client_id);
-        }
-
-        if ($payment->platform_id && $payment->user_id) {
-            $client = Client::where('platform_id', $payment->platform_id)
-                ->where('wp_user_id', $payment->user_id)
-                ->orderByDesc('id')
-                ->first();
-            if ($client) {
-                return $client;
-            }
-        }
-
-        if ($payment->platform_id && $payment->escort_post_id) {
-            $client = Client::where('platform_id', $payment->platform_id)
-                ->where('wp_post_id', $payment->escort_post_id)
-                ->first();
-            if ($client) {
-                return $client;
-            }
-        }
-
-        if ($payment->platform_id && $payment->phone) {
-            $match = app(PaymentMatchingService::class)->matchPayment($payment);
-            if (!empty($match['matched']) && !empty($match['client_id'])) {
-                return Client::find($match['client_id']);
-            }
-        }
-
-        return null;
-    }
-
-    private function inferPlanTypeFromProduct(?Product $product): string
-    {
-        if (!$product) {
-            return 'basic';
-        }
-
-        $name = strtolower($product->name);
-
-        if (str_contains($name, 'vip')) {
-            return 'vip';
-        }
-
-        if (str_contains($name, 'premium')) {
-            return 'premium';
-        }
-
-        return 'basic';
-    }
-
-    private function resolveProvisioningPaymentMethod(Payment $payment, ?array $metadata, array $rawData): string
-    {
-        $method = data_get($payment->raw_payload, 'method')
-            ?? data_get($metadata, 'payment_method')
-            ?? data_get($rawData, 'payment_method')
-            ?? data_get($rawData, 'source')
-            ?? 'provider';
-
-        return strtolower(trim((string) $method)) ?: 'provider';
-    }
-    
     private function handleReversedPayment(array $resource, ?array $metadata, array $rawData)
     {
         $paymentId = $metadata['payment_id'] ?? $resource['payment_id'] ?? null;

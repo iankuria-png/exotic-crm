@@ -14,6 +14,7 @@ class BillingGatewayService
     public function __construct(
         private readonly BillingModeService $billingModeService,
         private readonly HostedCheckoutService $hostedCheckoutService,
+        private readonly PaymentCompletionService $paymentCompletionService,
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly KopokopoService $kopokopoService
@@ -156,112 +157,13 @@ class BillingGatewayService
 
     public function completeTopupPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
-        $payment->loadMissing(['client.platform', 'platform']);
-        if ($payment->purpose !== 'wallet_topup') {
-            throw new InvalidArgumentException('Only wallet top-up payments can credit a wallet balance.');
-        }
-
-        if ($payment->wallet_transaction_id) {
-            app(WalletSyncService::class)->syncClientBalance($payment->client);
-
-            return [
-                'payment' => $payment->fresh(['platform', 'client']),
-                'credited' => false,
-                'replayed' => true,
-                'wallet' => $this->walletService->summary($payment->client, (int) data_get($payment->platform?->wallet_settings, 'recent_transactions_limit', 10)),
-            ];
-        }
-
-        $transactionReference = $options['transaction_reference']
-            ?? data_get($providerPayload, 'reference')
-            ?? data_get($providerPayload, 'order_tracking_id')
-            ?? $payment->transaction_reference
-            ?? $payment->reference_number;
-
-        $payment->forceFill([
-            'status' => 'completed',
-            'failure_reason' => null,
-            'completed_at' => $payment->completed_at ?? now(),
-            'transaction_reference' => (string) $transactionReference,
-            'raw_payload' => array_merge($payment->raw_payload ?? [], [
-                'completion_payload' => $providerPayload,
-            ]),
-        ])->save();
-
-        $credit = $this->walletService->credit($payment->client, (float) $payment->amount, [
-            'payment' => $payment,
-            'reference_type' => 'wallet_topup',
-            'reference_id' => (int) $payment->id,
-            'idempotency_key' => 'wallet-topup-credit:' . (int) $payment->id,
-            'description' => sprintf('Wallet top-up via %s', strtoupper((string) $payment->provider_key)),
-            'metadata' => [
-                'provider' => $payment->provider_key,
-                'provider_environment' => $payment->provider_environment,
-                'transaction_reference' => $transactionReference,
-            ],
-        ]);
-
-        $payment->refresh();
-        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
-        $autoSubscribe = is_array($paymentData['auto_subscribe'] ?? null) ? $paymentData['auto_subscribe'] : null;
-        $autoSubscribeResult = null;
-
-        if ($autoSubscribe && !empty($autoSubscribe['enabled'])) {
-            try {
-                $productId = (int) ($autoSubscribe['product_id'] ?? 0);
-                $duration = (string) ($autoSubscribe['duration'] ?? '');
-                $product = \App\Models\Product::query()
-                    ->where('platform_id', (int) $payment->platform_id)
-                    ->findOrFail($productId);
-
-                $checkout = $this->walletCheckoutService->payForSubscriptionFromWallet(
-                    $payment->client,
-                    $product,
-                    $duration,
-                    'wallet-auto-subscribe:' . (int) $payment->id,
-                    [
-                        'environment' => $payment->provider_environment,
-                        'origin' => 'wallet_auto_subscribe',
-                        'topup_payment_id' => (int) $payment->id,
-                    ]
-                );
-
-                $autoSubscribeResult = [
-                    'status' => 'completed',
-                    'subscription_payment_id' => (int) $checkout['payment']->id,
-                    'deal_id' => (int) ($checkout['deal']?->id ?? 0),
-                ];
-            } catch (\Throwable $exception) {
-                $autoSubscribeResult = [
-                    'status' => 'failed',
-                    'message' => mb_substr($exception->getMessage(), 0, 190),
-                ];
-            }
-        }
-
-        if ($autoSubscribeResult !== null) {
-            $payment->forceFill([
-                'payment_data' => array_merge($paymentData, [
-                    'auto_subscribe' => array_merge($autoSubscribe, [
-                        'result' => $autoSubscribeResult,
-                    ]),
-                ]),
-            ])->save();
-        }
-
-        return [
-            'payment' => $payment->fresh(['platform', 'client']),
-            'credited' => true,
-            'replayed' => false,
-            'wallet' => $this->walletService->summary($credit['client'], (int) data_get($payment->platform?->wallet_settings, 'recent_transactions_limit', 10)),
-            'auto_subscribe' => $autoSubscribeResult,
-        ];
+        return $this->paymentCompletionService->completeTopupPayment($payment, $providerPayload, $options);
     }
 
-    public function failTopupPayment(Payment $payment, string $reason, array $providerPayload = []): Payment
+    public function failPayment(Payment $payment, string $reason, array $providerPayload = []): Payment
     {
-        if ($payment->wallet_transaction_id) {
-            return $payment;
+        if ($payment->wallet_transaction_id || (string) $payment->status === 'completed' || $payment->completed_at) {
+            return $payment->fresh() ?? $payment;
         }
 
         $payment->forceFill([
@@ -283,7 +185,6 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()
-            ->where('purpose', 'wallet_topup')
             ->where('provider_key', 'paystack')
             ->where('reference_number', $reference)
             ->firstOrFail();
@@ -299,7 +200,7 @@ class BillingGatewayService
         $verification = $this->hostedCheckoutService->verifyPaystackTransaction($payment, $context, $reference);
         $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
         if (($verification['status'] ?? 'failed') !== 'completed') {
-            $failed = $this->failTopupPayment(
+            $failed = $this->failPayment(
                 $payment,
                 (string) ($verification['message'] ?? 'Paystack transaction did not complete successfully.'),
                 $verifiedData
@@ -311,7 +212,7 @@ class BillingGatewayService
             ];
         }
 
-        $completed = $this->completeTopupPayment($payment, $verifiedData, [
+        $completed = $this->completeVerifiedPayment($payment, $verifiedData, [
             'transaction_reference' => $verifiedData['reference'] ?? $reference,
         ]);
 
@@ -331,7 +232,6 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()
-            ->where('purpose', 'wallet_topup')
             ->where('provider_key', 'pesapal')
             ->where('reference_number', $merchantReference)
             ->firstOrFail();
@@ -347,7 +247,7 @@ class BillingGatewayService
         $verified = is_array($verification['data'] ?? null) ? $verification['data'] : [];
 
         if (($verification['status'] ?? 'failed') !== 'completed') {
-            $failed = $this->failTopupPayment(
+            $failed = $this->failPayment(
                 $payment,
                 (string) ($verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
                 $verified
@@ -359,7 +259,7 @@ class BillingGatewayService
             ];
         }
 
-        $completed = $this->completeTopupPayment($payment, $verified, [
+        $completed = $this->completeVerifiedPayment($payment, $verified, [
             'transaction_reference' => $trackingId,
         ]);
 
@@ -390,7 +290,7 @@ class BillingGatewayService
         $topic = strtolower((string) ($payload['topic'] ?? $payload['eventType'] ?? ''));
         $resourceStatus = strtolower((string) ($payload['resourceStatus'] ?? ''));
         if (str_contains($topic, 'reversed') || $resourceStatus === 'reversed') {
-            $failed = $this->failTopupPayment($payment, 'M-Pesa transaction was reversed.', $payload);
+            $failed = $this->failPayment($payment, 'M-Pesa transaction was reversed.', $payload);
 
             return [
                 'payment' => $failed,
@@ -431,7 +331,7 @@ class BillingGatewayService
         try {
             $action = $this->hostedCheckoutService->initializePaystack($payment, $context);
         } catch (RuntimeException $exception) {
-            $this->failTopupPayment($payment, $exception->getMessage());
+            $this->failPayment($payment, $exception->getMessage());
             throw $exception;
         }
 
@@ -460,7 +360,7 @@ class BillingGatewayService
                 'description' => 'Wallet top-up',
             ]);
         } catch (RuntimeException $exception) {
-            $this->failTopupPayment($payment, $exception->getMessage());
+            $this->failPayment($payment, $exception->getMessage());
             throw $exception;
         }
 
@@ -535,7 +435,7 @@ class BillingGatewayService
 
         if (($result['status'] ?? null) !== 'success') {
             $message = (string) ($result['error'] ?? $result['data'] ?? 'M-Pesa STK push failed.');
-            $this->failTopupPayment($payment, $message, is_array($result) ? $result : []);
+            $this->failPayment($payment, $message, is_array($result) ? $result : []);
             throw new RuntimeException($message);
         }
 
@@ -631,6 +531,11 @@ class BillingGatewayService
             'url' => null,
             'provider_reference' => $payment->transaction_reference,
         ];
+    }
+
+    private function completeVerifiedPayment(Payment $payment, array $providerPayload = [], array $options = []): array
+    {
+        return $this->paymentCompletionService->complete($payment, $providerPayload, $options);
     }
 
     private function topupReference(int $platformId, int $clientId, string $provider, string $idempotencyKey): string

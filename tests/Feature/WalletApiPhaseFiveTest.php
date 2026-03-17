@@ -383,6 +383,149 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertDatabaseCount('wallet_transactions', 1);
     }
 
+    public function test_paystack_webhook_completes_subscription_payments_without_wallet_credit_side_effects(): void
+    {
+        [
+            'platform' => $platform,
+            'product' => $product,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        Http::fake(array_merge(
+            $this->provisioningApiFakes($platform, $client, [
+                'premium' => true,
+                'premium_expire' => now()->addDays(30)->timestamp,
+            ]),
+            [
+                'https://api.paystack.co/transaction/verify/*' => Http::response([
+                    'status' => true,
+                    'data' => [
+                        'status' => 'success',
+                        'reference' => 'SUB-PAYSTACK-001',
+                        'gateway_response' => 'Successful',
+                    ],
+                ], 200),
+            ]
+        ));
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'product_id' => $product->id,
+            'purpose' => 'subscription',
+            'source' => 'gateway',
+            'provider_key' => 'paystack',
+            'provider_environment' => 'sandbox',
+            'amount' => 2400,
+            'currency' => 'KES',
+            'duration' => 'monthly',
+            'reference_number' => 'SUB-PAYSTACK-001',
+            'transaction_reference' => 'SUB-PAYSTACK-001',
+            'status' => 'pending',
+            'raw_payload' => [
+                'method' => 'link',
+            ],
+        ]);
+
+        $payload = [
+            'event' => 'charge.success',
+            'data' => [
+                'reference' => 'SUB-PAYSTACK-001',
+            ],
+        ];
+        $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        $signature = hash_hmac('sha512', $rawBody, 'sk_test_wallet');
+
+        $response = $this->call('POST', '/api/billing/paystack/webhook', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_PAYSTACK_SIGNATURE' => $signature,
+        ], $rawBody);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $payment->refresh();
+        $this->assertSame('completed', $payment->status);
+        $this->assertNotNull($payment->completed_at);
+        $this->assertNotNull($payment->deal_id);
+        $this->assertDatabaseHas('deals', [
+            'id' => $payment->deal_id,
+            'payment_id' => $payment->id,
+            'client_id' => $client->id,
+            'status' => 'active',
+        ]);
+        $this->assertDatabaseCount('wallet_transactions', 0);
+        $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+    }
+
+    public function test_pesapal_ipn_completes_subscription_payments_without_wallet_credit_side_effects(): void
+    {
+        [
+            'platform' => $platform,
+            'product' => $product,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        Http::fake(array_merge(
+            $this->provisioningApiFakes($platform, $client, [
+                'premium' => true,
+                'premium_expire' => now()->addDays(30)->timestamp,
+            ]),
+            [
+                'https://cybqa.pesapal.com/pesapalv3/api/Auth/RequestToken' => Http::response([
+                    'token' => 'pesapal-access-token',
+                ], 200),
+                'https://cybqa.pesapal.com/pesapalv3/api/Transactions/GetTransactionStatus*' => Http::response([
+                    'status_code' => 1,
+                    'payment_status_description' => 'Completed',
+                ], 200),
+            ]
+        ));
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'product_id' => $product->id,
+            'purpose' => 'subscription',
+            'source' => 'gateway',
+            'provider_key' => 'pesapal',
+            'provider_environment' => 'sandbox',
+            'amount' => 2400,
+            'currency' => 'KES',
+            'duration' => 'monthly',
+            'reference_number' => 'SUB-PESAPAL-001',
+            'transaction_reference' => 'PESAPAL-TRACK-001',
+            'status' => 'pending',
+            'raw_payload' => [
+                'method' => 'link',
+            ],
+        ]);
+
+        $response = $this->getJson('/api/billing/pesapal/ipn?OrderMerchantReference=SUB-PESAPAL-001&OrderTrackingId=PESAPAL-TRACK-001');
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $payment->refresh();
+        $this->assertSame('completed', $payment->status);
+        $this->assertSame('PESAPAL-TRACK-001', $payment->transaction_reference);
+        $this->assertNotNull($payment->deal_id);
+        $this->assertDatabaseHas('deals', [
+            'id' => $payment->deal_id,
+            'payment_id' => $payment->id,
+            'client_id' => $client->id,
+            'status' => 'active',
+        ]);
+        $this->assertDatabaseCount('wallet_transactions', 0);
+        $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+    }
+
     public function test_mpesa_direct_provider_initiation_and_retry_are_available(): void
     {
         [
@@ -654,7 +797,12 @@ class WalletApiPhaseFiveTest extends TestCase
 
     private function fakeProvisioningApis(Platform $platform, Client $client, array $profileOverrides = []): void
     {
-        Http::fake([
+        Http::fake($this->provisioningApiFakes($platform, $client, $profileOverrides));
+    }
+
+    private function provisioningApiFakes(Platform $platform, Client $client, array $profileOverrides = []): array
+    {
+        return [
             $platform->wp_api_url . '/clients/' . $client->wp_post_id . '/activate' => Http::response([
                 'ok' => true,
                 'post_id' => $client->wp_post_id,
@@ -676,7 +824,7 @@ class WalletApiPhaseFiveTest extends TestCase
                 'last_online' => now()->timestamp,
                 'main_image_url' => 'https://images.example.test/profile.jpg',
             ], $profileOverrides), 200),
-        ]);
+        ];
     }
 
     private function configureWalletPin(string $pin = '1234'): void

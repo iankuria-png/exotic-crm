@@ -200,9 +200,9 @@ class BillingController extends Controller
             $payment->loadMissing(['client.platform', 'platform']);
             $context = $this->billingModeService->walletContext($payment->platform);
             $redirectDelay = (int) data_get($context, 'system.redirect_delay_seconds', 3);
-            $mode = (string) ($context['mode'] ?? 'sandbox');
+            $mode = (string) ($payment->provider_environment ?: ($context['environment'] ?? 'sandbox'));
             $statusLabel = (string) ($payment->status ?: 'processing');
-            $redirectUrl = $this->walletReturnUrl($payment);
+            $redirectUrl = $this->paymentReturnUrl($payment);
         }
 
         return response()->view('payments.complete', [
@@ -264,7 +264,7 @@ class BillingController extends Controller
             return null;
         }
 
-        $query = Payment::query()->where('purpose', 'wallet_topup');
+        $query = Payment::query();
 
         if (is_numeric($identifier)) {
             $payment = (clone $query)->find((int) $identifier);
@@ -284,11 +284,15 @@ class BillingController extends Controller
             ->first();
     }
 
-    private function walletReturnUrl(Payment $payment): ?string
+    private function paymentReturnUrl(Payment $payment): ?string
     {
         $profileUrl = $payment->client?->wp_profile_url;
         if (!$profileUrl) {
             return null;
+        }
+
+        if ((string) $payment->purpose !== 'wallet_topup') {
+            return $profileUrl;
         }
 
         $separator = str_contains($profileUrl, '?') ? '&' : '?';

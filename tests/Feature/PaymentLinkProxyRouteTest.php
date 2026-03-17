@@ -113,6 +113,23 @@ class PaymentLinkProxyRouteTest extends TestCase
         $this->get('/api/payments/link/' . $firstToken)->assertNotFound();
     }
 
+    public function test_billing_complete_route_supports_subscription_proxy_payments(): void
+    {
+        ['payment' => $payment] = $this->seedProxyContext('paystack');
+        $payment->forceFill([
+            'provider_environment' => 'sandbox',
+            'status' => 'pending',
+        ])->save();
+
+        $response = $this->get('/billing/complete?payment=' . $payment->transaction_uuid);
+
+        $response->assertOk()
+            ->assertSee('subscription payment')
+            ->assertSee('Return to profile')
+            ->assertSee('Sandbox Billing')
+            ->assertDontSee('wallet payment');
+    }
+
     private function seedProxyContext(string $provider): array
     {
         config([
@@ -125,6 +142,7 @@ class PaymentLinkProxyRouteTest extends TestCase
             'domain' => 'proxy-market.example.test',
             'phone_prefix' => '254',
             'currency_code' => 'KES',
+            'wp_api_url' => 'https://proxy-market.example.test/wp-json/exotic-crm-sync/v1',
             'payment_link_providers' => [
                 'active_provider' => $provider . '_checkout',
                 'providers' => [
