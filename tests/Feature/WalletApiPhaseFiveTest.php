@@ -610,9 +610,13 @@ class WalletApiPhaseFiveTest extends TestCase
         $response = $this->get('/billing/complete?payment=' . $payment->transaction_uuid);
 
         $response->assertOk()
-            ->assertSee('Payment processing')
-            ->assertSee('Return to profile')
+            ->assertSee('Sandbox payment result')
+            ->assertSee('Back to CRM Payments')
+            ->assertSee('Check Provider Status')
+            ->assertSee('Open profile anyway')
+            ->assertSee('No live activation or wallet credit was performed.')
             ->assertSee('Sandbox Billing')
+            ->assertDontSee('Redirecting in 2 seconds')
             ->assertDontSee('CRM SPA');
     }
 

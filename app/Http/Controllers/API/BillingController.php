@@ -192,25 +192,46 @@ class BillingController extends Controller
         );
 
         $redirectUrl = null;
+        $autoRedirectUrl = null;
+        $manualProfileUrl = null;
+        $returnUrlSuppressed = false;
         $redirectDelay = 3;
         $mode = 'sandbox';
         $statusLabel = 'processing';
+        $crmPaymentsUrl = rtrim((string) config('app.url', url('/')), '/') . '/payments';
+        $providerStatusUrl = $crmPaymentsUrl;
+        $testMode = false;
 
         if ($payment) {
             $payment->loadMissing(['client.platform', 'platform']);
             $context = $this->billingModeService->walletContext($payment->platform);
             $redirectDelay = (int) data_get($context, 'system.redirect_delay_seconds', 3);
             $mode = (string) ($payment->provider_environment ?: ($context['environment'] ?? 'sandbox'));
+            $testMode = (bool) data_get($payment->payment_data, 'test_mode', false);
             $statusLabel = (string) ($payment->status ?: 'processing');
+            if ($mode === 'sandbox' && $testMode) {
+                $statusLabel = 'sandbox_' . ((string) data_get($payment->payment_data, 'test_result', $statusLabel));
+            }
+
             $redirectUrl = $this->paymentReturnUrl($payment);
+            $returnUrlIsPublic = $this->isPublicReturnUrl($redirectUrl);
+            $manualProfileUrl = $returnUrlIsPublic ? $redirectUrl : null;
+            $autoRedirectUrl = $mode !== 'sandbox' && $returnUrlIsPublic ? $redirectUrl : null;
+            $returnUrlSuppressed = $redirectUrl !== null && !$returnUrlIsPublic;
+            $providerStatusUrl = $crmPaymentsUrl . '?payment=' . (int) $payment->id . '&intent=provider-status';
         }
 
         return response()->view('payments.complete', [
             'payment' => $payment,
-            'redirect_url' => $redirectUrl,
+            'redirect_url' => $manualProfileUrl,
+            'auto_redirect_url' => $autoRedirectUrl,
             'redirect_delay_seconds' => $redirectDelay,
             'mode' => $mode,
             'status_label' => $statusLabel,
+            'crm_payments_url' => $crmPaymentsUrl,
+            'provider_status_url' => $providerStatusUrl,
+            'return_url_suppressed' => $returnUrlSuppressed,
+            'test_mode' => $testMode,
         ])->withHeaders([
             'Cache-Control' => 'no-store',
         ]);
@@ -302,5 +323,38 @@ class BillingController extends Controller
             'wallet_payment_status' => $payment->status,
             'wallet_payment_id' => $payment->id,
         ]);
+    }
+
+    private function isPublicReturnUrl(?string $url): bool
+    {
+        if (!$url) {
+            return false;
+        }
+
+        $parts = parse_url($url);
+        if (!is_array($parts)) {
+            return false;
+        }
+
+        $scheme = strtolower(trim((string) ($parts['scheme'] ?? '')));
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return false;
+        }
+
+        $host = strtolower(trim((string) ($parts['host'] ?? '')));
+        if ($host === '' || $host === 'localhost' || str_ends_with($host, '.local')) {
+            return false;
+        }
+
+        $normalizedHost = trim($host, '[]');
+        if (filter_var($normalizedHost, FILTER_VALIDATE_IP)) {
+            return (bool) filter_var(
+                $normalizedHost,
+                FILTER_VALIDATE_IP,
+                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+            );
+        }
+
+        return str_contains($host, '.');
     }
 }

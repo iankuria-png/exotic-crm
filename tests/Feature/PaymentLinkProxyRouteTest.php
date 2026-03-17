@@ -125,9 +125,51 @@ class PaymentLinkProxyRouteTest extends TestCase
 
         $response->assertOk()
             ->assertSee('subscription payment')
-            ->assertSee('Return to profile')
+            ->assertSee('Sandbox payment result')
+            ->assertSee('Back to CRM Payments')
+            ->assertSee('Check Provider Status')
+            ->assertSee('Open profile anyway')
             ->assertSee('Sandbox Billing')
+            ->assertDontSee('Redirecting in 2 seconds')
             ->assertDontSee('wallet payment');
+    }
+
+    public function test_billing_complete_route_keeps_production_redirects_for_public_profile_urls(): void
+    {
+        ['payment' => $payment] = $this->seedProxyContext('paystack');
+        $payment->forceFill([
+            'provider_environment' => 'production',
+            'status' => 'pending',
+        ])->save();
+
+        $response = $this->get('/billing/complete?payment=' . $payment->transaction_uuid);
+
+        $response->assertOk()
+            ->assertSee('Payment processing')
+            ->assertSee('Redirecting in 2 seconds')
+            ->assertSee('Return to profile')
+            ->assertSee('window.location.replace')
+            ->assertSee('Billing');
+    }
+
+    public function test_billing_complete_route_hides_local_profile_targets_in_sandbox(): void
+    {
+        ['payment' => $payment, 'platform' => $platform] = $this->seedProxyContext('paystack');
+        $platform->forceFill([
+            'wp_api_url' => 'http://exotic.local/wp-json/exotic-crm-sync/v1',
+        ])->save();
+        $payment->forceFill([
+            'provider_environment' => 'sandbox',
+            'status' => 'pending',
+        ])->save();
+
+        $response = $this->get('/billing/complete?payment=' . $payment->transaction_uuid);
+
+        $response->assertOk()
+            ->assertSee('Sandbox payment result')
+            ->assertSee('local or private host')
+            ->assertDontSee('Open profile anyway')
+            ->assertDontSee('window.location.replace');
     }
 
     private function seedProxyContext(string $provider): array
