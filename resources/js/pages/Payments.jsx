@@ -94,6 +94,46 @@ function titleize(value) {
         .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function isSandboxPayment(payment) {
+    return String(payment?.provider_environment || '').toLowerCase() === 'sandbox'
+        || Boolean(payment?.payment_data?.test_mode);
+}
+
+function sandboxStatusLabel(payment) {
+    if (!isSandboxPayment(payment)) {
+        return null;
+    }
+
+    const status = String(payment?.status || '').toLowerCase();
+    const testResult = String(payment?.payment_data?.test_result || '').toLowerCase();
+
+    if (testResult === 'failed' || status === 'failed') {
+        return 'Sandbox Failed';
+    }
+
+    if (status === 'completed' || testResult === 'completed') {
+        return 'Sandbox Completed';
+    }
+
+    if (['initiated', 'pending'].includes(status)) {
+        return 'Sandbox Pending';
+    }
+
+    return `Sandbox ${titleize(status)}`;
+}
+
+function renderPaymentStatusBadges(payment) {
+    const status = String(payment?.status || '').toLowerCase();
+    const customLabel = sandboxStatusLabel(payment);
+
+    return (
+        <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={status} label={customLabel} />
+            {isSandboxPayment(payment) ? <StatusBadge status="sandbox" label="Sandbox/Test" tone="sandbox" /> : null}
+        </div>
+    );
+}
+
 function paymentLinkModeLabel(mode) {
     return mode === 'proxy_hosted_checkout' ? 'CRM proxy' : 'Static URL';
 }
@@ -631,6 +671,10 @@ export default function Payments() {
         }
 
         if (actionKey === 'create_subscription') {
+            if (isSandboxPayment(paymentRow)) {
+                toast.info('Sandbox payments stay in test mode and cannot create live subscriptions.');
+                return;
+            }
             closeDiagnostics();
             setCreateSubDialog({ open: true, payment: paymentRow, reason: 'Create subscription from diagnostics drawer' });
             return;
@@ -922,7 +966,7 @@ export default function Payments() {
         {
             key: 'status',
             label: 'Status',
-            render: (row) => <StatusBadge status={row.status} />,
+            render: (row) => renderPaymentStatusBadges(row),
         },
         {
             key: 'match_confidence',
@@ -957,9 +1001,10 @@ export default function Payments() {
             key: 'actions',
             label: '',
             render: (row) => {
+                const sandboxRow = isSandboxPayment(row);
                 const isFailed = row.status === 'failed' || row.status === 'initiated' || row.status === 'pending';
                 const isCompletedUnmatched = row.status === 'completed' && !row.client_id;
-                const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id;
+                const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id && !sandboxRow;
                 const isLowConfidence = row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review';
                 const isManualReview = row.reconciliation_state === 'manual_review';
 
@@ -996,7 +1041,7 @@ export default function Payments() {
                     <RowActionMenu
                         primaryAction={primary}
                         actions={overflow}
-                        badge={row.client_id ? 'Matched' : null}
+                        badge={sandboxRow ? 'Sandbox' : (row.client_id ? 'Matched' : null)}
                     />
                 );
             },
@@ -1289,13 +1334,28 @@ export default function Payments() {
                                     <section className="grid gap-3 sm:grid-cols-2">
                                         <article className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                                             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Status</p>
-                                            <div className="mt-1"><StatusBadge status={diagnosticsData.payment?.status} /></div>
+                                            <div className="mt-1">{renderPaymentStatusBadges(diagnosticsData.payment)}</div>
                                         </article>
                                         <article className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                                             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Amount</p>
                                             <p className="mt-1 text-sm font-semibold text-slate-900">{formatCurrency(diagnosticsData.payment?.amount, resolveCurrency(diagnosticsData.payment?.currency))}</p>
                                         </article>
                                     </section>
+
+                                    {isSandboxPayment(diagnosticsData.payment) ? (
+                                        <section className="rounded-md border border-sky-200 bg-sky-50 p-3">
+                                            <h4 className="text-sm font-semibold text-sky-900">Sandbox/Test Safeguards</h4>
+                                            <p className="mt-1 text-sm text-sky-800">
+                                                This payment is marked as sandbox-only. Live wallet credits, subscriptions, and profile activation stay disabled.
+                                            </p>
+                                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Test result:</span> {titleize(diagnosticsData.payment?.payment_data?.test_result || diagnosticsData.payment?.status)}</p>
+                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Side effects skipped:</span> {diagnosticsData.payment?.payment_data?.side_effects_skipped ? 'Yes' : 'No'}</p>
+                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Verified at:</span> {formatDateTime(diagnosticsData.payment?.payment_data?.verified_at)}</p>
+                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Environment:</span> {titleize(diagnosticsData.payment?.provider_environment || 'sandbox')}</p>
+                                            </div>
+                                        </section>
+                                    ) : null}
 
                                     <section className="rounded-md border border-slate-200 bg-white p-3">
                                         <h4 className="text-sm font-semibold text-slate-900">Failure Point</h4>
@@ -1897,6 +1957,10 @@ export default function Payments() {
                 onCancel={() => setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' })}
                 onConfirm={() => {
                     if (createSubDialog.payment) {
+                        if (isSandboxPayment(createSubDialog.payment)) {
+                            toast.info('Sandbox payments stay in test mode and cannot create live subscriptions.');
+                            return;
+                        }
                         createSubscriptionMutation.mutate({
                             paymentId: createSubDialog.payment.id,
                             reason: createSubDialog.reason.trim() || undefined,

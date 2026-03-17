@@ -35,6 +35,7 @@ const statusStyles = {
     open: 'bg-slate-100 text-slate-600 ring-slate-200',
     manual_review: 'bg-amber-50 text-amber-700 ring-amber-200',
     resolved: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    sandbox: 'bg-sky-50 text-sky-700 ring-sky-200',
 };
 
 const statusLabels = {
@@ -48,14 +49,17 @@ const statusLabels = {
     manual_review: 'Manual Review',
 };
 
-export default function StatusBadge({ status }) {
-    if (!status) return null;
-    const style = statusStyles[status] || 'bg-slate-100 text-slate-600 ring-slate-200';
-    const label = statusLabels[status] || status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ');
+export default function StatusBadge({ status, label = null, tone = null, className = '' }) {
+    if (!status && !label) return null;
+
+    const normalizedStatus = status ? String(status) : '';
+    const toneKey = tone ? String(tone) : normalizedStatus;
+    const style = statusStyles[toneKey] || statusStyles[normalizedStatus] || 'bg-slate-100 text-slate-600 ring-slate-200';
+    const resolvedLabel = label || statusLabels[normalizedStatus] || normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1).replace(/_/g, ' ');
 
     return (
-        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${style}`}>
-            {label}
+        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${style} ${className}`.trim()}>
+            {resolvedLabel}
         </span>
     );
 }

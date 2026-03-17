@@ -75,7 +75,8 @@ class PaymentDiagnosticsTest extends TestCase
             ->assertJsonPath('timeline.0.event_type', 'payment_link_opened');
 
         $recommendationKeys = collect($response->json('recommendations'))->pluck('key')->all();
-        $this->assertContains('check_provider_status', $recommendationKeys);
+        $this->assertContains('sandbox_reconcile', $recommendationKeys);
+        $this->assertNotContains('create_subscription', $recommendationKeys);
     }
 
     public function test_provider_status_check_endpoint_returns_live_snapshot_without_mutating_payment(): void
@@ -130,6 +131,34 @@ class PaymentDiagnosticsTest extends TestCase
             'provider' => 'paystack',
             'status' => 'completed',
         ]);
+    }
+
+    public function test_diagnostics_endpoint_blocks_live_subscription_recommendations_for_sandbox_completed_payments(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');
+
+        $payment->forceFill([
+            'status' => 'completed',
+            'reconciliation_confidence' => 'high',
+            'payment_data' => [
+                'test_mode' => true,
+                'test_result' => 'completed',
+                'side_effects_skipped' => true,
+                'verified_at' => now()->toIso8601String(),
+            ],
+        ])->save();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('payment.payment_data.test_mode', true)
+            ->assertJsonPath('payment.payment_data.side_effects_skipped', true);
+
+        $recommendationKeys = collect($response->json('recommendations'))->pluck('key')->all();
+        $this->assertContains('manual_review', $recommendationKeys);
+        $this->assertNotContains('create_subscription', $recommendationKeys);
     }
 
     private function seedProxyPayment(string $provider): array

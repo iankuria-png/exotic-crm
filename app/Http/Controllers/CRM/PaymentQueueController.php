@@ -292,7 +292,8 @@ class PaymentQueueController extends Controller
             (string) $validated['reason']
         );
 
-        $canCreateSubscription = $payment->status === 'completed'
+        $canCreateSubscription = !$this->isSandboxPayment($payment)
+            && $payment->status === 'completed'
             && $payment->client_id
             && !$payment->deal_id
             && $this->resolveReconciliationConfidence($payment) === 'high';
@@ -1470,12 +1471,28 @@ class PaymentQueueController extends Controller
         $ageHours = $payment->created_at
             ? now()->diffInHours($payment->created_at)
             : 0;
+        $sandboxPayment = $this->isSandboxPayment($payment);
         $canCheckProviderStatus = is_array($linkProxy)
             && ($linkProxy['mode'] ?? null) === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
             && $ageHours >= 1
             && in_array((string) $payment->status, ['initiated', 'pending'], true)
             && in_array((string) $payment->provider_key, ['paystack', 'pesapal'], true)
             && (!empty($linkProxy['initialized_at']) || !empty($linkProxy['provider_reference']));
+        $providerRecoveryRecommendation = $canCheckProviderStatus
+            ? ($sandboxPayment
+                ? [
+                    'key' => 'sandbox_reconcile',
+                    'label' => 'Sandbox reconcile',
+                    'description' => 'Verify the hosted checkout against sandbox credentials and apply the safe test completion flow.',
+                    'recommended' => true,
+                ]
+                : [
+                    'key' => 'check_provider_status',
+                    'label' => 'Check provider status',
+                    'description' => 'Verify whether hosted checkout already captured payment before retrying the customer.',
+                    'recommended' => false,
+                ])
+            : null;
 
         if (in_array($payment->status, ['initiated', 'pending'], true)) {
             if ($ageHours < 1) {
@@ -1484,12 +1501,7 @@ class PaymentQueueController extends Controller
                     ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Share a direct payment URL if customer missed the STK prompt.', 'recommended' => false],
                 ];
 
-                return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
-                    'key' => 'check_provider_status',
-                    'label' => 'Check provider status',
-                    'description' => 'Verify whether hosted checkout already captured payment before retrying the customer.',
-                    'recommended' => false,
-                ] : null);
+                return $this->prependRecommendation($recommendations, $providerRecoveryRecommendation);
             }
             if ($ageHours < 24) {
                 $recommendations = [
@@ -1497,12 +1509,14 @@ class PaymentQueueController extends Controller
                     ['key' => 'retry_stk', 'label' => 'Retry STK', 'description' => 'Retry STK once if customer confirms they can approve now.', 'recommended' => false],
                 ];
 
-                return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
-                    'key' => 'check_provider_status',
-                    'label' => 'Check provider status',
-                    'description' => 'Confirm whether the provider already shows a completed or stuck checkout session.',
-                    'recommended' => true,
-                ] : null);
+                return $this->prependRecommendation($recommendations, $providerRecoveryRecommendation
+                    ? array_merge($providerRecoveryRecommendation, [
+                        'recommended' => true,
+                        'description' => $sandboxPayment
+                            ? 'Verify the sandbox checkout and safely finalize the test payment if the provider already marked it successful.'
+                            : 'Confirm whether the provider already shows a completed or stuck checkout session.',
+                    ])
+                    : null);
             }
             if ($ageHours < 72) {
                 $recommendations = [
@@ -1511,12 +1525,14 @@ class PaymentQueueController extends Controller
                     ['key' => 'manual_close', 'label' => 'Close manually', 'description' => 'Use only if customer confirms no payment should proceed.', 'recommended' => false],
                 ];
 
-                return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
-                    'key' => 'check_provider_status',
-                    'label' => 'Check provider status',
-                    'description' => 'Review the provider-side state before sending another reminder or retry.',
-                    'recommended' => true,
-                ] : null);
+                return $this->prependRecommendation($recommendations, $providerRecoveryRecommendation
+                    ? array_merge($providerRecoveryRecommendation, [
+                        'recommended' => true,
+                        'description' => $sandboxPayment
+                            ? 'Review the sandbox provider state before retrying or closing this test payment.'
+                            : 'Review the provider-side state before sending another reminder or retry.',
+                    ])
+                    : null);
             }
 
             $recommendations = [
@@ -1524,12 +1540,14 @@ class PaymentQueueController extends Controller
                 ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Optional final attempt before closure.', 'recommended' => false],
             ];
 
-            return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
-                'key' => 'check_provider_status',
-                'label' => 'Check provider status',
-                'description' => 'Validate the provider-side outcome before finally closing this stale checkout.',
-                'recommended' => true,
-            ] : null);
+            return $this->prependRecommendation($recommendations, $providerRecoveryRecommendation
+                ? array_merge($providerRecoveryRecommendation, [
+                    'recommended' => true,
+                    'description' => $sandboxPayment
+                        ? 'Validate the sandbox provider outcome before finally closing this stale checkout.'
+                        : 'Validate the provider-side outcome before finally closing this stale checkout.',
+                ])
+                : null);
         }
 
         if ($payment->status === 'failed') {
@@ -1551,6 +1569,12 @@ class PaymentQueueController extends Controller
                 return [
                     ['key' => 'manual_match', 'label' => 'Confirm reconciliation', 'description' => 'Resolve to high confidence before creating subscription.', 'recommended' => true],
                     ['key' => 'manual_review', 'label' => 'Manual review', 'description' => 'Mark for review when identifiers are weak or conflicting.', 'recommended' => false],
+                ];
+            }
+
+            if ($sandboxPayment) {
+                return [
+                    ['key' => 'manual_review', 'label' => 'Record sandbox result', 'description' => 'Keep this test payment visible for diagnostics only. Live subscription creation stays disabled.', 'recommended' => true],
                 ];
             }
 
@@ -1750,7 +1774,7 @@ class PaymentQueueController extends Controller
             throw new InvalidArgumentException('Sandbox reconcile is available only for gateway payments.');
         }
 
-        if (strtolower(trim((string) $payment->provider_environment)) !== 'sandbox' && !data_get($payment->payment_data, 'test_mode')) {
+        if (!$this->isSandboxPayment($payment)) {
             throw new InvalidArgumentException('Sandbox reconcile is available only for sandbox payments.');
         }
 
@@ -1767,6 +1791,12 @@ class PaymentQueueController extends Controller
     {
         return (bool) data_get($payment->payment_data, 'test_mode', false)
             && in_array((string) $payment->status, ['completed', 'failed'], true);
+    }
+
+    private function isSandboxPayment(Payment $payment): bool
+    {
+        return strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+            || (bool) data_get($payment->payment_data, 'test_mode', false);
     }
 
     private function sandboxReconcileState(Payment $payment): array
