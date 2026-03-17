@@ -11,13 +11,16 @@ use App\Models\Product;
 use App\Models\Platform;
 use App\Models\PaymentImportBatch;
 use App\Models\PaymentImportRow;
+use App\Models\TimelineEvent;
 use App\Models\AuditLog;
 use App\Services\AuditService;
+use App\Services\BillingModeService;
 use App\Services\NotificationService;
 use App\Services\PaymentImportService;
 use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentLinkService;
+use App\Services\HostedCheckoutService;
 use App\Services\LegacyStkService;
 use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
@@ -38,6 +41,8 @@ class PaymentQueueController extends Controller
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly PaymentLinkService $paymentLinkService,
         private readonly PaymentImportService $paymentImportService,
+        private readonly BillingModeService $billingModeService,
+        private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly LegacyStkService $legacyStkService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
@@ -728,6 +733,7 @@ class PaymentQueueController extends Controller
         $latestAttempt = $attempts->first();
         $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
         $manualCloseMeta = $rawPayload['manual_close'] ?? null;
+        $linkProxy = $this->buildLinkProxyDiagnostics($payment, $attempts, $auditEntries);
 
         $requestMeta = $attempts
             ->map(fn($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
@@ -746,8 +752,15 @@ class PaymentQueueController extends Controller
         $p95Latency = $latencies->count() > 0
             ? (int) $latencies->get(max(0, (int) ceil(($latencies->count() * 0.95) - 1)))
             : null;
+        $timelineEntries = TimelineEvent::query()
+            ->with('actor:id,name,email')
+            ->where('entity_type', 'payment')
+            ->where('entity_id', $payment->id)
+            ->orderByDesc('created_at')
+            ->limit(30)
+            ->get();
 
-        $failureStage = $this->resolveFailureStage($payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta);
+        $failureStage = $this->resolveFailureStage($payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta, $linkProxy);
         $failureReason = $latestFailedAttempt?->error_message
             ?? (is_array($rawPayload['failure_data'] ?? null) ? ($rawPayload['failure_data']['message'] ?? null) : null)
             ?? (is_array($manualCloseMeta) ? ($manualCloseMeta['reason'] ?? null) : null);
@@ -776,7 +789,8 @@ class PaymentQueueController extends Controller
                 'ip_hash' => $requestMeta['ip_hash'] ?? null,
                 'request_id' => $requestMeta['request_id'] ?? null,
             ],
-            'recommendations' => $this->buildRecommendations($payment),
+            'recommendations' => $this->buildRecommendations($payment, $linkProxy),
+            'link_proxy' => $linkProxy,
             'attempts' => $attempts->map(function ($attempt) {
                 return [
                     'id' => (int) $attempt->id,
@@ -811,7 +825,77 @@ class PaymentQueueController extends Controller
                     'created_at' => optional($log->created_at)->toDateTimeString(),
                 ];
             })->values(),
+            'timeline' => $timelineEntries->map(function (TimelineEvent $event) {
+                return [
+                    'id' => (int) $event->id,
+                    'event_type' => $event->event_type,
+                    'content' => is_array($event->content) ? $event->content : null,
+                    'actor' => $event->actor ? [
+                        'id' => (int) $event->actor->id,
+                        'name' => $event->actor->name,
+                        'email' => $event->actor->email,
+                    ] : null,
+                    'created_at' => optional($event->created_at)->toDateTimeString(),
+                ];
+            })->values(),
         ]);
+    }
+
+    public function checkProviderStatus(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        try {
+            $snapshot = $this->verifyProviderStatus($payment);
+
+            $this->paymentAttemptService->record($payment, 'provider_status_check', (string) ($snapshot['status'] ?? 'failed'), [
+                'provider' => $payment->provider_key,
+                'error_message' => $snapshot['message'] ?? null,
+                'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                    'provider_environment' => $payment->provider_environment,
+                    'reference_number' => $payment->reference_number,
+                    'provider_reference' => $snapshot['provider_reference'] ?? null,
+                ]),
+                'response_meta' => [
+                    'provider_status' => $snapshot['status'] ?? null,
+                    'provider_message' => $snapshot['message'] ?? null,
+                    'provider_payload' => $snapshot['data'] ?? null,
+                ],
+                'created_by' => optional($request->user())->id,
+            ]);
+
+            return response()->json($snapshot);
+        } catch (InvalidArgumentException $exception) {
+            $this->paymentAttemptService->record($payment, 'provider_status_check', 'failed', [
+                'provider' => $payment->provider_key,
+                'error_code' => 'provider_status_unavailable',
+                'error_message' => $exception->getMessage(),
+                'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                    'provider_environment' => $payment->provider_environment,
+                    'reference_number' => $payment->reference_number,
+                ]),
+                'created_by' => optional($request->user())->id,
+            ]);
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            $this->paymentAttemptService->record($payment, 'provider_status_check', 'failed', [
+                'provider' => $payment->provider_key,
+                'error_code' => 'provider_status_check_failed',
+                'error_message' => $exception->getMessage(),
+                'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
+                    'provider_environment' => $payment->provider_environment,
+                    'reference_number' => $payment->reference_number,
+                ]),
+                'created_by' => optional($request->user())->id,
+            ]);
+
+            return response()->json([
+                'message' => 'Provider status could not be checked right now.',
+            ], 502);
+        }
     }
 
     public function updateReviewState(Request $request, Payment $payment)
@@ -1184,7 +1268,7 @@ class PaymentQueueController extends Controller
         ]);
     }
 
-    private function resolveFailureStage(Payment $payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta): string
+    private function resolveFailureStage(Payment $payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta, ?array $linkProxy = null): string
     {
         if (is_array($manualCloseMeta)) {
             return 'manually_closed';
@@ -1195,8 +1279,33 @@ class PaymentQueueController extends Controller
                 'retry_stk' => 'stk_initiation',
                 'send_payment_link' => 'link_delivery',
                 'callback_update' => 'callback_processing',
+                'provider_status_check', 'reconciliation_check' => 'provider_verification',
                 default => $latestFailedAttempt->attempt_type,
             };
+        }
+
+        if (is_array($linkProxy)) {
+            if (($linkProxy['token_status'] ?? null) === 'expired') {
+                return 'proxy_link_expired';
+            }
+
+            if ($payment->status === 'failed' && !empty($linkProxy['initialized_at'])) {
+                return 'provider_checkout_failed';
+            }
+
+            if (!empty($linkProxy['initialized_at'])) {
+                return $payment->status === 'completed'
+                    ? 'provider_callback_completed'
+                    : 'provider_checkout_pending';
+            }
+
+            if (!empty($linkProxy['opened_at']) || ((int) ($linkProxy['open_count'] ?? 0)) > 0) {
+                return 'proxy_link_opened';
+            }
+
+            if (!empty($linkProxy['sent_at'])) {
+                return 'proxy_link_sent';
+            }
         }
 
         if ($payment->status === 'pending') {
@@ -1218,37 +1327,71 @@ class PaymentQueueController extends Controller
         return 'unknown';
     }
 
-    private function buildRecommendations(Payment $payment): array
+    private function buildRecommendations(Payment $payment, ?array $linkProxy = null): array
     {
         $ageHours = $payment->created_at
             ? now()->diffInHours($payment->created_at)
             : 0;
+        $canCheckProviderStatus = is_array($linkProxy)
+            && ($linkProxy['mode'] ?? null) === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
+            && $ageHours >= 1
+            && in_array((string) $payment->status, ['initiated', 'pending'], true)
+            && in_array((string) $payment->provider_key, ['paystack', 'pesapal'], true)
+            && (!empty($linkProxy['initialized_at']) || !empty($linkProxy['provider_reference']));
 
         if (in_array($payment->status, ['initiated', 'pending'], true)) {
             if ($ageHours < 1) {
-                return [
+                $recommendations = [
                     ['key' => 'wait_callback', 'label' => 'Wait for callback', 'description' => 'Payment is still fresh; monitor callback status first.', 'recommended' => true],
                     ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Share a direct payment URL if customer missed the STK prompt.', 'recommended' => false],
                 ];
+
+                return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
+                    'key' => 'check_provider_status',
+                    'label' => 'Check provider status',
+                    'description' => 'Verify whether hosted checkout already captured payment before retrying the customer.',
+                    'recommended' => false,
+                ] : null);
             }
             if ($ageHours < 24) {
-                return [
+                $recommendations = [
                     ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Best first recovery path for pending payments older than one hour.', 'recommended' => true],
                     ['key' => 'retry_stk', 'label' => 'Retry STK', 'description' => 'Retry STK once if customer confirms they can approve now.', 'recommended' => false],
                 ];
+
+                return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
+                    'key' => 'check_provider_status',
+                    'label' => 'Check provider status',
+                    'description' => 'Confirm whether the provider already shows a completed or stuck checkout session.',
+                    'recommended' => true,
+                ] : null);
             }
             if ($ageHours < 72) {
-                return [
+                $recommendations = [
                     ['key' => 'retry_stk', 'label' => 'Retry STK', 'description' => 'Retry once, then shift to manual follow-up if callback still does not arrive.', 'recommended' => true],
                     ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Provide self-serve payment route during follow-up.', 'recommended' => false],
                     ['key' => 'manual_close', 'label' => 'Close manually', 'description' => 'Use only if customer confirms no payment should proceed.', 'recommended' => false],
                 ];
+
+                return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
+                    'key' => 'check_provider_status',
+                    'label' => 'Check provider status',
+                    'description' => 'Review the provider-side state before sending another reminder or retry.',
+                    'recommended' => true,
+                ] : null);
             }
 
-            return [
+            $recommendations = [
                 ['key' => 'manual_close', 'label' => 'Close manually', 'description' => 'Payment is stale (>72h). Close with a reason category after follow-up.', 'recommended' => true],
                 ['key' => 'send_link', 'label' => 'Send payment link', 'description' => 'Optional final attempt before closure.', 'recommended' => false],
             ];
+
+            return $this->prependRecommendation($recommendations, $canCheckProviderStatus ? [
+                'key' => 'check_provider_status',
+                'label' => 'Check provider status',
+                'description' => 'Validate the provider-side outcome before finally closing this stale checkout.',
+                'recommended' => true,
+            ] : null);
         }
 
         if ($payment->status === 'failed') {
@@ -1279,6 +1422,188 @@ class PaymentQueueController extends Controller
         }
 
         return [];
+    }
+
+    private function prependRecommendation(array $recommendations, ?array $recommendation): array
+    {
+        if (!$recommendation) {
+            return $recommendations;
+        }
+
+        $filtered = array_values(array_filter($recommendations, function (array $item) use ($recommendation) {
+            return ($item['key'] ?? null) !== ($recommendation['key'] ?? null);
+        }));
+
+        array_unshift($filtered, $recommendation);
+
+        return $filtered;
+    }
+
+    private function buildLinkProxyDiagnostics(Payment $payment, $attempts, $auditEntries): ?array
+    {
+        $linkProxy = is_array(data_get($payment->payment_data, 'link_proxy'))
+            ? data_get($payment->payment_data, 'link_proxy')
+            : null;
+
+        if (!is_array($linkProxy)) {
+            return null;
+        }
+
+        $sendLinkAttemptCount = max(
+            (int) $attempts->where('attempt_type', 'send_payment_link')->count(),
+            (int) $auditEntries->where('action', CrmAuditAction::PAYMENT_SEND_LINK)->count()
+        );
+        $rotationCount = max(0, $sendLinkAttemptCount - 1);
+        $tokenExpiresAt = $this->safeDateTimeString($linkProxy['token_expires_at'] ?? null);
+        $latestProviderCheck = $attempts->first(function ($attempt) {
+            return in_array($attempt->attempt_type, ['provider_status_check', 'reconciliation_check'], true);
+        });
+
+        return [
+            'mode' => $linkProxy['mode'] ?? PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT,
+            'provider_key' => $linkProxy['provider_key'] ?? $payment->provider_key,
+            'provider_config_key' => $linkProxy['provider_config_key'] ?? null,
+            'environment' => $linkProxy['environment'] ?? $payment->provider_environment,
+            'token_status' => $this->resolveLinkProxyTokenStatus($linkProxy, $rotationCount),
+            'token_expires_at' => $tokenExpiresAt,
+            'rotation_count' => $rotationCount,
+            'sent_at' => $this->safeDateTimeString($linkProxy['sent_at'] ?? null),
+            'opened_at' => $this->safeDateTimeString($linkProxy['opened_at'] ?? null),
+            'open_count' => (int) ($linkProxy['open_count'] ?? 0),
+            'initialized_at' => $this->safeDateTimeString($linkProxy['initialized_at'] ?? null),
+            'redirect_url' => $linkProxy['redirect_url'] ?? null,
+            'provider_reference' => $linkProxy['provider_reference'] ?? $payment->transaction_reference ?? null,
+            'callback_at' => $payment->completed_at?->toDateTimeString(),
+            'session_status' => $this->resolveLinkProxySessionStatus($payment, $linkProxy),
+            'last_provider_check' => $latestProviderCheck ? [
+                'status' => $latestProviderCheck->status,
+                'message' => $latestProviderCheck->error_message,
+                'checked_at' => optional($latestProviderCheck->created_at)->toDateTimeString(),
+            ] : null,
+        ];
+    }
+
+    private function resolveLinkProxyTokenStatus(array $linkProxy, int $rotationCount): string
+    {
+        $expiresAt = $linkProxy['token_expires_at'] ?? null;
+        if ($expiresAt) {
+            try {
+                if (now()->greaterThan(Carbon::parse((string) $expiresAt))) {
+                    return 'expired';
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        return $rotationCount > 0 ? 'rotated' : 'active';
+    }
+
+    private function resolveLinkProxySessionStatus(Payment $payment, array $linkProxy): string
+    {
+        if ($payment->status === 'completed') {
+            return 'completed';
+        }
+
+        if ($payment->status === 'failed' && !empty($linkProxy['initialized_at'])) {
+            return 'failed';
+        }
+
+        if (!empty($linkProxy['initialized_at'])) {
+            return 'checkout_initialized';
+        }
+
+        if (!empty($linkProxy['opened_at']) || ((int) ($linkProxy['open_count'] ?? 0)) > 0) {
+            return 'opened';
+        }
+
+        if (($this->resolveLinkProxyTokenStatus($linkProxy, 0)) === 'expired') {
+            return 'expired';
+        }
+
+        return 'sent';
+    }
+
+    private function safeDateTimeString($value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value)->toDateTimeString();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function verifyProviderStatus(Payment $payment): array
+    {
+        $payment->loadMissing(['platform', 'client', 'product']);
+        $provider = strtolower(trim((string) $payment->provider_key));
+
+        if (!in_array($provider, ['paystack', 'pesapal'], true)) {
+            throw new InvalidArgumentException('Live provider checks are available only for Paystack and Pesapal payments.');
+        }
+
+        $linkProxy = is_array(data_get($payment->payment_data, 'link_proxy'))
+            ? data_get($payment->payment_data, 'link_proxy')
+            : null;
+        if (is_array($linkProxy)
+            && ($linkProxy['mode'] ?? null) === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
+            && empty($linkProxy['initialized_at'])
+        ) {
+            throw new InvalidArgumentException('Hosted checkout has not been initialized yet for this payment.');
+        }
+
+        $context = $this->billingModeService->providerContext(
+            $payment->platform,
+            $provider,
+            requireEnabled: false,
+            environmentOverride: $payment->provider_environment
+        );
+
+        $result = match ($provider) {
+            'paystack' => $this->hostedCheckoutService->verifyPaystackTransaction(
+                $payment,
+                $context,
+                (string) $payment->reference_number
+            ),
+            'pesapal' => $this->hostedCheckoutService->verifyPesapalTransaction(
+                $payment,
+                $context,
+                $this->resolvePesapalTrackingId($payment)
+            ),
+            default => throw new InvalidArgumentException('Live provider checks are available only for Paystack and Pesapal payments.'),
+        };
+
+        return [
+            'payment_id' => (int) $payment->id,
+            'provider' => $provider,
+            'provider_environment' => $payment->provider_environment,
+            'provider_reference' => $provider === 'pesapal'
+                ? $this->resolvePesapalTrackingId($payment)
+                : ($payment->transaction_reference ?: $payment->reference_number),
+            'status' => (string) ($result['status'] ?? 'failed'),
+            'message' => $result['message'] ?? null,
+            'checked_at' => now()->toDateTimeString(),
+            'data' => is_array($result['data'] ?? null) ? $result['data'] : [],
+        ];
+    }
+
+    private function resolvePesapalTrackingId(Payment $payment): string
+    {
+        $trackingId = trim((string) (
+            $payment->transaction_reference
+            ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id')
+            ?? data_get($payment->payment_data, 'link_proxy.provider_reference')
+            ?? ''
+        ));
+
+        if ($trackingId === '') {
+            throw new InvalidArgumentException('Pesapal status checks require an initialized provider reference.');
+        }
+
+        return $trackingId;
     }
 
     private function authorizePaymentAccess(Request $request, Payment $payment): void

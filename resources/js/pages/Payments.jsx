@@ -103,6 +103,77 @@ function paymentLinkProviderOptionLabel(providerKey, providerConfig = {}) {
     return `${baseLabel} (${paymentLinkModeLabel(providerConfig?.mode)})`;
 }
 
+function diagnosticToneClasses(status) {
+    const normalized = String(status || '').toLowerCase();
+
+    if (['completed', 'success', 'active'].includes(normalized)) {
+        return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    }
+
+    if (['pending', 'opened', 'checkout_initialized', 'rotated'].includes(normalized)) {
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+
+    if (['failed', 'expired'].includes(normalized)) {
+        return 'border-rose-200 bg-rose-50 text-rose-700';
+    }
+
+    return 'border-slate-200 bg-slate-100 text-slate-600';
+}
+
+function formatStructuredValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    if (Array.isArray(value)) {
+        return value.slice(0, 3).join(', ');
+    }
+
+    if (typeof value === 'object') {
+        return null;
+    }
+
+    return String(value);
+}
+
+function describeTimelineContent(content) {
+    if (!content || typeof content !== 'object') {
+        return 'Structured event data recorded.';
+    }
+
+    const preferredKeys = ['summary', 'message', 'reason', 'status', 'payment_method', 'transaction_reference', 'amount', 'currency', 'expires_at'];
+    const preferred = preferredKeys
+        .map((key) => {
+            const value = formatStructuredValue(content[key]);
+            return value ? `${titleize(key)}: ${value}` : null;
+        })
+        .filter(Boolean);
+
+    if (preferred.length > 0) {
+        return preferred.join(' • ');
+    }
+
+    const fallback = Object.entries(content)
+        .map(([key, value]) => {
+            const normalized = formatStructuredValue(value);
+            return normalized ? `${titleize(key)}: ${normalized}` : null;
+        })
+        .filter(Boolean)
+        .slice(0, 4);
+
+    if (fallback.length > 0) {
+        return fallback.join(' • ');
+    }
+
+    const nestedEntry = Object.entries(content).find(([, value]) => value && typeof value === 'object');
+    if (nestedEntry) {
+        return `${titleize(nestedEntry[0])} updated`;
+    }
+
+    return 'Structured event data recorded.';
+}
+
 export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'initiated', 'pending', 'failed', 'recovery_queue']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
@@ -174,6 +245,7 @@ export default function Payments() {
     });
     const [createSubDialog, setCreateSubDialog] = useState({ open: false, payment: null, reason: 'Create subscription from matched payment' });
     const [diagnosticsDrawer, setDiagnosticsDrawer] = useState({ open: false, payment: null });
+    const [providerStatusSnapshot, setProviderStatusSnapshot] = useState(null);
     const [manualCloseDialog, setManualCloseDialog] = useState({
         open: false,
         payment: null,
@@ -363,6 +435,19 @@ export default function Payments() {
         },
     });
 
+    const providerStatusMutation = useMutation({
+        mutationFn: (paymentId) =>
+            api.post(`/crm/payments/${paymentId}/check-provider-status`).then((response) => response.data),
+        onSuccess: (result, paymentId) => {
+            setProviderStatusSnapshot(result);
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', paymentId] });
+            toast.success(`Provider currently reports this payment as ${titleize(result.status)}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Provider status check failed.');
+        },
+    });
+
     const bulkAutoMatchMutation = useMutation({
         mutationFn: async (rows) => {
             const targets = rows.filter((row) => row.status !== 'failed');
@@ -531,6 +616,11 @@ export default function Payments() {
             return;
         }
 
+        if (actionKey === 'check_provider_status') {
+            providerStatusMutation.mutate(paymentRow.id);
+            return;
+        }
+
         if (actionKey === 'wait_callback') {
             toast.info('Keep monitoring callback updates for this payment before retrying.');
         }
@@ -596,6 +686,68 @@ export default function Payments() {
     };
 
     const diagnosticsPayment = diagnosticsData?.payment || diagnosticsDrawer.payment;
+    const linkProxyData = diagnosticsData?.link_proxy || null;
+    const providerStatusDisplay = providerStatusSnapshot || linkProxyData?.last_provider_check || null;
+    const providerCheckEligible = ['paystack', 'pesapal'].includes(String(diagnosticsPayment?.provider_key || '').toLowerCase())
+        && ['initiated', 'pending'].includes(diagnosticsPayment?.status);
+    const providerCheckReady = providerCheckEligible && (!linkProxyData || !!linkProxyData.initialized_at || !!linkProxyData.provider_reference);
+    const providerReference = providerStatusSnapshot?.provider_reference
+        || linkProxyData?.provider_reference
+        || diagnosticsPayment?.transaction_reference
+        || diagnosticsPayment?.reference_number
+        || '—';
+    const linkProxySteps = useMemo(() => {
+        if (!linkProxyData) {
+            return [];
+        }
+
+        const callbackAt = linkProxyData.callback_at || (diagnosticsPayment?.status === 'completed'
+            ? (diagnosticsPayment?.completed_at || diagnosticsPayment?.updated_at)
+            : null);
+
+        return [
+            {
+                key: 'sent',
+                label: 'Sent',
+                timestamp: linkProxyData.sent_at,
+                helper: 'Customer payment link was issued from CRM.',
+            },
+            {
+                key: 'opened',
+                label: 'Opened',
+                timestamp: linkProxyData.opened_at,
+                helper: linkProxyData.open_count
+                    ? `Opened ${linkProxyData.open_count} time${linkProxyData.open_count === 1 ? '' : 's'}.`
+                    : 'Awaiting first customer open.',
+            },
+            {
+                key: 'initialized',
+                label: 'Checkout initialized',
+                timestamp: linkProxyData.initialized_at,
+                helper: linkProxyData.provider_reference
+                    ? `Provider ref ${linkProxyData.provider_reference}`
+                    : 'Provider session not started yet.',
+            },
+            {
+                key: 'callback',
+                label: 'Provider callback',
+                timestamp: callbackAt,
+                helper: callbackAt
+                    ? 'CRM has provider completion evidence for this payment.'
+                    : 'No provider callback recorded yet.',
+            },
+            {
+                key: 'completed',
+                label: 'Completed',
+                timestamp: diagnosticsPayment?.status === 'completed'
+                    ? (diagnosticsPayment?.completed_at || diagnosticsPayment?.updated_at)
+                    : null,
+                helper: diagnosticsPayment?.status === 'completed'
+                    ? 'Payment is marked completed in CRM.'
+                    : 'Payment is still awaiting completion.',
+            },
+        ];
+    }, [diagnosticsPayment?.completed_at, diagnosticsPayment?.status, diagnosticsPayment?.updated_at, linkProxyData]);
     const sendLinkProviderEntries = useMemo(() => {
         const providers = sendLinkDialog.payment?.platform?.payment_link_providers?.providers || {};
         return Object.entries(providers).filter(([, providerConfig]) => providerConfig?.enabled !== false);
@@ -699,6 +851,10 @@ export default function Payments() {
         window.addEventListener('keydown', listener);
         return () => window.removeEventListener('keydown', listener);
     }, [selectedRows, bulkConfirmMutation]);
+
+    useEffect(() => {
+        setProviderStatusSnapshot(null);
+    }, [diagnosticsDrawer.open, diagnosticsDrawer.payment?.id]);
 
     const columns = [
         {
@@ -1103,6 +1259,107 @@ export default function Payments() {
                                         </p>
                                     </section>
 
+                                    {providerCheckEligible || providerStatusDisplay ? (
+                                        <section className="rounded-md border border-slate-200 bg-white p-3">
+                                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                                <div>
+                                                    <h4 className="text-sm font-semibold text-slate-900">Live Provider Status</h4>
+                                                    <p className="mt-1 text-xs text-slate-500">
+                                                        Read-only verification against the current Paystack or Pesapal session.
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => diagnosticsPayment?.id && providerStatusMutation.mutate(diagnosticsPayment.id)}
+                                                    disabled={!providerCheckReady || providerStatusMutation.isPending}
+                                                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    {providerStatusMutation.isPending ? 'Checking...' : 'Check Provider Status'}
+                                                </button>
+                                            </div>
+
+                                            {!providerCheckReady && providerCheckEligible ? (
+                                                <p className="mt-2 text-xs text-amber-700">
+                                                    Hosted checkout needs to initialize before CRM can verify provider-side status.
+                                                </p>
+                                            ) : null}
+
+                                            {providerStatusDisplay ? (
+                                                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${diagnosticToneClasses(providerStatusDisplay.status)}`}>
+                                                            {titleize(providerStatusDisplay.status)}
+                                                        </span>
+                                                        <span className="text-[11px] text-slate-500">
+                                                            Checked {formatDateTime(providerStatusDisplay.checked_at)}
+                                                        </span>
+                                                    </div>
+                                                    <p className="mt-2 text-sm text-slate-700">{providerStatusDisplay.message || 'No provider message returned.'}</p>
+                                                    <p className="mt-1 text-xs text-slate-500">
+                                                        Provider: {titleize(diagnosticsPayment?.provider_key)} • Reference: {providerReference}
+                                                    </p>
+                                                </div>
+                                            ) : null}
+                                        </section>
+                                    ) : null}
+
+                                    {linkProxyData ? (
+                                        <section className="rounded-md border border-slate-200 bg-white p-3">
+                                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                                <div>
+                                                    <h4 className="text-sm font-semibold text-slate-900">Proxy Link Lifecycle</h4>
+                                                    <p className="mt-1 text-xs text-slate-500">
+                                                        {titleize(linkProxyData.session_status)} • {titleize(linkProxyData.mode)}
+                                                    </p>
+                                                </div>
+                                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${diagnosticToneClasses(linkProxyData.token_status)}`}>
+                                                    {titleize(linkProxyData.token_status)}
+                                                </span>
+                                            </div>
+
+                                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Sent:</span> {formatDateTime(linkProxyData.sent_at)}</p>
+                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Opened:</span> {formatDateTime(linkProxyData.opened_at)}</p>
+                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Open count:</span> {linkProxyData.open_count ?? 0}</p>
+                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Provider ref:</span> {linkProxyData.provider_reference || '—'}</p>
+                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Environment:</span> {titleize(linkProxyData.environment)}</p>
+                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Expires:</span> {formatDateTime(linkProxyData.token_expires_at)}</p>
+                                            </div>
+
+                                            <div className="mt-4 space-y-3">
+                                                {linkProxySteps.map((step, index) => {
+                                                    const firstIncompleteIndex = linkProxySteps.findIndex((item) => !item.timestamp);
+                                                    const isComplete = Boolean(step.timestamp);
+                                                    const isCurrent = !isComplete && firstIncompleteIndex === index;
+
+                                                    return (
+                                                        <div key={step.key} className="flex gap-3">
+                                                            <div className="flex flex-col items-center">
+                                                                <span
+                                                                    aria-hidden="true"
+                                                                    className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                                                                        isComplete
+                                                                            ? 'bg-emerald-500'
+                                                                            : (isCurrent ? 'bg-amber-500' : 'bg-slate-300')
+                                                                    }`}
+                                                                />
+                                                                {index < linkProxySteps.length - 1 ? <span className="mt-1 h-8 w-px bg-slate-200" /> : null}
+                                                            </div>
+                                                            <div className="min-w-0 flex-1">
+                                                                <p className={`text-xs font-semibold ${isComplete ? 'text-slate-900' : (isCurrent ? 'text-amber-700' : 'text-slate-500')}`}>
+                                                                    {step.label}
+                                                                </p>
+                                                                <p className="mt-0.5 text-xs text-slate-500">
+                                                                    {step.timestamp ? formatDateTime(step.timestamp) : step.helper}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </section>
+                                    ) : null}
+
                                     <section className="rounded-md border border-slate-200 bg-white p-3">
                                         <h4 className="text-sm font-semibold text-slate-900">API Performance</h4>
                                         <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -1143,6 +1400,56 @@ export default function Payments() {
                                                 ))}
                                             </div>
                                         )}
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <details>
+                                            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">
+                                                Audit Trail
+                                                <span className="ml-2 text-xs font-medium text-slate-500">
+                                                    ({(diagnosticsData.audit_trail || []).length})
+                                                </span>
+                                            </summary>
+                                            {(diagnosticsData.audit_trail || []).length === 0 ? (
+                                                <p className="mt-2 text-sm text-slate-500">No audit entries were recorded for this payment yet.</p>
+                                            ) : (
+                                                <div className="mt-3 space-y-2">
+                                                    {diagnosticsData.audit_trail.map((entry) => (
+                                                        <article key={entry.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                            <p className="text-xs font-semibold text-slate-800">{titleize(entry.action)}</p>
+                                                            <p className="mt-1 text-xs text-slate-600">Actor: {entry.actor?.name || 'System'} • {formatDateTime(entry.created_at)}</p>
+                                                            <p className="mt-1 text-xs text-slate-600">Reason: {entry.reason || 'No reason provided'}</p>
+                                                        </article>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </details>
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <details>
+                                            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">
+                                                Timeline Events
+                                                <span className="ml-2 text-xs font-medium text-slate-500">
+                                                    ({(diagnosticsData.timeline || []).length})
+                                                </span>
+                                            </summary>
+                                            {(diagnosticsData.timeline || []).length === 0 ? (
+                                                <p className="mt-2 text-sm text-slate-500">No payment-linked timeline events have been recorded yet.</p>
+                                            ) : (
+                                                <div className="mt-3 space-y-2">
+                                                    {diagnosticsData.timeline.map((event) => (
+                                                        <article key={event.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                            <p className="text-xs font-semibold text-slate-800">{titleize(event.event_type)}</p>
+                                                            <p className="mt-1 text-xs text-slate-600">{describeTimelineContent(event.content)}</p>
+                                                            <p className="mt-1 text-[11px] text-slate-500">
+                                                                {event.actor?.name || 'System'} • {formatDateTime(event.created_at)}
+                                                            </p>
+                                                        </article>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </details>
                                     </section>
 
                                     <section className="rounded-md border border-slate-200 bg-white p-3">

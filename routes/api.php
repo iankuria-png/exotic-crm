@@ -185,6 +185,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::get('/payments/import/candidates', [PaymentQueueController::class, 'importCandidates']);
         Route::post('/payments/import/row-match', [PaymentQueueController::class, 'updateImportRowMatch']);
         Route::get('/payments/{payment}/diagnostics', [PaymentQueueController::class, 'diagnostics']);
+        Route::post('/payments/{payment}/check-provider-status', [PaymentQueueController::class, 'checkProviderStatus']);
         Route::get('/payments/{payment}/candidates', [PaymentQueueController::class, 'candidates']);
         Route::post('/payments/{payment}/auto-match', [PaymentQueueController::class, 'autoMatch']);
         Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);
