@@ -71,12 +71,16 @@ class DashboardController extends Controller
 
         $expiringDeals = $this->buildExpiringSubscriptionsWidget($platformIds, $search);
 
+        $reviewBaselineCutoff = $this->resolveBaselineCutoff();
         $paymentReviewQueueQuery = Payment::query()
             ->liveOnly()
             ->where('status', 'completed')
             ->whereNull('client_id')
             ->with(['platform', 'product'])
             ->orderBy('created_at', 'desc');
+        if ($reviewBaselineCutoff) {
+            $paymentReviewQueueQuery->where('created_at', '>=', $reviewBaselineCutoff);
+        }
         if (is_array($platformIds)) {
             $paymentReviewQueueQuery->whereIn('platform_id', $platformIds);
         }
@@ -130,9 +134,15 @@ class DashboardController extends Controller
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
         $unmatchedPaymentsWindowQuery = Payment::query()->liveOnly()->whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
+        $baselineCutoff = $this->resolveBaselineCutoff();
         $awaitingPaymentsQuery = Payment::query()->liveOnly()->whereIn('status', ['initiated', 'pending']);
         $failedPaymentsQuery = Payment::query()->liveOnly()->where('status', 'failed');
         $unmatchedQueueQuery = Payment::query()->liveOnly()->whereNull('client_id')->where('status', 'completed');
+        if ($baselineCutoff) {
+            $awaitingPaymentsQuery->where('created_at', '>=', $baselineCutoff);
+            $failedPaymentsQuery->where('created_at', '>=', $baselineCutoff);
+            $unmatchedQueueQuery->where('created_at', '>=', $baselineCutoff);
+        }
         $renewalRisk72hQuery = Deal::active()
             ->where('expires_at', '>', now())
             ->where('expires_at', '<=', now()->copy()->addDays(3));
