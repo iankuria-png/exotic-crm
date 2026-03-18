@@ -116,6 +116,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/completeness', [ClientController::class, 'profileCompleteness'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,marketing');

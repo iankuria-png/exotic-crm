@@ -82,6 +82,39 @@ const PROFILE_ENUM_CHOICES = {
         { code: '7', label: 'Mature' },
         { code: '8', label: 'GFE' },
     ],
+    haircolor: [
+        { code: '1', label: 'Black' }, { code: '2', label: 'Blonde' },
+        { code: '3', label: 'Brown' }, { code: '4', label: 'Brunette' },
+        { code: '5', label: 'Chestnut' }, { code: '6', label: 'Auburn' },
+        { code: '7', label: 'Dark-blonde' }, { code: '8', label: 'Golden' },
+        { code: '9', label: 'Red' }, { code: '10', label: 'Grey' },
+        { code: '11', label: 'Silver' }, { code: '12', label: 'White' },
+        { code: '13', label: 'Other' },
+    ],
+    hairlength: [
+        { code: '1', label: 'Bald' }, { code: '2', label: 'Short' },
+        { code: '3', label: 'Shoulder' }, { code: '4', label: 'Long' },
+        { code: '5', label: 'Very Long' },
+    ],
+    bustsize: [
+        { code: '1', label: 'Very small' }, { code: '2', label: 'Small (A)' },
+        { code: '3', label: 'Medium (B)' }, { code: '4', label: 'Large (C)' },
+        { code: '5', label: 'Very Large (D)' }, { code: '6', label: 'Enormous (E+)' },
+    ],
+    looks: [
+        { code: '1', label: 'Nothing Special' }, { code: '2', label: 'Average' },
+        { code: '3', label: 'Sexy' }, { code: '4', label: 'Ultra Sexy' },
+    ],
+    smoker: [
+        { code: '1', label: 'Yes' }, { code: '2', label: 'No' },
+    ],
+    availability: [
+        { code: '1', label: 'Incall' }, { code: '2', label: 'Outcall' },
+    ],
+    languagelevel: [
+        { code: '1', label: 'Minimal' }, { code: '2', label: 'Conversational' },
+        { code: '3', label: 'Fluent' },
+    ],
 };
 
 const LEGACY_HEIGHT_CODE_TO_CM = {
@@ -350,6 +383,18 @@ export default function ClientDetail() {
     const [updatePhoneTargetId, setUpdatePhoneTargetId] = useState('');
     const [updatePhoneValue, setUpdatePhoneValue] = useState('');
     const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
+    const [dealActionDialog, setDealActionDialog] = useState({ type: null, deal: null });
+    const [deactivateReason, setDeactivateReason] = useState('Deactivated from client profile');
+    const [extendDays, setExtendDays] = useState('7');
+    const [extendReason, setExtendReason] = useState('Extended from client profile');
+    const [renewDays, setRenewDays] = useState('30');
+    const [renewReason, setRenewReason] = useState('Renewed from client profile');
+    const [dealPaymentMethod, setDealPaymentMethod] = useState('manual');
+    const [dealPaymentReference, setDealPaymentReference] = useState('');
+    const [dealApprovedBy, setDealApprovedBy] = useState('');
+    const [notifyClient, setNotifyClient] = useState(false);
+    const [notificationTemplateId, setNotificationTemplateId] = useState('');
+    const [notificationMessage, setNotificationMessage] = useState('');
     const [walletTopupForm, setWalletTopupForm] = useState({
         amount: '',
         pin: '',
@@ -418,6 +463,19 @@ export default function ClientDetail() {
         enabled: activeTab === 'wallet',
     });
 
+    const { data: completenessData } = useQuery({
+        queryKey: ['client-completeness', id],
+        queryFn: () => api.get(`/crm/clients/${id}/completeness`).then((r) => r.data),
+        enabled: activeTab === 'overview',
+    });
+
+    const { data: deactivateTemplatesData } = useQuery({
+        queryKey: ['settings-templates', 'client-deal-deactivate'],
+        queryFn: () => api.get('/crm/settings/templates').then((r) => r.data),
+        enabled: dealActionDialog.type === 'deactivate',
+    });
+    const smsTemplates = (deactivateTemplatesData?.templates || []).filter((t) => t.channel === 'sms');
+
     const addNoteMutation = useMutation({
         mutationFn: (note) =>
             api.post(`/crm/clients/${id}/notes`, {
@@ -473,6 +531,79 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription activation failed.');
+        },
+    });
+
+    const deactivateDealMutation = useMutation({
+        mutationFn: ({ dealId, deactivateReason: reason, shouldNotify, templateId, message }) =>
+            api.post(`/crm/deals/${dealId}/deactivate`, {
+                reason,
+                notify_client: Boolean(shouldNotify),
+                notification_template_id: templateId || null,
+                notification_message: message || null,
+            }).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setDealActionDialog({ type: null, deal: null });
+            setDeactivateReason('Deactivated from client profile');
+            setNotifyClient(false);
+            setNotificationTemplateId('');
+            setNotificationMessage('');
+            toast.success('Subscription deactivated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Subscription deactivation failed.');
+        },
+    });
+
+    const extendDealMutation = useMutation({
+        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, approvedByValue }) =>
+            api.post(`/crm/deals/${dealId}/extend`, {
+                additional_days: additionalDays,
+                reason: extensionReason,
+                payment_method: selectedPaymentMethod,
+                ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
+                ...(selectedPaymentMethod === 'free_trial' ? { approved_by: approvedByValue } : {}),
+            }).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setDealActionDialog({ type: null, deal: null });
+            setExtendDays('7');
+            setExtendReason('Extended from client profile');
+            setDealPaymentMethod('manual');
+            setDealPaymentReference('');
+            setDealApprovedBy('');
+            toast.success('Subscription extension saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Subscription extension failed.');
+        },
+    });
+
+    const renewDealMutation = useMutation({
+        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, approvedByValue }) =>
+            api.post(`/crm/deals/${dealId}/renew`, {
+                additional_days: additionalDays,
+                reason: renewalReason,
+                payment_method: selectedPaymentMethod,
+                ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
+                ...(selectedPaymentMethod === 'free_trial' ? { approved_by: approvedByValue } : {}),
+            }).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setDealActionDialog({ type: null, deal: null });
+            setRenewDays('30');
+            setRenewReason('Renewed from client profile');
+            setDealPaymentMethod('manual');
+            setDealPaymentReference('');
+            setDealApprovedBy('');
+            toast.success('Subscription renewed successfully.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Subscription renewal failed.');
         },
     });
 
@@ -684,22 +815,50 @@ export default function ClientDetail() {
             ethnicity: resolveProfileEnumValue('ethnicity', meta.ethnicity),
             height: normalizeHeightForEditor(meta.height),
             build: resolveProfileEnumValue('build', meta.build || meta.body_type),
+            haircolor: resolveProfileEnumValue('haircolor', meta.haircolor),
+            hairlength: resolveProfileEnumValue('hairlength', meta.hairlength),
+            bustsize: resolveProfileEnumValue('bustsize', meta.bustsize),
+            weight: meta.weight || '',
+            looks: resolveProfileEnumValue('looks', meta.looks),
+            smoker: resolveProfileEnumValue('smoker', meta.smoker),
+            availability: parseProfileServices(meta.availability),
             services: parseProfileServices(meta.services),
+            extraservices: meta.extraservices || '',
             rates_incall: meta.incall || meta.rate_incall || '',
             rates_outcall: meta.outcall || meta.rate_outcall || '',
+            rate30min_incall: meta.rate30min_incall || '', rate30min_outcall: meta.rate30min_outcall || '',
+            rate1h_incall: meta.rate1h_incall || '', rate1h_outcall: meta.rate1h_outcall || '',
+            rate2h_incall: meta.rate2h_incall || '', rate2h_outcall: meta.rate2h_outcall || '',
+            rate3h_incall: meta.rate3h_incall || '', rate3h_outcall: meta.rate3h_outcall || '',
+            rate6h_incall: meta.rate6h_incall || '', rate6h_outcall: meta.rate6h_outcall || '',
+            rate12h_incall: meta.rate12h_incall || '', rate12h_outcall: meta.rate12h_outcall || '',
+            rate24h_incall: meta.rate24h_incall || '', rate24h_outcall: meta.rate24h_outcall || '',
             whatsapp: meta.whatsapp || meta.whatsapp_number || '',
             instagram: meta.instagram || meta.instagram_url || '',
             twitter: meta.twitter || meta.twitter_url || '',
             telegram: meta.telegram || '',
             website: meta.website || meta.website_url || '',
+            facebook: meta.facebook || '',
+            snapchat: meta.snapchat || '',
             bio: profile?.post?.content || meta.bio || '',
+            education: meta.education || '',
+            occupation: meta.occupation || '',
+            sports: meta.sports || '',
+            hobbies: meta.hobbies || '',
+            zodiacsign: meta.zodiacsign || '',
+            sexualorientation: meta.sexualorientation || '',
+            language1: meta.language1 || '', language1level: resolveProfileEnumValue('languagelevel', meta.language1level),
+            language2: meta.language2 || '', language2level: resolveProfileEnumValue('languagelevel', meta.language2level),
+            language3: meta.language3 || '', language3level: resolveProfileEnumValue('languagelevel', meta.language3level),
         });
     }, [wpProfileData?.wp_profile, client?.city, client?.email, client?.phone_normalized]);
 
     const profileSections = [
         { key: 'personal', label: 'Personal Info' },
+        { key: 'appearance', label: 'Appearance' },
         { key: 'services', label: 'Services & Rates' },
         { key: 'contact', label: 'Social & Contact' },
+        { key: 'lifestyle', label: 'Lifestyle & Languages' },
         { key: 'subscription', label: 'Subscription & Status' },
         { key: 'media', label: 'Media' },
     ];
@@ -781,6 +940,27 @@ export default function ClientDetail() {
         setActivationApprovedBy('');
     };
 
+    const openDealActionDialog = (type, deal) => {
+        setDealActionDialog({ type, deal });
+        setDealPaymentMethod('manual');
+        setDealPaymentReference('');
+        setDealApprovedBy(currentUser?.name || '');
+        if (type === 'deactivate') {
+            setDeactivateReason('Deactivated from client profile');
+            setNotifyClient(false);
+            setNotificationTemplateId('');
+            setNotificationMessage('');
+        }
+        if (type === 'extend') {
+            setExtendReason('Extended from client profile');
+            setExtendDays('7');
+        }
+        if (type === 'renew') {
+            setRenewReason('Renewed from client profile');
+            setRenewDays('30');
+        }
+    };
+
     const submitActivation = () => {
         if (!activationDialog.dealId) {
             return;
@@ -853,15 +1033,51 @@ export default function ClientDetail() {
             ethnicity: normalizedEthnicity || null,
             height: normalizeHeightForSave(profileForm.height),
             build: normalizedBuild || null,
+            haircolor: profileForm.haircolor || null,
+            hairlength: profileForm.hairlength || null,
+            bustsize: profileForm.bustsize || null,
+            weight: profileForm.weight?.toString().trim() || null,
+            looks: profileForm.looks || null,
+            smoker: profileForm.smoker || null,
+            availability: Array.isArray(profileForm.availability) && profileForm.availability.length ? profileForm.availability : null,
             services: normalizedServices.length ? normalizedServices : null,
+            extraservices: profileForm.extraservices?.trim() || null,
             incall: profileForm.rates_incall?.trim() || null,
             outcall: profileForm.rates_outcall?.trim() || null,
+            rate30min_incall: profileForm.rate30min_incall?.trim() || null,
+            rate30min_outcall: profileForm.rate30min_outcall?.trim() || null,
+            rate1h_incall: profileForm.rate1h_incall?.trim() || null,
+            rate1h_outcall: profileForm.rate1h_outcall?.trim() || null,
+            rate2h_incall: profileForm.rate2h_incall?.trim() || null,
+            rate2h_outcall: profileForm.rate2h_outcall?.trim() || null,
+            rate3h_incall: profileForm.rate3h_incall?.trim() || null,
+            rate3h_outcall: profileForm.rate3h_outcall?.trim() || null,
+            rate6h_incall: profileForm.rate6h_incall?.trim() || null,
+            rate6h_outcall: profileForm.rate6h_outcall?.trim() || null,
+            rate12h_incall: profileForm.rate12h_incall?.trim() || null,
+            rate12h_outcall: profileForm.rate12h_outcall?.trim() || null,
+            rate24h_incall: profileForm.rate24h_incall?.trim() || null,
+            rate24h_outcall: profileForm.rate24h_outcall?.trim() || null,
             whatsapp: profileForm.whatsapp?.trim() || null,
             instagram: profileForm.instagram?.trim() || null,
             twitter: profileForm.twitter?.trim() || null,
             telegram: profileForm.telegram?.trim() || null,
             website: profileForm.website?.trim() || null,
+            facebook: profileForm.facebook?.trim() || null,
+            snapchat: profileForm.snapchat?.trim() || null,
             content: profileForm.bio || '',
+            education: profileForm.education?.trim() || null,
+            occupation: profileForm.occupation?.trim() || null,
+            sports: profileForm.sports?.trim() || null,
+            hobbies: profileForm.hobbies?.trim() || null,
+            zodiacsign: profileForm.zodiacsign?.trim() || null,
+            sexualorientation: profileForm.sexualorientation?.trim() || null,
+            language1: profileForm.language1?.trim() || null,
+            language1level: profileForm.language1level || null,
+            language2: profileForm.language2?.trim() || null,
+            language2level: profileForm.language2level || null,
+            language3: profileForm.language3?.trim() || null,
+            language3level: profileForm.language3level || null,
         };
 
         updateProfileMutation.mutate({ fields, force: profileForce });
@@ -1078,6 +1294,7 @@ export default function ClientDetail() {
             </section>
 
             {activeTab === 'overview' ? (
+                <>
                 <section className="crm-surface">
                     <header className="crm-panel-header">
                         <div>
@@ -1095,6 +1312,9 @@ export default function ClientDetail() {
                                                 <p className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type} - {deal.duration}</p>
                                                 {deal.origin === 'mpesa_import' && (
                                                     <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA</span>
+                                                )}
+                                                {deal.is_free_trial && (
+                                                    <span className="inline-flex items-center rounded-sm bg-violet-50 px-1 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-inset ring-violet-600/20">Free Trial</span>
                                                 )}
                                             </div>
                                             <p className="text-xs text-slate-500">
@@ -1123,6 +1343,42 @@ export default function ClientDetail() {
                         )}
                     </div>
                 </section>
+
+                {/* Profile Completeness Card — loaded in parallel */}
+                {completenessData && (() => {
+                    const pc = completenessData;
+                    const pct = pc.score;
+                    const barColor = pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-rose-500';
+
+                    return (
+                        <section className="crm-surface mt-3">
+                            <header className="crm-panel-header">
+                                <div>
+                                    <h3 className="crm-panel-title">Profile Completeness</h3>
+                                    <p className="crm-panel-subtitle">Key fields filled for this client's profile.</p>
+                                </div>
+                                <span className={`text-lg font-bold ${pct >= 80 ? 'text-emerald-600' : pct >= 50 ? 'text-amber-600' : 'text-rose-600'}`}>{pct}%</span>
+                            </header>
+                            <div className="p-4 space-y-3">
+                                <div className="h-2.5 w-full rounded-full bg-slate-200">
+                                    <div className={`h-2.5 rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+                                </div>
+                                <p className="text-xs text-slate-500">{pc.filled} of {pc.total} key fields completed</p>
+                                {pc.missing?.length > 0 && (
+                                    <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2">
+                                        <p className="text-xs font-semibold text-amber-800 mb-1">Missing fields:</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {pc.missing.map((label) => (
+                                                <span key={label} className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200">{label}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </section>
+                    );
+                })()}
+                </>
             ) : null}
 
             {activeTab === 'deals' ? (
@@ -1137,6 +1393,9 @@ export default function ClientDetail() {
                                         {deal.origin === 'mpesa_import' && (
                                             <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA Import</span>
                                         )}
+                                        {deal.is_free_trial && (
+                                            <span className="inline-flex items-center rounded-sm bg-violet-50 px-1 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-inset ring-violet-600/20">Free Trial</span>
+                                        )}
                                     </div>
                                     <p className="mt-1 text-sm text-slate-500">
                                         {formatCurrency(deal.amount, deal.currency || 'KES')} - {deal.duration}
@@ -1146,14 +1405,40 @@ export default function ClientDetail() {
                                     </p>
                                 </div>
 
-                                {!isReadOnly && deal.status === 'pending' ? (
-                                    <button
-                                        onClick={() => openActivationDialog(deal)}
-                                        disabled={activateDealMutation.isPending}
-                                        className="crm-btn-primary px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        {activateDealMutation.isPending ? 'Submitting...' : 'Activate'}
-                                    </button>
+                                {!isReadOnly ? (
+                                    <div className="flex items-center gap-2">
+                                        {deal.status === 'pending' ? (
+                                            <button
+                                                onClick={() => openActivationDialog(deal)}
+                                                disabled={activateDealMutation.isPending}
+                                                className="crm-btn-primary px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {activateDealMutation.isPending ? 'Submitting...' : 'Activate'}
+                                            </button>
+                                        ) : deal.status === 'active' ? (
+                                            <>
+                                                <button
+                                                    onClick={() => openDealActionDialog('extend', deal)}
+                                                    className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                                                >
+                                                    Extend
+                                                </button>
+                                                <button
+                                                    onClick={() => openDealActionDialog('deactivate', deal)}
+                                                    className="rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:border-amber-300 hover:bg-amber-100"
+                                                >
+                                                    Deactivate
+                                                </button>
+                                            </>
+                                        ) : ['expired', 'cancelled', 'deactivated'].includes(deal.status) ? (
+                                            <button
+                                                onClick={() => openDealActionDialog('renew', deal)}
+                                                className="rounded-md border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 hover:border-teal-300 hover:bg-teal-100"
+                                            >
+                                                Renew
+                                            </button>
+                                        ) : null}
+                                    </div>
                                 ) : null}
                             </div>
                         </section>
@@ -1171,6 +1456,157 @@ export default function ClientDetail() {
                             ) : null}
                         </section>
                     )}
+                </div>
+            ) : null}
+
+            {dealActionDialog.deal ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setDealActionDialog({ type: null, deal: null })}>
+                    <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">
+                                    {dealActionDialog.type === 'extend' ? 'Extend Subscription'
+                                        : dealActionDialog.type === 'renew' ? 'Renew Subscription'
+                                        : 'Deactivate Subscription'}
+                                </h3>
+                                <p className="crm-panel-subtitle">
+                                    {client.name} &bull; {dealActionDialog.deal.product?.name || dealActionDialog.deal.plan_type}
+                                </p>
+                            </div>
+                        </header>
+                        <div className="space-y-4 p-4">
+                            {['extend', 'renew'].includes(dealActionDialog.type) ? (
+                                <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <p className="text-sm font-semibold text-slate-800">Payment Method</p>
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                        {['manual', 'stk', 'link', 'free_trial'].map((method) => (
+                                            <button
+                                                key={method}
+                                                type="button"
+                                                onClick={() => setDealPaymentMethod(method)}
+                                                className={`rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                                    dealPaymentMethod === method
+                                                        ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                                }`}
+                                            >
+                                                {method === 'manual' ? 'Manual Payment' : method === 'stk' ? 'STK Push' : method === 'link' ? 'Payment Link' : 'Free Trial'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {dealPaymentMethod === 'manual' ? (
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">MPESA / Transaction Reference</label>
+                                            <input type="text" value={dealPaymentReference} onChange={(e) => setDealPaymentReference(e.target.value)} className="crm-input" placeholder="e.g. MPESA123ABC" />
+                                        </div>
+                                    ) : null}
+                                    {dealPaymentMethod === 'free_trial' ? (
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Approved By</label>
+                                            <input type="text" value={dealApprovedBy} onChange={(e) => setDealApprovedBy(e.target.value)} className="crm-input" placeholder="Manager or approver name" />
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : null}
+
+                            {dealActionDialog.type === 'extend' ? (
+                                <>
+                                    <label className="block text-sm font-medium text-slate-700">Additional days</label>
+                                    <input type="number" min={1} value={extendDays} onChange={(e) => setExtendDays(e.target.value)} className="crm-input" />
+                                    <label className="block text-sm font-medium text-slate-700">Reason</label>
+                                    <textarea rows={3} value={extendReason} onChange={(e) => setExtendReason(e.target.value)} className="crm-input" />
+                                </>
+                            ) : null}
+
+                            {dealActionDialog.type === 'renew' ? (
+                                <>
+                                    <label className="block text-sm font-medium text-slate-700">Additional days</label>
+                                    <input type="number" min={1} value={renewDays} onChange={(e) => setRenewDays(e.target.value)} className="crm-input" />
+                                    <label className="block text-sm font-medium text-slate-700">Reason</label>
+                                    <textarea rows={3} value={renewReason} onChange={(e) => setRenewReason(e.target.value)} className="crm-input" />
+                                </>
+                            ) : null}
+
+                            {dealActionDialog.type === 'deactivate' ? (
+                                <>
+                                    <label className="block text-sm font-medium text-slate-700">Reason</label>
+                                    <textarea rows={3} value={deactivateReason} onChange={(e) => setDeactivateReason(e.target.value)} className="crm-input" />
+                                    <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                            <input type="checkbox" checked={notifyClient} onChange={(e) => setNotifyClient(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
+                                            Notify client via SMS
+                                        </label>
+                                        {notifyClient ? (
+                                            <>
+                                                <select value={notificationTemplateId} onChange={(e) => setNotificationTemplateId(e.target.value)} className="crm-select">
+                                                    <option value="">Choose SMS template (optional)</option>
+                                                    {smsTemplates.map((t) => (
+                                                        <option key={t.id} value={t.id}>{t.title}</option>
+                                                    ))}
+                                                </select>
+                                                <textarea rows={2} value={notificationMessage} onChange={(e) => setNotificationMessage(e.target.value)} className="crm-input" placeholder="Custom message (optional)" />
+                                            </>
+                                        ) : null}
+                                    </div>
+                                </>
+                            ) : null}
+                        </div>
+                        <footer className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
+                            <button type="button" onClick={() => setDealActionDialog({ type: null, deal: null })} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                Cancel
+                            </button>
+                            {dealActionDialog.type === 'extend' ? (
+                                <button
+                                    type="button"
+                                    disabled={!extendDays || extendDealMutation.isPending}
+                                    onClick={() => extendDealMutation.mutate({
+                                        dealId: dealActionDialog.deal.id,
+                                        additionalDays: Number(extendDays),
+                                        extensionReason: extendReason,
+                                        selectedPaymentMethod: dealPaymentMethod,
+                                        referenceValue: dealPaymentReference,
+                                        approvedByValue: dealApprovedBy,
+                                    })}
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {extendDealMutation.isPending ? 'Extending...' : 'Extend Subscription'}
+                                </button>
+                            ) : null}
+                            {dealActionDialog.type === 'renew' ? (
+                                <button
+                                    type="button"
+                                    disabled={!renewDays || renewDealMutation.isPending}
+                                    onClick={() => renewDealMutation.mutate({
+                                        dealId: dealActionDialog.deal.id,
+                                        additionalDays: Number(renewDays),
+                                        renewalReason: renewReason,
+                                        selectedPaymentMethod: dealPaymentMethod,
+                                        referenceValue: dealPaymentReference,
+                                        approvedByValue: dealApprovedBy,
+                                    })}
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {renewDealMutation.isPending ? 'Renewing...' : 'Renew Subscription'}
+                                </button>
+                            ) : null}
+                            {dealActionDialog.type === 'deactivate' ? (
+                                <button
+                                    type="button"
+                                    disabled={!deactivateReason.trim() || deactivateDealMutation.isPending}
+                                    onClick={() => deactivateDealMutation.mutate({
+                                        dealId: dealActionDialog.deal.id,
+                                        deactivateReason,
+                                        shouldNotify: notifyClient,
+                                        templateId: notificationTemplateId,
+                                        message: notificationMessage,
+                                    })}
+                                    className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {deactivateDealMutation.isPending ? 'Deactivating...' : 'Deactivate Subscription'}
+                                </button>
+                            ) : null}
+                        </footer>
+                    </div>
                 </div>
             ) : null}
 
@@ -1587,6 +2023,35 @@ export default function ClientDetail() {
                                 </div>
                             ) : null}
 
+                            {profileSection === 'appearance' ? (
+                                <div className="space-y-3">
+                                    <p className="text-xs text-slate-500">Appearance fields are saved as WordPress meta codes.</p>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        {['haircolor', 'hairlength', 'bustsize', 'looks', 'smoker'].map((field) => (
+                                            <label key={field} className="space-y-1">
+                                                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                                    {field === 'haircolor' ? 'Hair Color' : field === 'hairlength' ? 'Hair Length' : field === 'bustsize' ? 'Bust Size' : field === 'looks' ? 'Looks' : 'Smoker'}
+                                                </span>
+                                                <select
+                                                    value={profileForm?.[field] || ''}
+                                                    onChange={(e) => setProfileForm((c) => ({ ...c, [field]: e.target.value }))}
+                                                    className="crm-input"
+                                                >
+                                                    <option value="">Select</option>
+                                                    {PROFILE_ENUM_OPTIONS[field]?.map((opt) => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                        ))}
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Weight (kg)</span>
+                                            <input type="text" value={profileForm?.weight || ''} onChange={(e) => setProfileForm((c) => ({ ...c, weight: e.target.value }))} className="crm-input" placeholder="e.g. 55" />
+                                        </label>
+                                    </div>
+                                </div>
+                            ) : null}
+
                             {profileSection === 'services' ? (
                                 <div className="space-y-3">
                                     <p className="text-xs text-slate-500">Services are saved as WordPress service codes. Select one or more options with visible code values.</p>
@@ -1637,12 +2102,62 @@ export default function ClientDetail() {
                                             <p className="text-xs text-slate-500">Click a service chip to add or remove it. Selected: {selectedServiceCodes.length}</p>
                                         </label>
                                         <label className="space-y-1">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Incall Rate</span>
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Incall Rate (default)</span>
                                             <input value={profileForm?.rates_incall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_incall: event.target.value }))} className="crm-input" placeholder="e.g. 1500" />
                                         </label>
                                         <label className="space-y-1">
-                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Outcall Rate</span>
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Outcall Rate (default)</span>
                                             <input value={profileForm?.rates_outcall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_outcall: event.target.value }))} className="crm-input" placeholder="e.g. 2000" />
+                                        </label>
+
+                                        <div className="md:col-span-2">
+                                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rates by Duration</p>
+                                            <div className="overflow-auto rounded-md border border-slate-200">
+                                                <table className="w-full text-xs">
+                                                    <thead>
+                                                        <tr className="bg-slate-50 text-slate-600">
+                                                            <th className="px-2 py-1.5 text-left font-semibold">Duration</th>
+                                                            <th className="px-2 py-1.5 text-left font-semibold">Incall</th>
+                                                            <th className="px-2 py-1.5 text-left font-semibold">Outcall</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {[['30min', '30 min'], ['1h', '1 hour'], ['2h', '2 hours'], ['3h', '3 hours'], ['6h', '6 hours'], ['12h', '12 hours'], ['24h', '24 hours']].map(([key, label]) => (
+                                                            <tr key={key} className="border-t border-slate-100">
+                                                                <td className="px-2 py-1 text-slate-700">{label}</td>
+                                                                <td className="px-1 py-1">
+                                                                    <input value={profileForm?.[`rate${key}_incall`] || ''} onChange={(e) => setProfileForm((c) => ({ ...c, [`rate${key}_incall`]: e.target.value }))} className="crm-input py-1 text-xs" placeholder="—" />
+                                                                </td>
+                                                                <td className="px-1 py-1">
+                                                                    <input value={profileForm?.[`rate${key}_outcall`] || ''} onChange={(e) => setProfileForm((c) => ({ ...c, [`rate${key}_outcall`]: e.target.value }))} className="crm-input py-1 text-xs" placeholder="—" />
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Availability</span>
+                                            <div className="flex gap-2">
+                                                {PROFILE_ENUM_OPTIONS.availability?.map((opt) => {
+                                                    const selected = (profileForm?.availability || []).includes(opt.value);
+                                                    return (
+                                                        <button key={opt.value} type="button" onClick={() => setProfileForm((c) => {
+                                                            const current = Array.isArray(c?.availability) ? [...c.availability] : [];
+                                                            return { ...c, availability: selected ? current.filter((v) => v !== opt.value) : [...current, opt.value] };
+                                                        })} className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-700 hover:border-teal-400'}`}>
+                                                            {opt.plainLabel}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </label>
+
+                                        <label className="space-y-1 md:col-span-2">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Extra Services</span>
+                                            <textarea value={profileForm?.extraservices || ''} onChange={(e) => setProfileForm((c) => ({ ...c, extraservices: e.target.value }))} className="crm-input" rows={2} placeholder="Additional services not in the standard list" />
                                         </label>
                                     </div>
                                 </div>
@@ -1658,6 +2173,65 @@ export default function ClientDetail() {
                                     <input value={profileForm?.twitter || ''} onChange={(event) => setProfileForm((current) => ({ ...current, twitter: event.target.value }))} className="crm-input" placeholder="Twitter URL" />
                                     <input value={profileForm?.telegram || ''} onChange={(event) => setProfileForm((current) => ({ ...current, telegram: event.target.value }))} className="crm-input" placeholder="Telegram" />
                                     <input value={profileForm?.website || ''} onChange={(event) => setProfileForm((current) => ({ ...current, website: event.target.value }))} className="crm-input" placeholder="Website" />
+                                    <input value={profileForm?.facebook || ''} onChange={(event) => setProfileForm((current) => ({ ...current, facebook: event.target.value }))} className="crm-input" placeholder="Facebook URL" />
+                                    <input value={profileForm?.snapchat || ''} onChange={(event) => setProfileForm((current) => ({ ...current, snapchat: event.target.value }))} className="crm-input" placeholder="SnapChat" />
+                                </div>
+                            ) : null}
+
+                            {profileSection === 'lifestyle' ? (
+                                <div className="space-y-4">
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Education</span>
+                                            <input value={profileForm?.education || ''} onChange={(e) => setProfileForm((c) => ({ ...c, education: e.target.value }))} className="crm-input" placeholder="e.g. University degree" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Occupation</span>
+                                            <input value={profileForm?.occupation || ''} onChange={(e) => setProfileForm((c) => ({ ...c, occupation: e.target.value }))} className="crm-input" placeholder="e.g. Model, Entrepreneur" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Sports</span>
+                                            <input value={profileForm?.sports || ''} onChange={(e) => setProfileForm((c) => ({ ...c, sports: e.target.value }))} className="crm-input" placeholder="e.g. Swimming, Yoga" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Hobbies</span>
+                                            <input value={profileForm?.hobbies || ''} onChange={(e) => setProfileForm((c) => ({ ...c, hobbies: e.target.value }))} className="crm-input" placeholder="e.g. Travel, Reading" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Zodiac Sign</span>
+                                            <input value={profileForm?.zodiacsign || ''} onChange={(e) => setProfileForm((c) => ({ ...c, zodiacsign: e.target.value }))} className="crm-input" placeholder="e.g. Scorpio" />
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Sexual Orientation</span>
+                                            <input value={profileForm?.sexualorientation || ''} onChange={(e) => setProfileForm((c) => ({ ...c, sexualorientation: e.target.value }))} className="crm-input" placeholder="e.g. Bisexual" />
+                                        </label>
+                                    </div>
+
+                                    <div className="border-t border-slate-200 pt-3">
+                                        <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Languages</h4>
+                                        <div className="space-y-2">
+                                            {[1, 2, 3].map((n) => (
+                                                <div key={n} className="grid grid-cols-2 gap-2">
+                                                    <input
+                                                        value={profileForm?.[`language${n}`] || ''}
+                                                        onChange={(e) => setProfileForm((c) => ({ ...c, [`language${n}`]: e.target.value }))}
+                                                        className="crm-input"
+                                                        placeholder={`Language ${n} (e.g. English, Swahili)`}
+                                                    />
+                                                    <select
+                                                        value={profileForm?.[`language${n}level`] || ''}
+                                                        onChange={(e) => setProfileForm((c) => ({ ...c, [`language${n}level`]: e.target.value }))}
+                                                        className="crm-input"
+                                                    >
+                                                        <option value="">Level</option>
+                                                        {PROFILE_ENUM_OPTIONS.languagelevel?.map((opt) => (
+                                                            <option key={opt.value} value={opt.value}>{opt.plainLabel}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                 </div>
                             ) : null}
 

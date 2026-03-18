@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Deal;
+use App\Models\IntegrationSetting;
 use App\Models\Lead;
 use App\Models\Payment;
 use App\Models\RenewalRun;
@@ -36,6 +37,11 @@ class ReportController extends Controller
             ? Carbon::parse($validated['to'])->endOfDay()
             : now()->endOfDay();
 
+        $baselineCutoff = $this->resolveBaselineCutoff();
+        if ($baselineCutoff && $baselineCutoff->gt($from)) {
+            $from = $baselineCutoff;
+        }
+
         $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
             $request,
             'platform_id',
@@ -57,7 +63,7 @@ class ReportController extends Controller
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
 
-        $clientsQuery = Client::query();
+        $clientsQuery = Client::query()->where('created_at', '>=', $from);
         $leadsQuery = Lead::query()
             ->whereBetween('created_at', [$from, $to])
             ->whereNull('archived_at');
@@ -289,7 +295,32 @@ class ReportController extends Controller
                 ]
                 : null,
             'renewal_health' => $renewalHealth,
+            'baseline_cutoff' => $baselineCutoff?->toDateString(),
         ]);
+    }
+
+    private function resolveBaselineCutoff(): ?Carbon
+    {
+        try {
+            $value = IntegrationSetting::query()
+                ->where('key', 'data_baseline_mode')
+                ->value('value');
+        } catch (\Throwable) {
+            return null;
+        }
+        if (!is_array($value)) {
+            return null;
+        }
+        $mode = $value['mode'] ?? 'fresh_start';
+        $cutoffDate = $value['cutoff_date'] ?? null;
+        if ($mode !== 'fresh_start' || !$cutoffDate) {
+            return null;
+        }
+        try {
+            return Carbon::parse($cutoffDate)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function formatMonthLabel(?string $monthKey): string

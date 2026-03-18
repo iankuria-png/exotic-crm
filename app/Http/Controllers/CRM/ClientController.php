@@ -25,6 +25,7 @@ use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -265,6 +266,16 @@ class ClientController extends Controller
         ]);
 
         return response()->json($client);
+    }
+
+    /**
+     * Profile completeness — separate endpoint so it doesn't block show().
+     */
+    public function profileCompleteness(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        return response()->json($this->computeProfileCompleteness($client));
     }
 
     public function update(Request $request, Client $client)
@@ -1827,5 +1838,79 @@ class ClientController extends Controller
         }
 
         return $diff;
+    }
+
+    /**
+     * Compute profile completeness from CRM data + cached WP meta.
+     */
+    private function computeProfileCompleteness(Client $client): array
+    {
+        $fields = [];
+
+        // Fields available from CRM clients table
+        $fields[] = ['key' => 'name', 'label' => 'Name', 'filled' => (bool) $client->name];
+        $fields[] = ['key' => 'phone', 'label' => 'Phone', 'filled' => (bool) $client->phone_normalized];
+        $fields[] = ['key' => 'email', 'label' => 'Email', 'filled' => (bool) $client->email];
+        $fields[] = ['key' => 'city', 'label' => 'City', 'filled' => (bool) $client->city];
+        $fields[] = ['key' => 'photo', 'label' => 'At least 1 photo', 'filled' => (bool) $client->main_image_url];
+
+        // Fields from WP meta — fetch with short cache to avoid hitting WP API on every page load
+        $wpMeta = $this->getCachedWpMeta($client);
+
+        $fields[] = ['key' => 'gender', 'label' => 'Gender', 'filled' => !empty($wpMeta['gender'])];
+        $fields[] = ['key' => 'ethnicity', 'label' => 'Ethnicity', 'filled' => !empty($wpMeta['ethnicity'])];
+        $fields[] = ['key' => 'height', 'label' => 'Height', 'filled' => !empty($wpMeta['height'])];
+        $fields[] = ['key' => 'build', 'label' => 'Build', 'filled' => !empty($wpMeta['build'] ?? $wpMeta['body_type'] ?? null)];
+        $fields[] = ['key' => 'services', 'label' => 'Services', 'filled' => !empty($wpMeta['services'])];
+        $fields[] = ['key' => 'bio', 'label' => 'Bio / About', 'filled' => !empty($wpMeta['bio'] ?? $wpMeta['_post_content'] ?? null)];
+        $fields[] = ['key' => 'rates', 'label' => 'Rates', 'filled' => !empty($wpMeta['incall'] ?? $wpMeta['rate_incall'] ?? $wpMeta['outcall'] ?? $wpMeta['rate_outcall'] ?? $wpMeta['rate1h_incall'] ?? null)];
+
+        $filledCount = count(array_filter($fields, fn($f) => $f['filled']));
+        $totalCount = count($fields);
+        $missing = array_values(array_map(
+            fn($f) => $f['label'],
+            array_filter($fields, fn($f) => !$f['filled'])
+        ));
+
+        return [
+            'score' => $totalCount > 0 ? (int) round(($filledCount / $totalCount) * 100) : 0,
+            'filled' => $filledCount,
+            'total' => $totalCount,
+            'missing' => $missing,
+        ];
+    }
+
+    /**
+     * Get WP profile meta with a 10-minute cache to avoid repeated API calls.
+     */
+    private function getCachedWpMeta(Client $client): array
+    {
+        if ((int) ($client->wp_post_id ?? 0) <= 0) {
+            return [];
+        }
+
+        $cacheKey = "client_wp_meta_{$client->platform_id}_{$client->wp_post_id}";
+
+        return Cache::remember($cacheKey, 600, function () use ($client) {
+            try {
+                $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+                $profile = $wpSync->getClientProfile((int) $client->wp_post_id);
+
+                $meta = $profile['meta'] ?? [];
+                // Include post content for bio completeness check
+                if (!empty($profile['post']['content'])) {
+                    $meta['_post_content'] = $profile['post']['content'];
+                }
+
+                return $meta;
+            } catch (\Throwable $e) {
+                Log::warning('Failed to fetch WP meta for completeness', [
+                    'client_id' => $client->id,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return [];
+            }
+        });
     }
 }

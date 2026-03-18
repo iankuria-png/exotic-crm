@@ -429,6 +429,9 @@ export default function Deals() {
                         ) : (
                             <span className="inline-flex items-center rounded-sm bg-slate-50 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 ring-1 ring-inset ring-slate-600/10">Legacy</span>
                         )}
+                        {row.is_free_trial && (
+                            <span className="inline-flex items-center rounded-sm bg-violet-50 px-1 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-inset ring-violet-600/20">Free Trial</span>
+                        )}
                     </div>
                     <p className="crm-mono text-xs text-slate-500">{row.client?.phone_normalized || ''}</p>
                 </div>

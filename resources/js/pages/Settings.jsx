@@ -6176,6 +6176,7 @@ function RolesWorkspace() {
             role: user.role || 'sales',
             status: user.status || 'active',
             assigned_market_ids: Array.isArray(user.assigned_market_ids) ? user.assigned_market_ids.map((id) => Number(id)) : [],
+            password: '',
             reason: 'Role update from settings',
         });
     };
@@ -6360,6 +6361,19 @@ function RolesWorkspace() {
                             </div>
 
                             <div className="md:col-span-2">
+                                <label htmlFor="edit-password" className="mb-1 block text-sm font-medium text-slate-700">New Password <span className="font-normal text-slate-400">(leave blank to keep current)</span></label>
+                                <input
+                                    id="edit-password"
+                                    type="password"
+                                    value={editor.password || ''}
+                                    onChange={(event) => setEditor((current) => ({ ...current, password: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Min 8 characters"
+                                    autoComplete="new-password"
+                                />
+                            </div>
+
+                            <div className="md:col-span-2">
                                 <label htmlFor="role-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
                                 <textarea
                                     id="role-reason"
@@ -6390,6 +6404,7 @@ function RolesWorkspace() {
                                         role: editor.role,
                                         status: editor.status,
                                         assigned_market_ids: editor.assigned_market_ids,
+                                        ...(editor.password ? { password: editor.password } : {}),
                                         reason: editor.reason,
                                     },
                                 })}

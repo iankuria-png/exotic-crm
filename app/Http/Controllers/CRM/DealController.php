@@ -373,6 +373,30 @@ class DealController extends Controller
                 ], 202);
             }
 
+            if ($paymentMethod === 'free_trial') {
+                $payment = Payment::create([
+                    'platform_id' => (int) $deal->platform_id,
+                    'product_id' => $deal->product_id,
+                    'deal_id' => (int) $deal->id,
+                    'client_id' => (int) $client->id,
+                    'phone' => $client->phone_normalized,
+                    'amount' => 0,
+                    'currency' => $deal->currency ?: ($platform->currency_code ?? 'KES'),
+                    'transaction_uuid' => 'free_trial_' . $deal->id . '_' . now()->timestamp,
+                    'transaction_reference' => 'FREE-TRIAL-' . $deal->id,
+                    'status' => 'completed',
+                    'duration' => $deal->duration,
+                    'raw_payload' => [
+                        'source' => 'deal_free_trial',
+                        'deal_id' => (int) $deal->id,
+                        'approved_by' => (string) $validated['approved_by'],
+                    ],
+                    'match_confidence' => 'manual',
+                    'confirmed_by' => (int) $request->user()->id,
+                    'confirmed_at' => now(),
+                ]);
+            }
+
             $isFreeTrial = $paymentMethod === 'free_trial';
             $deal = $this->subscriptionProvisioningService->activateDeal($deal, [
                 'payment' => $payment,

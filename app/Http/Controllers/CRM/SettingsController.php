@@ -2102,6 +2102,7 @@ class SettingsController extends Controller
             'status' => 'required|in:active,inactive',
             'assigned_market_ids' => 'nullable|array',
             'assigned_market_ids.*' => 'integer|exists:platforms,id',
+            'password' => 'nullable|string|min:8',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -2118,11 +2119,15 @@ class SettingsController extends Controller
             'assigned_market_ids' => $this->decodeMarketIds($user->assigned_market_ids),
         ];
 
-        $user->update([
+        $updateData = [
             'role' => $validated['role'],
             'status' => $validated['status'],
             'assigned_market_ids' => $assignedMarketIds,
-        ]);
+        ];
+        if (!empty($validated['password'])) {
+            $updateData['password'] = Hash::make($validated['password']);
+        }
+        $user->update($updateData);
 
         if (method_exists($user, 'platforms')) {
             $user->platforms()->sync($assignedMarketIds);
@@ -2141,6 +2146,7 @@ class SettingsController extends Controller
                     'role' => $user->role,
                     'status' => $user->status ?? 'active',
                     'assigned_market_ids' => $assignedMarketIds,
+                    ...(!empty($validated['password']) ? ['password_changed' => true] : []),
                 ],
                 $validated['reason'] ?? 'Role and permission update from CRM settings'
             );

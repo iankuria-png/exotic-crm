@@ -14,6 +14,10 @@ class DatabaseSeeder extends Seeder
     {
         $this->call([
             SprintThreeTemplateSeeder::class,
+            CredentialTemplateSeeder::class,
+            PaymentTemplateSeeder::class,
+            FollowUpTemplateSeeder::class,
+            WelcomeTemplateSeeder::class,
         ]);
     }
 }

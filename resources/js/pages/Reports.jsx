@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../services/api';
 import PageHeader from '../components/PageHeader';
@@ -224,6 +224,7 @@ export default function Reports() {
     const [platformFilter, setPlatformFilter] = useState('');
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
+    const [hasInitializedFrom, setHasInitializedFrom] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
@@ -249,6 +250,13 @@ export default function Reports() {
             }).then((response) => response.data),
         enabled: !isRangeInvalid,
     });
+
+    useEffect(() => {
+        if (!hasInitializedFrom && data?.baseline_cutoff) {
+            setFromDate(data.baseline_cutoff);
+            setHasInitializedFrom(true);
+        }
+    }, [data?.baseline_cutoff, hasInitializedFrom]);
 
     const kpis = data?.kpis || {};
     const funnel = data?.lead_funnel || {};
