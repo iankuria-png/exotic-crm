@@ -388,7 +388,7 @@ export default function Deals() {
     }, [templatesData]);
 
     const openDialog = (type, deal, event) => {
-        event.stopPropagation();
+        event?.stopPropagation();
         setDialog({ type, deal });
         setPaymentMethod('manual');
         setPaymentReference('');
