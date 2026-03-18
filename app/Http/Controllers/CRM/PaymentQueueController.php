@@ -55,6 +55,11 @@ class PaymentQueueController extends Controller
 
     public function index(Request $request)
     {
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+        ]);
+
         $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
             $request,
             'platform_id',
@@ -130,12 +135,21 @@ class PaymentQueueController extends Controller
             $query->where('reconciliation_state', $request->review_state);
         }
 
-        // Apply data baseline cutoff when mode is 'fresh_start'
+        // Date range filtering — defaults to baseline cutoff → now
         $baselineCutoff = $this->resolveBaselineCutoff();
-        if ($baselineCutoff) {
-            $query->where('created_at', '>=', $baselineCutoff);
-            $statsQuery->where('created_at', '>=', $baselineCutoff);
+        $from = !empty($validated['from'])
+            ? Carbon::parse($validated['from'])->startOfDay()
+            : ($baselineCutoff ? (clone $baselineCutoff) : null);
+        $to = !empty($validated['to'])
+            ? Carbon::parse($validated['to'])->endOfDay()
+            : Carbon::now()->endOfDay();
+
+        if ($from) {
+            $query->where('created_at', '>=', $from);
+            $statsQuery->where('created_at', '>=', $from);
         }
+        $query->where('created_at', '<=', $to);
+        $statsQuery->where('created_at', '<=', $to);
 
         $awaitingStatuses = ['initiated', 'pending'];
         $oneHourAgo = Carbon::now()->subHour();
@@ -181,6 +195,7 @@ class PaymentQueueController extends Controller
         $payload['stats'] = $stats;
         $payload['environment_filter'] = $environmentFilter !== '' ? $environmentFilter : null;
         $payload['stats_scope'] = $environmentFilter === 'sandbox' ? 'sandbox' : 'live';
+        $payload['baseline_cutoff'] = $baselineCutoff?->toDateString();
 
         return response()->json($payload);
     }

@@ -229,6 +229,9 @@ export default function Payments() {
     const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
+    const [fromDate, setFromDate] = useState('');
+    const [toDate, setToDate] = useState('');
+    const [hasInitializedFrom, setHasInitializedFrom] = useState(false);
     const [statusFilter, setStatusFilter] = useState(() => {
         const requested = (searchParams.get('status') || '').trim();
         return allowedStatuses.has(requested) ? requested : '';
@@ -317,8 +320,10 @@ export default function Payments() {
 
     const resolveCurrency = (currencyCode) => currencyCode || selectedPlatformCurrency || 'KES';
 
+    const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
+
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, confidenceFilter, reviewStateFilter],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, confidenceFilter, reviewStateFilter, fromDate, toDate],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -332,9 +337,20 @@ export default function Payments() {
                     ...(environmentFilter && { environment: environmentFilter }),
                     ...(confidenceFilter && { match_confidence: confidenceFilter }),
                     ...(reviewStateFilter && { review_state: reviewStateFilter }),
+                    ...(fromDate && { from: fromDate }),
+                    ...(toDate && { to: toDate }),
                 },
             }).then((response) => response.data),
+        enabled: !isRangeInvalid,
     });
+
+    // Hydrate fromDate from baseline cutoff on first successful response
+    useEffect(() => {
+        if (!hasInitializedFrom && data?.baseline_cutoff) {
+            setFromDate(data.baseline_cutoff);
+            setHasInitializedFrom(true);
+        }
+    }, [data?.baseline_cutoff, hasInitializedFrom]);
 
     const { data: candidatesData, isLoading: candidatesLoading } = useQuery({
         queryKey: ['payment-candidates', selectedPayment?.id, candidateSearch],
@@ -1221,6 +1237,32 @@ export default function Payments() {
                         ]}
                     />
 
+                    <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400" htmlFor="payments-from">From</label>
+                        <input
+                            id="payments-from"
+                            type="date"
+                            value={fromDate}
+                            onChange={(event) => { setFromDate(event.target.value); setPage(1); }}
+                            className="crm-input w-auto min-w-[140px]"
+                        />
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400" htmlFor="payments-to">To</label>
+                        <input
+                            id="payments-to"
+                            type="date"
+                            value={toDate}
+                            onChange={(event) => { setToDate(event.target.value); setPage(1); }}
+                            className="crm-input w-auto min-w-[140px]"
+                        />
+                    </div>
+
+                    {isRangeInvalid && (
+                        <span className="self-end pb-2 text-xs text-rose-500">From must be before To</span>
+                    )}
+
                     {(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter) || showAdvancedFilters ? (
                         <>
                             <FilterSelect
@@ -1293,6 +1335,9 @@ export default function Payments() {
                                 setEnvironmentFilter('');
                                 setConfidenceFilter('');
                                 setReviewStateFilter('');
+                                setFromDate('');
+                                setToDate('');
+                                setHasInitializedFrom(false);
                                 setShowAdvancedFilters(false);
                                 setPage(1);
                             }}
