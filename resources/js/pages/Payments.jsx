@@ -1760,7 +1760,25 @@ export default function Payments() {
                                                 className={`flex cursor-pointer items-start justify-between gap-3 rounded-md border px-3 py-2.5 text-sm transition ${selectedClientId === String(client.id) ? 'border-teal-600 bg-teal-50/60' : 'border-slate-200 hover:bg-slate-50'}`}
                                             >
                                                 <span className="min-w-0 flex-1">
-                                                    <span className="block truncate font-semibold text-slate-900">{client.name || `Client #${client.id}`}</span>
+                                                    <span className="flex items-center gap-1.5">
+                                                        <span className="truncate font-semibold text-slate-900">{client.name || `Client #${client.id}`}</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                e.preventDefault();
+                                                                if (modalCandidates.length > 1) {
+                                                                    window.open(`/clients/${client.id}`, '_blank');
+                                                                } else {
+                                                                    navigate(`/clients/${client.id}`);
+                                                                }
+                                                            }}
+                                                            className="inline-flex shrink-0 items-center rounded px-1 py-0.5 text-[10px] font-semibold text-teal-700 hover:bg-teal-50 hover:underline"
+                                                            title={modalCandidates.length > 1 ? 'Open client profile in new tab' : 'Go to client profile'}
+                                                        >
+                                                            View profile &rarr;
+                                                        </button>
+                                                    </span>
                                                     <span className="mt-0.5 block truncate text-xs text-slate-500">{client.phone_normalized || 'No phone'} • {client.profile_status}</span>
                                                     <span className={`mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${tone}`}>
                                                         Match score {client.score}%
