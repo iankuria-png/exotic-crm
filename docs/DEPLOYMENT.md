@@ -123,15 +123,58 @@ Then run migrations:
 
 ### 10. Set up the scheduler cron
 
-Go to **cPanel > Cron Jobs**, add a job running every minute:
+Go to **cPanel > Cron Jobs**, use **Common Settings → "Once Per Minute"** or type `*` in each time field. Command:
 
 ```
 * * * * * cd /home/d9410/crm.exotic-online.com && /opt/cpanel/ea-php82/root/usr/bin/php artisan schedule:run >> /dev/null 2>&1
 ```
 
+**Note:** Do NOT paste cron syntax directly into the terminal — it must go through cPanel Cron Jobs UI or `crontab -e`.
+
+### 11. Fix deploy script for production
+
+The `deploy.sh` needs the correct PHP path and HOME variable:
+
+```bash
+# Set HOME for composer
+sed -i '1a export HOME=/home/d9410\nexport COMPOSER_HOME=/home/d9410/.config/composer' deploy.sh
+
+# Replace bare 'php' with PHP 8.2 path
+sed -i 's|    php |    /opt/cpanel/ea-php82/root/usr/bin/php |g' deploy.sh
+sed -i 's|^php |/opt/cpanel/ea-php82/root/usr/bin/php |g' deploy.sh
+
+# Replace bare 'composer' with PHP 8.2 composer
+sed -i 's|^composer install|/opt/cpanel/ea-php82/root/usr/bin/php $(which composer) install|' deploy.sh
+
+# Make executable
+chmod +x deploy.sh
+```
+
+### 12. Configure GitHub integration (for Settings changelog)
+
+Add to `.env`:
+
+```bash
+echo "GITHUB_REPO_OWNER=iankuria-png" >> .env
+echo "GITHUB_REPO_NAME=exotic-crm" >> .env
+echo "GITHUB_TOKEN=<your-github-pat>" >> .env
+/opt/cpanel/ea-php82/root/usr/bin/php artisan config:cache
+```
+
+This enables the **Pending Changelog** and **GitHub Compare** features in the CRM Settings page.
+
 ---
 
 ## Deploying Updates (Routine)
+
+### Option A: Deploy Button (Recommended)
+
+1. Push changes to `main` on GitHub
+2. Go to **CRM Settings** → **Updates** section
+3. Click **Deploy Update**
+4. Watch the deploy output for success/failure
+
+### Option B: Manual Terminal
 
 After pushing changes to GitHub from your local machine:
 
@@ -247,9 +290,22 @@ The repo is private. Git clone/pull requires a Personal Access Token (PAT):
 
 cPanel sets the document root to the project directory, not `public/`. The root `.htaccess` handles the redirect. Do not delete it.
 
+### Deploy script failures
+
+Common deploy script issues:
+- **"HOME or COMPOSER_HOME must be set"** — The web server doesn't set HOME. Fix: add `export HOME=/home/d9410` to top of `deploy.sh`
+- **PHP version errors during deploy** — All `php` calls in `deploy.sh` must use `/opt/cpanel/ea-php82/root/usr/bin/php`
+- **"Deploy script is not executable"** — Run `chmod +x deploy.sh`
+
 ### Data baseline feature
 
-The CRM has a "Data Baseline" setting (**Settings > Data Baseline**) that controls whether legacy data from before the CRM launch date appears in dashboards and reports. When set to "Fresh Start" with a cutoff date, records before that date are hidden by default but can be viewed by adjusting the date range filters.
+The CRM has a "Data Baseline" setting (**Settings > Data Baseline**) that controls whether legacy data from before the CRM launch date appears in dashboards and reports. When set to "Fresh Start" with a cutoff date, records before that date are hidden in the Dashboard (revenue, recovery queue, KPIs) and Payments page. The baseline affects:
+- Dashboard default date range (FROM defaults to cutoff date)
+- Payment Recovery Queue stats (awaiting, failed, unmatched counts)
+- Payment Review Queue listing
+- Payments page listing and summary stats
+
+To change the baseline mode, go to **Settings > Data Baseline** and toggle between "Fresh Start" and "Include Legacy".
 
 ---
 
