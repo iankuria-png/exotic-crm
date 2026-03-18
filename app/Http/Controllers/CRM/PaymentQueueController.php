@@ -24,6 +24,7 @@ use App\Services\PaymentCompletionService;
 use App\Services\PaymentLinkService;
 use App\Services\HostedCheckoutService;
 use App\Services\LegacyStkService;
+use App\Models\IntegrationSetting;
 use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Support\CrmAuditAction;
@@ -127,6 +128,13 @@ class PaymentQueueController extends Controller
 
         if ($request->filled('review_state')) {
             $query->where('reconciliation_state', $request->review_state);
+        }
+
+        // Apply data baseline cutoff when mode is 'fresh_start'
+        $baselineCutoff = $this->resolveBaselineCutoff();
+        if ($baselineCutoff) {
+            $query->where('created_at', '>=', $baselineCutoff);
+            $statsQuery->where('created_at', '>=', $baselineCutoff);
         }
 
         $awaitingStatuses = ['initiated', 'pending'];
@@ -2113,5 +2121,36 @@ class PaymentQueueController extends Controller
             'auto_low' => 'medium',
             default => 'low',
         };
+    }
+
+    /**
+     * Return the baseline cutoff as a Carbon date if mode is 'fresh_start', else null.
+     */
+    private function resolveBaselineCutoff(): ?Carbon
+    {
+        try {
+            $value = IntegrationSetting::query()
+                ->where('key', 'data_baseline_mode')
+                ->value('value');
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!is_array($value)) {
+            return null;
+        }
+
+        $mode = $value['mode'] ?? 'fresh_start';
+        $cutoffDate = $value['cutoff_date'] ?? null;
+
+        if ($mode !== 'fresh_start' || !$cutoffDate) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($cutoffDate)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

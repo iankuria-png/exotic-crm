@@ -13,6 +13,7 @@ use App\Models\Product;
 use App\Models\ClientNote;
 use App\Models\RenewalCampaign;
 use App\Models\TimelineEvent;
+use App\Models\IntegrationSetting;
 use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
 use Carbon\Carbon;
@@ -447,6 +448,12 @@ class DashboardController extends Controller
 
     private function resolveOldestDashboardRecordAt(?array $platformIds): ?Carbon
     {
+        // Respect data baseline cutoff when mode is 'fresh_start'
+        $baselineCutoff = $this->resolveBaselineCutoff();
+        if ($baselineCutoff) {
+            return $baselineCutoff;
+        }
+
         $oldestCandidates = [];
 
         $clientsQuery = Client::query();
@@ -495,5 +502,36 @@ class DashboardController extends Controller
             return $left->lt($right) ? -1 : 1;
         });
         return $oldestCandidates[0];
+    }
+
+    /**
+     * Return the baseline cutoff as a Carbon date if mode is 'fresh_start', else null.
+     */
+    private function resolveBaselineCutoff(): ?Carbon
+    {
+        try {
+            $value = IntegrationSetting::query()
+                ->where('key', 'data_baseline_mode')
+                ->value('value');
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!is_array($value)) {
+            return null;
+        }
+
+        $mode = $value['mode'] ?? 'fresh_start';
+        $cutoffDate = $value['cutoff_date'] ?? null;
+
+        if ($mode !== 'fresh_start' || !$cutoffDate) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($cutoffDate)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }
