@@ -227,6 +227,14 @@ echo "Repository: $APP_DIR"
 echo "Branch: ${CURRENT_BRANCH}"
 echo "Commit: ${CURRENT_COMMIT}"
 
+echo "Pulling latest changes from origin/${DEPLOY_BRANCH}..."
+git fetch origin "$DEPLOY_BRANCH"
+git reset --hard "origin/$DEPLOY_BRANCH"
+
+CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
+CURRENT_SHORT_COMMIT="${CURRENT_COMMIT:0:8}"
+echo "Updated to commit: ${CURRENT_COMMIT}"
+
 composer install --no-interaction --prefer-dist --optimize-autoloader
 backup_database
 php artisan migrate --force
