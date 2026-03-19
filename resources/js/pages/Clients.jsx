@@ -13,6 +13,7 @@ import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { normalizePhone } from '../utils/phone';
 import { useAuth } from '../hooks/useAuth';
+import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -36,6 +37,8 @@ export default function Clients() {
     const allowedPlans = new Set(['premium', 'featured', 'basic']);
     const allowedVerifiedFilters = new Set(['1', '0']);
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
+    const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
+    const allowedBehaviorTags = new Set(RETENTION_BEHAVIOR_TAGS);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -75,6 +78,14 @@ export default function Clients() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
+    const [retentionBandFilter, setRetentionBandFilter] = useState(() => {
+        const requested = (searchParams.get('retention_band') || '').trim();
+        return allowedRetentionBands.has(requested) ? requested : '';
+    });
+    const [behaviorTagFilter, setBehaviorTagFilter] = useState(() => {
+        const requested = (searchParams.get('behavior_tag') || '').trim();
+        return allowedBehaviorTags.has(requested) ? requested : '';
+    });
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
@@ -105,7 +116,7 @@ export default function Clients() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, onlineFilter, platformFilter],
+        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, onlineFilter, platformFilter, retentionBandFilter, behaviorTagFilter],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
@@ -117,6 +128,8 @@ export default function Clients() {
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
                     ...(onlineFilter && { online_within: Number(onlineFilter) }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
+                    ...(retentionBandFilter && { retention_band: retentionBandFilter }),
+                    ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
                 },
             }).then((response) => response.data),
     });
@@ -312,6 +325,7 @@ export default function Clients() {
                 active: Number(data.stats.active || 0),
                 premium: Number(data.stats.premium || 0),
                 verified: Number(data.stats.verified || 0),
+                retention_watch: Number(data.stats.retention_watch || 0),
                 total: Number(data.stats.total || 0),
             };
         }
@@ -320,6 +334,7 @@ export default function Clients() {
             active: rows.filter((row) => row.profile_status === 'publish').length,
             premium: rows.filter((row) => row.premium).length,
             verified: rows.filter((row) => row.verified).length,
+            retention_watch: rows.filter((row) => ['Watchlist', 'Needs Attention', 'Critical'].includes(String(row.retention_insight?.band || row.retentionInsight?.band || ''))).length,
             total: Number(data?.total || rows.length),
         };
     }, [data?.stats, data?.total, rows]);
@@ -328,14 +343,16 @@ export default function Clients() {
         active: percentage(stats.active, stats.total),
         premium: percentage(stats.premium, stats.total),
         verified: percentage(stats.verified, stats.total),
+        retention_watch: percentage(stats.retention_watch, stats.total),
     }), [stats]);
 
     const activeMetric = useMemo(() => {
         if (statusFilter === 'publish' && planFilter === '' && verifiedFilter === '' && onlineFilter === '') return 'active';
         if (planFilter === 'premium' && statusFilter === '' && verifiedFilter === '' && onlineFilter === '') return 'premium';
         if (verifiedFilter === '1' && statusFilter === '' && planFilter === '' && onlineFilter === '') return 'verified';
+        if (retentionBandFilter === 'watch' && statusFilter === '' && planFilter === '' && verifiedFilter === '' && onlineFilter === '' && behaviorTagFilter === '') return 'retention_watch';
         return '';
-    }, [statusFilter, planFilter, verifiedFilter, onlineFilter]);
+    }, [statusFilter, planFilter, verifiedFilter, onlineFilter, retentionBandFilter, behaviorTagFilter]);
 
     const applyMetricFilter = (metricKey) => {
         if (activeMetric === metricKey) {
@@ -343,6 +360,8 @@ export default function Clients() {
             setPlanFilter('');
             setVerifiedFilter('');
             setOnlineFilter('');
+            setRetentionBandFilter('');
+            setBehaviorTagFilter('');
             setPage(1);
             return;
         }
@@ -359,6 +378,14 @@ export default function Clients() {
             setStatusFilter('');
             setPlanFilter('');
             setVerifiedFilter('1');
+            setRetentionBandFilter('');
+            setBehaviorTagFilter('');
+        } else if (metricKey === 'retention_watch') {
+            setStatusFilter('');
+            setPlanFilter('');
+            setVerifiedFilter('');
+            setRetentionBandFilter('watch');
+            setBehaviorTagFilter('');
         }
 
         setOnlineFilter('');
@@ -428,6 +455,25 @@ export default function Clients() {
             ),
         },
         {
+            key: 'retention',
+            label: 'Retention',
+            render: (row) => {
+                const insight = row.retentionInsight || row.retention_insight;
+                if (!insight?.band) {
+                    return <span className="text-xs text-slate-400">Computing...</span>;
+                }
+
+                return (
+                    <div className="space-y-1">
+                        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${retentionBandClasses(insight.band)}`}>
+                            {insight.band}
+                        </span>
+                        <p className="text-[11px] text-slate-500">{insight.primary_tag || 'No behavior tag yet'}</p>
+                    </div>
+                );
+            },
+        },
+        {
             key: 'wp_profile_url',
             label: 'Profile URL',
             render: (row) => (
@@ -482,7 +528,7 @@ export default function Clients() {
                 ) : null}
             />
 
-            <section className="grid gap-4 md:grid-cols-3">
+            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
                     label="Active Clients"
                     value={stats.active.toLocaleString()}
@@ -506,6 +552,14 @@ export default function Clients() {
                     tone="default"
                     onClick={() => applyMetricFilter('verified')}
                     active={activeMetric === 'verified'}
+                />
+                <MetricCard
+                    label="Retention Watch"
+                    value={stats.retention_watch.toLocaleString()}
+                    meta="Clients showing churn or disengagement signals in current scope"
+                    tone={retentionBandTone('Needs Attention')}
+                    onClick={() => applyMetricFilter('retention_watch')}
+                    active={activeMetric === 'retention_watch'}
                 />
             </section>
 
@@ -592,7 +646,27 @@ export default function Clients() {
                         ]}
                     />
 
-                    {(search || statusFilter || planFilter || verifiedFilter !== '' || onlineFilter || platformFilter) ? (
+                    <FilterSelect
+                        label="Retention Band"
+                        value={retentionBandFilter}
+                        onChange={(event) => { setRetentionBandFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All bands' },
+                            ...RETENTION_BANDS.map((band) => ({ value: band, label: band })),
+                        ]}
+                    />
+
+                    <FilterSelect
+                        label="Behavior Tag"
+                        value={behaviorTagFilter}
+                        onChange={(event) => { setBehaviorTagFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All behaviors' },
+                            ...RETENTION_BEHAVIOR_TAGS.map((tag) => ({ value: tag, label: tag })),
+                        ]}
+                    />
+
+                    {(search || statusFilter || planFilter || verifiedFilter !== '' || onlineFilter || platformFilter || retentionBandFilter || behaviorTagFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -603,6 +677,8 @@ export default function Clients() {
                                 setVerifiedFilter('');
                                 setOnlineFilter('');
                                 setPlatformFilter('');
+                                setRetentionBandFilter('');
+                                setBehaviorTagFilter('');
                                 setPage(1);
                             }}
                             className="mb-0.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"

@@ -53,6 +53,7 @@ final class CrmAuditAction
     public const CLIENT_WALLET_TOPUP = 'client_wallet_topup';
     public const CLIENT_WALLET_ADJUSTMENT = 'client_wallet_adjustment';
     public const WALLET_PIN_UPDATE = 'wallet_pin_update';
+    public const FREE_TRIAL_PIN_UPDATE = 'free_trial_pin_update';
     public const LEAD_RECONCILE = 'lead_reconcile';
     public const PUSH_CAMPAIGN_CREATE = 'push_campaign_create';
     public const PUSH_CAMPAIGN_EXECUTE = 'push_campaign_execute';

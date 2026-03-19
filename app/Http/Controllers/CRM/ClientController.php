@@ -14,6 +14,7 @@ use App\Models\TimelineEvent;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\ClientRetentionInsightService;
 use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\PaymentMatchingService;
@@ -35,7 +36,8 @@ class ClientController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly LeadAssignmentService $leadAssignmentService,
         private readonly AuditService $auditService,
-        private readonly CredentialDeliveryService $credentialDeliveryService
+        private readonly CredentialDeliveryService $credentialDeliveryService,
+        private readonly ClientRetentionInsightService $clientRetentionInsightService
     ) {
     }
 
@@ -47,7 +49,11 @@ class ClientController extends Controller
             'You do not have access to this client market.'
         );
 
-        $query = Client::with(['platform', 'assignedAgent']);
+        $query = Client::with([
+            'platform',
+            'assignedAgent',
+            'retentionInsight:client_id,score,band,primary_tag,computed_at',
+        ]);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
         if ($request->filled('search')) {
@@ -96,6 +102,30 @@ class ClientController extends Controller
             }
         }
 
+        if ($request->filled('retention_band')) {
+            $retentionBand = trim((string) $request->retention_band);
+            $query->whereHas('retentionInsight', function ($builder) use ($retentionBand) {
+                if ($retentionBand === 'watch') {
+                    $builder->whereIn('band', ClientRetentionInsightService::WATCH_BANDS);
+                    return;
+                }
+
+                $bands = array_values(array_filter(array_map('trim', explode(',', $retentionBand))));
+                if (count($bands) > 1) {
+                    $builder->whereIn('band', $bands);
+                    return;
+                }
+
+                $builder->where('band', $retentionBand);
+            });
+        }
+
+        if ($request->filled('behavior_tag')) {
+            $query->whereHas('retentionInsight', function ($builder) use ($request) {
+                $builder->where('primary_tag', (string) $request->behavior_tag);
+            });
+        }
+
         $statsQuery = clone $query;
         $stats = [
             'total' => (clone $statsQuery)->count(),
@@ -104,6 +134,9 @@ class ClientController extends Controller
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
             'inactive' => (clone $statsQuery)->where('profile_status', 'private')->count(),
             'online_now' => (clone $statsQuery)->where('last_online_at', '>=', now()->subMinutes(15)->timestamp)->count(),
+            'retention_watch' => (clone $statsQuery)->whereHas('retentionInsight', function ($builder) {
+                $builder->whereIn('band', ClientRetentionInsightService::WATCH_BANDS);
+            })->count(),
         ];
 
         $clients = $query->orderBy('updated_at', 'desc')
@@ -276,6 +309,17 @@ class ClientController extends Controller
         $this->authorizeClientAccess($request, $client);
 
         return response()->json($this->computeProfileCompleteness($client));
+    }
+
+    public function retentionInsight(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $insight = $this->clientRetentionInsightService->getOrRefreshForClient($client);
+
+        return response()->json(
+            $this->clientRetentionInsightService->buildClientPayload($insight)
+        );
     }
 
     public function update(Request $request, Client $client)

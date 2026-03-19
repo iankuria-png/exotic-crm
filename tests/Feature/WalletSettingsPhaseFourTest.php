@@ -236,6 +236,42 @@ class WalletSettingsPhaseFourTest extends TestCase
         $this->assertTrue(Hash::check('4821', (string) data_get($stored->value, 'pin_hash')));
     }
 
+    public function test_admin_can_update_free_trial_pin_and_response_remains_masked(): void
+    {
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson('/api/crm/settings/free-trial/pin', [
+            'pin' => '4821',
+            'pin_confirmation' => '4821',
+            'reason' => 'Set free-trial PIN before sales rollout',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('system.free_trial_pin_set', true)
+            ->assertJsonPath('system.free_trial_pin_hash', '');
+
+        $this->assertNotEmpty($response->json('system.free_trial_pin_last_updated_at'));
+
+        $stored = IntegrationSetting::query()
+            ->where('key', WalletSettingsService::SYSTEM_SETTINGS_KEY)
+            ->firstOrFail();
+
+        $this->assertTrue(Hash::check('4821', (string) data_get($stored->value, 'free_trial_pin_hash')));
+    }
+
+    public function test_non_admin_cannot_update_free_trial_pin(): void
+    {
+        $subAdmin = $this->createUser('sub_admin');
+        Sanctum::actingAs($subAdmin);
+
+        $this->patchJson('/api/crm/settings/free-trial/pin', [
+            'pin' => '4821',
+            'pin_confirmation' => '4821',
+            'reason' => 'Unauthorized attempt',
+        ])->assertForbidden();
+    }
+
     public function test_wallet_provider_ssl_and_email_tests_use_configured_values(): void
     {
         $platform = $this->createPlatform('Tanzania');

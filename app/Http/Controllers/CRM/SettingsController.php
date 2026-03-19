@@ -586,6 +586,48 @@ class SettingsController extends Controller
         ]);
     }
 
+    public function updateFreeTrialPin(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can update the free-trial PIN.'
+        );
+
+        $validated = $request->validate([
+            'pin' => ['required', 'regex:/^\d{4,6}$/'],
+            'pin_confirmation' => 'required|string|same:pin',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $before = $this->walletSettingsService->currentSystemConfig(masked: true);
+        $saved = $this->walletSettingsService->updateFreeTrialPin(
+            (string) $validated['pin'],
+            (int) $request->user()->id
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId([]) ?? 1,
+            CrmAuditAction::FREE_TRIAL_PIN_UPDATE,
+            'integration_setting',
+            1,
+            [
+                'free_trial_pin_set' => (bool) ($before['free_trial_pin_set'] ?? false),
+                'free_trial_pin_last_updated_at' => $before['free_trial_pin_last_updated_at'] ?? null,
+            ],
+            [
+                'free_trial_pin_set' => (bool) ($saved['free_trial_pin_set'] ?? false),
+                'free_trial_pin_last_updated_at' => $saved['free_trial_pin_last_updated_at'] ?? null,
+            ],
+            $validated['reason'] ?? 'Updated free-trial PIN'
+        );
+
+        return response()->json([
+            'system' => $saved,
+        ]);
+    }
+
     public function updatePlatformWallet(Request $request, Platform $platform)
     {
         $this->marketAuthorizationService->ensureRole(

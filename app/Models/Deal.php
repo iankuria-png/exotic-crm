@@ -2,12 +2,24 @@
 
 namespace App\Models;
 
+use App\Services\ClientRetentionInsightService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Deal extends Model
 {
     use HasFactory;
+
+    protected static function booted(): void
+    {
+        static::saved(function (Deal $deal): void {
+            ClientRetentionInsightService::scheduleRefreshForClientId($deal->client_id ? (int) $deal->client_id : null);
+        });
+
+        static::deleted(function (Deal $deal): void {
+            ClientRetentionInsightService::scheduleRefreshForClientId($deal->client_id ? (int) $deal->client_id : null);
+        });
+    }
 
     protected $fillable = [
         'platform_id', 'client_id', 'lead_id', 'payment_id',

@@ -2,11 +2,26 @@
 
 namespace App\Models;
 
+use App\Services\ClientRetentionInsightService;
 use Illuminate\Database\Eloquent\Model;
 
 class TimelineEvent extends Model
 {
     public $timestamps = false;
+
+    protected static function booted(): void
+    {
+        static::created(function (TimelineEvent $event): void {
+            if (!in_array((string) $event->entity_type, ['client', 'deal', 'payment'], true)) {
+                return;
+            }
+
+            ClientRetentionInsightService::scheduleRefreshForEntity(
+                (string) $event->entity_type,
+                (int) $event->entity_id
+            );
+        });
+    }
 
     protected $fillable = [
         'platform_id', 'entity_type', 'entity_id',

@@ -20,6 +20,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\SubscriptionProvisioningService;
+use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
@@ -37,7 +38,8 @@ class DealController extends Controller
         private readonly NotificationService $notificationService,
         private readonly PaymentLinkService $paymentLinkService,
         private readonly LegacyStkService $legacyStkService,
-        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -261,7 +263,9 @@ class DealController extends Controller
             'reason' => 'nullable|string|max:500',
             'payment_method' => 'required|in:manual,stk,link,free_trial',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
-            'approved_by' => 'required_if:payment_method,free_trial|nullable|string|max:255',
+            'payment_link_provider' => 'nullable|string|max:120',
+            'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
+            'approved_by' => 'nullable|string|max:255',
             'duration_days' => 'nullable|integer|min:1|max:365',
         ]);
 
@@ -279,9 +283,12 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
-        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod)) {
+        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
+        $paymentLinkProvider = $paymentMethod === 'link'
+            ? $this->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+            : null;
 
         // Resolve duration days: explicit request param → ProductPrice lookup → legacy enum fallback
         $explicitDays = isset($validated['duration_days']) ? (int) $validated['duration_days'] : 0;
@@ -316,7 +323,7 @@ class DealController extends Controller
                     (int) $request->user()->id
                 );
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->initiatePaymentForDeal($deal, $client, $paymentMethod, $request);
+                $initiation = $this->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -337,6 +344,7 @@ class DealController extends Controller
                     'payment_id' => $deal->payment_id,
                     'payment_reference' => $deal->payment_reference,
                     'payment_method' => $paymentMethod,
+                    'payment_link_provider' => $paymentLinkProvider,
                 ];
 
                 $this->auditService->fromRequest(
@@ -389,7 +397,7 @@ class DealController extends Controller
                     'raw_payload' => [
                         'source' => 'deal_free_trial',
                         'deal_id' => (int) $deal->id,
-                        'approved_by' => (string) $validated['approved_by'],
+                        'approval_mode' => 'pin',
                     ],
                     'match_confidence' => 'manual',
                     'confirmed_by' => (int) $request->user()->id,
@@ -405,7 +413,7 @@ class DealController extends Controller
                 'payment_reference' => $payment?->transaction_reference
                     ?? ($paymentMethod === 'manual' ? (string) $validated['payment_reference'] : null),
                 'is_free_trial' => $isFreeTrial,
-                'free_trial_approved_by' => $isFreeTrial ? (string) $validated['approved_by'] : null,
+                'free_trial_approved_by' => null,
                 'actor_id' => (int) $request->user()->id,
                 'emit_profile_activated_timeline' => true,
                 'emit_deal_activated_timeline' => true,
@@ -419,6 +427,7 @@ class DealController extends Controller
                 'payment_id' => $deal->payment_id,
                 'payment_reference' => $deal->payment_reference,
                 'payment_method' => $paymentMethod,
+                'payment_link_provider' => $paymentLinkProvider,
                 'is_free_trial' => (bool) $deal->is_free_trial,
             ];
 
@@ -442,7 +451,7 @@ class DealController extends Controller
                     (int) $deal->id,
                     null,
                     [
-                        'approved_by' => (string) $validated['approved_by'],
+                        'approval_mode' => 'pin',
                         'duration_days' => $durationDays,
                     ],
                     $validated['reason'] ?: 'Free trial activation from CRM flow'
@@ -569,7 +578,9 @@ class DealController extends Controller
             'reason' => 'required|string|max:500',
             'payment_method' => 'required|in:manual,stk,link,free_trial',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
-            'approved_by' => 'required_if:payment_method,free_trial|nullable|string|max:255',
+            'payment_link_provider' => 'nullable|string|max:120',
+            'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
+            'approved_by' => 'nullable|string|max:255',
         ]);
 
         if ($missingColumnsResponse = $this->missingSprint6DealColumnsResponse()) {
@@ -582,9 +593,12 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
-        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod)) {
+        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
+        $paymentLinkProvider = $paymentMethod === 'link'
+            ? $this->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+            : null;
 
         $beforeState = [
             'expires_at' => $deal->expires_at?->toDateTimeString(),
@@ -608,7 +622,7 @@ class DealController extends Controller
                     (int) $request->user()->id
                 );
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->initiatePaymentForDeal($deal, $client, $paymentMethod, $request);
+                $initiation = $this->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -626,9 +640,7 @@ class DealController extends Controller
                 'payment_reference' => $payment?->transaction_reference
                     ?? ($paymentMethod === 'manual' ? (string) $validated['payment_reference'] : $deal->payment_reference),
                 'is_free_trial' => $paymentMethod === 'free_trial' ? true : (bool) $deal->is_free_trial,
-                'free_trial_approved_by' => $paymentMethod === 'free_trial'
-                    ? (string) $validated['approved_by']
-                    : $deal->free_trial_approved_by,
+                'free_trial_approved_by' => $paymentMethod === 'free_trial' ? null : $deal->free_trial_approved_by,
             ]);
 
             $syncService = new ClientSyncService($platform);
@@ -646,6 +658,7 @@ class DealController extends Controller
                     'payment_id' => $deal->payment_id,
                     'payment_reference' => $deal->payment_reference,
                     'payment_method' => $paymentMethod,
+                    'payment_link_provider' => $paymentLinkProvider,
                     'extension_payment_id' => $payment?->id,
                 ],
                 (string) $validated['reason']
@@ -660,7 +673,7 @@ class DealController extends Controller
                     (int) $deal->id,
                     null,
                     [
-                        'approved_by' => (string) $validated['approved_by'],
+                        'approval_mode' => 'pin',
                         'additional_days' => (int) $validated['additional_days'],
                     ],
                     (string) $validated['reason']
@@ -704,7 +717,9 @@ class DealController extends Controller
             'reason' => 'required|string|max:500',
             'payment_method' => 'required|in:manual,stk,link,free_trial',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
-            'approved_by' => 'required_if:payment_method,free_trial|nullable|string|max:255',
+            'payment_link_provider' => 'nullable|string|max:120',
+            'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
+            'approved_by' => 'nullable|string|max:255',
         ]);
 
         if ($missingColumnsResponse = $this->missingSprint6DealColumnsResponse()) {
@@ -723,9 +738,12 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
-        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod)) {
+        if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
+        $paymentLinkProvider = $paymentMethod === 'link'
+            ? $this->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+            : null;
         $isFreeTrial = $paymentMethod === 'free_trial';
 
         $beforeState = [
@@ -757,7 +775,7 @@ class DealController extends Controller
                 'expires_at' => $activatesImmediately ? now()->addDays($additionalDays) : null,
                 'assigned_to' => $deal->assigned_to,
                 'is_free_trial' => $isFreeTrial,
-                'free_trial_approved_by' => $isFreeTrial ? (string) $validated['approved_by'] : null,
+                'free_trial_approved_by' => null,
                 'payment_reference' => $paymentMethod === 'manual' ? (string) $validated['payment_reference'] : null,
             ]);
 
@@ -774,7 +792,7 @@ class DealController extends Controller
                     'payment_reference' => $payment->transaction_reference,
                 ]);
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->initiatePaymentForDeal($newDeal, $client, $paymentMethod, $request);
+                $initiation = $this->initiatePaymentForDeal($newDeal, $client, $paymentMethod, $request, $paymentLinkProvider);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -818,6 +836,7 @@ class DealController extends Controller
                     'new_expires_at' => optional($newDeal->expires_at)->toDateTimeString(),
                     'payment_id' => $newDeal->payment_id,
                     'payment_method' => $paymentMethod,
+                    'payment_link_provider' => $paymentLinkProvider,
                     'is_free_trial' => (bool) $newDeal->is_free_trial,
                 ],
                 (string) $validated['reason']
@@ -832,7 +851,7 @@ class DealController extends Controller
                     (int) $newDeal->id,
                     null,
                     [
-                        'approved_by' => (string) $validated['approved_by'],
+                        'approval_mode' => 'pin',
                         'duration_days' => $additionalDays,
                     ],
                     (string) $validated['reason']
@@ -924,7 +943,7 @@ class DealController extends Controller
         ]);
     }
 
-    private function initiatePaymentForDeal(Deal $deal, Client $client, string $method, Request $request): array
+    private function initiatePaymentForDeal(Deal $deal, Client $client, string $method, Request $request, ?string $paymentLinkProvider = null): array
     {
         $client->loadMissing('platform');
 
@@ -953,6 +972,7 @@ class DealController extends Controller
                 'source' => 'deal_payment_initiation',
                 'method' => $method,
                 'deal_id' => (int) $deal->id,
+                'payment_link_provider' => $paymentLinkProvider,
             ],
         ]);
 
@@ -1052,6 +1072,7 @@ class DealController extends Controller
                 'request' => $request,
                 'channel' => 'sms',
                 'phone' => $phone,
+                'provider' => $paymentLinkProvider,
                 'reason' => (string) ($request->input('reason') ?: 'Send payment link from deal flow'),
                 'notification_purpose' => 'deal_activation_payment_link',
                 'notification_context' => [
@@ -1067,6 +1088,8 @@ class DealController extends Controller
                     'raw_payload' => [
                         'source' => 'deal_payment_initiation',
                         'method' => 'link',
+                        'payment_link_provider' => $paymentLinkProvider,
+                        'resolved_provider' => $sendResult['provider'] ?? $paymentLinkProvider,
                         'payment_url' => $sendResult['payment_url'] ?? null,
                         'error' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
                         'sms_result' => $sendResult['notification_result'] ?? null,
@@ -1082,9 +1105,12 @@ class DealController extends Controller
 
             $payment->update([
                 'status' => 'initiated',
+                'provider_key' => $sendResult['provider'] ?? $paymentLinkProvider,
                 'raw_payload' => [
                     'source' => 'deal_payment_initiation',
                     'method' => 'link',
+                    'payment_link_provider' => $paymentLinkProvider,
+                    'resolved_provider' => $sendResult['provider'] ?? $paymentLinkProvider,
                     'payment_url' => $sendResult['payment_url'] ?? null,
                     'sms_status' => data_get($sendResult, 'notification_result.status'),
                 ],
@@ -1154,19 +1180,60 @@ class DealController extends Controller
         return $payment;
     }
 
-    private function freeTrialPermissionResponse(Request $request, string $paymentMethod): ?\Illuminate\Http\JsonResponse
+    private function freeTrialPermissionResponse(Request $request, string $paymentMethod, ?string $freeTrialPin = null): ?\Illuminate\Http\JsonResponse
     {
         if ($paymentMethod !== 'free_trial') {
             return null;
         }
 
-        if ($this->marketAuthorizationService->isManager($request->user())) {
+        if (!$this->walletSettingsService->freeTrialPinIsConfigured()) {
+            return response()->json([
+                'message' => 'Free-trial PIN is not configured. Ask an admin to set it in Settings first.',
+            ], 409);
+        }
+
+        if ($freeTrialPin !== null && $this->walletSettingsService->verifyFreeTrialPin($freeTrialPin)) {
             return null;
         }
 
         return response()->json([
-            'message' => 'Only admin or sub-admin users can approve free trial activations.',
-        ], 403);
+            'message' => 'Free-trial PIN is invalid.',
+        ], 422);
+    }
+
+    private function resolvePaymentLinkProvider(Client $client, ?string $requestedProvider): ?string
+    {
+        $client->loadMissing('platform');
+        $config = is_array($client->platform?->payment_link_providers)
+            ? $client->platform->payment_link_providers
+            : [];
+
+        $providers = collect($config['providers'] ?? [])
+            ->filter(fn ($provider): bool => is_array($provider) && (bool) ($provider['enabled'] ?? true));
+
+        if ($providers->isEmpty()) {
+            throw ValidationException::withMessages([
+                'payment_link_provider' => 'No enabled payment-link providers are configured for this market.',
+            ]);
+        }
+
+        $requestedProvider = trim((string) $requestedProvider);
+        if ($requestedProvider !== '') {
+            if (!$providers->has($requestedProvider)) {
+                throw ValidationException::withMessages([
+                    'payment_link_provider' => 'Selected payment-link provider is not enabled for this market.',
+                ]);
+            }
+
+            return $requestedProvider;
+        }
+
+        $activeProvider = trim((string) ($config['active_provider'] ?? ''));
+        if ($activeProvider !== '' && $providers->has($activeProvider)) {
+            return $activeProvider;
+        }
+
+        return (string) $providers->keys()->first();
     }
 
     private function missingSprint6DealColumnsResponse(): ?\Illuminate\Http\JsonResponse

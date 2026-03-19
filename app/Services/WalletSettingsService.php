@@ -33,6 +33,8 @@ class WalletSettingsService
         $maskedConfig['smtp']['password'] = '';
         $maskedConfig['pin_hash'] = '';
         $maskedConfig['pin_set'] = !empty($config['pin_hash']);
+        $maskedConfig['free_trial_pin_hash'] = '';
+        $maskedConfig['free_trial_pin_set'] = !empty($config['free_trial_pin_hash']);
 
         return $maskedConfig;
     }
@@ -83,6 +85,40 @@ class WalletSettingsService
     public function verifyOperatorPin(string $pin): bool
     {
         $hash = (string) ($this->resolveSystemConfig()['pin_hash'] ?? '');
+
+        return $hash !== '' && Hash::check(trim($pin), $hash);
+    }
+
+    public function updateFreeTrialPin(string $pin, ?int $updatedBy = null): array
+    {
+        $pin = trim($pin);
+        if (!preg_match('/^\d{4,6}$/', $pin)) {
+            throw new InvalidArgumentException('Free-trial PIN must be 4 to 6 digits.');
+        }
+
+        $current = $this->resolveSystemConfig();
+        $current['free_trial_pin_hash'] = Hash::make($pin);
+        $current['free_trial_pin_last_updated_at'] = now()->toIso8601String();
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => self::SYSTEM_SETTINGS_KEY],
+            [
+                'value' => $this->systemConfigForStorage($current),
+                'updated_by' => $updatedBy,
+            ]
+        );
+
+        return $this->currentSystemConfig(masked: true);
+    }
+
+    public function freeTrialPinIsConfigured(): bool
+    {
+        return !empty($this->resolveSystemConfig()['free_trial_pin_hash'] ?? '');
+    }
+
+    public function verifyFreeTrialPin(string $pin): bool
+    {
+        $hash = (string) ($this->resolveSystemConfig()['free_trial_pin_hash'] ?? '');
 
         return $hash !== '' && Hash::check(trim($pin), $hash);
     }
@@ -400,6 +436,8 @@ class WalletSettingsService
             'topup_poll_interval_seconds' => 10,
             'pin_hash' => '',
             'pin_last_updated_at' => null,
+            'free_trial_pin_hash' => '',
+            'free_trial_pin_last_updated_at' => null,
             'smtp' => [
                 'enabled' => false,
                 'host' => '',
@@ -613,6 +651,14 @@ class WalletSettingsService
                 ? (string) $incoming['pin_last_updated_at']
                 : null;
         }
+        if (array_key_exists('free_trial_pin_hash', $incoming) && trim((string) $incoming['free_trial_pin_hash']) !== '') {
+            $merged['free_trial_pin_hash'] = (string) $incoming['free_trial_pin_hash'];
+        }
+        if (array_key_exists('free_trial_pin_last_updated_at', $incoming)) {
+            $merged['free_trial_pin_last_updated_at'] = $incoming['free_trial_pin_last_updated_at']
+                ? (string) $incoming['free_trial_pin_last_updated_at']
+                : null;
+        }
 
         return $merged;
     }
@@ -768,6 +814,8 @@ class WalletSettingsService
         $stored = $config;
         $stored['pin_hash'] = (string) ($config['pin_hash'] ?? '');
         $stored['pin_last_updated_at'] = $config['pin_last_updated_at'] ?? null;
+        $stored['free_trial_pin_hash'] = (string) ($config['free_trial_pin_hash'] ?? '');
+        $stored['free_trial_pin_last_updated_at'] = $config['free_trial_pin_last_updated_at'] ?? null;
         $stored['smtp'] = [
             'enabled' => (bool) ($config['smtp']['enabled'] ?? false),
             'host' => (string) ($config['smtp']['host'] ?? ''),
@@ -789,6 +837,8 @@ class WalletSettingsService
         $config = $stored;
         $config['pin_hash'] = (string) ($stored['pin_hash'] ?? '');
         $config['pin_last_updated_at'] = $stored['pin_last_updated_at'] ?? null;
+        $config['free_trial_pin_hash'] = (string) ($stored['free_trial_pin_hash'] ?? '');
+        $config['free_trial_pin_last_updated_at'] = $stored['free_trial_pin_last_updated_at'] ?? null;
         $smtp = is_array($stored['smtp'] ?? null) ? $stored['smtp'] : [];
         $config['smtp'] = [
             'enabled' => (bool) ($smtp['enabled'] ?? false),

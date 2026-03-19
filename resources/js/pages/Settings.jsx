@@ -472,6 +472,8 @@ function defaultWalletSystemForm() {
         },
         pin_set: false,
         pin_last_updated_at: null,
+        free_trial_pin_set: false,
+        free_trial_pin_last_updated_at: null,
         reason: 'Updated wallet system settings',
     };
 }
@@ -519,6 +521,8 @@ function buildWalletSystemForm(systemConfig) {
         },
         pin_set: Boolean(systemConfig.pin_set),
         pin_last_updated_at: systemConfig.pin_last_updated_at || null,
+        free_trial_pin_set: Boolean(systemConfig.free_trial_pin_set),
+        free_trial_pin_last_updated_at: systemConfig.free_trial_pin_last_updated_at || null,
         reason: 'Updated wallet system settings',
     };
 }
@@ -528,6 +532,14 @@ function defaultWalletPinForm() {
         pin: '',
         pin_confirmation: '',
         reason: 'Updated wallet operator PIN',
+    };
+}
+
+function defaultFreeTrialPinForm() {
+    return {
+        pin: '',
+        pin_confirmation: '',
+        reason: 'Updated free-trial redemption PIN',
     };
 }
 
@@ -795,6 +807,7 @@ function IntegrationsWorkspace({
     const [paymentLinkForm, setPaymentLinkForm] = useState(defaultPaymentLinkProviderForm());
     const [packageEditor, setPackageEditor] = useState(null);
     const paymentLinkReadOnly = !canEditPaymentLinks;
+    const [freeTrialPinForm, setFreeTrialPinForm] = useState(defaultFreeTrialPinForm());
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
@@ -1246,6 +1259,24 @@ function IntegrationsWorkspace({
         },
     });
 
+    const updateFreeTrialPinMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/free-trial/pin', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            const system = buildWalletSystemForm(response?.system || null);
+            setWalletSystemForm((current) => ({
+                ...current,
+                free_trial_pin_set: system.free_trial_pin_set,
+                free_trial_pin_last_updated_at: system.free_trial_pin_last_updated_at,
+            }));
+            setFreeTrialPinForm(defaultFreeTrialPinForm());
+            toast.success('Free-trial PIN updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update free-trial PIN.');
+        },
+    });
+
     const saveWalletPlatformMutation = useMutation({
         mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}/wallet`, payload).then((response) => response.data),
         onSuccess: (response) => {
@@ -1449,6 +1480,14 @@ function IntegrationsWorkspace({
             pin: walletPinForm.pin.trim(),
             pin_confirmation: walletPinForm.pin_confirmation.trim(),
             reason: walletPinForm.reason.trim(),
+        });
+    };
+
+    const saveFreeTrialPin = () => {
+        updateFreeTrialPinMutation.mutate({
+            pin: freeTrialPinForm.pin.trim(),
+            pin_confirmation: freeTrialPinForm.pin_confirmation.trim(),
+            reason: freeTrialPinForm.reason.trim(),
         });
     };
 
@@ -3353,6 +3392,77 @@ function IntegrationsWorkspace({
                                         className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                                     >
                                         {updateWalletPinMutation.isPending ? 'Saving...' : (walletSystemForm.pin_set ? 'Rotate wallet PIN' : 'Set wallet PIN')}
+                                    </button>
+                                </div>
+                            </section>
+
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-slate-900">Free-trial PIN</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Required when sales or sub-admin users redeem a free-trial activation, renewal, or extension from CRM.</p>
+                                    </div>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(walletSystemForm.free_trial_pin_set ? 'success' : 'pending')}`}>
+                                        {walletSystemForm.free_trial_pin_set ? 'configured' : 'not set'}
+                                    </span>
+                                </div>
+
+                                {!canManageWalletSystem ? (
+                                    <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                        Only admin can rotate the free-trial PIN. Sales and sub-admin users will redeem the configured PIN during free-trial subscription actions.
+                                    </p>
+                                ) : null}
+
+                                <fieldset disabled={walletSystemReadOnly || updateFreeTrialPinMutation.isPending} className={`mt-3 ${walletSystemReadOnly ? 'opacity-70' : ''}`}>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Last rotated</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(walletSystemForm.free_trial_pin_last_updated_at)}</p>
+                                        </div>
+
+                                        <input
+                                            type="password"
+                                            inputMode="numeric"
+                                            maxLength={6}
+                                            value={freeTrialPinForm.pin}
+                                            onChange={(event) => setFreeTrialPinForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                            className="crm-input"
+                                            placeholder="New free-trial PIN"
+                                        />
+                                        <input
+                                            type="password"
+                                            inputMode="numeric"
+                                            maxLength={6}
+                                            value={freeTrialPinForm.pin_confirmation}
+                                            onChange={(event) => setFreeTrialPinForm((current) => ({ ...current, pin_confirmation: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                            className="crm-input"
+                                            placeholder="Confirm free-trial PIN"
+                                        />
+
+                                        <textarea
+                                            rows={2}
+                                            value={freeTrialPinForm.reason}
+                                            onChange={(event) => setFreeTrialPinForm((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="Reason for free-trial PIN rotation"
+                                        />
+                                    </div>
+                                </fieldset>
+
+                                <div className="mt-3 flex justify-end">
+                                    <button
+                                        type="button"
+                                        onClick={saveFreeTrialPin}
+                                        disabled={
+                                            walletSystemReadOnly
+                                            || updateFreeTrialPinMutation.isPending
+                                            || freeTrialPinForm.pin.length < 4
+                                            || freeTrialPinForm.pin_confirmation.length < 4
+                                            || !freeTrialPinForm.reason.trim()
+                                        }
+                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {updateFreeTrialPinMutation.isPending ? 'Saving...' : (walletSystemForm.free_trial_pin_set ? 'Rotate free-trial PIN' : 'Set free-trial PIN')}
                                     </button>
                                 </div>
                             </section>

@@ -2,12 +2,24 @@
 
 namespace App\Models;
 
+use App\Services\ClientRetentionInsightService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Client extends Model
 {
     use HasFactory;
+
+    protected static function booted(): void
+    {
+        static::saved(function (Client $client): void {
+            ClientRetentionInsightService::scheduleRefreshForClientId((int) $client->id);
+        });
+
+        static::deleted(function (Client $client): void {
+            ClientRetentionInsight::query()->where('client_id', (int) $client->id)->delete();
+        });
+    }
 
     protected $fillable = [
         'platform_id',
@@ -88,6 +100,11 @@ class Client extends Model
     public function payments()
     {
         return $this->hasMany(Payment::class);
+    }
+
+    public function retentionInsight()
+    {
+        return $this->hasOne(ClientRetentionInsight::class);
     }
 
     public function walletTransactions()

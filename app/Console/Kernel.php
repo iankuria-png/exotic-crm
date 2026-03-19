@@ -96,6 +96,13 @@ class Kernel extends ConsoleKernel
             ->daily()
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sync_push_subscribers.log'));
+
+        $schedule->command('crm:refresh-retention-insights')
+            ->name('crm_refresh_retention_insights')
+            ->dailyAt('02:20')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
     }
 
     /**

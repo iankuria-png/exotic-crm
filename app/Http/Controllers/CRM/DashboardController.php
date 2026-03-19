@@ -14,6 +14,7 @@ use App\Models\ClientNote;
 use App\Models\RenewalCampaign;
 use App\Models\TimelineEvent;
 use App\Models\IntegrationSetting;
+use App\Services\ClientRetentionInsightService;
 use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
 use Carbon\Carbon;
@@ -24,7 +25,8 @@ class DashboardController extends Controller
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
-        private readonly RenewalService $renewalService
+        private readonly RenewalService $renewalService,
+        private readonly ClientRetentionInsightService $clientRetentionInsightService
     ) {
     }
 
@@ -232,6 +234,9 @@ class DashboardController extends Controller
         $commsSentCount = $commsEvents->whereIn('event_type', ['sms_sent', 'whatsapp_sent'])->count();
         $commsDeliveredCount = $commsEvents->whereIn('event_type', ['sms_delivered', 'whatsapp_delivered'])->count();
         $commsFailedCount = $commsEvents->whereIn('event_type', ['sms_failed', 'whatsapp_failed'])->count();
+        $retentionSummary = $this->clientRetentionInsightService->buildDashboardSummary(
+            is_array($platformIds) ? $platformIds : null
+        );
 
         return response()->json([
             'filters' => [
@@ -283,6 +288,7 @@ class DashboardController extends Controller
             'country_revenue' => $countryRevenue,
             'active_campaigns_count' => $activeCampaignsCount,
             'recent_activity' => $recentActivity,
+            'retention_summary' => $retentionSummary,
             'comms_stats' => [
                 'sent_count' => $commsSentCount,
                 'delivered_count' => $commsDeliveredCount,

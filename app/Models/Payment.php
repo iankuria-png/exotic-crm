@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\ClientRetentionInsightService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -10,6 +11,20 @@ use Illuminate\Database\Eloquent\Model;
 class Payment extends Model
 {
     use HasFactory;
+
+    protected static function booted(): void
+    {
+        $refresh = static function (Payment $payment): void {
+            $clientId = $payment->client_id
+                ? (int) $payment->client_id
+                : (int) (Deal::query()->whereKey($payment->deal_id)->value('client_id') ?: 0);
+
+            ClientRetentionInsightService::scheduleRefreshForClientId($clientId > 0 ? $clientId : null);
+        };
+
+        static::saved($refresh);
+        static::deleted($refresh);
+    }
 
     public const SUCCESSFUL_STATUSES = ['completed'];
     public const ACTIVE_SUBSCRIPTION_STATUSES = ['completed', 'activated'];

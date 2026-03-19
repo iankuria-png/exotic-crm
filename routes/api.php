@@ -117,6 +117,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/completeness', [ClientController::class, 'profileCompleteness'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/retention-insight', [ClientController::class, 'retentionInsight'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,marketing');
@@ -211,6 +212,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/settings/wallet', [SettingsController::class, 'wallet']);
     Route::patch('/settings/wallet', [SettingsController::class, 'updateWallet'])->middleware('role:admin');
     Route::patch('/settings/wallet/pin', [SettingsController::class, 'updateWalletPin'])->middleware('role:admin');
+    Route::patch('/settings/free-trial/pin', [SettingsController::class, 'updateFreeTrialPin'])->middleware('role:admin');
     Route::post('/settings/wallet/test-email', [SettingsController::class, 'testWalletEmail'])->middleware('role:admin');
     Route::post('/settings/wallet/test-domain', [SettingsController::class, 'testWalletDomain'])->middleware('role:admin');
     Route::post('/settings/wallet/test-app', [SettingsController::class, 'testWalletApp'])->middleware('role:admin');

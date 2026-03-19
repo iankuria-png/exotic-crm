@@ -105,6 +105,18 @@ function EmptyState({ message }) {
     );
 }
 
+function InfoHint({ text }) {
+    return (
+        <span
+            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-semibold text-slate-500 cursor-help"
+            title={text}
+            aria-label={text}
+        >
+            ?
+        </span>
+    );
+}
+
 function MetricProgress({ label, helper, value, tone, tooltip }) {
     const clamped = clampPercent(value);
     const fillMap = {
@@ -173,6 +185,149 @@ function MetricCard({ metric, isLoading }) {
             <p className={`mt-2 text-sm font-medium ${metric.hintClass}`}>{metric.hint}</p>
             {metric.subHint ? <p className="mt-1 text-xs text-slate-500">{metric.subHint}</p> : null}
         </Wrapper>
+    );
+}
+
+function RetentionWatchWidget({ summary, isLoading, onOpenWatchlist }) {
+    const watchCount = asNumber(summary?.watch_count);
+    const logoChurn30d = Number(summary?.logo_churn_30d || 0);
+    const bandDistribution = summary?.band_distribution || {};
+    const behaviorDistribution = summary?.behavior_distribution || {};
+    const bandOrder = ['Critical', 'Needs Attention', 'Watchlist', 'Stable'];
+    const monochromeBadgeClasses = {
+        Stable: 'border-slate-200 bg-white text-slate-500',
+        Watchlist: 'border-slate-300 bg-white text-slate-700',
+        'Needs Attention': 'border-slate-500 bg-slate-50 text-slate-800',
+        Critical: 'border-slate-900 bg-slate-100 text-slate-950',
+    };
+    const bandEntries = bandOrder.map((band) => ({
+        band,
+        count: asNumber(bandDistribution?.[band]),
+    }));
+    const totalBandCount = bandEntries.reduce((sum, entry) => sum + entry.count, 0);
+    const behaviorEntries = Object.entries(behaviorDistribution)
+        .map(([behavior, count]) => ({ behavior, count: asNumber(count) }))
+        .sort((left, right) => right.count - left.count)
+        .slice(0, 4);
+    const totalBehaviorCount = behaviorEntries.reduce((sum, entry) => sum + entry.count, 0);
+
+    const shareOf = (count, total) => {
+        if (!total) {
+            return 0;
+        }
+
+        return Math.round((count / total) * 100);
+    };
+
+    return (
+        <SectionFrame
+            title="Retention Watch"
+            subtitle="Churn signals"
+            action={(
+                <button
+                    type="button"
+                    onClick={onOpenWatchlist}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                >
+                    Open clients
+                </button>
+            )}
+        >
+            {isLoading ? (
+                <LoadingRows />
+            ) : (
+                <div className="space-y-5">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Watch count</p>
+                                <InfoHint text="Clients currently flagged for retention follow-up in the active dashboard scope." />
+                            </div>
+                            <p className="mt-2 text-3xl leading-none font-semibold text-slate-950">{watchCount.toLocaleString()}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Logo churn 30d</p>
+                                <InfoHint text="Trailing 30-day churn from daily snapshots. Not computed live on page load." />
+                            </div>
+                            <p className="mt-2 text-3xl leading-none font-semibold text-slate-950">{logoChurn30d.toFixed(2)}%</p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <div>
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">Band mix</p>
+                                    <InfoHint text="Distribution of retention risk across the current dashboard scope." />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                {bandEntries.map(({ band, count }) => {
+                                    const share = shareOf(count, totalBandCount);
+
+                                    return (
+                                        <div key={band} className="space-y-1.5">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="flex min-w-0 items-center gap-2">
+                                                    <span className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${monochromeBadgeClasses[band] || monochromeBadgeClasses.Watchlist}`}>
+                                                        {band}
+                                                    </span>
+                                                </div>
+                                                <div className="shrink-0 text-right">
+                                                    <p className="text-base font-semibold text-slate-950">{count.toLocaleString()}</p>
+                                                    <p className="text-[11px] font-medium text-slate-500">{share}%</p>
+                                                </div>
+                                            </div>
+                                            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                                <div
+                                                    className="h-full rounded-full bg-slate-700"
+                                                    style={{ width: `${Math.max(share, count > 0 ? 4 : 0)}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div className="mb-2 flex items-center gap-2">
+                                <p className="text-sm font-semibold text-slate-900">Behavior mix</p>
+                                <InfoHint text="Behavior tags explain the dominant reasons clients are drifting." />
+                            </div>
+                            {behaviorEntries.length ? (
+                                <div className="space-y-2">
+                                    {behaviorEntries.map(({ behavior, count }) => {
+                                        const share = shareOf(count, totalBehaviorCount);
+
+                                        return (
+                                            <div key={behavior} className="space-y-1.5">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="min-w-0 truncate text-sm font-medium text-slate-700">{behavior}</p>
+                                                    <div className="shrink-0 text-right">
+                                                        <p className="text-base font-semibold text-slate-950">{count.toLocaleString()}</p>
+                                                        <p className="text-[11px] font-medium text-slate-500">{share}%</p>
+                                                    </div>
+                                                </div>
+                                                <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                                    <div
+                                                        className="h-full rounded-full bg-slate-700"
+                                                        style={{ width: `${Math.max(share, count > 0 ? 4 : 0)}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <EmptyState message="Behavior data will appear once retention snapshots have enough history." />
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </SectionFrame>
     );
 }
 
@@ -291,6 +446,9 @@ export default function Dashboard() {
     const renewalRisk72h = asNumber(kpis.renewal_risk_72h ?? kpis.expiring_soon);
     const renewalPipeline14d = asNumber(kpis.renewal_pipeline_4_14d);
     const renewalWorkload14d = asNumber(kpis.renewal_workload_14d ?? (renewalRisk72h + renewalPipeline14d));
+    const retentionSummary = data?.retention_summary || {};
+    const retentionWatchCount = asNumber(retentionSummary.watch_count);
+    const logoChurn30d = Number(retentionSummary.logo_churn_30d || 0);
 
     const matchQuality = recentPaymentsCount > 0
         ? clampPercent(((recentPaymentsCount - unmatchedPaymentsWindow) / recentPaymentsCount) * 100)
@@ -347,6 +505,18 @@ export default function Dashboard() {
             accentDot: renewalWorkload14d > 0 ? 'bg-amber-500' : 'bg-slate-400',
             hintClass: renewalWorkload14d > 0 ? 'text-amber-700' : 'text-emerald-700',
             onClick: () => navigate(withMarketScope('/deals?bucket=workload')),
+        },
+        {
+            key: 'retention_watch',
+            label: 'Retention Watch',
+            value: retentionWatchCount.toLocaleString(),
+            hint: retentionWatchCount > 0
+                ? `${logoChurn30d.toFixed(2)}% logo churn in trailing 30 days`
+                : 'No clients currently flagged in retention watch',
+            subHint: 'Signals combine payments, renewals, engagement, reminders, and market baseline.',
+            accentDot: retentionWatchCount > 0 ? 'bg-rose-500' : 'bg-slate-400',
+            hintClass: retentionWatchCount > 0 ? 'text-rose-700' : 'text-slate-600',
+            onClick: () => navigate(withMarketScope('/clients?retention_band=watch')),
         },
     ];
 
@@ -522,7 +692,7 @@ export default function Dashboard() {
                 </div>
             </section>
 
-            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                 {metrics.map((metric) => (
                     <MetricCard key={metric.key} metric={metric} isLoading={isLoading} />
                 ))}
@@ -679,6 +849,14 @@ export default function Dashboard() {
                                 />
                             </div>
                         </SectionFrame>
+                    ) : null}
+
+                    {widgetConfig.retention_watch ? (
+                        <RetentionWatchWidget
+                            summary={retentionSummary}
+                            isLoading={isLoading}
+                            onOpenWatchlist={() => navigate(withMarketScope('/clients?retention_band=watch'))}
+                        />
                     ) : null}
 
                     {widgetConfig.quick_stats ? (

@@ -7,6 +7,8 @@ import Timeline from '../components/Timeline';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import { useToast } from '../components/ToastProvider';
+import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
+import { retentionBandAccent, retentionBandClasses } from '../utils/retention';
 
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -346,6 +348,68 @@ function DefinitionRow({ label, value, mono = false }) {
     );
 }
 
+function RetentionBandBadge({ band }) {
+    return (
+        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${retentionBandClasses(band)}`}>
+            {band || 'Unknown'}
+        </span>
+    );
+}
+
+function RetentionDriverBar({ componentKey, component }) {
+    const score = Number(component?.score || 0);
+    const weight = Number(component?.effective_weight || component?.base_weight || 0);
+    const width = Math.max(8, Math.min(100, score));
+
+    return (
+        <div key={componentKey} className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+            <div className="flex items-start justify-between gap-3">
+                <div>
+                    <p className="text-sm font-semibold text-slate-900">{component?.label || componentKey}</p>
+                    <p className="mt-1 text-xs text-slate-500">{component?.summary || 'No signal summary available.'}</p>
+                </div>
+                <div className="text-right">
+                    <p className="text-sm font-semibold text-slate-900">{score}/100</p>
+                    <p className="text-[11px] text-slate-500">Affects {weight}% of the overall score</p>
+                </div>
+            </div>
+            <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                <div className={`h-full rounded-full ${retentionBandAccent(score >= 75 ? 'Critical' : score >= 55 ? 'Needs Attention' : score >= 30 ? 'Watchlist' : 'Stable')}`} style={{ width: `${width}%` }} />
+            </div>
+        </div>
+    );
+}
+
+function humanizeSignalKey(key) {
+    return String(key || '')
+        .replaceAll('_', ' ')
+        .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatRetentionSignalValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return '—';
+    }
+
+    if (typeof value === 'boolean') {
+        return value ? 'Yes' : 'No';
+    }
+
+    if (typeof value === 'number') {
+        return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(1);
+    }
+
+    const asString = String(value);
+    if (/\d{4}-\d{2}-\d{2}T/.test(asString)) {
+        const date = new Date(asString);
+        if (!Number.isNaN(date.getTime())) {
+            return date.toLocaleString();
+        }
+    }
+
+    return asString;
+}
+
 export default function ClientDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -368,7 +432,8 @@ export default function ClientDetail() {
     const [activationReason, setActivationReason] = useState('Activation initiated from client profile');
     const [activationPaymentMethod, setActivationPaymentMethod] = useState('manual');
     const [activationPaymentReference, setActivationPaymentReference] = useState('');
-    const [activationApprovedBy, setActivationApprovedBy] = useState('');
+    const [activationFreeTrialPin, setActivationFreeTrialPin] = useState('');
+    const [activationPaymentLinkProvider, setActivationPaymentLinkProvider] = useState('');
     const [showSyncConfirm, setShowSyncConfirm] = useState(false);
     const [profileSection, setProfileSection] = useState('personal');
     const [profileForm, setProfileForm] = useState(null);
@@ -391,7 +456,9 @@ export default function ClientDetail() {
     const [renewReason, setRenewReason] = useState('Renewed from client profile');
     const [dealPaymentMethod, setDealPaymentMethod] = useState('manual');
     const [dealPaymentReference, setDealPaymentReference] = useState('');
-    const [dealApprovedBy, setDealApprovedBy] = useState('');
+    const [dealFreeTrialPin, setDealFreeTrialPin] = useState('');
+    const [dealPaymentLinkProvider, setDealPaymentLinkProvider] = useState('');
+    const [retentionTab, setRetentionTab] = useState('summary');
     const [notifyClient, setNotifyClient] = useState(false);
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
     const [notificationMessage, setNotificationMessage] = useState('');
@@ -469,6 +536,24 @@ export default function ClientDetail() {
         enabled: activeTab === 'overview',
     });
 
+    const {
+        data: retentionInsight,
+        isLoading: retentionInsightLoading,
+    } = useQuery({
+        queryKey: ['client-retention-insight', id],
+        queryFn: () => api.get(`/crm/clients/${id}/retention-insight`).then((r) => r.data),
+        enabled: activeTab === 'overview',
+        staleTime: 60_000,
+    });
+    const paymentLinkProviderOptions = useMemo(
+        () => getEnabledPaymentLinkProviders(client?.platform),
+        [client?.platform],
+    );
+    const defaultPaymentLinkProvider = useMemo(
+        () => getDefaultPaymentLinkProviderKey(client?.platform),
+        [client?.platform],
+    );
+
     const { data: deactivateTemplatesData } = useQuery({
         queryKey: ['settings-templates', 'client-deal-deactivate'],
         queryFn: () => api.get('/crm/settings/templates').then((r) => r.data),
@@ -512,12 +597,13 @@ export default function ClientDetail() {
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, approvedBy }) =>
+        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason,
                 payment_method: paymentMethod,
                 ...(paymentMethod === 'manual' ? { payment_reference: paymentReference } : {}),
-                ...(paymentMethod === 'free_trial' ? { approved_by: approvedBy } : {}),
+                ...(paymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPin } : {}),
+                ...(paymentMethod === 'link' && paymentLinkProvider ? { payment_link_provider: paymentLinkProvider } : {}),
             }).then((r) => r.data),
         onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
@@ -526,7 +612,8 @@ export default function ClientDetail() {
             setActivationReason('Activation initiated from client profile');
             setActivationPaymentMethod('manual');
             setActivationPaymentReference('');
-            setActivationApprovedBy('');
+            setActivationFreeTrialPin('');
+            setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
             toast.success(payload?.message || 'Subscription activation request submitted.');
         },
         onError: (error) => {
@@ -558,13 +645,14 @@ export default function ClientDetail() {
     });
 
     const extendDealMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, approvedByValue }) =>
+        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue }) =>
             api.post(`/crm/deals/${dealId}/extend`, {
                 additional_days: additionalDays,
                 reason: extensionReason,
                 payment_method: selectedPaymentMethod,
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
-                ...(selectedPaymentMethod === 'free_trial' ? { approved_by: approvedByValue } : {}),
+                ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
+                ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
             }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
@@ -574,7 +662,8 @@ export default function ClientDetail() {
             setExtendReason('Extended from client profile');
             setDealPaymentMethod('manual');
             setDealPaymentReference('');
-            setDealApprovedBy('');
+            setDealFreeTrialPin('');
+            setDealPaymentLinkProvider(defaultPaymentLinkProvider);
             toast.success('Subscription extension saved.');
         },
         onError: (error) => {
@@ -583,13 +672,14 @@ export default function ClientDetail() {
     });
 
     const renewDealMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, approvedByValue }) =>
+        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue }) =>
             api.post(`/crm/deals/${dealId}/renew`, {
                 additional_days: additionalDays,
                 reason: renewalReason,
                 payment_method: selectedPaymentMethod,
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
-                ...(selectedPaymentMethod === 'free_trial' ? { approved_by: approvedByValue } : {}),
+                ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
+                ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
             }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
@@ -599,7 +689,8 @@ export default function ClientDetail() {
             setRenewReason('Renewed from client profile');
             setDealPaymentMethod('manual');
             setDealPaymentReference('');
-            setDealApprovedBy('');
+            setDealFreeTrialPin('');
+            setDealPaymentLinkProvider(defaultPaymentLinkProvider);
             toast.success('Subscription renewed successfully.');
         },
         onError: (error) => {
@@ -797,6 +888,26 @@ export default function ClientDetail() {
     }, [isReadOnly, searchParams, setSearchParams]);
 
     useEffect(() => {
+        if (!activationDialog.open) {
+            return;
+        }
+
+        if (!activationPaymentLinkProvider && defaultPaymentLinkProvider) {
+            setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
+        }
+    }, [activationDialog.open, activationPaymentLinkProvider, defaultPaymentLinkProvider]);
+
+    useEffect(() => {
+        if (!dealActionDialog.deal) {
+            return;
+        }
+
+        if (!dealPaymentLinkProvider && defaultPaymentLinkProvider) {
+            setDealPaymentLinkProvider(defaultPaymentLinkProvider);
+        }
+    }, [dealActionDialog.deal, dealPaymentLinkProvider, defaultPaymentLinkProvider]);
+
+    useEffect(() => {
         if (!wpProfileData?.wp_profile) {
             return;
         }
@@ -916,8 +1027,14 @@ export default function ClientDetail() {
     const walletSummary = walletData?.wallet || null;
     const walletTransactions = walletSummary?.transactions || [];
     const activationRequiresReference = activationPaymentMethod === 'manual';
-    const activationRequiresApprovedBy = activationPaymentMethod === 'free_trial';
+    const activationRequiresFreeTrialPin = activationPaymentMethod === 'free_trial';
+    const activationRequiresProvider = activationPaymentMethod === 'link';
     const activationTargetPhone = client?.phone_normalized || '';
+    const retentionComponents = retentionInsight?.component_scores || {};
+    const retentionSignals = retentionInsight?.signals || {};
+    const dealPaymentRequiresReference = dealPaymentMethod === 'manual';
+    const dealPaymentRequiresFreeTrialPin = dealPaymentMethod === 'free_trial';
+    const dealPaymentRequiresProvider = dealPaymentMethod === 'link';
 
     const openActivationDialog = (deal) => {
         const dealLabel = deal?.product?.name || deal?.plan_type || 'Subscription';
@@ -929,7 +1046,8 @@ export default function ClientDetail() {
         setActivationReason('Activation initiated from client profile');
         setActivationPaymentMethod('manual');
         setActivationPaymentReference('');
-        setActivationApprovedBy(currentUser?.name || '');
+        setActivationFreeTrialPin('');
+        setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
     };
 
     const closeActivationDialog = () => {
@@ -937,14 +1055,16 @@ export default function ClientDetail() {
         setActivationReason('Activation initiated from client profile');
         setActivationPaymentMethod('manual');
         setActivationPaymentReference('');
-        setActivationApprovedBy('');
+        setActivationFreeTrialPin('');
+        setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
     };
 
     const openDealActionDialog = (type, deal) => {
         setDealActionDialog({ type, deal });
         setDealPaymentMethod('manual');
         setDealPaymentReference('');
-        setDealApprovedBy(currentUser?.name || '');
+        setDealFreeTrialPin('');
+        setDealPaymentLinkProvider(defaultPaymentLinkProvider);
         if (type === 'deactivate') {
             setDeactivateReason('Deactivated from client profile');
             setNotifyClient(false);
@@ -971,8 +1091,13 @@ export default function ClientDetail() {
             return;
         }
 
-        if (activationRequiresApprovedBy && !activationApprovedBy.trim()) {
-            toast.error('Approver name is required for free trial activation.');
+        if (activationRequiresFreeTrialPin && activationFreeTrialPin.trim().length < 4) {
+            toast.error('Enter the configured free-trial PIN to continue.');
+            return;
+        }
+
+        if (activationRequiresProvider && !activationPaymentLinkProvider) {
+            toast.error('Choose an enabled payment-link provider for this market.');
             return;
         }
 
@@ -981,14 +1106,16 @@ export default function ClientDetail() {
             reason: activationReason.trim() || 'Activation initiated from client profile',
             paymentMethod: activationPaymentMethod,
             paymentReference: activationPaymentReference.trim(),
-            approvedBy: activationApprovedBy.trim(),
+            freeTrialPin: activationFreeTrialPin.trim(),
+            paymentLinkProvider: activationPaymentLinkProvider || undefined,
         });
     };
 
     const activationSubmitDisabled = activateDealMutation.isPending
         || !activationDialog.dealId
         || (activationRequiresReference && !activationPaymentReference.trim())
-        || (activationRequiresApprovedBy && !activationApprovedBy.trim());
+        || (activationRequiresFreeTrialPin && activationFreeTrialPin.trim().length < 4)
+        || (activationRequiresProvider && !activationPaymentLinkProvider);
 
     const submitProfileUpdate = () => {
         if (!profileForm) {
@@ -1378,6 +1505,137 @@ export default function ClientDetail() {
                         </section>
                     );
                 })()}
+
+                <section className="crm-surface mt-3 overflow-hidden">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Retention Insight</h3>
+                            <p className="crm-panel-subtitle">Quick view of churn risk and follow-up signals.</p>
+                        </div>
+                        {retentionInsight?.band ? <RetentionBandBadge band={retentionInsight.band} /> : null}
+                    </header>
+
+                    <div className="border-b border-slate-100 px-4 py-2">
+                        <div className="flex flex-wrap gap-2">
+                            {[
+                                { key: 'summary', label: 'Summary' },
+                                { key: 'drivers', label: 'Score factors' },
+                                { key: 'signals', label: 'Signals' },
+                            ].map((tab) => (
+                                <button
+                                    key={tab.key}
+                                    type="button"
+                                    onClick={() => setRetentionTab(tab.key)}
+                                    className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                        retentionTab === tab.key
+                                            ? 'bg-slate-900 text-white'
+                                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800'
+                                    }`}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="p-4">
+                        {retentionInsightLoading ? (
+                            <div className="space-y-3">
+                                <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+                                <div className="grid gap-3 md:grid-cols-2">
+                                    <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+                                    <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+                                </div>
+                            </div>
+                        ) : retentionInsight ? (
+                            <>
+                                {retentionTab === 'summary' ? (
+                                    <div className="grid gap-4 lg:grid-cols-[240px,1fr]">
+                                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                            <div className="flex items-center gap-4">
+                                                <div className={`flex h-20 w-20 items-center justify-center rounded-full border-4 border-white text-2xl font-semibold shadow-sm ${retentionBandClasses(retentionInsight.band)}`}>
+                                                    {retentionInsight.score}
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Risk score</p>
+                                                    <p className="mt-1 text-lg font-semibold text-slate-900">{retentionInsight.primary_tag || 'Behavior not classified'}</p>
+                                                    <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(retentionInsight.computed_at)}</p>
+                                                </div>
+                                            </div>
+                                            {retentionInsight.secondary_tags?.length ? (
+                                                <div className="mt-4 flex flex-wrap gap-2">
+                                                    {retentionInsight.secondary_tags.map((tag) => (
+                                                        <span key={tag} className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+                                                            {tag}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            ) : null}
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {(retentionInsight.top_drivers || []).slice(0, 3).map((driver, index) => (
+                                                <div key={`${driver.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-4">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <p className="text-sm font-semibold text-slate-900">{driver.label}</p>
+                                                        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">
+                                                            Risk {Number(driver.severity || 0)}
+                                                        </span>
+                                                    </div>
+                                                    <p className="mt-1.5 text-sm text-slate-600">{driver.detail}</p>
+                                                </div>
+                                            ))}
+                                            {!(retentionInsight.top_drivers || []).length ? (
+                                                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                                                    No elevated churn drivers detected right now. This client is showing a relatively steady retention pattern.
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                ) : null}
+
+                                {retentionTab === 'drivers' ? (
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        {Object.entries(retentionComponents).map(([componentKey, component]) => (
+                                            <RetentionDriverBar key={componentKey} componentKey={componentKey} component={component} />
+                                        ))}
+                                    </div>
+                                ) : null}
+
+                                {retentionTab === 'signals' ? (
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        {Object.entries(retentionSignals).map(([componentKey, signals]) => (
+                                            <div key={componentKey} className="rounded-xl border border-slate-200 bg-white p-4">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="text-sm font-semibold text-slate-900">
+                                                        {retentionComponents?.[componentKey]?.label || humanizeSignalKey(componentKey)}
+                                                    </p>
+                                                    {retentionComponents?.[componentKey]?.summary ? (
+                                                        <span className="text-[11px] text-slate-400">
+                                                            {retentionComponents[componentKey].summary}
+                                                        </span>
+                                                    ) : null}
+                                                </div>
+                                                <dl className="mt-3 space-y-2">
+                                                    {Object.entries(signals || {}).map(([key, value]) => (
+                                                        <div key={key} className="flex items-start justify-between gap-3 text-sm">
+                                                            <dt className="text-slate-500">{humanizeSignalKey(key)}</dt>
+                                                            <dd className="text-right font-medium text-slate-900">{formatRetentionSignalValue(value)}</dd>
+                                                        </div>
+                                                    ))}
+                                                </dl>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : null}
+                            </>
+                        ) : (
+                            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                                Retention insight will appear here once enough payment, subscription, engagement, and reminder history is available for this client.
+                            </div>
+                        )}
+                    </div>
+                </section>
                 </>
             ) : null}
 
@@ -1500,10 +1758,42 @@ export default function ClientDetail() {
                                             <input type="text" value={dealPaymentReference} onChange={(e) => setDealPaymentReference(e.target.value)} className="crm-input" placeholder="e.g. MPESA123ABC" />
                                         </div>
                                     ) : null}
+                                    {dealPaymentMethod === 'link' ? (
+                                        <div className="space-y-2">
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
+                                            <select
+                                                value={dealPaymentLinkProvider}
+                                                onChange={(e) => setDealPaymentLinkProvider(e.target.value)}
+                                                className="crm-select"
+                                                disabled={!paymentLinkProviderOptions.length}
+                                            >
+                                                <option value="">{paymentLinkProviderOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
+                                                {paymentLinkProviderOptions.map((provider) => (
+                                                    <option key={provider.key} value={provider.key}>
+                                                        {provider.optionLabel}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <p className="text-xs text-slate-500">
+                                                Choose who sends the payment link.
+                                            </p>
+                                        </div>
+                                    ) : null}
                                     {dealPaymentMethod === 'free_trial' ? (
-                                        <div>
-                                            <label className="mb-1 block text-sm font-medium text-slate-700">Approved By</label>
-                                            <input type="text" value={dealApprovedBy} onChange={(e) => setDealApprovedBy(e.target.value)} className="crm-input" placeholder="Manager or approver name" />
+                                        <div className="space-y-2">
+                                            <label className="mb-1 block text-sm font-medium text-slate-700">Free-trial PIN</label>
+                                            <input
+                                                type="password"
+                                                inputMode="numeric"
+                                                maxLength={6}
+                                                value={dealFreeTrialPin}
+                                                onChange={(e) => setDealFreeTrialPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                                className="crm-input"
+                                                placeholder="Enter free-trial PIN"
+                                            />
+                                            <p className="text-xs text-slate-500">
+                                                Enter the free-trial PIN from Settings.
+                                            </p>
                                         </div>
                                     ) : null}
                                 </div>
@@ -1558,14 +1848,21 @@ export default function ClientDetail() {
                             {dealActionDialog.type === 'extend' ? (
                                 <button
                                     type="button"
-                                    disabled={!extendDays || extendDealMutation.isPending}
+                                    disabled={
+                                        !extendDays
+                                        || extendDealMutation.isPending
+                                        || (dealPaymentRequiresReference && !dealPaymentReference.trim())
+                                        || (dealPaymentRequiresFreeTrialPin && dealFreeTrialPin.trim().length < 4)
+                                        || (dealPaymentRequiresProvider && !dealPaymentLinkProvider)
+                                    }
                                     onClick={() => extendDealMutation.mutate({
                                         dealId: dealActionDialog.deal.id,
                                         additionalDays: Number(extendDays),
                                         extensionReason: extendReason,
                                         selectedPaymentMethod: dealPaymentMethod,
                                         referenceValue: dealPaymentReference,
-                                        approvedByValue: dealApprovedBy,
+                                        freeTrialPinValue: dealFreeTrialPin,
+                                        paymentLinkProviderValue: dealPaymentLinkProvider,
                                     })}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
@@ -1575,14 +1872,21 @@ export default function ClientDetail() {
                             {dealActionDialog.type === 'renew' ? (
                                 <button
                                     type="button"
-                                    disabled={!renewDays || renewDealMutation.isPending}
+                                    disabled={
+                                        !renewDays
+                                        || renewDealMutation.isPending
+                                        || (dealPaymentRequiresReference && !dealPaymentReference.trim())
+                                        || (dealPaymentRequiresFreeTrialPin && dealFreeTrialPin.trim().length < 4)
+                                        || (dealPaymentRequiresProvider && !dealPaymentLinkProvider)
+                                    }
                                     onClick={() => renewDealMutation.mutate({
                                         dealId: dealActionDialog.deal.id,
                                         additionalDays: Number(renewDays),
                                         renewalReason: renewReason,
                                         selectedPaymentMethod: dealPaymentMethod,
                                         referenceValue: dealPaymentReference,
-                                        approvedByValue: dealApprovedBy,
+                                        freeTrialPinValue: dealFreeTrialPin,
+                                        paymentLinkProviderValue: dealPaymentLinkProvider,
                                     })}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
@@ -2540,29 +2844,61 @@ export default function ClientDetail() {
                                     </div>
                                 ) : null}
 
+                                {activationPaymentMethod === 'link' ? (
+                                    <div className="space-y-2">
+                                        <label htmlFor="client-detail-payment-link-provider" className="mb-1 block text-sm font-medium text-slate-700">
+                                            Link provider
+                                        </label>
+                                        <select
+                                            id="client-detail-payment-link-provider"
+                                            value={activationPaymentLinkProvider}
+                                            onChange={(event) => setActivationPaymentLinkProvider(event.target.value)}
+                                            className="crm-select"
+                                            disabled={!paymentLinkProviderOptions.length}
+                                        >
+                                            <option value="">{paymentLinkProviderOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
+                                            {paymentLinkProviderOptions.map((provider) => (
+                                                <option key={provider.key} value={provider.key}>
+                                                    {provider.optionLabel}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <p className="text-xs text-slate-500">
+                                            Choose who sends the payment link.
+                                        </p>
+                                    </div>
+                                ) : null}
+
                                 {activationPaymentMethod === 'free_trial' ? (
-                                    <div>
-                                        <label htmlFor="client-detail-approved-by" className="mb-1 block text-sm font-medium text-slate-700">
-                                            Approved By
+                                    <div className="space-y-2">
+                                        <label htmlFor="client-detail-free-trial-pin" className="mb-1 block text-sm font-medium text-slate-700">
+                                            Free-trial PIN
                                         </label>
                                         <input
-                                            id="client-detail-approved-by"
-                                            type="text"
-                                            value={activationApprovedBy}
-                                            onChange={(event) => setActivationApprovedBy(event.target.value)}
+                                            id="client-detail-free-trial-pin"
+                                            type="password"
+                                            inputMode="numeric"
+                                            maxLength={6}
+                                            value={activationFreeTrialPin}
+                                            onChange={(event) => setActivationFreeTrialPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
                                             className="crm-input"
-                                            placeholder="Admin or sub-admin approver"
+                                            placeholder="Enter free-trial PIN"
                                         />
+                                        <p className="text-xs text-slate-500">
+                                            Enter the free-trial PIN from Settings.
+                                        </p>
                                     </div>
                                 ) : null}
 
                                 {(activationPaymentMethod === 'stk' || activationPaymentMethod === 'link') ? (
                                     <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
                                         {activationPaymentMethod === 'stk'
-                                            ? 'An STK push will be sent to the client phone. Subscription activates after payment confirmation.'
-                                            : 'A payment link will be sent to the client phone. Subscription activates after payment confirmation.'}
+                                            ? 'We’ll send an STK push to this phone. The subscription starts after payment is confirmed.'
+                                            : paymentLinkProviderOptions.length
+                                                ? 'We’ll send a payment link to this phone. The subscription starts after payment is confirmed.'
+                                                : 'No payment link provider is set up for this market yet.'}
                                         <span className="mt-1 block crm-mono text-[11px] text-slate-500">
-                                            Target phone: {activationTargetPhone || 'Unavailable'}
+                                            Phone: {activationTargetPhone || 'Unavailable'}
                                         </span>
                                     </div>
                                 ) : null}
@@ -2599,8 +2935,10 @@ export default function ClientDetail() {
                             >
                                 {activateDealMutation.isPending
                                     ? 'Submitting...'
-                                    : (activationPaymentMethod === 'stk' || activationPaymentMethod === 'link')
-                                        ? 'Initiate payment'
+                                    : activationPaymentMethod === 'stk'
+                                        ? 'Send STK push'
+                                        : activationPaymentMethod === 'link'
+                                            ? 'Send payment link'
                                         : 'Activate subscription'}
                             </button>
                         </footer>
