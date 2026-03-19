@@ -65,6 +65,10 @@ function buildPlatformEditor(platform) {
         timezone: platform.timezone || 'Africa/Nairobi',
         phone_prefix: platform.phone_prefix || '254',
         support_chat_url: platform.support_chat_url || '',
+        support_board_api_url: platform.support_board_api_url || '',
+        support_board_token: '',
+        support_board_token_configured: Boolean(platform.support_board_token_configured),
+        support_board_sender_id: platform.support_board_sender_id ?? '',
     };
 }
 
@@ -4354,6 +4358,34 @@ function IntegrationsWorkspace({
                                             placeholder="Support board URL (e.g. https://chat.cloud.board.support/...)"
                                         />
                                         <input
+                                            value={editor.support_board_api_url}
+                                            onChange={(event) => setEditor((current) => ({ ...current, support_board_api_url: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="https://cloud.board.support/script/include/api.php"
+                                        />
+                                        <div className="space-y-1 md:col-span-2">
+                                            <input
+                                                value={editor.support_board_token}
+                                                onChange={(event) => setEditor((current) => ({ ...current, support_board_token: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder={editor.support_board_token_configured ? '••••••••' : 'Support Board API token'}
+                                                type="password"
+                                            />
+                                            <p className="text-xs text-slate-500">Leave blank to keep the current Support Board token.</p>
+                                        </div>
+                                        <div className="space-y-1 md:col-span-2">
+                                            <input
+                                                value={editor.support_board_sender_id}
+                                                onChange={(event) => setEditor((current) => ({ ...current, support_board_sender_id: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder="Default Sender ID"
+                                                type="number"
+                                                min="1"
+                                                inputMode="numeric"
+                                            />
+                                            <p className="text-xs text-slate-500">Fallback SB agent ID for replies. Find in SB admin: Users → agent → ID in URL.</p>
+                                        </div>
+                                        <input
                                             value={editor.wp_api_user}
                                             onChange={(event) => setEditor((current) => ({ ...current, wp_api_user: event.target.value }))}
                                             className="crm-input"
@@ -4387,8 +4419,9 @@ function IntegrationsWorkspace({
                                         <button
                                             type="button"
                                             onClick={() => {
+                                                const { support_board_token_configured, ...editorPayload } = editor;
                                                 const payload = {
-                                                    ...editor,
+                                                    ...editorPayload,
                                                     reason: 'Integration profile update from settings workspace',
                                                 };
 
@@ -6285,6 +6318,7 @@ function RolesWorkspace() {
         setEditor({
             role: user.role || 'sales',
             status: user.status || 'active',
+            sb_agent_id: user.sb_agent_id ?? '',
             assigned_market_ids: Array.isArray(user.assigned_market_ids) ? user.assigned_market_ids.map((id) => Number(id)) : [],
             password: '',
             reason: 'Role update from settings',
@@ -6450,6 +6484,23 @@ function RolesWorkspace() {
                             </div>
 
                             <div className="md:col-span-2">
+                                <label htmlFor="sb-agent-id" className="mb-1 block text-sm font-medium text-slate-700">SB Agent ID</label>
+                                <input
+                                    id="sb-agent-id"
+                                    type="number"
+                                    min="1"
+                                    inputMode="numeric"
+                                    value={editor.sb_agent_id}
+                                    onChange={(event) => setEditor((current) => ({ ...current, sb_agent_id: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Support Board user ID"
+                                />
+                                <p className="mt-1 text-xs text-slate-500">
+                                    Maps this CRM user to their Support Board agent identity for personalized replies.
+                                </p>
+                            </div>
+
+                            <div className="md:col-span-2">
                                 <p className="mb-1 text-sm font-medium text-slate-700">Assigned markets</p>
                                 {availableMarkets.length === 0 ? (
                                     <p className="text-sm text-slate-500">No markets available.</p>
@@ -6513,6 +6564,7 @@ function RolesWorkspace() {
                                     payload: {
                                         role: editor.role,
                                         status: editor.status,
+                                        sb_agent_id: editor.sb_agent_id === '' ? null : Number(editor.sb_agent_id),
                                         assigned_market_ids: editor.assigned_market_ids,
                                         ...(editor.password ? { password: editor.password } : {}),
                                         reason: editor.reason,
