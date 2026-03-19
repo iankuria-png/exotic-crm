@@ -199,6 +199,65 @@ class DeploymentStatusService
         ];
     }
 
+    public function commitHistory(int $page = 1, int $perPage = 10): array
+    {
+        $owner = (string) config('deployment.github.owner');
+        $repo = (string) config('deployment.github.repo');
+        $trackedBranch = $this->trackedBranch();
+
+        if ($owner === '' || $repo === '') {
+            return ['commits' => [], 'page' => $page, 'per_page' => $perPage, 'has_more' => false];
+        }
+
+        try {
+            $client = Http::baseUrl('https://api.github.com')
+                ->timeout(10)
+                ->acceptJson()
+                ->withHeaders(['User-Agent' => 'ExoticCRM Deployment Status']);
+
+            $token = trim((string) config('deployment.github.token'));
+            if ($token !== '') {
+                $client = $client->withToken($token);
+            }
+
+            $response = $client->get(sprintf(
+                '/repos/%s/%s/commits',
+                rawurlencode($owner),
+                rawurlencode($repo)
+            ), [
+                'sha' => $trackedBranch,
+                'per_page' => $perPage + 1,
+                'page' => $page,
+            ]);
+
+            if (!$response->successful()) {
+                return ['commits' => [], 'page' => $page, 'per_page' => $perPage, 'has_more' => false];
+            }
+
+            $all = collect($response->json());
+            $hasMore = $all->count() > $perPage;
+
+            $commits = $all->take($perPage)->map(fn (array $commit) => [
+                'sha' => $commit['sha'] ?? null,
+                'short_sha' => isset($commit['sha']) ? $this->shortSha($commit['sha']) : null,
+                'message' => (string) data_get($commit, 'commit.message', ''),
+                'message_subject' => Str::before((string) data_get($commit, 'commit.message', ''), "\n"),
+                'author' => data_get($commit, 'commit.author.name') ?: data_get($commit, 'author.login'),
+                'authored_at' => data_get($commit, 'commit.author.date'),
+                'url' => $commit['html_url'] ?? null,
+            ])->values()->all();
+
+            return [
+                'commits' => $commits,
+                'page' => $page,
+                'per_page' => $perPage,
+                'has_more' => $hasMore,
+            ];
+        } catch (\Throwable) {
+            return ['commits' => [], 'page' => $page, 'per_page' => $perPage, 'has_more' => false];
+        }
+    }
+
     private function remoteCompare(?string $baseSha): array
     {
         $owner = (string) config('deployment.github.owner');

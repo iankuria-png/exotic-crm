@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { useToast } from './ToastProvider';
 
@@ -72,6 +72,9 @@ export default function SystemHealthWorkspace({
         message: 'This is a test message from ExoticCRM System Health.',
         reason: 'System Health SMS test',
     });
+    const [changelogTab, setChangelogTab] = useState('pending');
+    const [historyPage, setHistoryPage] = useState(1);
+    const [expandedCommits, setExpandedCommits] = useState({});
 
     const settingsQuery = useQuery({
         queryKey: ['settings-integrations'],
@@ -105,6 +108,13 @@ export default function SystemHealthWorkspace({
         queryFn: () => api.get('/crm/settings/system-health/updates/log').then((response) => response.data),
         enabled: canViewUpdates,
         refetchInterval: (query) => query.state.data?.manual_deploy?.in_progress ? 4000 : false,
+    });
+
+    const commitHistoryQuery = useQuery({
+        queryKey: ['deploy-commit-history', historyPage],
+        queryFn: () => api.get(`/crm/settings/system-health/updates/commits?page=${historyPage}&per_page=10`).then((r) => r.data),
+        enabled: canViewUpdates && changelogTab === 'previous',
+        placeholderData: keepPreviousData,
     });
 
     useEffect(() => {
@@ -470,31 +480,116 @@ export default function SystemHealthWorkspace({
                         </div>
 
                         <div className="space-y-4">
-                            <div className="rounded-lg border border-slate-200 bg-white p-4">
-                                <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                        <p className="text-sm font-semibold text-slate-900">Pending changelog</p>
-                                        <p className="mt-1 text-xs text-slate-500">Latest commits waiting to be reflected in the deployed version.</p>
+                            <div className="rounded-lg border border-slate-200 bg-white">
+                                <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 pt-3">
+                                    <div className="flex gap-0">
+                                        <button
+                                            type="button"
+                                            onClick={() => setChangelogTab('pending')}
+                                            className={`relative px-3 pb-2.5 text-sm font-medium transition ${changelogTab === 'pending' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-700'}`}
+                                        >
+                                            Pending
+                                            {(updates?.ahead_by ?? 0) > 0 && (
+                                                <span className="ml-1.5 inline-flex items-center rounded-full bg-teal-100 px-1.5 py-0.5 text-[10px] font-semibold text-teal-700">
+                                                    {updates.ahead_by}
+                                                </span>
+                                            )}
+                                            {changelogTab === 'pending' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-teal-600" />}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setChangelogTab('previous')}
+                                            className={`relative px-3 pb-2.5 text-sm font-medium transition ${changelogTab === 'previous' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-700'}`}
+                                        >
+                                            Previous
+                                            {changelogTab === 'previous' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-teal-600" />}
+                                        </button>
                                     </div>
-                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(updates?.remote?.available ? 'healthy' : 'degraded')}`}>
+                                    <span className={`mb-2 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(updates?.remote?.available ? 'healthy' : 'degraded')}`}>
                                         {updates?.remote?.available ? 'GitHub compare ready' : 'GitHub compare unavailable'}
                                     </span>
                                 </div>
-                                <div className="mt-3 space-y-3">
-                                    {(updates?.commits || []).length ? updates.commits.map((commit) => (
-                                        <div key={commit.sha} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <p className="text-sm font-semibold text-slate-900">{commit.message || 'Untitled commit'}</p>
-                                                <span className="rounded-md bg-slate-900 px-2 py-1 font-mono text-xs text-slate-50">{commit.short_sha}</span>
-                                            </div>
-                                            <p className="mt-1 text-xs text-slate-500">
-                                                {commit.author || 'Unknown author'} • {formatDateTime(commit.authored_at)}
-                                            </p>
-                                        </div>
-                                    )) : (
-                                        <p className="rounded-md border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500">
-                                            {updates?.remote?.message || 'No pending commits detected.'}
-                                        </p>
+
+                                <div className="p-4 space-y-3">
+                                    {changelogTab === 'pending' ? (
+                                        <>
+                                            {(updates?.commits || []).length ? updates.commits.map((commit) => (
+                                                <div key={commit.sha} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <p className="text-sm font-semibold text-slate-900">{commit.message || 'Untitled commit'}</p>
+                                                        <span className="shrink-0 rounded-md bg-slate-900 px-2 py-1 font-mono text-xs text-slate-50">{commit.short_sha}</span>
+                                                    </div>
+                                                    <p className="mt-1 text-xs text-slate-500">
+                                                        {commit.author || 'Unknown author'} • {formatDateTime(commit.authored_at)}
+                                                    </p>
+                                                </div>
+                                            )) : (
+                                                <p className="rounded-md border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500">
+                                                    {updates?.remote?.message || 'No pending commits detected.'}
+                                                </p>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <>
+                                            {commitHistoryQuery.isLoading ? (
+                                                <p className="px-4 py-5 text-sm text-slate-500">Loading commit history...</p>
+                                            ) : (commitHistoryQuery.data?.commits || []).length ? (
+                                                <>
+                                                    {commitHistoryQuery.data.commits.map((commit) => {
+                                                        const hasBody = commit.message && commit.message.includes('\n');
+                                                        const isExpanded = expandedCommits[commit.sha];
+                                                        return (
+                                                            <div key={commit.sha} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                                <div className="flex items-center justify-between gap-3">
+                                                                    <p className="text-sm font-semibold text-slate-900">{commit.message_subject || 'Untitled commit'}</p>
+                                                                    <span className="shrink-0 rounded-md bg-slate-900 px-2 py-1 font-mono text-xs text-slate-50">{commit.short_sha}</span>
+                                                                </div>
+                                                                <p className="mt-1 text-xs text-slate-500">
+                                                                    {commit.author || 'Unknown author'} • {formatDateTime(commit.authored_at)}
+                                                                </p>
+                                                                {hasBody && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setExpandedCommits((prev) => ({ ...prev, [commit.sha]: !prev[commit.sha] }))}
+                                                                        className="mt-1.5 text-xs font-medium text-teal-700 hover:text-teal-900"
+                                                                    >
+                                                                        {isExpanded ? 'Hide details' : 'Show details'}
+                                                                    </button>
+                                                                )}
+                                                                {hasBody && isExpanded && (
+                                                                    <pre className="mt-2 whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600">
+                                                                        {commit.message.split('\n').slice(1).join('\n').trim()}
+                                                                    </pre>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <div className="flex items-center justify-between pt-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                                                            disabled={historyPage <= 1}
+                                                            className="text-xs font-medium text-teal-700 hover:text-teal-900 disabled:text-slate-400 disabled:cursor-not-allowed"
+                                                        >
+                                                            &larr; Newer
+                                                        </button>
+                                                        <span className="text-xs text-slate-500">Page {historyPage}</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setHistoryPage((p) => p + 1)}
+                                                            disabled={!commitHistoryQuery.data?.has_more}
+                                                            className="text-xs font-medium text-teal-700 hover:text-teal-900 disabled:text-slate-400 disabled:cursor-not-allowed"
+                                                        >
+                                                            Older &rarr;
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <p className="rounded-md border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500">
+                                                    No commit history available.
+                                                </p>
+                                            )}
+                                        </>
                                     )}
                                 </div>
                             </div>

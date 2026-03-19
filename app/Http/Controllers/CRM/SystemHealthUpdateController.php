@@ -27,6 +27,14 @@ class SystemHealthUpdateController extends Controller
         return response()->json($this->deploymentStatusService->logSnapshot());
     }
 
+    public function commitHistory(Request $request)
+    {
+        $page = max(1, (int) $request->query('page', 1));
+        $perPage = min(50, max(1, (int) $request->query('per_page', 10)));
+
+        return response()->json($this->deploymentStatusService->commitHistory($page, $perPage));
+    }
+
     public function deploy(Request $request)
     {
         $validated = $request->validate([
