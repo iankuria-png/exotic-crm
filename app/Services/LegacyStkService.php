@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Payment;
 use App\Models\Platform;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use RuntimeException;
@@ -12,7 +13,8 @@ class LegacyStkService
 {
     public function __construct(
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly KopokopoService $kopokopoService
+        private readonly KopokopoService $kopokopoService,
+        private readonly PaymentAttemptService $paymentAttemptService
     ) {
     }
 
@@ -48,6 +50,61 @@ class LegacyStkService
         }
 
         return $this->initiateDjangoProxy($environment, $credentials, $payload);
+    }
+
+    public function initiateWithTelemetry(
+        Payment $payment,
+        array $attributes = [],
+        ?Request $request = null,
+        ?int $actorId = null
+    ): array {
+        $attemptStartedAt = microtime(true);
+        $requestMeta = $request
+            ? $this->paymentAttemptService->requestMetaFromRequest($request, array_filter([
+                'channel' => 'stk',
+                'phone' => $attributes['phone'] ?? $payment->phone,
+                'amount' => (float) $payment->amount,
+                'duration' => $attributes['duration'] ?? $payment->duration,
+            ], static fn ($value) => $value !== null && $value !== ''))
+            : null;
+
+        try {
+            $result = $this->initiate($payment, $attributes);
+        } catch (\Throwable $exception) {
+            $this->paymentAttemptService->record($payment, 'stk_initiate', 'failed', [
+                'provider' => null,
+                'error_code' => 'preflight_exception',
+                'error_message' => mb_substr($exception->getMessage(), 0, 500),
+                'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+                'request_meta' => $requestMeta,
+                'created_by' => $actorId,
+            ]);
+
+            throw $exception;
+        }
+
+        $status = ($result['success'] ?? false) ? 'success' : 'failed';
+        $this->paymentAttemptService->record($payment, 'stk_initiate', $status, [
+            'provider' => $result['provider'] ?? null,
+            'error_code' => $status === 'failed'
+                ? (!empty($result['http_status']) ? 'upstream_http_' . $result['http_status'] : 'initiation_failed')
+                : null,
+            'error_message' => $status === 'failed' ? ($result['message'] ?? null) : null,
+            'http_status' => $result['http_status'] ?? null,
+            'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+            'request_meta' => $requestMeta,
+            'response_meta' => array_filter([
+                'message' => $result['message'] ?? null,
+                'transport' => $result['transport'] ?? null,
+                'upstream_url' => $result['upstream_url'] ?? null,
+                'provider_environment' => $result['provider_environment'] ?? null,
+                'provider_reference' => $result['provider_reference'] ?? null,
+                'provider_response' => $result['provider_response'] ?? null,
+            ], static fn ($value) => $value !== null && $value !== ''),
+            'created_by' => $actorId,
+        ]);
+
+        return $result;
     }
 
     private function initiateDjangoProxy(string $environment, array $credentials, array $payload): array

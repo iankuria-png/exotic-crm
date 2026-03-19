@@ -5,9 +5,11 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
+use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 class BillingGatewayService
 {
@@ -17,7 +19,8 @@ class BillingGatewayService
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
-        private readonly KopokopoService $kopokopoService
+        private readonly KopokopoService $kopokopoService,
+        private readonly PaymentAttemptService $paymentAttemptService
     ) {
     }
 
@@ -25,7 +28,8 @@ class BillingGatewayService
         Client $client,
         string $provider,
         float $amount,
-        array $options = []
+        array $options = [],
+        ?Request $request = null
     ): array {
         $amount = round($amount, 2);
         if ($amount <= 0) {
@@ -98,7 +102,7 @@ class BillingGatewayService
         $action = match ($provider) {
             'paystack' => $this->initiatePaystack($payment, $context),
             'pesapal' => $this->initiatePesapal($payment, $context),
-            'mpesa_stk' => $this->initiateMpesaStk($payment, $context, $options),
+            'mpesa_stk' => $this->initiateMpesaStk($payment, $context, $options, $request),
             default => throw new InvalidArgumentException('Unsupported wallet billing provider.'),
         };
 
@@ -110,7 +114,7 @@ class BillingGatewayService
         ];
     }
 
-    public function retryMpesaTopup(Payment $payment, array $options = []): array
+    public function retryMpesaTopup(Payment $payment, array $options = [], ?Request $request = null): array
     {
         $payment->loadMissing(['client.platform', 'platform', 'client']);
         if ($payment->purpose !== 'wallet_topup' || $payment->provider_key !== 'mpesa_stk') {
@@ -135,7 +139,7 @@ class BillingGatewayService
         $action = $this->dispatchMpesaStk($payment, $context, [
             'phone' => $options['phone'] ?? $payment->phone,
             'retry' => true,
-        ]);
+        ], $request);
         $storedAction = $action;
         unset($storedAction['provider_payload']);
 
@@ -227,6 +231,14 @@ class BillingGatewayService
                 (string) ($verification['message'] ?? 'Paystack transaction did not complete successfully.'),
                 $verifiedData
             );
+            $this->recordBillingCallbackAttempt($failed, 'paystack_webhook', 'failed', [
+                'error_message' => (string) ($verification['message'] ?? 'Paystack transaction did not complete successfully.'),
+                'response_meta' => [
+                    'reference' => $reference,
+                    'gateway_response' => $verifiedData['gateway_response'] ?? null,
+                    'verification_status' => $verification['status'] ?? null,
+                ],
+            ]);
 
             return [
                 'payment' => $failed,
@@ -236,6 +248,13 @@ class BillingGatewayService
 
         $completed = $this->completeVerifiedPayment($payment, $verifiedData, [
             'transaction_reference' => $verifiedData['reference'] ?? $reference,
+        ]);
+        $this->recordBillingCallbackAttempt($completed['payment'], 'paystack_webhook', 'success', [
+            'response_meta' => [
+                'reference' => $verifiedData['reference'] ?? $reference,
+                'gateway_response' => $verifiedData['gateway_response'] ?? null,
+                'verification_status' => $verification['status'] ?? null,
+            ],
         ]);
 
         return array_merge($completed, [
@@ -279,6 +298,14 @@ class BillingGatewayService
                 (string) ($verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
                 $verified
             );
+            $this->recordBillingCallbackAttempt($failed, 'pesapal_ipn', 'failed', [
+                'error_message' => (string) ($verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
+                'response_meta' => [
+                    'merchant_reference' => $merchantReference,
+                    'tracking_id' => $trackingId,
+                    'verification_status' => $verification['status'] ?? null,
+                ],
+            ]);
 
             return [
                 'payment' => $failed,
@@ -288,6 +315,13 @@ class BillingGatewayService
 
         $completed = $this->completeVerifiedPayment($payment, $verified, [
             'transaction_reference' => $trackingId,
+        ]);
+        $this->recordBillingCallbackAttempt($completed['payment'], 'pesapal_ipn', 'success', [
+            'response_meta' => [
+                'merchant_reference' => $merchantReference,
+                'tracking_id' => $trackingId,
+                'verification_status' => $verification['status'] ?? null,
+            ],
         ]);
 
         return array_merge($completed, [
@@ -318,6 +352,16 @@ class BillingGatewayService
         $resourceStatus = strtolower((string) ($payload['resourceStatus'] ?? ''));
         if (str_contains($topic, 'reversed') || $resourceStatus === 'reversed') {
             $failed = $this->failPayment($payment, 'M-Pesa transaction was reversed.', $payload);
+            $this->recordBillingCallbackAttempt($failed, 'kopokopo_webhook', 'failed', [
+                'error_code' => 'reversed',
+                'error_message' => 'M-Pesa transaction was reversed.',
+                'response_meta' => [
+                    'topic' => $payload['topic'] ?? $payload['eventType'] ?? null,
+                    'resourceStatus' => $payload['resourceStatus'] ?? null,
+                    'reference' => $payload['reference'] ?? null,
+                    'metadata_payment_id' => $metadata['payment_id'] ?? null,
+                ],
+            ]);
 
             return [
                 'payment' => $failed,
@@ -327,6 +371,14 @@ class BillingGatewayService
 
         $completed = $this->completeTopupPayment($payment, $payload, [
             'transaction_reference' => $payload['reference'] ?? $payment->transaction_reference,
+        ]);
+        $this->recordBillingCallbackAttempt($completed['payment'], 'kopokopo_webhook', 'success', [
+            'response_meta' => [
+                'topic' => $payload['topic'] ?? $payload['eventType'] ?? null,
+                'resourceStatus' => $payload['resourceStatus'] ?? null,
+                'reference' => $payload['reference'] ?? null,
+                'metadata_payment_id' => $metadata['payment_id'] ?? null,
+            ],
         ]);
 
         return array_merge($completed, [
@@ -410,9 +462,9 @@ class BillingGatewayService
         return $action;
     }
 
-    private function initiateMpesaStk(Payment $payment, array $context, array $options = []): array
+    private function initiateMpesaStk(Payment $payment, array $context, array $options = [], ?Request $request = null): array
     {
-        $action = $this->dispatchMpesaStk($payment, $context, $options);
+        $action = $this->dispatchMpesaStk($payment, $context, $options, $request);
         $storedAction = $action;
         unset($storedAction['provider_payload']);
 
@@ -433,54 +485,106 @@ class BillingGatewayService
         return $action;
     }
 
-    private function dispatchMpesaStk(Payment $payment, array $context, array $options = []): array
+    private function dispatchMpesaStk(Payment $payment, array $context, array $options = [], ?Request $request = null): array
     {
         $credentials = $context['provider_credentials'];
         $transport = (string) ($credentials['transport'] ?? 'django_proxy');
         $phone = trim((string) ($options['phone'] ?? $payment->phone ?? ''));
+        $requestMeta = $this->requestMetaFromRequest($request, [
+            'channel' => 'wallet_topup_stk',
+            'phone' => $phone,
+            'amount' => (float) $payment->amount,
+            'purpose' => $payment->purpose,
+        ]);
+        $provider = 'kopokopo_direct';
+        $providerEnvironment = $payment->provider_environment ?: ($context['environment'] ?? null);
+        $upstreamUrl = (string) config('services.kopokopo.base_url', '');
+        $attemptStartedAt = microtime(true);
+        $providerResponse = null;
+        $paymentAlreadyFailed = false;
 
-        if ($phone === '') {
-            throw new InvalidArgumentException('A valid phone number is required for M-Pesa STK push.');
+        try {
+            if ($phone === '') {
+                throw new InvalidArgumentException('A valid phone number is required for M-Pesa STK push.');
+            }
+
+            if ($transport !== 'direct_provider') {
+                throw new InvalidArgumentException('M-Pesa wallet top-up requires the direct_provider transport for this CRM contract.');
+            }
+
+            $result = $this->kopokopoService->initiateStkPush(
+                $phone,
+                (float) $payment->amount,
+                $this->billingModeService->buildAbsoluteUrl($payment->platform, '/api/billing/mpesa/callback'),
+                [
+                    'payment_id' => (int) $payment->id,
+                    'platform_id' => (int) $payment->platform_id,
+                    'client_id' => (int) $payment->client_id,
+                    'purpose' => $payment->purpose,
+                    'reference_number' => $payment->reference_number,
+                ]
+            );
+            $providerResponse = is_array($result) ? $result : null;
+
+            if (($result['status'] ?? null) !== 'success') {
+                $message = (string) ($result['error'] ?? $result['data'] ?? 'M-Pesa STK push failed.');
+                $this->failPayment($payment, $message, $providerResponse ?? []);
+                $paymentAlreadyFailed = true;
+
+                throw new RuntimeException($message);
+            }
+
+            $providerReference = (string) ($result['location'] ?? '');
+            if ($providerReference !== '') {
+                $payment->forceFill([
+                    'transaction_reference' => $providerReference,
+                ])->save();
+            }
+
+            $this->paymentAttemptService->record($payment, 'stk_initiate', 'success', [
+                'provider' => $provider,
+                'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+                'request_meta' => $requestMeta,
+                'response_meta' => array_filter([
+                    'transport' => $transport,
+                    'upstream_url' => $upstreamUrl !== '' ? $upstreamUrl : null,
+                    'provider_environment' => $providerEnvironment,
+                    'provider_reference' => $providerReference !== '' ? $providerReference : null,
+                    'provider_response' => $providerResponse,
+                ], static fn ($value) => $value !== null && $value !== ''),
+                'created_by' => $this->actorIdFromRequest($request),
+            ]);
+
+            return [
+                'type' => 'stk_pending',
+                'message' => 'STK push sent. Complete the prompt on your phone.',
+                'retry_available' => true,
+                'poll_after_seconds' => (int) data_get($context, 'system.topup_poll_interval_seconds', 10),
+                'provider_reference' => $providerReference,
+                'provider_payload' => $result,
+            ];
+        } catch (Throwable $exception) {
+            $this->paymentAttemptService->record($payment, 'stk_initiate', 'failed', [
+                'provider' => $provider,
+                'error_code' => $exception instanceof InvalidArgumentException ? 'preflight_exception' : 'initiation_failed',
+                'error_message' => mb_substr($exception->getMessage(), 0, 500),
+                'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+                'request_meta' => $requestMeta,
+                'response_meta' => array_filter([
+                    'transport' => $transport,
+                    'upstream_url' => $upstreamUrl !== '' ? $upstreamUrl : null,
+                    'provider_environment' => $providerEnvironment,
+                    'provider_response' => $providerResponse,
+                ], static fn ($value) => $value !== null && $value !== ''),
+                'created_by' => $this->actorIdFromRequest($request),
+            ]);
+
+            if (!$paymentAlreadyFailed) {
+                $this->failPayment($payment, $exception->getMessage(), $providerResponse ?? []);
+            }
+
+            throw $exception;
         }
-
-        if ($transport !== 'direct_provider') {
-            throw new InvalidArgumentException('M-Pesa wallet top-up requires the direct_provider transport for this CRM contract.');
-        }
-
-        $result = $this->kopokopoService->initiateStkPush(
-            $phone,
-            (float) $payment->amount,
-            $this->billingModeService->buildAbsoluteUrl($payment->platform, '/api/billing/mpesa/callback'),
-            [
-                'payment_id' => (int) $payment->id,
-                'platform_id' => (int) $payment->platform_id,
-                'client_id' => (int) $payment->client_id,
-                'purpose' => $payment->purpose,
-                'reference_number' => $payment->reference_number,
-            ]
-        );
-
-        if (($result['status'] ?? null) !== 'success') {
-            $message = (string) ($result['error'] ?? $result['data'] ?? 'M-Pesa STK push failed.');
-            $this->failPayment($payment, $message, is_array($result) ? $result : []);
-            throw new RuntimeException($message);
-        }
-
-        $providerReference = (string) ($result['location'] ?? '');
-        if ($providerReference !== '') {
-            $payment->forceFill([
-                'transaction_reference' => $providerReference,
-            ])->save();
-        }
-
-        return [
-            'type' => 'stk_pending',
-            'message' => 'STK push sent. Complete the prompt on your phone.',
-            'retry_available' => true,
-            'poll_after_seconds' => (int) data_get($context, 'system.topup_poll_interval_seconds', 10),
-            'provider_reference' => $providerReference,
-            'provider_payload' => $result,
-        ];
     }
 
     private function normalizeAutoSubscribe(Platform $platform, array $walletConfig, mixed $payload): ?array
@@ -563,6 +667,30 @@ class BillingGatewayService
     private function completeVerifiedPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
         return $this->paymentCompletionService->complete($payment, $providerPayload, $options);
+    }
+
+    private function requestMetaFromRequest(?Request $request, array $extra = []): ?array
+    {
+        if (!$request) {
+            return null;
+        }
+
+        return $this->paymentAttemptService->requestMetaFromRequest($request, $extra);
+    }
+
+    private function actorIdFromRequest(?Request $request): ?int
+    {
+        return $request?->user()?->id ?: null;
+    }
+
+    private function recordBillingCallbackAttempt(Payment $payment, string $provider, string $status, array $attributes = []): void
+    {
+        $this->paymentAttemptService->record($payment, 'callback_update', $status, [
+            'provider' => $provider,
+            'error_code' => $attributes['error_code'] ?? null,
+            'error_message' => $attributes['error_message'] ?? null,
+            'response_meta' => is_array($attributes['response_meta'] ?? null) ? $attributes['response_meta'] : null,
+        ]);
     }
 
     private function topupReference(int $platformId, int $clientId, string $provider, string $idempotencyKey): string

@@ -776,9 +776,14 @@ class PaymentQueueController extends Controller
         $manualCloseMeta = $rawPayload['manual_close'] ?? null;
         $linkProxy = $this->buildLinkProxyDiagnostics($payment, $attempts, $auditEntries);
 
+        $initiationTypes = ['stk_initiate', 'send_payment_link', 'retry_stk'];
         $requestMeta = $attempts
+            ->filter(fn($attempt) => in_array($attempt->attempt_type, $initiationTypes, true))
             ->map(fn($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
-            ->first(fn($meta) => is_array($meta) && !empty($meta));
+            ->first(fn($meta) => is_array($meta) && !empty($meta))
+            ?? $attempts
+                ->map(fn($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)
+                ->first(fn($meta) => is_array($meta) && !empty($meta));
 
         $latencies = $attempts
             ->pluck('latency_ms')
@@ -823,6 +828,7 @@ class PaymentQueueController extends Controller
                 'last_latency_ms' => $latestAttempt?->latency_ms ? (int) $latestAttempt->latency_ms : null,
             ],
             'browser_meta' => [
+                'context_type' => $requestMeta['context_type'] ?? null,
                 'origin_url' => $requestMeta['origin_url'] ?? null,
                 'referrer' => $requestMeta['referrer'] ?? null,
                 'user_agent_family' => $requestMeta['user_agent_family'] ?? null,
@@ -1451,7 +1457,7 @@ class PaymentQueueController extends Controller
 
         if ($latestFailedAttempt) {
             return match ($latestFailedAttempt->attempt_type) {
-                'retry_stk' => 'stk_initiation',
+                'stk_initiate', 'retry_stk' => 'stk_initiation',
                 'send_payment_link' => 'link_delivery',
                 'callback_update' => 'callback_processing',
                 'provider_status_check', 'reconciliation_check' => 'provider_verification',

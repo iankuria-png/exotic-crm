@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\AuditLog;
 use App\Models\Payment;
+use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
@@ -104,6 +105,139 @@ class LegacyStkRoutingTest extends TestCase
         $this->assertSame('failed', data_get($audit->after_state, 'after_status'));
         $this->assertSame(522, data_get($audit->after_state, 'http_status'));
         $this->assertSame('https://payments.exotic-ads.com/api/payments', data_get($audit->after_state, 'upstream_url'));
+    }
+
+    public function test_initiate_stk_payment_records_attempt_with_browser_context(): void
+    {
+        config([
+            'services.django.base_url' => 'https://legacy-default.example.test/api/payments',
+        ]);
+
+        $platform = $this->createPlatform('Kenya');
+        $product = $this->createProduct($platform);
+        $admin = $this->createUser('admin');
+
+        $this->configureMpesaProxy($platform, $admin->id, 'https://payments.exotic-ads.com/api/payments', '76');
+
+        Http::fake([
+            'https://payments.exotic-ads.com/api/payments/initiate/' => Http::response([
+                'message' => 'Payment initiated',
+                'payment_id' => 321,
+            ], 200),
+        ]);
+
+        $response = $this->withHeaders([
+            'Origin' => 'https://www.exoticnairobi.com',
+            'Referer' => 'https://www.exoticnairobi.com/escort/ada',
+            'User-Agent' => 'Mozilla/5.0 Chrome/123.0 Safari/537.36',
+        ])->postJson('/api/initiate-stk-payment', [
+            'product_id' => $product->id,
+            'platform_id' => $platform->id,
+            'user_id' => 7788,
+            'phone' => '254700111222',
+            'duration' => 'monthly',
+            'first_name' => 'Ada',
+            'last_name' => 'Client',
+            'email' => 'ada@example.test',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', true);
+
+        /** @var Payment $payment */
+        $payment = Payment::query()->latest('id')->firstOrFail();
+        $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->latest('id')->firstOrFail();
+
+        $this->assertSame('stk_initiate', $attempt->attempt_type);
+        $this->assertSame('success', $attempt->status);
+        $this->assertSame('django_stk', $attempt->provider);
+        $this->assertSame('browser', data_get($attempt->request_meta, 'context_type'));
+        $this->assertSame('https://www.exoticnairobi.com', data_get($attempt->request_meta, 'origin_url'));
+    }
+
+    public function test_manual_stk_push_records_attempt(): void
+    {
+        config([
+            'services.django.base_url' => 'https://legacy-default.example.test/api/payments',
+        ]);
+
+        $platform = $this->createPlatform('Kenya');
+        $product = $this->createProduct($platform);
+        $admin = $this->createUser('admin');
+
+        $this->configureMpesaProxy($platform, $admin->id, 'https://payments.exotic-ads.com/api/payments', '76');
+
+        Http::fake([
+            'https://payments.exotic-ads.com/api/payments/initiate/' => Http::response([
+                'message' => 'Payment initiated',
+                'payment_id' => 654,
+            ], 200),
+        ]);
+
+        $response = $this->withHeaders([
+            'Origin' => 'https://www.exoticnairobi.com',
+            'Referer' => 'https://www.exoticnairobi.com/escort/grace',
+            'User-Agent' => 'Mozilla/5.0 Chrome/123.0 Safari/537.36',
+        ])->postJson('/api/initiate-payment', [
+            'product_id' => $product->id,
+            'platform_id' => $platform->id,
+            'user_id' => 8899,
+            'phone' => '0700111222',
+            'duration' => 'monthly',
+            'first_name' => 'Grace',
+            'last_name' => 'Client',
+            'email' => 'grace@example.test',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', true)
+            ->assertJsonPath('phone', '254700111222');
+
+        /** @var Payment $payment */
+        $payment = Payment::query()->latest('id')->firstOrFail();
+        $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->latest('id')->firstOrFail();
+
+        $this->assertSame('stk_initiate', $attempt->attempt_type);
+        $this->assertSame('success', $attempt->status);
+        $this->assertSame('django_stk', $attempt->provider);
+        $this->assertSame('browser', data_get($attempt->request_meta, 'context_type'));
+    }
+
+    public function test_initiate_preflight_exception_records_failed_attempt(): void
+    {
+        config([
+            'services.django.base_url' => '',
+        ]);
+
+        $platform = $this->createPlatform('Kenya');
+        $product = $this->createProduct($platform);
+        $admin = $this->createUser('admin');
+
+        $this->configureMpesaProxy($platform, $admin->id, '', '76');
+
+        $response = $this->withHeaders([
+            'Origin' => 'https://www.exoticnairobi.com',
+            'Referer' => 'https://www.exoticnairobi.com/escort/mary',
+            'User-Agent' => 'Mozilla/5.0 Chrome/123.0 Safari/537.36',
+        ])->postJson('/api/initiate-stk-payment', [
+            'product_id' => $product->id,
+            'platform_id' => $platform->id,
+            'user_id' => 9900,
+            'phone' => '254700111222',
+            'duration' => 'monthly',
+        ]);
+
+        $response->assertStatus(500)
+            ->assertJsonPath('status', false);
+
+        /** @var Payment $payment */
+        $payment = Payment::query()->latest('id')->firstOrFail();
+        $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->latest('id')->firstOrFail();
+
+        $this->assertSame('failed', $attempt->status);
+        $this->assertSame('preflight_exception', $attempt->error_code);
+        $this->assertNull($attempt->provider);
+        $this->assertSame('failed', $payment->fresh()->status);
     }
 
     private function configureMpesaProxy(Platform $platform, int $userId, string $baseUrl, string $organizationCode): void

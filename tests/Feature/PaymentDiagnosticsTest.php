@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Payment;
+use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Models\User;
@@ -159,6 +160,137 @@ class PaymentDiagnosticsTest extends TestCase
         $recommendationKeys = collect($response->json('recommendations'))->pluck('key')->all();
         $this->assertContains('manual_review', $recommendationKeys);
         $this->assertNotContains('create_subscription', $recommendationKeys);
+    }
+
+    public function test_stk_initiate_attempt_populates_diagnostics(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('mpesa_stk');
+
+        $attempt = PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'stk_initiate',
+            'provider' => 'django_stk',
+            'status' => 'success',
+            'latency_ms' => 1365,
+            'request_meta' => [
+                'context_type' => 'browser',
+                'origin_url' => 'https://www.exoticnairobi.com',
+                'referrer' => 'https://www.exoticnairobi.com/escort/ada',
+                'user_agent_family' => 'Chrome',
+                'device_type' => 'desktop',
+                'ip_hash' => 'hash-browser-1',
+            ],
+            'response_meta' => [
+                'transport' => 'django_proxy',
+            ],
+        ]);
+        $attempt->forceFill([
+            'created_at' => now()->subMinutes(5),
+            'updated_at' => now()->subMinutes(5),
+        ])->saveQuietly();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('performance.attempt_count', 1)
+            ->assertJsonPath('performance.avg_latency_ms', 1365)
+            ->assertJsonPath('browser_meta.context_type', 'browser')
+            ->assertJsonPath('browser_meta.origin_url', 'https://www.exoticnairobi.com')
+            ->assertJsonPath('browser_meta.referrer', 'https://www.exoticnairobi.com/escort/ada')
+            ->assertJsonPath('browser_meta.user_agent_family', 'Chrome')
+            ->assertJsonPath('attempts.0.attempt_type', 'stk_initiate');
+    }
+
+    public function test_browser_meta_prefers_initiation_over_callback(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('mpesa_stk');
+
+        $initiation = PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'stk_initiate',
+            'provider' => 'django_stk',
+            'status' => 'success',
+            'latency_ms' => 980,
+            'request_meta' => [
+                'context_type' => 'browser',
+                'origin_url' => 'https://www.exoticnairobi.com',
+                'referrer' => 'https://www.exoticnairobi.com/escort/grace',
+                'user_agent_family' => 'Chrome',
+                'device_type' => 'mobile',
+                'ip_hash' => 'hash-browser-2',
+            ],
+        ]);
+        $initiation->forceFill([
+            'created_at' => now()->subMinutes(4),
+            'updated_at' => now()->subMinutes(4),
+        ])->saveQuietly();
+
+        $callback = PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'kopokopo_webhook',
+            'status' => 'success',
+            'request_meta' => [
+                'context_type' => 'server',
+                'origin_url' => 'https://internal-callback.example.test',
+                'referrer' => 'https://internal-callback.example.test/webhook',
+                'user_agent_family' => 'Other',
+                'device_type' => 'desktop',
+                'ip_hash' => 'hash-server-1',
+            ],
+        ]);
+        $callback->forceFill([
+            'created_at' => now()->subMinute(),
+            'updated_at' => now()->subMinute(),
+        ])->saveQuietly();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('attempts.0.attempt_type', 'callback_update')
+            ->assertJsonPath('browser_meta.context_type', 'browser')
+            ->assertJsonPath('browser_meta.origin_url', 'https://www.exoticnairobi.com')
+            ->assertJsonPath('browser_meta.referrer', 'https://www.exoticnairobi.com/escort/grace')
+            ->assertJsonPath('browser_meta.device_type', 'mobile');
+    }
+
+    public function test_mpesa_reversal_populates_failure_diagnostics(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('mpesa_stk');
+
+        $payment->forceFill([
+            'status' => 'reversed',
+            'failure_reason' => 'Payment reversed by provider',
+        ])->save();
+
+        $attempt = PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'kopokopo_webhook',
+            'status' => 'failed',
+            'error_code' => 'reversed',
+            'error_message' => 'Payment reversed by provider',
+            'response_meta' => [
+                'resourceStatus' => 'Reversed',
+            ],
+        ]);
+        $attempt->forceFill([
+            'created_at' => now()->subMinute(),
+            'updated_at' => now()->subMinute(),
+        ])->saveQuietly();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('failure.stage', 'callback_processing')
+            ->assertJsonPath('failure.reason', 'Payment reversed by provider')
+            ->assertJsonPath('failure.error_code', 'reversed');
     }
 
     private function seedProxyPayment(string $provider): array

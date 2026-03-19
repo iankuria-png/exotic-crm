@@ -31,6 +31,8 @@ class PaymentController extends Controller
 
     public function initiate(Request $request)
     {
+        $payment = null;
+
         try {
             $request->validate([
                 'product_id' => 'required',
@@ -70,13 +72,13 @@ class PaymentController extends Controller
                 'status' => 'initiated'
             ]);
     
-            $result = $this->legacyStkService->initiate($payment, [
+            $result = $this->legacyStkService->initiateWithTelemetry($payment, [
                 'phone' => $request->phone,
                 'duration' => $request->duration,
                 'first_name' => $request->first_name,
                 'last_name' => $request->last_name,
                 'email' => $request->email,
-            ]);
+            ], $request);
 
             if ($result['success']) {
                 $updates = [
@@ -135,6 +137,22 @@ class PaymentController extends Controller
             ], 400);
     
         } catch (\Exception $e) {
+            if ($payment instanceof Payment && !in_array((string) $payment->status, ['completed', 'failed'], true)) {
+                $payment->forceFill([
+                    'status' => 'failed',
+                    'failure_reason' => mb_substr('System error: ' . $e->getMessage(), 0, 190),
+                    'provider_key' => 'mpesa_stk',
+                    'raw_payload' => array_merge(is_array($payment->raw_payload) ? $payment->raw_payload : [], [
+                        'source' => 'legacy_payment_initiate',
+                        'exception' => [
+                            'message' => $e->getMessage(),
+                            'file' => $e->getFile(),
+                            'line' => $e->getLine(),
+                        ],
+                    ]),
+                ])->save();
+            }
+
             \Log::error("STK push error", ["exception" => $e->getMessage()]);
             return response()->json([
                 "status" => false,
@@ -209,7 +227,7 @@ class PaymentController extends Controller
                 $this->recordCallbackAttempt(
                     $request,
                     $payment,
-                    'reversed',
+                    'failed',
                     $resource,
                     $rawData,
                     'Payment reversed by provider',
@@ -2104,6 +2122,8 @@ class PaymentController extends Controller
     
     public function manualStkPush(Request $request)
     {
+        $payment = null;
+
         try {
             // 1. Validate request - update duration validation to include weekly
             $validated = $request->validate([
@@ -2160,13 +2180,13 @@ class PaymentController extends Controller
                 'status'      => 'initiated'
             ]);
     
-            $result = $this->legacyStkService->initiate($payment, [
+            $result = $this->legacyStkService->initiateWithTelemetry($payment, [
                 'phone' => $phone,
                 'duration' => $validated['duration'],
                 'first_name' => $validated['first_name'] ?? null,
                 'last_name' => $validated['last_name'] ?? null,
                 'email' => $validated['email'] ?? null,
-            ]);
+            ], $request);
 
             if ($result['success']) {
                 $updates = [
@@ -2228,6 +2248,22 @@ class PaymentController extends Controller
             ], 400);
     
         } catch (\Exception $e) {
+            if ($payment instanceof Payment && !in_array((string) $payment->status, ['completed', 'failed'], true)) {
+                $payment->forceFill([
+                    'status' => 'failed',
+                    'failure_reason' => mb_substr('System error: ' . $e->getMessage(), 0, 190),
+                    'provider_key' => 'mpesa_stk',
+                    'raw_payload' => array_merge(is_array($payment->raw_payload) ? $payment->raw_payload : [], [
+                        'source' => 'legacy_payment_initiate_v2',
+                        'exception' => [
+                            'message' => $e->getMessage(),
+                            'file' => $e->getFile(),
+                            'line' => $e->getLine(),
+                        ],
+                    ]),
+                ])->save();
+            }
+
             \Log::error("STK push error", ["exception" => $e->getMessage()]);
             return response()->json([
                 "status" => false,

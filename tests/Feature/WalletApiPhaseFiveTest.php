@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Payment;
+use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
@@ -379,6 +380,12 @@ class WalletApiPhaseFiveTest extends TestCase
             'id' => $payment->id,
             'status' => 'completed',
         ]);
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'paystack_webhook',
+            'status' => 'success',
+        ]);
         $this->assertSame('2000.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
         $this->assertDatabaseCount('wallet_transactions', 1);
     }
@@ -522,6 +529,12 @@ class WalletApiPhaseFiveTest extends TestCase
             'client_id' => $client->id,
             'status' => 'active',
         ]);
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'pesapal_ipn',
+            'status' => 'success',
+        ]);
         $this->assertDatabaseCount('wallet_transactions', 0);
         $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
     }
@@ -567,6 +580,14 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('action.retry_available', true);
 
         $paymentId = (int) $initiate->json('payment.id');
+        $initialAttempts = PaymentAttempt::query()
+            ->where('payment_id', $paymentId)
+            ->where('attempt_type', 'stk_initiate')
+            ->get();
+        $this->assertCount(1, $initialAttempts);
+        $this->assertSame('success', $initialAttempts->first()->status);
+        $this->assertSame('kopokopo_direct', $initialAttempts->first()->provider);
+        $this->assertSame('wallet_topup_stk', data_get($initialAttempts->first()->request_meta, 'channel'));
         $this->travel(61)->seconds();
 
         $retryPayload = [
@@ -587,6 +608,74 @@ class WalletApiPhaseFiveTest extends TestCase
         $retry = $this->withHeaders($retryHeaders)->postJson('/api/billing/retry-stk', $retryPayload);
         $retry->assertOk()
             ->assertJsonPath('action.type', 'stk_pending');
+
+        $retryAttempts = PaymentAttempt::query()
+            ->where('payment_id', $paymentId)
+            ->where('attempt_type', 'stk_initiate')
+            ->orderBy('id')
+            ->get();
+        $this->assertCount(2, $retryAttempts);
+        $this->assertSame('success', $retryAttempts->last()->status);
+        $this->assertSame('kopokopo_direct', $retryAttempts->last()->provider);
+    }
+
+    public function test_mpesa_callback_records_attempt(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 350,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'mpesa_stk',
+            'provider_environment' => 'sandbox',
+            'amount' => 900,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-MPESA-001',
+            'transaction_reference' => 'WTU-MPESA-001',
+            'status' => 'pending',
+        ]);
+
+        $this->mock(KopokopoService::class, function (MockInterface $mock) use ($payment, $platform, $client) {
+            $mock->shouldReceive('handleWebhook')
+                ->once()
+                ->with('{"topic":"buygoods_transaction_received"}', 'mock-signature')
+                ->andReturn([
+                    'status' => 'success',
+                    'data' => [
+                        'topic' => 'buygoods_transaction_received',
+                        'resourceStatus' => 'Success',
+                        'reference' => 'KPK-REF-001',
+                        'metadata' => [
+                            'payment_id' => $payment->id,
+                            'platform_id' => $platform->id,
+                            'client_id' => $client->id,
+                        ],
+                    ],
+                ]);
+        });
+
+        $response = $this->call('POST', '/api/billing/mpesa/callback', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_KOPOKOPO_SIGNATURE' => 'mock-signature',
+        ], '{"topic":"buygoods_transaction_received"}');
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'kopokopo_webhook',
+            'status' => 'success',
+        ]);
     }
 
     public function test_billing_complete_route_renders_completion_view_above_spa_catch_all(): void

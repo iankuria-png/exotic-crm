@@ -959,13 +959,13 @@ class DealController extends Controller
         if ($method === 'stk') {
             $nameParts = preg_split('/\s+/', trim((string) $client->name), 2) ?: [];
             try {
-                $result = $this->legacyStkService->initiate($payment, [
+                $result = $this->legacyStkService->initiateWithTelemetry($payment, [
                     'phone' => $phone,
                     'duration' => $payment->duration ?: $deal->duration ?: 'monthly',
                     'first_name' => $nameParts[0] ?? null,
                     'last_name' => $nameParts[1] ?? null,
                     'email' => $client->email,
-                ]);
+                ], $request, optional($request->user())->id);
             } catch (\Throwable $exception) {
                 $payment->update([
                     'status' => 'failed',

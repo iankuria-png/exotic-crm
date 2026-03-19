@@ -40,15 +40,22 @@ class PaymentAttemptService
     public function requestMetaFromRequest(Request $request, array $extra = []): array
     {
         $userAgent = (string) ($request->userAgent() ?? '');
+        $origin = trim((string) ($request->header('Origin') ?? ''));
+        $referrer = trim((string) ($request->header('Referer') ?? ''));
+        $hasBrowserHeaders = $origin !== '' || $referrer !== '';
+        $contextType = $hasBrowserHeaders
+            ? 'browser'
+            : ($this->looksServerSideRequest($userAgent) ? 'server' : 'unknown');
 
         $meta = [
             'request_id' => (string) ($request->header('X-Request-Id') ?? ''),
-            'origin_url' => (string) ($request->header('Origin') ?? ''),
-            'referrer' => (string) ($request->header('Referer') ?? ''),
-            'ip_hash' => $this->hashIp($request->ip()),
-            'user_agent' => $userAgent !== '' ? $userAgent : null,
-            'user_agent_family' => $this->userAgentFamily($userAgent),
-            'device_type' => $this->deviceType($userAgent),
+            'context_type' => $contextType,
+            'origin_url' => $hasBrowserHeaders ? $origin : null,
+            'referrer' => $hasBrowserHeaders ? $referrer : null,
+            'ip_hash' => $hasBrowserHeaders ? $this->hashIp($request->ip()) : null,
+            'user_agent' => $hasBrowserHeaders && $userAgent !== '' ? $userAgent : null,
+            'user_agent_family' => $hasBrowserHeaders ? $this->userAgentFamily($userAgent) : null,
+            'device_type' => $hasBrowserHeaders ? $this->deviceType($userAgent) : null,
         ];
 
         $merged = array_merge($meta, $extra);
@@ -102,5 +109,22 @@ class PaymentAttemptService
         $salt = (string) config('app.key', 'payment_attempt_salt');
 
         return hash('sha256', $ip . '|' . $salt);
+    }
+
+    private function looksServerSideRequest(string $userAgent): bool
+    {
+        if ($userAgent === '') {
+            return false;
+        }
+
+        $ua = strtolower($userAgent);
+
+        foreach (['wordpress', 'wp-http', 'guzzlehttp', 'laravel', 'curl/', 'postman', 'insomnia'] as $needle) {
+            if (str_contains($ua, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

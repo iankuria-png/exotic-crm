@@ -47,7 +47,7 @@ class BillingController extends Controller
                 'idempotency_key' => (string) $request->attributes->get('wallet_idempotency_key'),
                 'phone' => $validated['phone'] ?? null,
                 'auto_subscribe' => $validated['auto_subscribe'] ?? null,
-            ]);
+            ], $request);
         } catch (RuntimeException|InvalidArgumentException $exception) {
             return response()->json([
                 'message' => $exception->getMessage(),
@@ -89,7 +89,7 @@ class BillingController extends Controller
         try {
             $result = $this->billingGatewayService->retryMpesaTopup($payment, [
                 'phone' => $validated['phone'] ?? null,
-            ]);
+            ], $request);
         } catch (RuntimeException|InvalidArgumentException $exception) {
             return response()->json([
                 'message' => $exception->getMessage(),
