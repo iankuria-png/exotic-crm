@@ -579,8 +579,7 @@ export default function Deals() {
         {
             key: 'actions',
             label: 'Actions',
-            width: '190px',
-            cellClassName: 'w-[190px]',
+            headerClassName: 'text-right',
             render: (row) => {
                 let primaryAction = null;
                 const overflowActions = [];
@@ -612,7 +611,11 @@ export default function Deals() {
                     overflowActions.push({ key: 'delete', label: 'Delete', variant: 'danger', onClick: () => openDialog('delete', row) });
                 }
 
-                return <RowActionMenu primaryAction={primaryAction} actions={overflowActions} />;
+                return (
+                    <div className="flex justify-end">
+                        <RowActionMenu primaryAction={primaryAction} actions={overflowActions} />
+                    </div>
+                );
             },
         },
     ];
