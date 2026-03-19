@@ -8,7 +8,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import { useToast } from '../components/ToastProvider';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
-import { retentionBandAccent, retentionBandClasses } from '../utils/retention';
+import ClientHealthSection from '../components/ClientHealthSection';
 
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -348,68 +348,6 @@ function DefinitionRow({ label, value, mono = false }) {
     );
 }
 
-function RetentionBandBadge({ band }) {
-    return (
-        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${retentionBandClasses(band)}`}>
-            {band || 'Unknown'}
-        </span>
-    );
-}
-
-function RetentionDriverBar({ componentKey, component }) {
-    const score = Number(component?.score || 0);
-    const weight = Number(component?.effective_weight || component?.base_weight || 0);
-    const width = Math.max(8, Math.min(100, score));
-
-    return (
-        <div key={componentKey} className="rounded-lg border border-slate-200 bg-white px-3 py-3">
-            <div className="flex items-start justify-between gap-3">
-                <div>
-                    <p className="text-sm font-semibold text-slate-900">{component?.label || componentKey}</p>
-                    <p className="mt-1 text-xs text-slate-500">{component?.summary || 'No signal summary available.'}</p>
-                </div>
-                <div className="text-right">
-                    <p className="text-sm font-semibold text-slate-900">{score}/100</p>
-                    <p className="text-[11px] text-slate-500">Affects {weight}% of the overall score</p>
-                </div>
-            </div>
-            <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100">
-                <div className={`h-full rounded-full ${retentionBandAccent(score >= 75 ? 'Critical' : score >= 55 ? 'Needs Attention' : score >= 30 ? 'Watchlist' : 'Stable')}`} style={{ width: `${width}%` }} />
-            </div>
-        </div>
-    );
-}
-
-function humanizeSignalKey(key) {
-    return String(key || '')
-        .replaceAll('_', ' ')
-        .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function formatRetentionSignalValue(value) {
-    if (value === null || value === undefined || value === '') {
-        return '—';
-    }
-
-    if (typeof value === 'boolean') {
-        return value ? 'Yes' : 'No';
-    }
-
-    if (typeof value === 'number') {
-        return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(1);
-    }
-
-    const asString = String(value);
-    if (/\d{4}-\d{2}-\d{2}T/.test(asString)) {
-        const date = new Date(asString);
-        if (!Number.isNaN(date.getTime())) {
-            return date.toLocaleString();
-        }
-    }
-
-    return asString;
-}
-
 export default function ClientDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -458,7 +396,6 @@ export default function ClientDetail() {
     const [dealPaymentReference, setDealPaymentReference] = useState('');
     const [dealFreeTrialPin, setDealFreeTrialPin] = useState('');
     const [dealPaymentLinkProvider, setDealPaymentLinkProvider] = useState('');
-    const [retentionTab, setRetentionTab] = useState('summary');
     const [notifyClient, setNotifyClient] = useState(false);
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
     const [notificationMessage, setNotificationMessage] = useState('');
@@ -1030,8 +967,6 @@ export default function ClientDetail() {
     const activationRequiresFreeTrialPin = activationPaymentMethod === 'free_trial';
     const activationRequiresProvider = activationPaymentMethod === 'link';
     const activationTargetPhone = client?.phone_normalized || '';
-    const retentionComponents = retentionInsight?.component_scores || {};
-    const retentionSignals = retentionInsight?.signals || {};
     const dealPaymentRequiresReference = dealPaymentMethod === 'manual';
     const dealPaymentRequiresFreeTrialPin = dealPaymentMethod === 'free_trial';
     const dealPaymentRequiresProvider = dealPaymentMethod === 'link';
@@ -1471,171 +1406,20 @@ export default function ClientDetail() {
                     </div>
                 </section>
 
-                {/* Profile Completeness Card — loaded in parallel */}
-                {completenessData && (() => {
-                    const pc = completenessData;
-                    const pct = pc.score;
-                    const barColor = pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-rose-500';
-
-                    return (
-                        <section className="crm-surface mt-3">
-                            <header className="crm-panel-header">
-                                <div>
-                                    <h3 className="crm-panel-title">Profile Completeness</h3>
-                                    <p className="crm-panel-subtitle">Key fields filled for this client's profile.</p>
-                                </div>
-                                <span className={`text-lg font-bold ${pct >= 80 ? 'text-emerald-600' : pct >= 50 ? 'text-amber-600' : 'text-rose-600'}`}>{pct}%</span>
-                            </header>
-                            <div className="p-4 space-y-3">
-                                <div className="h-2.5 w-full rounded-full bg-slate-200">
-                                    <div className={`h-2.5 rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
-                                </div>
-                                <p className="text-xs text-slate-500">{pc.filled} of {pc.total} key fields completed</p>
-                                {pc.missing?.length > 0 && (
-                                    <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2">
-                                        <p className="text-xs font-semibold text-amber-800 mb-1">Missing fields:</p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {pc.missing.map((label) => (
-                                                <span key={label} className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200">{label}</span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </section>
-                    );
-                })()}
-
-                <section className="crm-surface mt-3 overflow-hidden">
-                    <header className="crm-panel-header">
-                        <div>
-                            <h3 className="crm-panel-title">Retention Insight</h3>
-                            <p className="crm-panel-subtitle">Quick view of churn risk and follow-up signals.</p>
-                        </div>
-                        {retentionInsight?.band ? <RetentionBandBadge band={retentionInsight.band} /> : null}
-                    </header>
-
-                    <div className="border-b border-slate-100 px-4 py-2">
-                        <div className="flex flex-wrap gap-2">
-                            {[
-                                { key: 'summary', label: 'Summary' },
-                                { key: 'drivers', label: 'Score factors' },
-                                { key: 'signals', label: 'Signals' },
-                            ].map((tab) => (
-                                <button
-                                    key={tab.key}
-                                    type="button"
-                                    onClick={() => setRetentionTab(tab.key)}
-                                    className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                                        retentionTab === tab.key
-                                            ? 'bg-slate-900 text-white'
-                                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800'
-                                    }`}
-                                >
-                                    {tab.label}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="p-4">
-                        {retentionInsightLoading ? (
-                            <div className="space-y-3">
-                                <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
-                                <div className="grid gap-3 md:grid-cols-2">
-                                    <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
-                                    <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
-                                </div>
-                            </div>
-                        ) : retentionInsight ? (
-                            <>
-                                {retentionTab === 'summary' ? (
-                                    <div className="grid gap-4 lg:grid-cols-[240px,1fr]">
-                                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                                            <div className="flex items-center gap-4">
-                                                <div className={`flex h-20 w-20 items-center justify-center rounded-full border-4 border-white text-2xl font-semibold shadow-sm ${retentionBandClasses(retentionInsight.band)}`}>
-                                                    {retentionInsight.score}
-                                                </div>
-                                                <div>
-                                                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Risk score</p>
-                                                    <p className="mt-1 text-lg font-semibold text-slate-900">{retentionInsight.primary_tag || 'Behavior not classified'}</p>
-                                                    <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(retentionInsight.computed_at)}</p>
-                                                </div>
-                                            </div>
-                                            {retentionInsight.secondary_tags?.length ? (
-                                                <div className="mt-4 flex flex-wrap gap-2">
-                                                    {retentionInsight.secondary_tags.map((tag) => (
-                                                        <span key={tag} className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
-                                                            {tag}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            ) : null}
-                                        </div>
-
-                                        <div className="space-y-3">
-                                            {(retentionInsight.top_drivers || []).slice(0, 3).map((driver, index) => (
-                                                <div key={`${driver.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-4">
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <p className="text-sm font-semibold text-slate-900">{driver.label}</p>
-                                                        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">
-                                                            Risk {Number(driver.severity || 0)}
-                                                        </span>
-                                                    </div>
-                                                    <p className="mt-1.5 text-sm text-slate-600">{driver.detail}</p>
-                                                </div>
-                                            ))}
-                                            {!(retentionInsight.top_drivers || []).length ? (
-                                                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                                                    No elevated churn drivers detected right now. This client is showing a relatively steady retention pattern.
-                                                </div>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                ) : null}
-
-                                {retentionTab === 'drivers' ? (
-                                    <div className="grid gap-3 md:grid-cols-2">
-                                        {Object.entries(retentionComponents).map(([componentKey, component]) => (
-                                            <RetentionDriverBar key={componentKey} componentKey={componentKey} component={component} />
-                                        ))}
-                                    </div>
-                                ) : null}
-
-                                {retentionTab === 'signals' ? (
-                                    <div className="grid gap-3 md:grid-cols-2">
-                                        {Object.entries(retentionSignals).map(([componentKey, signals]) => (
-                                            <div key={componentKey} className="rounded-xl border border-slate-200 bg-white p-4">
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <p className="text-sm font-semibold text-slate-900">
-                                                        {retentionComponents?.[componentKey]?.label || humanizeSignalKey(componentKey)}
-                                                    </p>
-                                                    {retentionComponents?.[componentKey]?.summary ? (
-                                                        <span className="text-[11px] text-slate-400">
-                                                            {retentionComponents[componentKey].summary}
-                                                        </span>
-                                                    ) : null}
-                                                </div>
-                                                <dl className="mt-3 space-y-2">
-                                                    {Object.entries(signals || {}).map(([key, value]) => (
-                                                        <div key={key} className="flex items-start justify-between gap-3 text-sm">
-                                                            <dt className="text-slate-500">{humanizeSignalKey(key)}</dt>
-                                                            <dd className="text-right font-medium text-slate-900">{formatRetentionSignalValue(value)}</dd>
-                                                        </div>
-                                                    ))}
-                                                </dl>
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : null}
-                            </>
-                        ) : (
-                            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                                Retention insight will appear here once enough payment, subscription, engagement, and reminder history is available for this client.
-                            </div>
-                        )}
-                    </div>
-                </section>
+                <ClientHealthSection
+                    completenessData={completenessData}
+                    retentionInsight={retentionInsight}
+                    retentionLoading={retentionInsightLoading}
+                    clientId={id}
+                    onSwitchTab={(tab) => {
+                        setActiveTab(tab);
+                        const next = new URLSearchParams(searchParams);
+                        if (tab === 'overview') { next.delete('tab'); } else { next.set('tab', tab); }
+                        setSearchParams(next, { replace: true });
+                    }}
+                    onOpenActivationDialog={openActivationDialog}
+                    activeDeal={client?.deals?.find((d) => ['pending', 'awaiting_payment'].includes(d.status))}
+                />
                 </>
             ) : null}
 
