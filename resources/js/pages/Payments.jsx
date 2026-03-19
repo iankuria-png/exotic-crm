@@ -154,11 +154,72 @@ function diagnosticToneClasses(status) {
         return 'border-amber-200 bg-amber-50 text-amber-700';
     }
 
-    if (['failed', 'expired'].includes(normalized)) {
+    if (['failed', 'expired', 'reversed'].includes(normalized)) {
         return 'border-rose-200 bg-rose-50 text-rose-700';
     }
 
     return 'border-slate-200 bg-slate-100 text-slate-600';
+}
+
+function buildDiagnosisHeadline(payment, failure) {
+    const status = String(payment?.status || '').toLowerCase();
+    const stage = titleize(failure?.stage);
+
+    if (status === 'completed') {
+        return 'Payment is completed in CRM and the latest telemetry shows a resolved flow.';
+    }
+
+    if (status === 'reversed') {
+        return failure?.reason || 'Payment was reversed after provider processing.';
+    }
+
+    if (status === 'failed') {
+        if (failure?.reason) {
+            return `${stage}: ${failure.reason}`;
+        }
+
+        if (failure?.stage) {
+            return `${stage} failed and needs operator review.`;
+        }
+
+        return 'Payment failed before CRM could complete the flow.';
+    }
+
+    if (['initiated', 'pending', 'awaiting_payment'].includes(status)) {
+        if (failure?.stage === 'callback_processing') {
+            return 'CRM has provider activity, but the final callback outcome is still incomplete.';
+        }
+
+        return 'Payment is still in progress and waiting on customer or provider action.';
+    }
+
+    return 'Review the latest telemetry and recommended action before taking the next step.';
+}
+
+function resolveBrowserContextState(browserMeta) {
+    const contextType = String(browserMeta?.context_type || '').toLowerCase();
+
+    if (contextType === 'browser') {
+        return {
+            label: 'Browser captured',
+            tone: diagnosticToneClasses('success'),
+            description: 'Captured from the initiating browser request. These fields are safe to use for operator troubleshooting.',
+        };
+    }
+
+    if (contextType === 'server') {
+        return {
+            label: 'Server-side request',
+            tone: diagnosticToneClasses('pending'),
+            description: 'This flow was initiated by a server-to-server request, so browser-only fields were intentionally not captured.',
+        };
+    }
+
+    return {
+        label: 'No browser context captured',
+        tone: diagnosticToneClasses('default'),
+        description: 'CRM has no trustworthy browser-origin context for this payment yet.',
+    };
 }
 
 function formatStructuredValue(value) {
@@ -797,6 +858,7 @@ export default function Payments() {
     const diagnosticsPayment = diagnosticsData?.payment || diagnosticsDrawer.payment;
     const linkProxyData = diagnosticsData?.link_proxy || null;
     const providerStatusDisplay = providerStatusSnapshot || linkProxyData?.last_provider_check || null;
+    const diagnosticsRecommendations = diagnosticsData?.recommendations || [];
     const providerCheckEligible = ['paystack', 'pesapal'].includes(String(diagnosticsPayment?.provider_key || '').toLowerCase())
         && ['initiated', 'pending'].includes(diagnosticsPayment?.status);
     const providerCheckReady = providerCheckEligible && (!linkProxyData || !!linkProxyData.initialized_at || !!linkProxyData.provider_reference);
@@ -860,6 +922,40 @@ export default function Payments() {
             },
         ];
     }, [diagnosticsPayment?.completed_at, diagnosticsPayment?.status, diagnosticsPayment?.updated_at, linkProxyData]);
+    const diagnosticsSummary = useMemo(() => ({
+        headline: buildDiagnosisHeadline(diagnosticsPayment, diagnosticsData?.failure),
+        tone: diagnosticToneClasses(
+            diagnosticsPayment?.status === 'reversed'
+                ? 'failed'
+                : diagnosticsPayment?.status
+        ),
+    }), [diagnosticsData?.failure, diagnosticsPayment]);
+    const primaryRecommendation = useMemo(
+        () => diagnosticsRecommendations.find((item) => item.recommended) || diagnosticsRecommendations[0] || null,
+        [diagnosticsRecommendations],
+    );
+    const secondaryRecommendations = useMemo(
+        () => diagnosticsRecommendations.filter((item) => item.key !== primaryRecommendation?.key),
+        [diagnosticsRecommendations, primaryRecommendation],
+    );
+    const browserContextState = useMemo(
+        () => resolveBrowserContextState(diagnosticsData?.browser_meta || null),
+        [diagnosticsData?.browser_meta],
+    );
+    const diagnosticsFreshness = diagnosticsPayment?.updated_at
+        || providerStatusDisplay?.checked_at
+        || diagnosticsData?.attempts?.[0]?.created_at
+        || null;
+    const jumpToDiagnosticsSection = (sectionKey) => {
+        if (typeof document === 'undefined') {
+            return;
+        }
+
+        const node = document.getElementById(`payment-diagnostics-${sectionKey}`);
+        if (node) {
+            node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    };
     const sendLinkProviderEntries = useMemo(() => {
         const providers = sendLinkDialog.payment?.platform?.payment_link_providers?.providers || {};
         return Object.entries(providers).filter(([, providerConfig]) => providerConfig?.enabled !== false);
@@ -1379,294 +1475,445 @@ export default function Payments() {
             {diagnosticsDrawer.open ? (
                 <div className="fixed inset-0 z-40 flex bg-slate-900/45" onClick={closeDiagnostics}>
                     <aside
-                        className="ml-auto h-full w-full max-w-xl border-l border-slate-200 bg-white shadow-xl"
+                        className="ml-auto flex h-full w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-xl"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <header className="crm-panel-header sticky top-0 z-10 bg-white">
-                            <div>
-                                <h3 className="crm-panel-title">Payment Diagnostics</h3>
-                                <p className="crm-panel-subtitle">
-                                    Payment #{diagnosticsPayment?.id || '--'} • {diagnosticsPayment?.phone || 'No phone'}
-                                </p>
+                        <header className="crm-panel-header sticky top-0 z-10 border-b border-slate-100 bg-white/95 backdrop-blur">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <h3 className="crm-panel-title">Payment Diagnostics</h3>
+                                    <p className="crm-panel-subtitle">
+                                        Payment #{diagnosticsPayment?.id || '--'} • {diagnosticsPayment?.phone || 'No phone'}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeDiagnostics}
+                                    className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                >
+                                    Close
+                                </button>
                             </div>
+                            {diagnosticsData ? (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    {[
+                                        ['overview', 'Overview'],
+                                        ['telemetry', 'Telemetry'],
+                                        ['history', 'History'],
+                                    ].map(([key, label]) => (
+                                        <button
+                                            key={key}
+                                            type="button"
+                                            onClick={() => jumpToDiagnosticsSection(key)}
+                                            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 transition hover:border-slate-300 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : null}
                         </header>
 
-                        <div className="h-[calc(100%-132px)] space-y-4 overflow-y-auto p-4">
+                        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
                             {diagnosticsLoading ? (
-                                <p className="text-sm text-slate-500">Loading payment diagnostics...</p>
+                                <div className="animate-pulse space-y-4">
+                                    <div className="rounded-xl border border-slate-200 bg-white p-4">
+                                        <div className="h-3 w-24 rounded bg-slate-200" />
+                                        <div className="mt-3 h-6 w-4/5 rounded bg-slate-200" />
+                                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                            <div className="h-16 rounded-lg bg-slate-100" />
+                                            <div className="h-16 rounded-lg bg-slate-100" />
+                                            <div className="h-16 rounded-lg bg-slate-100" />
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-4 sm:grid-cols-2">
+                                        <div className="h-40 rounded-xl border border-slate-200 bg-white" />
+                                        <div className="h-40 rounded-xl border border-slate-200 bg-white" />
+                                    </div>
+                                    <div className="h-48 rounded-xl border border-slate-200 bg-white" />
+                                </div>
                             ) : diagnosticsError ? (
-                                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                                    Diagnostics could not be loaded for this payment.
-                                </p>
+                                <section className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                                    <div className="flex items-start gap-3">
+                                        <span className="mt-0.5 inline-flex rounded-full border border-rose-200 bg-white px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-rose-700">
+                                            Error
+                                        </span>
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-rose-900">Diagnostics unavailable</h4>
+                                            <p className="mt-1 text-sm text-rose-700">
+                                                CRM could not load this payment’s diagnostics payload right now.
+                                            </p>
+                                            <p className="mt-2 text-xs text-rose-600">
+                                                Close the drawer and retry from the payment row if the problem persists.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </section>
                             ) : diagnosticsData ? (
                                 <>
-                                    <section className="grid gap-3 sm:grid-cols-2">
-                                        <article className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Status</p>
-                                            <div className="mt-1">{renderPaymentStatusBadges(diagnosticsData.payment)}</div>
-                                        </article>
-                                        <article className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Amount</p>
-                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatCurrency(diagnosticsData.payment?.amount, resolveCurrency(diagnosticsData.payment?.currency))}</p>
-                                        </article>
-                                    </section>
-
-                                    {isSandboxPayment(diagnosticsData.payment) ? (
-                                        <section className="rounded-md border border-sky-200 bg-sky-50 p-3">
-                                            <h4 className="text-sm font-semibold text-sky-900">Sandbox/Test Safeguards</h4>
-                                            <p className="mt-1 text-sm text-sky-800">
-                                                This payment is marked as sandbox-only. Live wallet credits, subscriptions, and profile activation stay disabled.
-                                            </p>
-                                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Test result:</span> {titleize(diagnosticsData.payment?.payment_data?.test_result || diagnosticsData.payment?.status)}</p>
-                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Side effects skipped:</span> {diagnosticsData.payment?.payment_data?.side_effects_skipped ? 'Yes' : 'No'}</p>
-                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Verified at:</span> {formatDateTime(diagnosticsData.payment?.payment_data?.verified_at)}</p>
-                                                <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Environment:</span> {titleize(diagnosticsData.payment?.provider_environment || 'sandbox')}</p>
-                                            </div>
-                                        </section>
-                                    ) : null}
-
-                                    <section className="rounded-md border border-slate-200 bg-white p-3">
-                                        <h4 className="text-sm font-semibold text-slate-900">Failure Point</h4>
-                                        <p className="mt-1 text-sm text-slate-600"><span className="font-semibold text-slate-800">Stage:</span> {titleize(diagnosticsData.failure?.stage)}</p>
-                                        <p className="mt-1 text-sm text-slate-600"><span className="font-semibold text-slate-800">Reason:</span> {diagnosticsData.failure?.reason || 'Not provided'}</p>
-                                        <p className="mt-1 text-xs text-slate-500">
-                                            Error code: {diagnosticsData.failure?.error_code || '—'} • HTTP: {diagnosticsData.failure?.http_status || '—'}
-                                        </p>
-                                    </section>
-
-                                    {providerCheckEligible || providerStatusDisplay ? (
-                                        <section className="rounded-md border border-slate-200 bg-white p-3">
-                                            <div className="flex flex-wrap items-start justify-between gap-3">
-                                                <div>
-                                                    <h4 className="text-sm font-semibold text-slate-900">Live Provider Status</h4>
-                                                    <p className="mt-1 text-xs text-slate-500">
-                                                        {sandboxReconcileEligible
-                                                            ? 'Read-only verification plus sandbox-safe reconcile for hosted checkout tests.'
-                                                            : 'Read-only verification against the current Paystack or Pesapal session.'}
+                                    <section id="payment-diagnostics-overview" className="space-y-4">
+                                        <section className={`rounded-xl border p-4 ${diagnosticsSummary.tone}`}>
+                                            <div className="flex flex-wrap items-start justify-between gap-4">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        {renderPaymentStatusBadges(diagnosticsData.payment)}
+                                                        <span className="rounded-full border border-white/60 bg-white/60 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700">
+                                                            {titleize(diagnosticsData.failure?.stage || 'overview')}
+                                                        </span>
+                                                        {diagnosticsFreshness ? (
+                                                            <span className="text-[11px] font-medium text-slate-600">
+                                                                Last updated {formatDateTime(diagnosticsFreshness)}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                    <p className="mt-3 text-sm font-semibold text-slate-900">{diagnosticsSummary.headline}</p>
+                                                    <p className="mt-2 text-xs text-slate-600">
+                                                        Reason: {diagnosticsData.failure?.reason || 'Not provided'} • Error: {diagnosticsData.failure?.error_code || '—'} • HTTP: {diagnosticsData.failure?.http_status || '—'}
                                                     </p>
                                                 </div>
-                                                <div className="flex flex-wrap items-center gap-2">
+                                                <div className="grid min-w-[180px] gap-2 sm:text-right">
+                                                    <div className="rounded-lg bg-white/70 px-3 py-2">
+                                                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                            {formatCurrency(diagnosticsData.payment?.amount, resolveCurrency(diagnosticsData.payment?.currency))}
+                                                        </p>
+                                                    </div>
+                                                    <div className="rounded-lg bg-white/70 px-3 py-2">
+                                                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Attempts</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{diagnosticsData.performance?.attempt_count ?? 0}</p>
+                                                    </div>
+                                                    <div className="rounded-lg bg-white/70 px-3 py-2">
+                                                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Avg latency</p>
+                                                        <p className="mt-1 text-sm font-semibold text-slate-900">{diagnosticsData.performance?.avg_latency_ms ?? '—'} ms</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-4 flex flex-wrap gap-2">
+                                                {primaryRecommendation ? (
                                                     <button
                                                         type="button"
-                                                        onClick={() => diagnosticsPayment?.id && providerStatusMutation.mutate(diagnosticsPayment.id)}
-                                                        disabled={!providerCheckReady || providerStatusMutation.isPending}
-                                                        className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        onClick={() => triggerRecommendation(primaryRecommendation.key, diagnosticsPayment)}
+                                                        className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                                        title={primaryRecommendation.description}
                                                     >
-                                                        {providerStatusMutation.isPending ? 'Checking...' : 'Check Provider Status'}
+                                                        {primaryRecommendation.label}
                                                     </button>
-                                                    {sandboxReconcileEligible ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => diagnosticsPayment?.id && sandboxReconcileMutation.mutate({
-                                                                paymentId: diagnosticsPayment.id,
-                                                                reason: 'Sandbox reconcile from diagnostics drawer',
-                                                            })}
-                                                            disabled={sandboxReconcileMutation.isPending}
-                                                            className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                        >
-                                                            {sandboxReconcileMutation.isPending ? 'Reconciling...' : 'Sandbox Reconcile'}
-                                                        </button>
-                                                    ) : null}
-                                                </div>
-                                            </div>
-
-                                            {!providerCheckReady && providerCheckEligible ? (
-                                                <p className="mt-2 text-xs text-amber-700">
-                                                    Hosted checkout needs to initialize before CRM can verify provider-side status.
-                                                </p>
-                                            ) : null}
-
-                                            {sandboxReconcileSnapshot?.message && sandboxReconcileEligible ? (
-                                                <p className="mt-2 text-xs text-slate-600">
-                                                    {sandboxReconcileSnapshot.message}
-                                                </p>
-                                            ) : null}
-
-                                            {providerStatusDisplay ? (
-                                                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${diagnosticToneClasses(providerStatusDisplay.status)}`}>
-                                                            {titleize(providerStatusDisplay.status)}
-                                                        </span>
-                                                        <span className="text-[11px] text-slate-500">
-                                                            Checked {formatDateTime(providerStatusDisplay.checked_at)}
-                                                        </span>
-                                                    </div>
-                                                    <p className="mt-2 text-sm text-slate-700">{providerStatusDisplay.message || 'No provider message returned.'}</p>
-                                                    <p className="mt-1 text-xs text-slate-500">
-                                                        Provider: {titleize(diagnosticsPayment?.provider_key)} • Reference: {providerReference}
-                                                    </p>
-                                                </div>
-                                            ) : null}
-                                        </section>
-                                    ) : null}
-
-                                    {linkProxyData ? (
-                                        <section className="rounded-md border border-slate-200 bg-white p-3">
-                                            <div className="flex flex-wrap items-start justify-between gap-3">
-                                                <div>
-                                                    <h4 className="text-sm font-semibold text-slate-900">Proxy Link Lifecycle</h4>
-                                                    <p className="mt-1 text-xs text-slate-500">
-                                                        {titleize(linkProxyData.session_status)} • {titleize(linkProxyData.mode)}
-                                                    </p>
-                                                </div>
-                                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${diagnosticToneClasses(linkProxyData.token_status)}`}>
-                                                    {titleize(linkProxyData.token_status)}
-                                                </span>
-                                            </div>
-
-                                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Sent:</span> {formatDateTime(linkProxyData.sent_at)}</p>
-                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Opened:</span> {formatDateTime(linkProxyData.opened_at)}</p>
-                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Open count:</span> {linkProxyData.open_count ?? 0}</p>
-                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Provider ref:</span> {linkProxyData.provider_reference || '—'}</p>
-                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Environment:</span> {titleize(linkProxyData.environment)}</p>
-                                                <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Expires:</span> {formatDateTime(linkProxyData.token_expires_at)}</p>
-                                            </div>
-
-                                            <div className="mt-4 space-y-3">
-                                                {linkProxySteps.map((step, index) => {
-                                                    const firstIncompleteIndex = linkProxySteps.findIndex((item) => !item.timestamp);
-                                                    const isComplete = Boolean(step.timestamp);
-                                                    const isCurrent = !isComplete && firstIncompleteIndex === index;
-
-                                                    return (
-                                                        <div key={step.key} className="flex gap-3">
-                                                            <div className="flex flex-col items-center">
-                                                                <span
-                                                                    aria-hidden="true"
-                                                                    className={`mt-1 h-2.5 w-2.5 rounded-full ${
-                                                                        isComplete
-                                                                            ? 'bg-emerald-500'
-                                                                            : (isCurrent ? 'bg-amber-500' : 'bg-slate-300')
-                                                                    }`}
-                                                                />
-                                                                {index < linkProxySteps.length - 1 ? <span className="mt-1 h-8 w-px bg-slate-200" /> : null}
-                                                            </div>
-                                                            <div className="min-w-0 flex-1">
-                                                                <p className={`text-xs font-semibold ${isComplete ? 'text-slate-900' : (isCurrent ? 'text-amber-700' : 'text-slate-500')}`}>
-                                                                    {step.label}
-                                                                </p>
-                                                                <p className="mt-0.5 text-xs text-slate-500">
-                                                                    {step.timestamp ? formatDateTime(step.timestamp) : step.helper}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </section>
-                                    ) : null}
-
-                                    <section className="rounded-md border border-slate-200 bg-white p-3">
-                                        <h4 className="text-sm font-semibold text-slate-900">API Performance</h4>
-                                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                                            <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Attempts:</span> {diagnosticsData.performance?.attempt_count ?? 0}</p>
-                                            <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Avg:</span> {diagnosticsData.performance?.avg_latency_ms ?? '—'} ms</p>
-                                            <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">P95:</span> {diagnosticsData.performance?.p95_latency_ms ?? '—'} ms</p>
-                                        </div>
-                                    </section>
-
-                                    <section className="rounded-md border border-slate-200 bg-white p-3">
-                                        <h4 className="text-sm font-semibold text-slate-900">Browser & Request Context</h4>
-                                        <p className="mt-1 text-xs text-slate-600">Origin: {diagnosticsData.browser_meta?.origin_url || '—'}</p>
-                                        <p className="mt-1 text-xs text-slate-600">Referrer: {diagnosticsData.browser_meta?.referrer || '—'}</p>
-                                        <p className="mt-1 text-xs text-slate-600">Browser: {diagnosticsData.browser_meta?.user_agent_family || '—'} • Device: {diagnosticsData.browser_meta?.device_type || '—'}</p>
-                                        <p className="mt-1 text-xs text-slate-500">IP hash: {diagnosticsData.browser_meta?.ip_hash || '—'}</p>
-                                    </section>
-
-                                    <section className="rounded-md border border-slate-200 bg-white p-3">
-                                        <h4 className="text-sm font-semibold text-slate-900">Recommended Actions</h4>
-                                        {(diagnosticsData.recommendations || []).length === 0 ? (
-                                            <p className="mt-1 text-sm text-slate-500">No action recommendations for the current payment state.</p>
-                                        ) : (
-                                            <div className="mt-2 flex flex-wrap gap-2">
-                                                {diagnosticsData.recommendations.map((item) => (
+                                                ) : (
+                                                    <span className="rounded-md border border-white/60 bg-white/60 px-3 py-1.5 text-xs font-medium text-slate-600">
+                                                        No immediate action recommendation.
+                                                    </span>
+                                                )}
+                                                {secondaryRecommendations.map((item) => (
                                                     <button
                                                         key={item.key}
                                                         type="button"
                                                         onClick={() => triggerRecommendation(item.key, diagnosticsPayment)}
-                                                        className={`rounded-md px-2.5 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
-                                                            item.recommended
-                                                                ? 'bg-teal-700 text-white hover:bg-teal-800'
-                                                                : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                                                        }`}
+                                                        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                                                         title={item.description}
                                                     >
                                                         {item.label}
                                                     </button>
                                                 ))}
                                             </div>
-                                        )}
-                                    </section>
+                                        </section>
 
-                                    <section className="rounded-md border border-slate-200 bg-white p-3">
-                                        <details>
-                                            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">
-                                                Audit Trail
-                                                <span className="ml-2 text-xs font-medium text-slate-500">
-                                                    ({(diagnosticsData.audit_trail || []).length})
-                                                </span>
-                                            </summary>
-                                            {(diagnosticsData.audit_trail || []).length === 0 ? (
-                                                <p className="mt-2 text-sm text-slate-500">No audit entries were recorded for this payment yet.</p>
-                                            ) : (
-                                                <div className="mt-3 space-y-2">
-                                                    {diagnosticsData.audit_trail.map((entry) => (
-                                                        <article key={entry.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                            <p className="text-xs font-semibold text-slate-800">{titleize(entry.action)}</p>
-                                                            <p className="mt-1 text-xs text-slate-600">Actor: {entry.actor?.name || 'System'} • {formatDateTime(entry.created_at)}</p>
-                                                            <p className="mt-1 text-xs text-slate-600">Reason: {entry.reason || 'No reason provided'}</p>
-                                                        </article>
-                                                    ))}
+                                        {isSandboxPayment(diagnosticsData.payment) ? (
+                                            <section className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+                                                <h4 className="text-sm font-semibold text-sky-900">Sandbox/Test Safeguards</h4>
+                                                <p className="mt-1 text-sm text-sky-800">
+                                                    This payment is marked as sandbox-only. Live wallet credits, subscriptions, and profile activation stay disabled.
+                                                </p>
+                                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                                    <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Test result:</span> {titleize(diagnosticsData.payment?.payment_data?.test_result || diagnosticsData.payment?.status)}</p>
+                                                    <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Side effects skipped:</span> {diagnosticsData.payment?.payment_data?.side_effects_skipped ? 'Yes' : 'No'}</p>
+                                                    <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Verified at:</span> {formatDateTime(diagnosticsData.payment?.payment_data?.verified_at)}</p>
+                                                    <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Environment:</span> {titleize(diagnosticsData.payment?.provider_environment || 'sandbox')}</p>
                                                 </div>
-                                            )}
-                                        </details>
+                                            </section>
+                                        ) : null}
+
+                                        {providerCheckEligible || providerStatusDisplay ? (
+                                            <section className="rounded-xl border border-slate-200 bg-white p-4">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <h4 className="text-sm font-semibold text-slate-900">Live Provider Status</h4>
+                                                        <p className="mt-1 text-xs text-slate-500">
+                                                            {sandboxReconcileEligible
+                                                                ? 'Read-only verification plus sandbox-safe reconcile for hosted checkout tests.'
+                                                                : 'Read-only verification against the current Paystack or Pesapal session.'}
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => diagnosticsPayment?.id && providerStatusMutation.mutate(diagnosticsPayment.id)}
+                                                            disabled={!providerCheckReady || providerStatusMutation.isPending}
+                                                            className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            {providerStatusMutation.isPending ? 'Checking...' : 'Check Provider Status'}
+                                                        </button>
+                                                        {sandboxReconcileEligible ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => diagnosticsPayment?.id && sandboxReconcileMutation.mutate({
+                                                                    paymentId: diagnosticsPayment.id,
+                                                                    reason: 'Sandbox reconcile from diagnostics drawer',
+                                                                })}
+                                                                disabled={sandboxReconcileMutation.isPending}
+                                                                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            >
+                                                                {sandboxReconcileMutation.isPending ? 'Reconciling...' : 'Sandbox Reconcile'}
+                                                            </button>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+
+                                                {!providerCheckReady && providerCheckEligible ? (
+                                                    <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                                                        Hosted checkout needs to initialize before CRM can verify provider-side status.
+                                                    </p>
+                                                ) : null}
+
+                                                {sandboxReconcileSnapshot?.message && sandboxReconcileEligible ? (
+                                                    <p className="mt-3 text-xs text-slate-600">
+                                                        {sandboxReconcileSnapshot.message}
+                                                    </p>
+                                                ) : null}
+
+                                                {providerStatusDisplay ? (
+                                                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${diagnosticToneClasses(providerStatusDisplay.status)}`}>
+                                                                {titleize(providerStatusDisplay.status)}
+                                                            </span>
+                                                            <span className="text-[11px] text-slate-500">
+                                                                Checked {formatDateTime(providerStatusDisplay.checked_at)}
+                                                            </span>
+                                                        </div>
+                                                        <p className="mt-2 text-sm text-slate-700">{providerStatusDisplay.message || 'No provider message returned.'}</p>
+                                                        <p className="mt-1 text-xs text-slate-500">
+                                                            Provider: {titleize(diagnosticsPayment?.provider_key)} • Reference: {providerReference}
+                                                        </p>
+                                                    </div>
+                                                ) : null}
+                                            </section>
+                                        ) : null}
                                     </section>
 
-                                    <section className="rounded-md border border-slate-200 bg-white p-3">
-                                        <details>
-                                            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">
-                                                Timeline Events
-                                                <span className="ml-2 text-xs font-medium text-slate-500">
-                                                    ({(diagnosticsData.timeline || []).length})
+                                    <section id="payment-diagnostics-telemetry" className="space-y-4">
+                                        {linkProxyData ? (
+                                            <section className="rounded-xl border border-slate-200 bg-white p-4">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <h4 className="text-sm font-semibold text-slate-900">Proxy Link Lifecycle</h4>
+                                                        <p className="mt-1 text-xs text-slate-500">
+                                                            {titleize(linkProxyData.session_status)} • {titleize(linkProxyData.mode)}
+                                                        </p>
+                                                    </div>
+                                                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${diagnosticToneClasses(linkProxyData.token_status)}`}>
+                                                        {titleize(linkProxyData.token_status)}
+                                                    </span>
+                                                </div>
+
+                                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                                    <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Sent:</span> {formatDateTime(linkProxyData.sent_at)}</p>
+                                                    <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Opened:</span> {formatDateTime(linkProxyData.opened_at)}</p>
+                                                    <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Open count:</span> {linkProxyData.open_count ?? 0}</p>
+                                                    <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Provider ref:</span> {linkProxyData.provider_reference || '—'}</p>
+                                                    <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Environment:</span> {titleize(linkProxyData.environment)}</p>
+                                                    <p className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600"><span className="font-semibold text-slate-800">Expires:</span> {formatDateTime(linkProxyData.token_expires_at)}</p>
+                                                </div>
+
+                                                <div className="mt-4 space-y-3">
+                                                    {linkProxySteps.map((step, index) => {
+                                                        const firstIncompleteIndex = linkProxySteps.findIndex((item) => !item.timestamp);
+                                                        const isComplete = Boolean(step.timestamp);
+                                                        const isCurrent = !isComplete && firstIncompleteIndex === index;
+
+                                                        return (
+                                                            <div key={step.key} className="flex gap-3">
+                                                                <div className="flex flex-col items-center">
+                                                                    <span
+                                                                        aria-hidden="true"
+                                                                        className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                                                                            isComplete
+                                                                                ? 'bg-emerald-500'
+                                                                                : (isCurrent ? 'bg-amber-500' : 'bg-slate-300')
+                                                                        }`}
+                                                                    />
+                                                                    {index < linkProxySteps.length - 1 ? <span className="mt-1 h-8 w-px bg-slate-200" /> : null}
+                                                                </div>
+                                                                <div className="min-w-0 flex-1">
+                                                                    <p className={`text-xs font-semibold ${isComplete ? 'text-slate-900' : (isCurrent ? 'text-amber-700' : 'text-slate-500')}`}>
+                                                                        {step.label}
+                                                                    </p>
+                                                                    <p className="mt-0.5 text-xs text-slate-500">
+                                                                        {step.timestamp ? formatDateTime(step.timestamp) : step.helper}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </section>
+                                        ) : null}
+
+                                        <div className="grid gap-4 sm:grid-cols-2">
+                                            <section className="rounded-xl border border-slate-200 bg-white p-4">
+                                                <h4 className="text-sm font-semibold text-slate-900">API Performance</h4>
+                                                <div className="mt-3 grid gap-2">
+                                                    <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Attempts:</span> {diagnosticsData.performance?.attempt_count ?? 0}</p>
+                                                    <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Avg:</span> {diagnosticsData.performance?.avg_latency_ms ?? '—'} ms</p>
+                                                    <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">P95:</span> {diagnosticsData.performance?.p95_latency_ms ?? '—'} ms</p>
+                                                </div>
+                                            </section>
+
+                                            <section className="rounded-xl border border-slate-200 bg-white p-4">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <h4 className="text-sm font-semibold text-slate-900">Browser & Request Context</h4>
+                                                        <p className="mt-1 text-xs text-slate-500">{browserContextState.description}</p>
+                                                    </div>
+                                                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${browserContextState.tone}`}>
+                                                        {browserContextState.label}
+                                                    </span>
+                                                </div>
+
+                                                {diagnosticsData.browser_meta?.context_type === 'browser' ? (
+                                                    <div className="mt-3 grid gap-2">
+                                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Origin:</span> {diagnosticsData.browser_meta?.origin_url || '—'}</p>
+                                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Referrer:</span> {diagnosticsData.browser_meta?.referrer || '—'}</p>
+                                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Browser:</span> {diagnosticsData.browser_meta?.user_agent_family || '—'} • <span className="font-semibold text-slate-800">Device:</span> {diagnosticsData.browser_meta?.device_type || '—'}</p>
+                                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500"><span className="font-semibold text-slate-700">IP hash:</span> {diagnosticsData.browser_meta?.ip_hash || '—'}</p>
+                                                    </div>
+                                                ) : (
+                                                    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                                                        {diagnosticsData.browser_meta?.request_id
+                                                            ? `Request ID: ${diagnosticsData.browser_meta.request_id}`
+                                                            : 'No browser-origin headers were captured for this payment.'}
+                                                    </div>
+                                                )}
+                                            </section>
+                                        </div>
+
+                                        <section className="rounded-xl border border-slate-200 bg-white p-4">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <div>
+                                                    <h4 className="text-sm font-semibold text-slate-900">Recent Attempts</h4>
+                                                    <p className="mt-1 text-xs text-slate-500">Most recent telemetry first. Use this section before diving into the longer history.</p>
+                                                </div>
+                                                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                                                    {(diagnosticsData.attempts || []).length} logged
                                                 </span>
-                                            </summary>
-                                            {(diagnosticsData.timeline || []).length === 0 ? (
-                                                <p className="mt-2 text-sm text-slate-500">No payment-linked timeline events have been recorded yet.</p>
+                                            </div>
+                                            {(diagnosticsData.attempts || []).length === 0 ? (
+                                                <p className="mt-3 rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                                                    No telemetry attempts recorded for this payment yet.
+                                                </p>
                                             ) : (
                                                 <div className="mt-3 space-y-2">
-                                                    {diagnosticsData.timeline.map((event) => (
-                                                        <article key={event.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                            <p className="text-xs font-semibold text-slate-800">{titleize(event.event_type)}</p>
-                                                            <p className="mt-1 text-xs text-slate-600">{describeTimelineContent(event.content)}</p>
-                                                            <p className="mt-1 text-[11px] text-slate-500">
-                                                                {event.actor?.name || 'System'} • {formatDateTime(event.created_at)}
+                                                    {diagnosticsData.attempts.slice(0, 8).map((attempt) => (
+                                                        <article key={attempt.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    <span className="text-xs font-semibold text-slate-900">{titleize(attempt.attempt_type)}</span>
+                                                                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${diagnosticToneClasses(attempt.status)}`}>
+                                                                        {titleize(attempt.status)}
+                                                                    </span>
+                                                                </div>
+                                                                <span className="text-[11px] text-slate-500">{formatDateTime(attempt.created_at)}</span>
+                                                            </div>
+                                                            <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                                                                <p><span className="font-semibold text-slate-800">Provider:</span> {attempt.provider || '—'}</p>
+                                                                <p><span className="font-semibold text-slate-800">Latency:</span> {attempt.latency_ms ?? '—'} ms</p>
+                                                                <p><span className="font-semibold text-slate-800">HTTP:</span> {attempt.http_status || '—'}</p>
+                                                                <p><span className="font-semibold text-slate-800">Actor:</span> {attempt.actor?.name || 'System'}</p>
+                                                            </div>
+                                                            <p className="mt-2 text-xs text-slate-600">
+                                                                <span className="font-semibold text-slate-800">Reason:</span> {attempt.error_message || 'No error message recorded.'}
                                                             </p>
                                                         </article>
                                                     ))}
                                                 </div>
                                             )}
-                                        </details>
+                                        </section>
                                     </section>
 
-                                    <section className="rounded-md border border-slate-200 bg-white p-3">
-                                        <h4 className="text-sm font-semibold text-slate-900">Recent Attempts</h4>
-                                        {(diagnosticsData.attempts || []).length === 0 ? (
-                                            <p className="mt-1 text-sm text-slate-500">No telemetry attempts recorded for this payment yet.</p>
-                                        ) : (
-                                            <div className="mt-2 space-y-2">
-                                                {diagnosticsData.attempts.slice(0, 8).map((attempt) => (
-                                                    <article key={attempt.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                        <p className="text-xs font-semibold text-slate-800">{titleize(attempt.attempt_type)} • {titleize(attempt.status)}</p>
-                                                        <p className="mt-1 text-xs text-slate-600">Provider: {attempt.provider || '—'} • HTTP: {attempt.http_status || '—'} • Latency: {attempt.latency_ms ?? '—'} ms</p>
-                                                        <p className="mt-1 text-xs text-slate-600">Reason: {attempt.error_message || '—'}</p>
-                                                        <p className="mt-1 text-[11px] text-slate-500">{formatDateTime(attempt.created_at)}</p>
-                                                    </article>
-                                                ))}
-                                            </div>
-                                        )}
+                                    <section id="payment-diagnostics-history" className="space-y-4">
+                                        <section className="rounded-xl border border-slate-200 bg-white p-4">
+                                            <details className="group">
+                                                <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-slate-900">
+                                                            Audit Trail
+                                                            <span className="ml-2 text-xs font-medium text-slate-500">
+                                                                ({(diagnosticsData.audit_trail || []).length})
+                                                            </span>
+                                                        </p>
+                                                        <p className="mt-1 text-xs text-slate-500">Expand to review operator actions and recorded reasons.</p>
+                                                    </div>
+                                                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-500 transition group-open:rotate-180">
+                                                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
+                                                            <path d="M5 8l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                                        </svg>
+                                                    </span>
+                                                </summary>
+                                                {(diagnosticsData.audit_trail || []).length === 0 ? (
+                                                    <p className="mt-3 rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                                                        No audit entries were recorded for this payment yet.
+                                                    </p>
+                                                ) : (
+                                                    <div className="mt-3 space-y-2">
+                                                        {diagnosticsData.audit_trail.map((entry) => (
+                                                            <article key={entry.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                                <p className="text-xs font-semibold text-slate-800">{titleize(entry.action)}</p>
+                                                                <p className="mt-1 text-xs text-slate-600">Actor: {entry.actor?.name || 'System'} • {formatDateTime(entry.created_at)}</p>
+                                                                <p className="mt-1 text-xs text-slate-600">Reason: {entry.reason || 'No reason provided'}</p>
+                                                            </article>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </details>
+                                        </section>
+
+                                        <section className="rounded-xl border border-slate-200 bg-white p-4">
+                                            <details className="group">
+                                                <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-slate-900">
+                                                            Timeline Events
+                                                            <span className="ml-2 text-xs font-medium text-slate-500">
+                                                                ({(diagnosticsData.timeline || []).length})
+                                                            </span>
+                                                        </p>
+                                                        <p className="mt-1 text-xs text-slate-500">Expand to review linked CRM events in chronological order.</p>
+                                                    </div>
+                                                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-500 transition group-open:rotate-180">
+                                                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
+                                                            <path d="M5 8l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                                        </svg>
+                                                    </span>
+                                                </summary>
+                                                {(diagnosticsData.timeline || []).length === 0 ? (
+                                                    <p className="mt-3 rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                                                        No payment-linked timeline events have been recorded yet.
+                                                    </p>
+                                                ) : (
+                                                    <div className="mt-3 space-y-2">
+                                                        {diagnosticsData.timeline.map((event) => (
+                                                            <article key={event.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                                <p className="text-xs font-semibold text-slate-800">{titleize(event.event_type)}</p>
+                                                                <p className="mt-1 text-xs text-slate-600">{describeTimelineContent(event.content)}</p>
+                                                                <p className="mt-1 text-[11px] text-slate-500">
+                                                                    {event.actor?.name || 'System'} • {formatDateTime(event.created_at)}
+                                                                </p>
+                                                            </article>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </details>
+                                        </section>
                                     </section>
                                 </>
                             ) : (
