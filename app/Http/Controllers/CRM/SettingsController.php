@@ -425,6 +425,9 @@ class SettingsController extends Controller
             'db_pass' => 'nullable|string|max:255',
             'db_prefix' => 'nullable|string|max:32',
             'support_chat_url' => 'nullable|url|max:500',
+            'support_board_api_url' => 'nullable|url|max:500',
+            'support_board_token' => 'nullable|string',
+            'support_board_sender_id' => 'nullable|integer',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -1059,6 +1062,9 @@ class SettingsController extends Controller
             'db_pass' => 'sometimes|nullable|string|max:255',
             'db_prefix' => 'sometimes|nullable|string|max:32',
             'support_chat_url' => 'sometimes|nullable|url|max:500',
+            'support_board_api_url' => 'sometimes|nullable|url|max:500',
+            'support_board_token' => 'sometimes|nullable|string',
+            'support_board_sender_id' => 'sometimes|nullable|integer',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -2003,7 +2009,7 @@ class SettingsController extends Controller
             ->keyBy('id');
 
         $users = User::query()
-            ->select(['id', 'name', 'email', 'role', 'status', 'assigned_market_ids'])
+            ->select(['id', 'name', 'email', 'role', 'status', 'assigned_market_ids', 'sb_agent_id'])
             ->with('platforms:id,name,country')
             ->orderBy('role')
             ->orderBy('name')
@@ -2037,6 +2043,7 @@ class SettingsController extends Controller
                     'email' => $user->email,
                     'role' => $user->role,
                     'status' => $user->status ?? 'active',
+                    'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
                     'assigned_market_ids' => array_values(array_unique(array_map('intval', $assignedMarketIds))),
                     'assigned_markets' => $marketDetails,
                 ];
@@ -2068,6 +2075,7 @@ class SettingsController extends Controller
             'password' => 'nullable|string|min:8|max:120',
             'role' => 'required|in:admin,sub_admin,sales,marketing',
             'status' => 'required|in:active,inactive',
+            'sb_agent_id' => 'nullable|integer',
             'assigned_market_ids' => 'nullable|array',
             'assigned_market_ids.*' => 'integer|exists:platforms,id',
             'reason' => 'nullable|string|max:500',
@@ -2088,6 +2096,7 @@ class SettingsController extends Controller
             'password' => $passwordHash,
             'role' => $validated['role'],
             'status' => $validated['status'],
+            'sb_agent_id' => $validated['sb_agent_id'] ?? null,
             'assigned_market_ids' => $assignedMarketIds,
         ]);
 
@@ -2109,6 +2118,7 @@ class SettingsController extends Controller
                     'email' => $user->email,
                     'role' => $user->role,
                     'status' => $user->status ?? 'active',
+                    'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
                     'assigned_market_ids' => $assignedMarketIds,
                 ],
                 $validated['reason'] ?? 'Created user from CRM role settings'
@@ -2132,6 +2142,7 @@ class SettingsController extends Controller
             'email' => $user->email,
             'role' => $user->role,
             'status' => $user->status ?? 'active',
+            'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
             'assigned_market_ids' => $assignedMarketIds,
             'assigned_markets' => $assignedMarkets,
         ], 201);
@@ -2142,6 +2153,7 @@ class SettingsController extends Controller
         $validated = $request->validate([
             'role' => 'required|in:admin,sub_admin,sales,marketing',
             'status' => 'required|in:active,inactive',
+            'sb_agent_id' => 'nullable|integer',
             'assigned_market_ids' => 'nullable|array',
             'assigned_market_ids.*' => 'integer|exists:platforms,id',
             'password' => 'nullable|string|min:8',
@@ -2158,12 +2170,14 @@ class SettingsController extends Controller
         $beforeState = [
             'role' => $user->role,
             'status' => $user->status ?? 'active',
+            'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
             'assigned_market_ids' => $this->decodeMarketIds($user->assigned_market_ids),
         ];
 
         $updateData = [
             'role' => $validated['role'],
             'status' => $validated['status'],
+            'sb_agent_id' => $validated['sb_agent_id'] ?? null,
             'assigned_market_ids' => $assignedMarketIds,
         ];
         if (!empty($validated['password'])) {
@@ -2187,6 +2201,7 @@ class SettingsController extends Controller
                 [
                     'role' => $user->role,
                     'status' => $user->status ?? 'active',
+                    'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
                     'assigned_market_ids' => $assignedMarketIds,
                     ...(!empty($validated['password']) ? ['password_changed' => true] : []),
                 ],
@@ -2211,6 +2226,7 @@ class SettingsController extends Controller
             'email' => $user->email,
             'role' => $user->role,
             'status' => $user->status ?? 'active',
+            'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
             'assigned_market_ids' => $assignedMarketIds,
             'assigned_markets' => $assignedMarkets,
         ]);
@@ -2660,6 +2676,9 @@ class SettingsController extends Controller
             'timezone' => $platform->timezone ?: 'Africa/Nairobi',
             'phone_prefix' => $platform->phone_prefix ?: '254',
             'support_chat_url' => $platform->support_chat_url,
+            'support_board_api_url' => $platform->support_board_api_url,
+            'support_board_token_configured' => !empty($platform->support_board_token),
+            'support_board_sender_id' => $platform->support_board_sender_id ? (int) $platform->support_board_sender_id : null,
             'wp_sync' => [
                 'status' => $wpStatus,
                 'credentials_ready' => $hasWpCredentials,
@@ -2701,6 +2720,10 @@ class SettingsController extends Controller
             unset($payload['wp_api_password']);
         }
 
+        if ($isPatch && array_key_exists('support_board_token', $payload) && empty($payload['support_board_token'])) {
+            unset($payload['support_board_token']);
+        }
+
         if (!$isPatch) {
             $payload['is_active'] = array_key_exists('is_active', $payload) ? (bool) $payload['is_active'] : false;
             $payload['phone_prefix'] = $payload['phone_prefix'] ?? '254';
@@ -2724,6 +2747,9 @@ class SettingsController extends Controller
             'timezone' => $platform->timezone,
             'currency_code' => $platform->currency_code,
             'support_chat_url' => $platform->support_chat_url,
+            'support_board_api_url' => $platform->support_board_api_url,
+            'support_board_token_configured' => !empty($platform->support_board_token),
+            'support_board_sender_id' => $platform->support_board_sender_id ? (int) $platform->support_board_sender_id : null,
             'sync_last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
             'sync_last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
             'sync_last_scope' => $platform->sync_last_scope,
