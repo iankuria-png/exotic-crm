@@ -167,6 +167,13 @@ class SupportBoardController extends Controller
                 ], 404);
             }
 
+            $senderSbUserId = $request->user()->sb_agent_id ?: $client->platform->support_board_sender_id;
+            if (empty($senderSbUserId)) {
+                return response()->json([
+                    'message' => 'No sender configured.',
+                ], 422);
+            }
+
             $conversation = $service->getConversation($conversationId);
             if (empty($conversation['id'])) {
                 return response()->json([
@@ -175,13 +182,6 @@ class SupportBoardController extends Controller
             }
 
             $this->ensureConversationOwnership($conversation, $sbUserId);
-
-            $senderSbUserId = $request->user()->sb_agent_id ?: $client->platform->support_board_sender_id;
-            if (empty($senderSbUserId)) {
-                return response()->json([
-                    'message' => 'No sender configured.',
-                ], 422);
-            }
 
             $sentMessage = $service->sendMessage(
                 $conversationId,
