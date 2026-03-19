@@ -2170,7 +2170,7 @@ function IntegrationsWorkspace({
     const walletGuideHealthUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/health`;
     const walletGuideCompleteUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/billing/complete?payment={transaction_uuid}`;
     const walletGuidePaystackWebhookUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/paystack/webhook`;
-    const walletGuidePesapalWebhookUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/pesapal/webhook`;
+    const walletGuidePesapalIpnUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/pesapal/ipn`;
     const walletGuideMpesaCallbackUrl = `${walletGuideBaseUrl.replace(/\/$/, '')}/api/billing/mpesa/callback`;
     const walletGuideDomainResult = latestWalletDomainTest?.environment === walletGuideEnvironment ? latestWalletDomainTest : null;
     const walletGuideSslResult = latestWalletSslTest?.environment === walletGuideEnvironment ? latestWalletSslTest : null;
@@ -3201,7 +3201,7 @@ function IntegrationsWorkspace({
                                                     </button>
                                                 </div>
                                                 <p className="mt-2 break-all text-[11px] text-slate-600">Paystack: {walletGuidePaystackWebhookUrl}</p>
-                                                <p className="mt-1 break-all text-[11px] text-slate-600">Pesapal: {walletGuidePesapalWebhookUrl}</p>
+                                                <p className="mt-1 break-all text-[11px] text-slate-600">Pesapal IPN: {walletGuidePesapalIpnUrl}</p>
                                             </div>
                                         </div>
                                     </div>
