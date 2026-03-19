@@ -396,8 +396,10 @@ export default function Clients() {
         {
             key: 'name',
             label: 'Client',
+            width: '280px',
+            cellClassName: 'w-[280px] max-w-[280px]',
             render: (row) => (
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 max-w-[248px] items-center gap-3">
                     {row.main_image_url ? (
                         <img src={row.main_image_url} alt="" className="h-9 w-9 rounded-full object-cover ring-1 ring-slate-200" />
                     ) : (
@@ -405,9 +407,13 @@ export default function Clients() {
                             {row.name?.charAt(0) || '?'}
                         </div>
                     )}
-                    <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">{row.name || 'Unnamed'}</p>
-                        <p className="truncate text-xs text-slate-500">{row.city || 'City not set'}</p>
+                    <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-900" title={row.name || 'Unnamed'}>
+                            {row.name || 'Unnamed'}
+                        </p>
+                        <p className="truncate text-xs text-slate-500" title={row.city || 'City not set'}>
+                            {row.city || 'City not set'}
+                        </p>
                     </div>
                 </div>
             ),

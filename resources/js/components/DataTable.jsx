@@ -164,7 +164,7 @@ export default function DataTable({
                             {columns.map((col) => (
                                 <th
                                     key={col.key}
-                                    className="sticky top-0 z-10 bg-slate-50/95 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500"
+                                    className={`sticky top-0 z-10 bg-slate-50/95 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 ${col.headerClassName || ''}`}
                                     style={col.width ? { width: col.width } : {}}
                                 >
                                     {col.label}
@@ -212,7 +212,11 @@ export default function DataTable({
                                             </td>
                                         ) : null}
                                         {columns.map((col) => (
-                                            <td key={col.key} className={`${cellPadding} whitespace-nowrap text-sm text-slate-700`}>
+                                            <td
+                                                key={col.key}
+                                                className={`${cellPadding} whitespace-nowrap text-sm text-slate-700 ${col.cellClassName || ''}`}
+                                                style={col.width ? { width: col.width } : {}}
+                                            >
                                                 {col.render ? col.render(row) : row[col.key]}
                                             </td>
                                         ))}

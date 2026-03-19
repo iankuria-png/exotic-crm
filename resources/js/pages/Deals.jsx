@@ -447,24 +447,30 @@ export default function Deals() {
         {
             key: 'client',
             label: 'Client',
+            width: '320px',
+            cellClassName: 'w-[320px] max-w-[320px]',
             render: (row) => (
-                <div>
-                    <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</p>
+                <div className="min-w-0 max-w-[288px]">
+                    <div className="flex min-w-0 items-center gap-2">
+                        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900" title={row.client?.name || 'Unknown'}>
+                            {row.client?.name || 'Unknown'}
+                        </p>
                         {row.origin_type === 'modern' ? (
-                            <span className="inline-flex items-center rounded-sm bg-blue-50 px-1 text-[10px] font-bold uppercase tracking-wider text-blue-600 ring-1 ring-inset ring-blue-600/20">Modern</span>
+                            <span className="inline-flex shrink-0 items-center rounded-sm bg-blue-50 px-1 text-[10px] font-bold uppercase tracking-wider text-blue-600 ring-1 ring-inset ring-blue-600/20">Modern</span>
                         ) : row.origin_type === 'mpesa_import' ? (
-                            <span className="inline-flex items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA</span>
+                            <span className="inline-flex shrink-0 items-center rounded-sm bg-teal-50 px-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">MPESA</span>
                         ) : row.origin_type === 'untracked' ? (
-                            <span className="inline-flex items-center rounded-sm bg-amber-50 px-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-inset ring-amber-700/20">Untracked</span>
+                            <span className="inline-flex shrink-0 items-center rounded-sm bg-amber-50 px-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-inset ring-amber-700/20">Untracked</span>
                         ) : (
-                            <span className="inline-flex items-center rounded-sm bg-slate-50 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 ring-1 ring-inset ring-slate-600/10">Legacy</span>
+                            <span className="inline-flex shrink-0 items-center rounded-sm bg-slate-50 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 ring-1 ring-inset ring-slate-600/10">Legacy</span>
                         )}
                         {row.is_free_trial && (
-                            <span className="inline-flex items-center rounded-sm bg-violet-50 px-1 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-inset ring-violet-600/20">Free Trial</span>
+                            <span className="inline-flex shrink-0 items-center rounded-sm bg-violet-50 px-1 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-inset ring-violet-600/20">Free Trial</span>
                         )}
                     </div>
-                    <p className="crm-mono text-xs text-slate-500">{row.client?.phone_normalized || ''}</p>
+                    <p className="crm-mono truncate text-xs text-slate-500" title={row.client?.phone_normalized || ''}>
+                        {row.client?.phone_normalized || ''}
+                    </p>
                 </div>
             ),
         },
@@ -575,6 +581,8 @@ export default function Deals() {
         {
             key: 'actions',
             label: 'Actions',
+            width: '190px',
+            cellClassName: 'w-[190px]',
             render: (row) => {
                 let primaryAction = null;
                 const overflowActions = [];
