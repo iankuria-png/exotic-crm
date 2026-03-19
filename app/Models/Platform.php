@@ -17,7 +17,14 @@ class Platform extends Model
         'sync_last_checked_at', 'sync_last_synced_at',
         'sync_last_scope', 'sync_last_status',
         'sync_last_error', 'sync_last_result', 'payment_link_providers', 'support_chat_url',
+        'support_board_api_url', 'support_board_token', 'support_board_sender_id',
         'wallet_settings',
+    ];
+
+    protected $hidden = [
+        'support_board_token',
+        'wp_api_password',
+        'db_pass',
     ];
 
     protected $casts = [
@@ -26,6 +33,7 @@ class Platform extends Model
         'sync_last_synced_at' => 'datetime',
         'sync_last_result' => 'array',
         'payment_link_providers' => 'array',
+        'support_board_token' => 'encrypted',
         'wallet_settings' => 'array',
     ];
     

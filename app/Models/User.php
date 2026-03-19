@@ -18,6 +18,7 @@ class User extends Authenticatable
         'role',
         'assigned_market_ids',
         'status',
+        'sb_agent_id',
     ];
 
     protected $hidden = [

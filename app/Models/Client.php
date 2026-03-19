@@ -29,6 +29,8 @@ class Client extends Model
         'name',
         'phone_normalized',
         'email',
+        'sb_user_id',
+        'sb_matched_by',
         'city',
         'profile_status',
         'premium',
