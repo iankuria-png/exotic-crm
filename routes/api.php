@@ -26,6 +26,7 @@ use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
 use App\Http\Controllers\CRM\SetupController;
+use App\Http\Controllers\CRM\SupportBoardController;
 use App\Http\Controllers\CRM\SystemHealthUpdateController;
 
 Route::get('/ping', function () {
@@ -133,6 +134,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/support-board/status', [SupportBoardController::class, 'status'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/support-board/conversations', [SupportBoardController::class, 'conversations'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/support-board/conversations/{conversationId}', [SupportBoardController::class, 'conversation'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/support-board/conversations/{conversationId}/reply', [SupportBoardController::class, 'reply'])->middleware('role:admin,sub_admin,sales');
 
     Route::middleware('role:admin,sub_admin,sales')->group(function () {
         // Deals
