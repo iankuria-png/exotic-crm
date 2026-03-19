@@ -20,6 +20,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\PaymentMatchingService;
 use App\Services\CredentialDeliveryService;
 use App\Services\ClientSyncService;
+use App\Services\SupportBoardService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
@@ -339,6 +340,7 @@ class ClientController extends Controller
             'email' => $client->email,
             'phone_normalized' => $client->phone_normalized,
         ];
+        $hadSupportBoardLink = !empty($client->sb_user_id);
 
         if (array_key_exists('assigned_to', $validated) && $validated['assigned_to']) {
             $assignee = User::query()->find((int) $validated['assigned_to']);
@@ -350,6 +352,17 @@ class ClientController extends Controller
         }
 
         $client->update($validated);
+
+        if (
+            $hadSupportBoardLink
+            && ($client->wasChanged('phone_normalized') || $client->wasChanged('email'))
+        ) {
+            SupportBoardService::clearResolveCache($client);
+            $client->forceFill([
+                'sb_user_id' => null,
+                'sb_matched_by' => null,
+            ])->saveQuietly();
+        }
 
         TimelineEvent::create([
             'platform_id' => $client->platform_id,
@@ -391,7 +404,7 @@ class ClientController extends Controller
         $this->authorizeClientAccess($request, $client);
 
         $validated = $request->validate([
-            'note_type' => 'required|in:call,email,sms,internal,system',
+            'note_type' => 'required|in:call,email,sms,internal,system,support_chat',
             'content' => 'required|string|max:5000',
             'follow_up_at' => 'nullable|date|after:now',
         ]);

@@ -9,6 +9,7 @@ const eventTones = {
     note_added: 'bg-amber-100 text-amber-700',
     payment_received: 'bg-emerald-100 text-emerald-700',
     status_changed: 'bg-teal-100 text-teal-700',
+    support_chat_reply: 'bg-sky-100 text-sky-700',
 };
 
 function formatEventDescription(event) {
@@ -32,6 +33,8 @@ function formatEventDescription(event) {
             return `Payment received: ${currency} ${content.amount || 0}`;
         case 'status_changed':
             return `Status changed from ${content.from || '?'} to ${content.to || '?'}`;
+        case 'support_chat_reply':
+            return 'Chat reply sent via Support Board';
         default:
             return event.event_type?.replace(/_/g, ' ') || 'Event';
     }

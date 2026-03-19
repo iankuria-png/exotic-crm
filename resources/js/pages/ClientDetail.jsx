@@ -1749,8 +1749,12 @@ export default function ClientDetail() {
                         <section key={note.id} className="crm-surface p-4">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex items-center gap-2">
-                                    <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-0.5 text-xs font-medium capitalize text-slate-600 ring-1 ring-inset ring-slate-200">
-                                        {note.note_type}
+                                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium capitalize ring-1 ring-inset ${
+                                        note.note_type === 'support_chat'
+                                            ? 'bg-sky-50 text-sky-700 ring-sky-200'
+                                            : 'bg-slate-100 text-slate-600 ring-slate-200'
+                                    }`}>
+                                        {{ support_chat: 'Chat' }[note.note_type] || note.note_type}
                                     </span>
                                     <span className="text-xs text-slate-500">by {note.author?.name || 'Unknown'}</span>
                                 </div>
