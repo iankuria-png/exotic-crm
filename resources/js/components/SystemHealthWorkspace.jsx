@@ -7,7 +7,7 @@ function statusChip(status) {
     if (['connected', 'healthy', 'success', 'complete'].includes(status)) {
         return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
     }
-    if (['configured_disabled', 'partial', 'degraded', 'pending', 'stale', 'missing', 'skipped', 'running', 'idle'].includes(status)) {
+    if (['configured_disabled', 'partial', 'degraded', 'pending', 'stale', 'missing', 'skipped', 'running', 'idle', 'rolling_back'].includes(status)) {
         return 'bg-amber-50 text-amber-700 ring-amber-200';
     }
     return 'bg-rose-50 text-rose-700 ring-rose-200';
@@ -75,6 +75,9 @@ export default function SystemHealthWorkspace({
     const [changelogTab, setChangelogTab] = useState('pending');
     const [historyPage, setHistoryPage] = useState(1);
     const [expandedCommits, setExpandedCommits] = useState({});
+    const [rollbackTarget, setRollbackTarget] = useState(null);
+    const [selectedBackup, setSelectedBackup] = useState('');
+    const [backupUploading, setBackupUploading] = useState(false);
 
     const settingsQuery = useQuery({
         queryKey: ['settings-integrations'],
@@ -217,6 +220,75 @@ export default function SystemHealthWorkspace({
             toast.error(error?.response?.data?.message || error?.response?.data?.errors?.deploy?.[0] || 'Unable to start deployment.');
         },
     });
+
+    const deployHistoryQuery = useQuery({
+        queryKey: ['deploy-history'],
+        queryFn: () => api.get('/crm/settings/system-health/updates/history').then((r) => r.data),
+        enabled: canViewUpdates && changelogTab === 'deployments',
+    });
+
+    const backupsQuery = useQuery({
+        queryKey: ['deploy-backups'],
+        queryFn: () => api.get('/crm/settings/system-health/updates/backups').then((r) => r.data),
+        enabled: canViewUpdates,
+    });
+
+    const rollbackMutation = useMutation({
+        mutationFn: ({ deploymentId, backupFilename }) =>
+            api.post('/crm/settings/system-health/updates/rollback', {
+                deployment_id: deploymentId,
+                backup_filename: backupFilename || null,
+            }).then((r) => r.data),
+        onSuccess: () => {
+            updatesQuery.refetch();
+            updatesLogQuery.refetch();
+            deployHistoryQuery.refetch();
+            toast.success('Rollback has been queued.');
+            setRollbackTarget(null);
+            setSelectedBackup('');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || error?.response?.data?.errors?.rollback?.[0] || 'Unable to start rollback.');
+        },
+    });
+
+    const deleteBackupMutation = useMutation({
+        mutationFn: (filename) => api.delete(`/crm/settings/system-health/updates/backups/${encodeURIComponent(filename)}`).then((r) => r.data),
+        onSuccess: () => {
+            backupsQuery.refetch();
+            toast.success('Backup deleted.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Unable to delete backup.');
+        },
+    });
+
+    const handleBackupUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!file.name.toLowerCase().endsWith('.sql')) {
+            toast.error('Only .sql files are accepted.');
+            e.target.value = '';
+            return;
+        }
+
+        setBackupUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append('backup', file);
+            await api.post('/crm/settings/system-health/updates/upload-backup', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            backupsQuery.refetch();
+            toast.success('Backup uploaded successfully.');
+        } catch (err) {
+            toast.error(err?.response?.data?.message || 'Upload failed.');
+        } finally {
+            setBackupUploading(false);
+            e.target.value = '';
+        }
+    };
 
     const loading = settingsQuery.isLoading
         || envQuery.isLoading
@@ -504,6 +576,14 @@ export default function SystemHealthWorkspace({
                                             Previous
                                             {changelogTab === 'previous' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-teal-600" />}
                                         </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setChangelogTab('deployments')}
+                                            className={`relative px-3 pb-2.5 text-sm font-medium transition ${changelogTab === 'deployments' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-700'}`}
+                                        >
+                                            Deployments
+                                            {changelogTab === 'deployments' && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-teal-600" />}
+                                        </button>
                                     </div>
                                     <span className={`mb-2 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(updates?.remote?.available ? 'healthy' : 'degraded')}`}>
                                         {updates?.remote?.available ? 'GitHub compare ready' : 'GitHub compare unavailable'}
@@ -511,7 +591,7 @@ export default function SystemHealthWorkspace({
                                 </div>
 
                                 <div className="p-4 space-y-3">
-                                    {changelogTab === 'pending' ? (
+                                    {changelogTab === 'pending' && (
                                         <>
                                             {(updates?.commits || []).length ? updates.commits.map((commit) => (
                                                 <div key={commit.sha} className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -529,7 +609,9 @@ export default function SystemHealthWorkspace({
                                                 </p>
                                             )}
                                         </>
-                                    ) : (
+                                    )}
+
+                                    {changelogTab === 'previous' && (
                                         <>
                                             {commitHistoryQuery.isLoading ? (
                                                 <p className="px-4 py-5 text-sm text-slate-500">Loading commit history...</p>
@@ -591,6 +673,121 @@ export default function SystemHealthWorkspace({
                                             )}
                                         </>
                                     )}
+
+                                    {changelogTab === 'deployments' && (
+                                        <>
+                                            {deployHistoryQuery.isLoading ? (
+                                                <p className="px-4 py-5 text-sm text-slate-500">Loading deployment history...</p>
+                                            ) : (deployHistoryQuery.data?.deployments || []).length ? (
+                                                <>
+                                                    {deployHistoryQuery.data.deployments.map((dep) => {
+                                                        const isCurrent = dep.sha === updates?.deployed_version?.sha;
+                                                        const isRollbackTarget = rollbackTarget?.id === dep.id;
+                                                        return (
+                                                            <div key={dep.id}>
+                                                                <div className={`rounded-md border p-3 ${isCurrent ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
+                                                                    <div className="flex items-center justify-between gap-3">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="shrink-0 rounded-md bg-slate-900 px-2 py-1 font-mono text-xs text-slate-50">{dep.short_sha}</span>
+                                                                            {isCurrent && (
+                                                                                <span className="inline-flex items-center rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-700">Current</span>
+                                                                            )}
+                                                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset ${
+                                                                                dep.trigger_source === 'rollback' ? 'bg-amber-50 text-amber-700 ring-amber-200'
+                                                                                : dep.trigger_source === 'manual' ? 'bg-blue-50 text-blue-700 ring-blue-200'
+                                                                                : 'bg-slate-50 text-slate-600 ring-slate-200'
+                                                                            }`}>
+                                                                                {dep.trigger_source}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-2">
+                                                                            {canDeployUpdates && !isCurrent && !updates?.manual_deploy?.in_progress && (
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => {
+                                                                                        setRollbackTarget(isRollbackTarget ? null : dep);
+                                                                                        setSelectedBackup('');
+                                                                                    }}
+                                                                                    className="text-xs font-medium text-teal-700 hover:text-teal-900"
+                                                                                >
+                                                                                    {isRollbackTarget ? 'Cancel' : 'Rollback'}
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                    <p className="mt-1 text-xs text-slate-500">
+                                                                        {formatDateTime(dep.deployed_at)}
+                                                                        {dep.requested_by?.name ? ` • ${dep.requested_by.name}` : ''}
+                                                                        {dep.branch ? ` • ${dep.branch}` : ''}
+                                                                    </p>
+                                                                </div>
+
+                                                                {isRollbackTarget && (
+                                                                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-4 space-y-3">
+                                                                        <p className="text-sm font-semibold text-slate-900">
+                                                                            Roll back to <span className="font-mono">{dep.short_sha}</span>?
+                                                                        </p>
+                                                                        <p className="text-xs text-slate-600">
+                                                                            Deployed on {formatDateTime(dep.deployed_at)}. This will check out an older version of the codebase and restart the application.
+                                                                        </p>
+
+                                                                        <div>
+                                                                            <label className="block text-xs font-medium text-slate-700 mb-1">Database restore (optional)</label>
+                                                                            <select
+                                                                                value={selectedBackup}
+                                                                                onChange={(e) => setSelectedBackup(e.target.value)}
+                                                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                                                                            >
+                                                                                <option value="">App only — no database restore</option>
+                                                                                {(backupsQuery.data?.backups || []).map((b) => (
+                                                                                    <option key={b.filename} value={b.filename}>
+                                                                                        {b.filename} ({b.size_human})
+                                                                                    </option>
+                                                                                ))}
+                                                                            </select>
+                                                                            {selectedBackup && (
+                                                                                <p className="mt-1.5 text-xs text-rose-600">
+                                                                                    The database will be restored from this backup. Any data created after the backup was taken will be lost.
+                                                                                </p>
+                                                                            )}
+                                                                        </div>
+
+                                                                        <div className="flex items-center gap-2 pt-1">
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => {
+                                                                                    setRollbackTarget(null);
+                                                                                    setSelectedBackup('');
+                                                                                }}
+                                                                                className="crm-btn-secondary px-3 py-2"
+                                                                            >
+                                                                                Cancel
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => rollbackMutation.mutate({
+                                                                                    deploymentId: dep.id,
+                                                                                    backupFilename: selectedBackup || null,
+                                                                                })}
+                                                                                disabled={rollbackMutation.isPending}
+                                                                                className="rounded-md bg-rose-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                                                            >
+                                                                                {rollbackMutation.isPending ? 'Rolling back...' : 'Confirm Rollback'}
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </>
+                                            ) : (
+                                                <p className="rounded-md border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500">
+                                                    No deployment history recorded yet. Deploy once to start tracking history.
+                                                </p>
+                                            )}
+                                        </>
+                                    )}
                                 </div>
                             </div>
 
@@ -610,6 +807,57 @@ export default function SystemHealthWorkspace({
                                     </pre>
                                 </div>
                             </div>
+
+                            {canDeployUpdates && (
+                                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">Database Backups</p>
+                                            <p className="mt-1 text-xs text-slate-500">Upload <code className="text-xs">.sql</code> backups from cPanel to use during rollbacks.</p>
+                                        </div>
+                                        <label className="crm-btn-secondary px-3 py-2 cursor-pointer">
+                                            {backupUploading ? 'Uploading...' : 'Upload .sql'}
+                                            <input
+                                                type="file"
+                                                accept=".sql"
+                                                onChange={handleBackupUpload}
+                                                disabled={backupUploading}
+                                                className="hidden"
+                                            />
+                                        </label>
+                                    </div>
+                                    <div className="mt-3 space-y-2">
+                                        {backupsQuery.isLoading ? (
+                                            <p className="text-xs text-slate-500">Loading backups...</p>
+                                        ) : (backupsQuery.data?.backups || []).length ? (
+                                            backupsQuery.data.backups.map((b) => (
+                                                <div key={b.filename} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-medium text-slate-900">{b.filename}</p>
+                                                        <p className="text-xs text-slate-500">{b.size_human} &middot; {formatDateTime(b.modified_at)}</p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (window.confirm(`Delete backup "${b.filename}"?`)) {
+                                                                deleteBackupMutation.mutate(b.filename);
+                                                            }
+                                                        }}
+                                                        disabled={deleteBackupMutation.isPending}
+                                                        className="shrink-0 text-xs font-medium text-rose-600 hover:text-rose-800 disabled:opacity-50"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <p className="rounded-md border border-dashed border-slate-300 px-4 py-4 text-center text-xs text-slate-500">
+                                                No backups uploaded yet. Download a <code className="text-xs">.sql</code> backup from cPanel and upload it here.
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </section>

@@ -219,6 +219,11 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/settings/system-health/updates/log', [SystemHealthUpdateController::class, 'log'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/commits', [SystemHealthUpdateController::class, 'commitHistory'])->middleware('role:admin,sub_admin');
     Route::post('/settings/system-health/updates/deploy', [SystemHealthUpdateController::class, 'deploy'])->middleware('role:admin');
+    Route::get('/settings/system-health/updates/history', [SystemHealthUpdateController::class, 'deploymentHistory'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/system-health/updates/backups', [SystemHealthUpdateController::class, 'backups'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/system-health/updates/upload-backup', [SystemHealthUpdateController::class, 'uploadBackup'])->middleware('role:admin');
+    Route::delete('/settings/system-health/updates/backups/{filename}', [SystemHealthUpdateController::class, 'deleteBackup'])->middleware('role:admin');
+    Route::post('/settings/system-health/updates/rollback', [SystemHealthUpdateController::class, 'rollback'])->middleware('role:admin');
     Route::get('/settings/wallet', [SettingsController::class, 'wallet']);
     Route::patch('/settings/wallet', [SettingsController::class, 'updateWallet'])->middleware('role:admin');
     Route::patch('/settings/wallet/pin', [SettingsController::class, 'updateWalletPin'])->middleware('role:admin');

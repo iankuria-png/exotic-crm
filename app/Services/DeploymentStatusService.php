@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\User;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -439,6 +440,8 @@ class DeploymentStatusService
             'DEPLOY_LOG_FILE' => $this->logPath(),
             'DEPLOY_LOCK_FILE' => $this->lockPath(),
             'DEPLOY_REPOSITORY_PATH' => $this->repositoryPath(),
+            'DEPLOY_HISTORY_FILE' => $this->historyPath(),
+            'GITHUB_TOKEN' => config('deployment.github.token'),
             'APP_ENV' => app()->environment(),
         ];
 
@@ -562,6 +565,245 @@ class DeploymentStatusService
     private function manualDeployEnabled(): bool
     {
         return (bool) config('deployment.manual_enabled', true);
+    }
+
+    public function deploymentHistory(): array
+    {
+        $path = $this->historyPath();
+
+        if (!is_file($path)) {
+            return ['deployments' => []];
+        }
+
+        $decoded = json_decode((string) File::get($path), true);
+
+        if (!is_array($decoded) || !isset($decoded['deployments'])) {
+            return ['deployments' => []];
+        }
+
+        return ['deployments' => $decoded['deployments']];
+    }
+
+    public function availableBackups(): array
+    {
+        $dir = $this->backupsPath();
+
+        if (!is_dir($dir)) {
+            return [];
+        }
+
+        $files = collect(File::files($dir))
+            ->filter(fn ($file) => $file->getExtension() === 'sql')
+            ->sortByDesc(fn ($file) => $file->getMTime())
+            ->map(fn ($file) => [
+                'filename' => $file->getFilename(),
+                'size' => $file->getSize(),
+                'size_human' => $this->humanFileSize($file->getSize()),
+                'modified_at' => gmdate('Y-m-d\TH:i:s\Z', $file->getMTime()),
+            ])
+            ->values()
+            ->all();
+
+        return $files;
+    }
+
+    public function storeBackup(UploadedFile $file): array
+    {
+        $dir = $this->backupsPath();
+        File::ensureDirectoryExists($dir);
+
+        $filename = $file->getClientOriginalName();
+        $filename = preg_replace('/[^a-zA-Z0-9._\-]/', '_', $filename);
+
+        if (is_file($dir . DIRECTORY_SEPARATOR . $filename)) {
+            $filename = pathinfo($filename, PATHINFO_FILENAME) . '_' . time() . '.sql';
+        }
+
+        $file->move($dir, $filename);
+
+        $fullPath = $dir . DIRECTORY_SEPARATOR . $filename;
+
+        return [
+            'filename' => $filename,
+            'size' => filesize($fullPath),
+            'size_human' => $this->humanFileSize(filesize($fullPath)),
+        ];
+    }
+
+    public function deleteBackup(string $filename): void
+    {
+        $filename = basename($filename);
+        $path = $this->backupsPath() . DIRECTORY_SEPARATOR . $filename;
+
+        if (!is_file($path)) {
+            throw ValidationException::withMessages([
+                'filename' => ['Backup file not found.'],
+            ]);
+        }
+
+        File::delete($path);
+    }
+
+    public function startRollback(string $deploymentId, ?User $user = null, ?string $backupFilename = null): array
+    {
+        $availability = $this->deployAvailability();
+
+        if (!($availability['available'] ?? false)) {
+            throw ValidationException::withMessages([
+                'rollback' => [$availability['message'] ?? 'Rollback is not available.'],
+            ]);
+        }
+
+        $currentStatus = $this->readStatusFile();
+        if (($currentStatus['in_progress'] ?? false) === true) {
+            throw ValidationException::withMessages([
+                'rollback' => ['A deployment or rollback is already in progress.'],
+            ]);
+        }
+
+        $history = $this->deploymentHistory();
+        $deployment = collect($history['deployments'])->firstWhere('id', $deploymentId);
+
+        if (!$deployment) {
+            throw ValidationException::withMessages([
+                'deployment_id' => ['Deployment not found in history.'],
+            ]);
+        }
+
+        $targetSha = $deployment['sha'] ?? null;
+        if (!$targetSha) {
+            throw ValidationException::withMessages([
+                'deployment_id' => ['Deployment has no commit SHA.'],
+            ]);
+        }
+
+        $backupPath = null;
+        if ($backupFilename) {
+            $backupFilename = basename($backupFilename);
+            $backupPath = $this->backupsPath() . DIRECTORY_SEPARATOR . $backupFilename;
+
+            if (!is_file($backupPath)) {
+                throw ValidationException::withMessages([
+                    'backup_filename' => ['The selected backup file does not exist.'],
+                ]);
+            }
+        }
+
+        $currentCheckout = $this->currentCheckoutVersion();
+        $queuedAt = now()->toIso8601String();
+        $initialStatus = [
+            'state' => 'rolling_back',
+            'in_progress' => true,
+            'trigger_source' => 'rollback',
+            'branch' => $currentCheckout['branch'] ?? $this->trackedBranch(),
+            'commit_sha' => $currentCheckout['sha'] ?? null,
+            'commit_short' => $currentCheckout['short_sha'] ?? null,
+            'started_at' => $queuedAt,
+            'finished_at' => null,
+            'deployed_at' => null,
+            'message' => 'Rolling back to ' . substr($targetSha, 0, 8) . '...',
+            'requested_by' => $this->serializeUser($user),
+            'reason' => 'Rollback to deployment ' . $deploymentId,
+            'last_successful_deploy' => $currentStatus['last_successful_deploy'] ?? null,
+        ];
+
+        $this->ensureDeploymentDirectory();
+        File::put($this->logPath(), '[' . $queuedAt . "] Rollback queued.\n");
+        $this->writeStatusFile($initialStatus);
+
+        $command = $this->buildRollbackCommand($targetSha, $backupPath, $user);
+        $output = [];
+        $exitCode = 0;
+
+        exec($command, $output, $exitCode);
+
+        if ($exitCode !== 0) {
+            $this->writeStatusFile(array_merge($initialStatus, [
+                'state' => 'failed',
+                'in_progress' => false,
+                'finished_at' => now()->toIso8601String(),
+                'message' => 'Unable to start the rollback process.',
+            ]));
+
+            throw ValidationException::withMessages([
+                'rollback' => ['Unable to start the rollback process.'],
+            ]);
+        }
+
+        $pid = trim((string) collect($output)->last());
+        if ($pid !== '') {
+            $initialStatus['pid'] = $pid;
+            $this->writeStatusFile($initialStatus);
+        }
+
+        return $this->snapshot();
+    }
+
+    private function buildRollbackCommand(string $targetSha, ?string $backupPath, ?User $user): string
+    {
+        $env = [
+            'DEPLOY_TRIGGER_SOURCE' => 'rollback',
+            'DEPLOY_REQUESTED_BY_ID' => $user?->id,
+            'DEPLOY_REQUESTED_BY_NAME' => $user?->name,
+            'DEPLOY_REQUESTED_BY_EMAIL' => $user?->email,
+            'DEPLOY_REASON' => 'Rollback to ' . substr($targetSha, 0, 8),
+            'DEPLOY_STATUS_FILE' => $this->statusPath(),
+            'DEPLOY_LOG_FILE' => $this->logPath(),
+            'DEPLOY_LOCK_FILE' => $this->lockPath(),
+            'DEPLOY_REPOSITORY_PATH' => $this->repositoryPath(),
+            'DEPLOY_HISTORY_FILE' => $this->historyPath(),
+            'GITHUB_TOKEN' => config('deployment.github.token'),
+            'ROLLBACK_TARGET_SHA' => $targetSha,
+            'ROLLBACK_DB_BACKUP' => $backupPath,
+            'APP_ENV' => app()->environment(),
+        ];
+
+        $databaseConfig = config('database.connections.' . config('database.default'), []);
+        foreach ([
+            'DB_CONNECTION' => config('database.default'),
+            'DB_HOST' => $databaseConfig['host'] ?? null,
+            'DB_PORT' => $databaseConfig['port'] ?? null,
+            'DB_DATABASE' => $databaseConfig['database'] ?? null,
+            'DB_USERNAME' => $databaseConfig['username'] ?? null,
+            'DB_PASSWORD' => $databaseConfig['password'] ?? null,
+        ] as $key => $value) {
+            $env[$key] = $value;
+        }
+
+        $pairs = collect($env)
+            ->filter(fn ($value) => $value !== null && $value !== '')
+            ->map(fn ($value, $key) => sprintf('%s=%s', $key, escapeshellarg((string) $value)))
+            ->implode(' ');
+
+        return sprintf(
+            'env %s /bin/bash %s > /dev/null 2>&1 & echo $!',
+            $pairs,
+            escapeshellarg($this->scriptPath())
+        );
+    }
+
+    private function historyPath(): string
+    {
+        return (string) config('deployment.history_path', storage_path('app/deployment/history.json'));
+    }
+
+    private function backupsPath(): string
+    {
+        return (string) config('deployment.db_backups_path', storage_path('app/deployment/backups'));
+    }
+
+    private function humanFileSize(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB'];
+        $i = 0;
+        $size = (float) $bytes;
+
+        while ($size >= 1024 && $i < count($units) - 1) {
+            $size /= 1024;
+            $i++;
+        }
+
+        return round($size, 1) . ' ' . $units[$i];
     }
 
     private function commandExecutionAvailable(): bool

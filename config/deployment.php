@@ -9,6 +9,9 @@ return [
     'lock_path' => env('DEPLOY_LOCK_PATH', storage_path('app/deployment/deploy.lock')),
     'git_dir' => env('DEPLOY_GIT_DIR', base_path('.git')),
     'repository_path' => env('DEPLOY_REPOSITORY_PATH', base_path()),
+    'history_path' => env('DEPLOY_HISTORY_PATH', storage_path('app/deployment/history.json')),
+    'history_max_entries' => env('DEPLOY_HISTORY_MAX', 20),
+    'db_backups_path' => env('DEPLOY_DB_BACKUPS_PATH', storage_path('app/deployment/backups')),
     'github' => [
         'owner' => env('GITHUB_REPO_OWNER'),
         'repo' => env('GITHUB_REPO_NAME'),
