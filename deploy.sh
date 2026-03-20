@@ -18,6 +18,8 @@ HISTORY_FILE="${DEPLOY_HISTORY_FILE:-$APP_DIR/storage/app/deployment/history.jso
 DEPLOY_HISTORY_MAX="${DEPLOY_HISTORY_MAX:-20}"
 ROLLBACK_TARGET_SHA="${ROLLBACK_TARGET_SHA:-}"
 ROLLBACK_DB_BACKUP="${ROLLBACK_DB_BACKUP:-}"
+PHP_BIN="${DEPLOY_PHP_BINARY:-php}"
+COMPOSER_BIN="${DEPLOY_COMPOSER_BINARY:-composer}"
 
 mkdir -p "$(dirname "$STATUS_FILE")"
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -56,7 +58,7 @@ write_status() {
     DEPLOY_REQUESTED_BY_NAME_RUNTIME="$DEPLOY_REQUESTED_BY_NAME" \
     DEPLOY_REQUESTED_BY_EMAIL_RUNTIME="$DEPLOY_REQUESTED_BY_EMAIL" \
     DEPLOY_REASON_RUNTIME="$DEPLOY_REASON" \
-    php <<'PHP'
+    "$PHP_BIN" <<'PHP'
 <?php
 $path = getenv('DEPLOY_STATUS_FILE_RUNTIME');
 $existing = [];
@@ -113,7 +115,7 @@ record_manual_audit() {
         return 0
     fi
 
-    php artisan crm:record-deploy-audit "$status" \
+    "$PHP_BIN" artisan crm:record-deploy-audit "$status" \
         --user-id="$DEPLOY_REQUESTED_BY_ID" \
         --source="$DEPLOY_TRIGGER_SOURCE" \
         --branch="$CURRENT_BRANCH" \
@@ -123,7 +125,7 @@ record_manual_audit() {
 }
 
 backup_database() {
-    php <<'PHP'
+    "$PHP_BIN" <<'PHP'
 <?php
 require __DIR__ . '/vendor/autoload.php';
 $app = require __DIR__ . '/bootstrap/app.php';
@@ -201,7 +203,7 @@ record_history() {
     DEPLOY_HISTORY_BY_NAME_RUNTIME="$DEPLOY_REQUESTED_BY_NAME" \
     DEPLOY_HISTORY_BY_EMAIL_RUNTIME="$DEPLOY_REQUESTED_BY_EMAIL" \
     DEPLOY_HISTORY_PREV_SHA_RUNTIME="${PREVIOUS_COMMIT:-}" \
-    php <<'PHP'
+    "$PHP_BIN" <<'PHP'
 <?php
 $path = getenv('DEPLOY_HISTORY_FILE_RUNTIME');
 $maxEntries = (int) getenv('DEPLOY_HISTORY_MAX_RUNTIME') ?: 20;
@@ -261,7 +263,7 @@ finish_success() {
         CURRENT_BRANCH_ENV="$CURRENT_BRANCH" \
         DEPLOYED_AT_ENV="$deployed_at" \
         DEPLOY_TRIGGER_SOURCE_ENV="$DEPLOY_TRIGGER_SOURCE" \
-        php <<'PHP'
+        "$PHP_BIN" <<'PHP'
 <?php
 echo json_encode([
     'sha' => getenv('CURRENT_COMMIT_ENV'),
@@ -281,7 +283,7 @@ PHP
 restore_database() {
     local backup_path="$1"
     RESTORE_BACKUP_PATH_RUNTIME="$backup_path" \
-    php <<'PHP'
+    "$PHP_BIN" <<'PHP'
 <?php
 require __DIR__ . '/vendor/autoload.php';
 $app = require __DIR__ . '/bootstrap/app.php';
@@ -378,21 +380,21 @@ if [[ -n "$ROLLBACK_TARGET_SHA" ]]; then
     CURRENT_SHORT_COMMIT="${CURRENT_COMMIT:0:8}"
     echo "Checked out commit: ${CURRENT_COMMIT}"
 
-    composer install --no-interaction --prefer-dist --optimize-autoloader
+    "$COMPOSER_BIN" install --no-interaction --prefer-dist --optimize-autoloader
 
     if [[ -n "$ROLLBACK_DB_BACKUP" ]]; then
         echo "Restoring database from backup: ${ROLLBACK_DB_BACKUP}"
         restore_database "$ROLLBACK_DB_BACKUP"
     else
         echo "Skipping database restore (app-only rollback)."
-        php artisan migrate --force
+        "$PHP_BIN" artisan migrate --force
     fi
 
-    php artisan optimize:clear
-    php artisan config:cache
-    php artisan route:cache
-    php artisan view:cache
-    php artisan queue:restart
+    "$PHP_BIN" artisan optimize:clear
+    "$PHP_BIN" artisan config:cache
+    "$PHP_BIN" artisan route:cache
+    "$PHP_BIN" artisan view:cache
+    "$PHP_BIN" artisan queue:restart
 
     finish_success
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Rollback completed successfully."
@@ -407,14 +409,14 @@ CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 CURRENT_SHORT_COMMIT="${CURRENT_COMMIT:0:8}"
 echo "Updated to commit: ${CURRENT_COMMIT}"
 
-composer install --no-interaction --prefer-dist --optimize-autoloader
+"$COMPOSER_BIN" install --no-interaction --prefer-dist --optimize-autoloader
 backup_database
-php artisan migrate --force
-php artisan optimize:clear
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-php artisan queue:restart
+"$PHP_BIN" artisan migrate --force
+"$PHP_BIN" artisan optimize:clear
+"$PHP_BIN" artisan config:cache
+"$PHP_BIN" artisan route:cache
+"$PHP_BIN" artisan view:cache
+"$PHP_BIN" artisan queue:restart
 
 finish_success
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deployment finished successfully."

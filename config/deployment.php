@@ -1,6 +1,8 @@
 <?php
 
 return [
+    'php_binary' => env('DEPLOY_PHP_BINARY', 'php'),
+    'composer_binary' => env('DEPLOY_COMPOSER_BINARY', 'composer'),
     'script_path' => env('DEPLOY_SCRIPT_PATH', base_path('deploy.sh')),
     'tracked_branch' => env('DEPLOY_TRACKED_BRANCH', 'main'),
     'manual_enabled' => env('DEPLOY_MANUAL_ENABLED', true),
