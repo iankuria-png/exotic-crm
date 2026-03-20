@@ -95,6 +95,14 @@ class ClientController extends Controller
             $query->where('verified', $request->boolean('verified'));
         }
 
+        if (in_array((string) $request->input('has_chat'), ['0', '1'], true)) {
+            if ((string) $request->input('has_chat') === '1') {
+                $query->whereNotNull('sb_user_id');
+            } else {
+                $query->whereNull('sb_user_id');
+            }
+        }
+
         if ($request->filled('online_within')) {
             $minutes = (int) $request->online_within;
             if ($minutes > 0) {
@@ -134,6 +142,7 @@ class ClientController extends Controller
             'premium' => (clone $statsQuery)->where('premium', true)->count(),
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
             'inactive' => (clone $statsQuery)->where('profile_status', 'private')->count(),
+            'with_chat' => (clone $statsQuery)->whereNotNull('sb_user_id')->count(),
             'online_now' => (clone $statsQuery)->where('last_online_at', '>=', now()->subMinutes(15)->timestamp)->count(),
             'retention_watch' => (clone $statsQuery)->whereHas('retentionInsight', function ($builder) {
                 $builder->whereIn('band', ClientRetentionInsightService::WATCH_BANDS);

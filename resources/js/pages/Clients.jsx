@@ -36,6 +36,7 @@ export default function Clients() {
     const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending']);
     const allowedPlans = new Set(['premium', 'featured', 'basic']);
     const allowedVerifiedFilters = new Set(['1', '0']);
+    const allowedHasChatFilters = new Set(['1', '0']);
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
     const allowedBehaviorTags = new Set(RETENTION_BEHAVIOR_TAGS);
@@ -61,6 +62,10 @@ export default function Clients() {
     const [verifiedFilter, setVerifiedFilter] = useState(() => {
         const requested = (searchParams.get('verified') || '').trim();
         return allowedVerifiedFilters.has(requested) ? requested : '';
+    });
+    const [hasChatFilter, setHasChatFilter] = useState(() => {
+        const requested = (searchParams.get('has_chat') || '').trim();
+        return allowedHasChatFilters.has(requested) ? requested : '';
     });
     const [onlineFilter, setOnlineFilter] = useState(() => {
         const requested = (searchParams.get('online_within') || '').trim();
@@ -116,7 +121,7 @@ export default function Clients() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, onlineFilter, platformFilter, retentionBandFilter, behaviorTagFilter],
+        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, hasChatFilter, onlineFilter, platformFilter, retentionBandFilter, behaviorTagFilter],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
@@ -126,6 +131,7 @@ export default function Clients() {
                     ...(statusFilter && { status: statusFilter }),
                     ...(planFilter && { plan: planFilter }),
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
+                    ...(hasChatFilter !== '' && { has_chat: hasChatFilter }),
                     ...(onlineFilter && { online_within: Number(onlineFilter) }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
@@ -325,6 +331,7 @@ export default function Clients() {
                 active: Number(data.stats.active || 0),
                 premium: Number(data.stats.premium || 0),
                 verified: Number(data.stats.verified || 0),
+                with_chat: Number(data.stats.with_chat || 0),
                 retention_watch: Number(data.stats.retention_watch || 0),
                 total: Number(data.stats.total || 0),
             };
@@ -334,6 +341,7 @@ export default function Clients() {
             active: rows.filter((row) => row.profile_status === 'publish').length,
             premium: rows.filter((row) => row.premium).length,
             verified: rows.filter((row) => row.verified).length,
+            with_chat: rows.filter((row) => Number(row.sb_user_id || 0) > 0).length,
             retention_watch: rows.filter((row) => ['Watchlist', 'Needs Attention', 'Critical'].includes(String(row.retention_insight?.band || row.retentionInsight?.band || ''))).length,
             total: Number(data?.total || rows.length),
         };
@@ -408,9 +416,16 @@ export default function Clients() {
                         </div>
                     )}
                     <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-900" title={row.name || 'Unnamed'}>
-                            {row.name || 'Unnamed'}
-                        </p>
+                        <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-semibold text-slate-900" title={row.name || 'Unnamed'}>
+                                {row.name || 'Unnamed'}
+                            </p>
+                            {row.sb_user_id ? (
+                                <span className="inline-flex shrink-0 items-center rounded-md bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-inset ring-sky-200">
+                                    Chat
+                                </span>
+                            ) : null}
+                        </div>
                         <p className="truncate text-xs text-slate-500" title={row.city || 'City not set'}>
                             {row.city || 'City not set'}
                         </p>
@@ -637,6 +652,17 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="Chat"
+                        value={hasChatFilter}
+                        onChange={(event) => { setHasChatFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All clients' },
+                            { value: '1', label: 'Matched to chat' },
+                            { value: '0', label: 'No chat match' },
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Online"
                         value={onlineFilter}
                         onChange={(event) => { setOnlineFilter(event.target.value); setPage(1); }}
@@ -672,7 +698,7 @@ export default function Clients() {
                         ]}
                     />
 
-                    {(search || statusFilter || planFilter || verifiedFilter !== '' || onlineFilter || platformFilter || retentionBandFilter || behaviorTagFilter) ? (
+                    {(search || statusFilter || planFilter || verifiedFilter !== '' || hasChatFilter !== '' || onlineFilter || platformFilter || retentionBandFilter || behaviorTagFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -681,6 +707,7 @@ export default function Clients() {
                                 setStatusFilter('');
                                 setPlanFilter('');
                                 setVerifiedFilter('');
+                                setHasChatFilter('');
                                 setOnlineFilter('');
                                 setPlatformFilter('');
                                 setRetentionBandFilter('');
