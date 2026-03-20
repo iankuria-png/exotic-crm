@@ -242,6 +242,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/settings/integrations/platforms/{platform}/test-connection', [SettingsController::class, 'testPlatformConnection'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/support-board/sync', [SettingsController::class, 'runPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/integrations/platforms/{platform}/support-board/sync/latest', [SettingsController::class, 'latestPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/scraper-sources', [SettingsController::class, 'storeScraperSource'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/scraper-sources/{scraperSource}', [SettingsController::class, 'updateScraperSource'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/scraper-sources/{scraperSource}/run', [SettingsController::class, 'runScraperSource'])->middleware('role:admin,sub_admin');

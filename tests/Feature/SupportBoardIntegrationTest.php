@@ -5,13 +5,18 @@ namespace Tests\Feature;
 use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\Platform;
+use App\Models\SupportBoardSyncRun;
 use App\Models\TimelineEvent;
 use App\Models\User;
+use App\Jobs\RunSupportBoardSyncJob;
+use App\Services\SupportBoardLinkSyncService;
+use App\Services\SupportBoardSyncRunService;
 use App\Services\SupportBoardService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -659,8 +664,9 @@ class SupportBoardIntegrationTest extends TestCase
             ->assertJsonPath('stats.with_chat', 1);
     }
 
-    public function test_settings_support_board_sync_endpoint_backfills_links_for_selected_market(): void
+    public function test_settings_support_board_sync_endpoint_queues_background_run_for_selected_market(): void
     {
+        config(['queue.default' => 'database']);
         $platform = $this->createPlatform();
         $otherPlatform = $this->createPlatform(['domain' => 'second-market.test']);
         $admin = $this->createUser('admin');
@@ -682,6 +688,117 @@ class SupportBoardIntegrationTest extends TestCase
             'email' => 'other-market@example.test',
         ]);
 
+        Queue::fake();
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson("/api/crm/settings/integrations/platforms/{$platform->id}/support-board/sync", [
+            'refresh' => false,
+            'reason' => 'Backfill unmatched Support Board links',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('status', 'queued')
+            ->assertJsonPath('run.mode', 'incremental')
+            ->assertJsonPath('run.candidates', 1)
+            ->assertJsonPath('run.processed', 0)
+            ->assertJsonPath('run.errors', 0);
+
+        Queue::assertPushed(RunSupportBoardSyncJob::class, function (RunSupportBoardSyncJob $job) use ($platform) {
+            $run = SupportBoardSyncRun::query()->find($job->runId);
+
+            return $run
+                && (int) $run->platform_id === (int) $platform->id
+                && $run->status === SupportBoardSyncRun::STATUS_QUEUED;
+        });
+
+        $matchedClient->refresh();
+        $unmatchedClient->refresh();
+        $otherMarketClient->refresh();
+
+        $this->assertSame(999, (int) $matchedClient->sb_user_id);
+        $this->assertNull($unmatchedClient->sb_user_id);
+        $this->assertNull($otherMarketClient->sb_user_id);
+    }
+
+    public function test_settings_support_board_sync_endpoint_reuses_existing_active_run(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $admin = $this->createUser('admin');
+
+        $run = SupportBoardSyncRun::query()->create([
+            'platform_id' => $platform->id,
+            'initiated_by' => $admin->id,
+            'mode' => 'incremental',
+            'status' => SupportBoardSyncRun::STATUS_RUNNING,
+            'candidates' => 12,
+            'processed' => 4,
+            'matched' => 3,
+            'errors' => 0,
+            'started_at' => now()->subMinutes(3),
+            'last_heartbeat_at' => now()->subSeconds(20),
+        ]);
+
+        Queue::fake();
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson("/api/crm/settings/integrations/platforms/{$platform->id}/support-board/sync", [
+            'refresh' => false,
+            'reason' => 'Avoid duplicate sync run',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('reused_run', true)
+            ->assertJsonPath('run.id', $run->id)
+            ->assertJsonPath('run.status', 'running');
+
+        Queue::assertNothingPushed();
+    }
+
+    public function test_latest_support_board_sync_endpoint_returns_run_status(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $admin = $this->createUser('admin');
+
+        $run = SupportBoardSyncRun::query()->create([
+            'platform_id' => $platform->id,
+            'initiated_by' => $admin->id,
+            'mode' => 'refresh',
+            'status' => SupportBoardSyncRun::STATUS_COMPLETED,
+            'candidates' => 10,
+            'processed' => 10,
+            'matched' => 7,
+            'updated' => 1,
+            'cleared' => 0,
+            'unchanged' => 2,
+            'errors' => 0,
+            'started_at' => now()->subMinutes(5),
+            'finished_at' => now()->subMinute(),
+            'last_heartbeat_at' => now()->subMinute(),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/settings/integrations/platforms/{$platform->id}/support-board/sync/latest")
+            ->assertOk()
+            ->assertJsonPath('run.id', $run->id)
+            ->assertJsonPath('run.status', 'completed')
+            ->assertJsonPath('run.progress_percent', 100)
+            ->assertJsonPath('run.refresh', true);
+    }
+
+    public function test_support_board_sync_job_processes_run_to_completion(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $admin = $this->createUser('admin');
+        $client = $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'async-sync@example.test',
+        ]);
+
         Http::fake(function (ClientRequest $request) {
             $function = $request->data()['function'] ?? null;
             $value = $request->data()['value'] ?? null;
@@ -690,14 +807,14 @@ class SupportBoardIntegrationTest extends TestCase
                 return Http::response(['success' => true, 'response' => []]);
             }
 
-            if (in_array($value, ['+254700111222', '254700111222', '0700111222', 'needs-link@example.test'], true)) {
+            if (in_array($value, ['+254701234567', '254701234567', '0701234567', 'async-sync@example.test'], true)) {
                 return Http::response([
                     'success' => true,
                     'response' => [
-                        'id' => 1234,
-                        'first_name' => 'Needs',
-                        'last_name' => 'Link',
-                        'email' => 'needs-link@example.test',
+                        'id' => 5678,
+                        'first_name' => 'Async',
+                        'last_name' => 'Sync',
+                        'email' => 'async-sync@example.test',
                         'user_type' => 'lead',
                         'details' => [],
                     ],
@@ -707,28 +824,27 @@ class SupportBoardIntegrationTest extends TestCase
             return Http::response(['success' => true, 'response' => []]);
         });
 
-        Sanctum::actingAs($admin);
+        $started = app(SupportBoardSyncRunService::class)->startRun(
+            $platform,
+            $admin,
+            false,
+            'Run one-client async sync'
+        );
 
-        $response = $this->postJson("/api/crm/settings/integrations/platforms/{$platform->id}/support-board/sync", [
-            'refresh' => false,
-            'reason' => 'Backfill unmatched Support Board links',
-        ]);
+        (new RunSupportBoardSyncJob((int) $started['run']->id))
+            ->handle(
+                app(SupportBoardSyncRunService::class),
+                app(SupportBoardLinkSyncService::class)
+            );
 
-        $response->assertOk()
-            ->assertJsonPath('status', 'success')
-            ->assertJsonPath('result.candidates', 1)
-            ->assertJsonPath('result.processed', 1)
-            ->assertJsonPath('result.matched', 1)
-            ->assertJsonPath('result.errors', 0);
+        $client->refresh();
+        $run = SupportBoardSyncRun::query()->findOrFail($started['run']->id);
 
-        $matchedClient->refresh();
-        $unmatchedClient->refresh();
-        $otherMarketClient->refresh();
-
-        $this->assertSame(999, (int) $matchedClient->sb_user_id);
-        $this->assertSame(1234, (int) $unmatchedClient->sb_user_id);
-        $this->assertSame('phone', $unmatchedClient->sb_matched_by);
-        $this->assertNull($otherMarketClient->sb_user_id);
+        $this->assertSame(5678, (int) $client->sb_user_id);
+        $this->assertSame('phone', $client->sb_matched_by);
+        $this->assertSame(SupportBoardSyncRun::STATUS_COMPLETED, $run->status);
+        $this->assertSame(1, (int) $run->processed);
+        $this->assertSame(1, (int) $run->matched);
     }
 
     public function test_settings_support_board_sync_endpoint_rejects_sales_role(): void

@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RunSupportBoardSyncJob;
 use App\Models\AuditLog;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\ScraperRun;
 use App\Models\ScraperSource;
+use App\Models\SupportBoardSyncRun;
 use App\Models\Template;
 use App\Models\User;
 use App\Services\AuditService;
@@ -18,7 +20,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ScraperSourceService;
-use App\Services\SupportBoardLinkSyncService;
+use App\Services\SupportBoardSyncRunService;
 use App\Services\SupportBoardService;
 use App\Services\WalletSyncService;
 use App\Services\WalletSettingsService;
@@ -41,6 +43,7 @@ class SettingsController extends Controller
         private readonly NotificationService $notificationService,
         private readonly PushProviderService $pushProviderService,
         private readonly ScraperSourceService $scraperSourceService,
+        private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService
     ) {
@@ -56,8 +59,14 @@ class SettingsController extends Controller
         }
 
         $platforms = $platformQuery->get();
+        $supportBoardSyncRuns = $this->supportBoardSyncRunService->latestRunsForPlatforms(
+            $platforms->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
         $platformStatuses = $platforms
-            ->map(fn(Platform $platform) => $this->serializePlatformIntegration($platform))
+            ->map(fn(Platform $platform) => $this->serializePlatformIntegration(
+                $platform,
+                $supportBoardSyncRuns->get((int) $platform->id)
+            ))
             ->values();
 
         $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
@@ -1495,8 +1504,7 @@ class SettingsController extends Controller
 
     public function runPlatformSupportBoardSync(
         Request $request,
-        Platform $platform,
-        SupportBoardLinkSyncService $supportBoardLinkSyncService
+        Platform $platform
     ) {
         $this->marketAuthorizationService->ensureRole(
             $request->user(),
@@ -1520,13 +1528,28 @@ class SettingsController extends Controller
             ], 422);
         }
 
+        $queue = $this->supportBoardSyncRunService->queueReadiness();
+        if (!($queue['available'] ?? false)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $queue['issues'][0] ?? 'Support Board background sync is not available.',
+                'queue' => $queue,
+            ], 503);
+        }
+
         $refresh = (bool) ($validated['refresh'] ?? false);
         $beforeState = array_merge($this->platformAuditState($platform), [
             'support_board_sync' => null,
         ]);
 
         try {
-            $result = $supportBoardLinkSyncService->syncPlatform($platform, $refresh);
+            $started = $this->supportBoardSyncRunService->startRun(
+                $platform,
+                $request->user(),
+                $refresh,
+                $validated['reason'] ?? null
+            );
+            $run = $started['run'];
 
             $this->auditService->fromRequest(
                 $request,
@@ -1537,14 +1560,17 @@ class SettingsController extends Controller
                 $beforeState,
                 array_merge($this->platformAuditState($platform), [
                     'support_board_sync' => [
+                        'run_id' => (int) $run->id,
+                        'status' => $run->status,
+                        'mode' => $run->mode,
                         'refresh' => $refresh,
-                        'candidates' => (int) ($result['candidates'] ?? 0),
-                        'processed' => (int) ($result['processed'] ?? 0),
-                        'matched' => (int) ($result['matched'] ?? 0),
-                        'updated' => (int) ($result['updated'] ?? 0),
-                        'cleared' => (int) ($result['cleared'] ?? 0),
-                        'unchanged' => (int) ($result['unchanged'] ?? 0),
-                        'errors' => (int) ($result['errors'] ?? 0),
+                        'candidates' => (int) ($run->candidates ?? 0),
+                        'processed' => (int) ($run->processed ?? 0),
+                        'matched' => (int) ($run->matched ?? 0),
+                        'updated' => (int) ($run->updated ?? 0),
+                        'cleared' => (int) ($run->cleared ?? 0),
+                        'unchanged' => (int) ($run->unchanged ?? 0),
+                        'errors' => (int) ($run->errors ?? 0),
                     ],
                 ]),
                 $validated['reason'] ?? ($refresh
@@ -1552,19 +1578,53 @@ class SettingsController extends Controller
                     : 'Manual Support Board link sync run')
             );
 
+            if (!$started['reused']) {
+                RunSupportBoardSyncJob::dispatch((int) $run->id);
+            }
+
             return response()->json([
-                'status' => (int) ($result['errors'] ?? 0) > 0 ? 'partial' : 'success',
-                'result' => $result,
-                'platform' => $this->serializePlatformIntegration($platform->fresh()),
-            ]);
+                'status' => $started['reused'] ? 'running' : 'queued',
+                'message' => $started['reused']
+                    ? 'A Support Board link sync is already running for this market.'
+                    : 'Support Board link sync has been queued.',
+                'reused_run' => (bool) $started['reused'],
+                'platform' => $this->serializePlatformIntegration($platform->fresh(), $run),
+                'run' => $this->supportBoardSyncRunService->serializeRun($run),
+            ], 202);
         } catch (\Throwable $exception) {
+            $failedRun = isset($run) && $run instanceof SupportBoardSyncRun
+                ? $this->supportBoardSyncRunService->markFailed($run, $exception)
+                : null;
+
             return response()->json([
                 'status' => 'error',
-                'message' => 'Support Board link sync failed for this market.',
+                'message' => 'Failed to queue the Support Board link sync.',
                 'error' => $exception->getMessage(),
-                'platform' => $this->serializePlatformIntegration($platform->fresh()),
-            ], 422);
+                'platform' => $this->serializePlatformIntegration($platform->fresh(), $failedRun),
+                'run' => $this->supportBoardSyncRunService->serializeRun($failedRun),
+            ], 500);
         }
+    }
+
+    public function latestPlatformSupportBoardSync(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can view Support Board link sync status.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $run = $this->supportBoardSyncRunService->latestRunForPlatform((int) $platform->id);
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform, $run),
+            'run' => $this->supportBoardSyncRunService->serializeRun($run),
+        ]);
     }
 
     public function updatePaymentLinkProviders(Request $request, Platform $platform)
@@ -2730,12 +2790,13 @@ class SettingsController extends Controller
         ];
     }
 
-    public function serializePlatformIntegration(Platform $platform): array
+    public function serializePlatformIntegration(Platform $platform, ?SupportBoardSyncRun $supportBoardSyncRun = null): array
     {
         $packageRows = $this->platformPackageRows($platform);
         $packageSetup = $this->platformPackageSetup($platform, $packageRows);
         $hasWpCredentials = $this->platformHasWpCredentials($platform);
         $lastStatus = (string) ($platform->sync_last_status ?? 'unknown');
+        $supportBoardSyncRun = $supportBoardSyncRun ?: $this->supportBoardSyncRunService->latestRunForPlatform((int) $platform->id);
 
         $wpStatus = 'pending';
         if ($hasWpCredentials) {
@@ -2755,6 +2816,10 @@ class SettingsController extends Controller
             'support_board_api_url' => $platform->support_board_api_url,
             'support_board_token_configured' => !empty($platform->support_board_token),
             'support_board_sender_id' => $platform->support_board_sender_id ? (int) $platform->support_board_sender_id : null,
+            'support_board_sync' => [
+                'queue' => $this->supportBoardSyncRunService->queueReadiness(),
+                'latest_run' => $this->supportBoardSyncRunService->serializeRun($supportBoardSyncRun),
+            ],
             'wp_sync' => [
                 'status' => $wpStatus,
                 'credentials_ready' => $hasWpCredentials,

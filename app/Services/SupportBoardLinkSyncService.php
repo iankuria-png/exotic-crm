@@ -50,54 +50,93 @@ class SupportBoardLinkSyncService
         ];
 
         foreach ($this->platformClientQuery($platform, $refresh)->lazyById(100, 'id') as $client) {
-            $beforeSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
-            $beforeMatchedBy = $client->sb_matched_by ?: null;
-            $exception = null;
-
-            try {
-                SupportBoardService::clearResolveCache($client);
-                $supportBoard->resolveClient($client);
-                $client->refresh();
-
-                $afterSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
-                $afterMatchedBy = $client->sb_matched_by ?: null;
-
-                $this->recordOutcome(
-                    $result,
-                    $beforeSbUserId,
-                    $beforeMatchedBy,
-                    $afterSbUserId,
-                    $afterMatchedBy
-                );
-            } catch (Throwable $caughtException) {
-                $exception = $caughtException;
-                $result['errors']++;
-
-                if (count($result['errors_detail']) < 25) {
-                    $result['errors_detail'][] = [
-                        'client_id' => (int) $client->id,
-                        'message' => $caughtException->getMessage(),
-                    ];
-                }
-            }
-
-            $result['processed']++;
+            $this->mergeClientOutcome(
+                $result,
+                $this->syncClient($client, $supportBoard)
+            );
 
             if ($onProcessed) {
                 $onProcessed();
             }
-
-            usleep(100000);
         }
 
         return $result;
     }
 
-    private function platformClientQuery(Platform $platform, bool $refresh): Builder
+    public function nextClientForPlatform(Platform $platform, bool $refresh = false, int $afterId = 0): ?Client
+    {
+        return $this->platformClientQuery($platform, $refresh, $afterId)
+            ->orderBy('id')
+            ->first();
+    }
+
+    public function syncClient(Client $client, ?SupportBoardService $supportBoard = null): array
+    {
+        $supportBoard = $supportBoard ?: new SupportBoardService($client->platform);
+        $beforeSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
+        $beforeMatchedBy = $client->sb_matched_by ?: null;
+
+        $result = [
+            'client_id' => (int) $client->id,
+            'client_name' => $client->name,
+            'processed' => 1,
+            'matched' => 0,
+            'updated' => 0,
+            'cleared' => 0,
+            'unchanged' => 0,
+            'errors' => 0,
+            'error_detail' => null,
+        ];
+
+        try {
+            SupportBoardService::clearResolveCache($client);
+            $supportBoard->resolveClient($client);
+            $client->refresh();
+
+            $afterSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
+            $afterMatchedBy = $client->sb_matched_by ?: null;
+
+            $this->recordOutcome(
+                $result,
+                $beforeSbUserId,
+                $beforeMatchedBy,
+                $afterSbUserId,
+                $afterMatchedBy
+            );
+        } catch (Throwable $caughtException) {
+            $result['errors'] = 1;
+            $result['error_detail'] = [
+                'client_id' => (int) $client->id,
+                'message' => $caughtException->getMessage(),
+            ];
+        }
+
+        usleep(100000);
+
+        return $result;
+    }
+
+    private function platformClientQuery(Platform $platform, bool $refresh, int $afterId = 0): Builder
     {
         return Client::query()
             ->where('platform_id', (int) $platform->id)
+            ->when($afterId > 0, fn (Builder $query) => $query->where('id', '>', $afterId))
             ->when(!$refresh, fn (Builder $query) => $query->whereNull('sb_user_id'));
+    }
+
+    private function mergeClientOutcome(array &$aggregate, array $outcome): void
+    {
+        $aggregate['processed'] += (int) ($outcome['processed'] ?? 0);
+        $aggregate['matched'] += (int) ($outcome['matched'] ?? 0);
+        $aggregate['updated'] += (int) ($outcome['updated'] ?? 0);
+        $aggregate['cleared'] += (int) ($outcome['cleared'] ?? 0);
+        $aggregate['unchanged'] += (int) ($outcome['unchanged'] ?? 0);
+        $aggregate['errors'] += (int) ($outcome['errors'] ?? 0);
+
+        $errorDetail = $outcome['error_detail'] ?? null;
+        if (is_array($errorDetail) && count($aggregate['errors_detail']) < 25) {
+            $aggregate['errors_detail'][] = $errorDetail;
+        }
     }
 
     private function recordOutcome(

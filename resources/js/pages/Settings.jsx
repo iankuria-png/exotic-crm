@@ -36,7 +36,8 @@ const paymentLinkProxyWalletProviders = ['paystack', 'pesapal'];
 
 function statusChip(status) {
     if (['connected', 'healthy', 'success'].includes(status)) return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
-    if (['configured_disabled', 'partial', 'degraded', 'pending'].includes(status)) return 'bg-amber-50 text-amber-700 ring-amber-200';
+    if (['configured_disabled', 'partial', 'degraded', 'pending', 'queued', 'running'].includes(status)) return 'bg-amber-50 text-amber-700 ring-amber-200';
+    if (['completed'].includes(status)) return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
     if (['deferred', 'unknown'].includes(status)) return 'bg-slate-100 text-slate-700 ring-slate-300';
     return 'bg-rose-50 text-rose-700 ring-rose-200';
 }
@@ -881,6 +882,12 @@ function IntegrationsWorkspace({
 
     const platformRows = data?.platforms || [];
     const selectedPlatform = platformRows.find((platform) => platform.platform_id === selectedPlatformId) || null;
+    const supportBoardSyncStatusQuery = useQuery({
+        queryKey: ['settings-support-board-sync', selectedPlatformId],
+        queryFn: () => api.get(`/crm/settings/integrations/platforms/${selectedPlatformId}/support-board/sync/latest`).then((response) => response.data),
+        enabled: Boolean(selectedPlatformId) && canManageMarkets,
+        refetchInterval: (query) => query.state.data?.run?.in_progress ? 4000 : false,
+    });
     const enabledPaymentLinkProviders = useMemo(() => (
         (paymentLinkForm.providers || [])
             .map((provider) => ({
@@ -951,13 +958,21 @@ function IntegrationsWorkspace({
 
         setEditor(buildPlatformEditor(selectedPlatform));
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
-        setLatestSupportBoardSyncResult(null);
+        setLatestSupportBoardSyncResult(selectedPlatform.support_board_sync?.latest_run || null);
         setPaymentLinkForm(buildPaymentLinkProviderForm(selectedPlatform));
         setPackageEditor(buildPackageEditor(selectedPlatform));
         setWalletPlatformForm(buildWalletPlatformForm(selectedPlatform));
         setWalletProvidersForm(buildWalletProvidersForm(selectedPlatform));
         setWalletCredentialReveal(null);
     }, [selectedPlatformId, selectedPlatform]);
+
+    useEffect(() => {
+        if (!supportBoardSyncStatusQuery.data) {
+            return;
+        }
+
+        setLatestSupportBoardSyncResult(supportBoardSyncStatusQuery.data.run || null);
+    }, [supportBoardSyncStatusQuery.data]);
 
     useEffect(() => {
         const nextActiveProvider = enabledPaymentLinkProviders.some((provider) => provider.key === paymentLinkForm.active_provider)
@@ -1150,18 +1165,20 @@ function IntegrationsWorkspace({
     const runSupportBoardSyncMutation = useMutation({
         mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/support-board/sync`, payload).then((response) => response.data),
         onSuccess: (response) => {
-            setLatestSupportBoardSyncResult(response?.result || null);
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            queryClient.setQueryData(['settings-support-board-sync', response?.platform?.platform_id || selectedPlatformId], response);
+            setLatestSupportBoardSyncResult(response?.run || null);
             setSupportBoardSyncConfirmOpen(false);
-            toast[response?.status === 'partial' ? 'warning' : 'success'](
-                response?.status === 'partial'
-                    ? 'Support Board link sync completed with warnings.'
-                    : 'Support Board link sync completed.'
+            toast[response?.reused_run ? 'warning' : 'success'](
+                response?.reused_run
+                    ? (response?.message || 'A Support Board link sync is already running for this market.')
+                    : (response?.message || 'Support Board link sync has been queued.')
             );
         },
         onError: (error) => {
-            const result = error?.response?.data?.result || null;
-            if (result) {
-                setLatestSupportBoardSyncResult(result);
+            const run = error?.response?.data?.run || null;
+            if (run) {
+                setLatestSupportBoardSyncResult(run);
             }
             toast.error(error?.response?.data?.message || 'Support Board link sync failed.');
         },
@@ -2272,6 +2289,15 @@ function IntegrationsWorkspace({
         selectedPlatform?.support_board_api_url
         && selectedPlatform?.support_board_token_configured
     );
+    const supportBoardSyncQueue = supportBoardSyncStatusQuery.data?.platform?.support_board_sync?.queue
+        || selectedPlatform?.support_board_sync?.queue
+        || latestSupportBoardSyncResult?.queue
+        || null;
+    const supportBoardSyncActive = Boolean(latestSupportBoardSyncResult?.in_progress);
+    const supportBoardSyncQueueReady = Boolean(supportBoardSyncQueue?.available ?? true);
+    const supportBoardSyncStatusLabel = latestSupportBoardSyncResult?.status
+        ? latestSupportBoardSyncResult.status.replaceAll('_', ' ')
+        : 'idle';
     const selectedPackageSetup = selectedPlatform?.package_setup || null;
     const selectedPackagesReady = Boolean(selectedPackageSetup?.can_go_live);
     const showInitialFullSyncCta = Boolean(
@@ -4795,7 +4821,7 @@ function IntegrationsWorkspace({
 
                                 <section className="rounded-lg border border-slate-200 bg-white p-3">
                                     <h4 className="text-sm font-semibold text-slate-900">Support Board Link Sync</h4>
-                                    <p className="text-xs text-slate-500">Backfill the local chat-match cache so the Clients filter can find matched profiles without opening each chat tab.</p>
+                                    <p className="text-xs text-slate-500">Backfill the local chat-match cache so the Clients filter can find matched profiles without opening each chat tab. Syncs now run in the background and continue even if you leave this page.</p>
                                     <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-900">
                                         <p className="font-semibold">How it runs</p>
                                         <p className="mt-1">
@@ -4803,6 +4829,12 @@ function IntegrationsWorkspace({
                                             Revalidation mode checks all clients in this market and refreshes stale matches.
                                         </p>
                                     </div>
+                                    {!supportBoardSyncQueueReady ? (
+                                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                            <p className="font-semibold">Background queue not ready</p>
+                                            <p className="mt-1">{supportBoardSyncQueue?.issues?.[0] || 'Support Board background sync is currently unavailable.'}</p>
+                                        </div>
+                                    ) : null}
                                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                                         <label className="flex items-center gap-2 text-sm text-slate-700">
                                             <input
@@ -4833,12 +4865,18 @@ function IntegrationsWorkspace({
                                             disabled={
                                                 !canManageMarkets
                                                 || runSupportBoardSyncMutation.isPending
+                                                || supportBoardSyncActive
+                                                || !supportBoardSyncQueueReady
                                                 || !selectedSupportBoardConfigured
                                                 || !supportBoardSyncForm.reason.trim()
                                             }
                                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                                         >
-                                            {runSupportBoardSyncMutation.isPending ? 'Syncing...' : 'Run Support Board sync'}
+                                            {runSupportBoardSyncMutation.isPending
+                                                ? 'Starting...'
+                                                : supportBoardSyncActive
+                                                    ? 'Sync in progress'
+                                                    : 'Start Support Board sync'}
                                         </button>
                                     </div>
                                     {!canManageMarkets ? (
@@ -4848,33 +4886,85 @@ function IntegrationsWorkspace({
                                         <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the link sync.</p>
                                     ) : null}
                                     {latestSupportBoardSyncResult ? (
-                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
-                                            <p className="font-semibold text-slate-800">Latest Support Board sync</p>
-                                            <p className="mt-1">
-                                                Mode: {latestSupportBoardSyncResult.refresh ? 'revalidate all matches' : 'incremental unmatched-only'}
-                                                {' • '}
-                                                Candidates: {latestSupportBoardSyncResult.candidates || 0}
-                                                {' • '}
-                                                Processed: {latestSupportBoardSyncResult.processed || 0}
-                                            </p>
-                                            <p>
-                                                Matched: {latestSupportBoardSyncResult.matched || 0}
-                                                {' • '}
-                                                Updated: {latestSupportBoardSyncResult.updated || 0}
-                                                {' • '}
-                                                Cleared: {latestSupportBoardSyncResult.cleared || 0}
-                                                {' • '}
-                                                Unchanged: {latestSupportBoardSyncResult.unchanged || 0}
-                                                {' • '}
-                                                Errors: {latestSupportBoardSyncResult.errors || 0}
-                                            </p>
-                                            {latestSupportBoardSyncResult.errors_detail?.length ? (
-                                                <p className="mt-1 text-amber-700">
-                                                    First error: {latestSupportBoardSyncResult.errors_detail[0]?.message || 'Unknown error'}
+                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <div>
+                                                    <p className="font-semibold text-slate-800">Latest Support Board sync</p>
+                                                    <p className="mt-1 text-slate-500">
+                                                        Mode: {latestSupportBoardSyncResult.refresh ? 'revalidate all matches' : 'incremental unmatched-only'}
+                                                        {' • '}
+                                                        Started: {formatDateTime(latestSupportBoardSyncResult.started_at || latestSupportBoardSyncResult.created_at)}
+                                                    </p>
+                                                </div>
+                                                <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestSupportBoardSyncResult.status)}`}>
+                                                    {supportBoardSyncStatusLabel}
+                                                </span>
+                                            </div>
+
+                                            <div className="mt-3">
+                                                <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-slate-500">
+                                                    <span>Progress</span>
+                                                    <span>{latestSupportBoardSyncResult.progress_percent || 0}%</span>
+                                                </div>
+                                                <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200">
+                                                    <div
+                                                        className="h-full rounded-full bg-teal-600 transition-all"
+                                                        style={{ width: `${Math.max(0, Math.min(100, latestSupportBoardSyncResult.progress_percent || 0))}%` }}
+                                                    />
+                                                </div>
+                                                <p className="mt-2 text-slate-600">
+                                                    Processed {latestSupportBoardSyncResult.processed || 0} of {latestSupportBoardSyncResult.candidates || 0} candidates.
+                                                    {latestSupportBoardSyncResult.in_progress ? ' You can leave this page while the sync continues.' : ''}
                                                 </p>
+                                            </div>
+
+                                            <div className="mt-3 grid gap-2 md:grid-cols-3">
+                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Matched</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.matched || 0}</p>
+                                                </div>
+                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Updated / Cleared</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.updated || 0} / {latestSupportBoardSyncResult.cleared || 0}</p>
+                                                </div>
+                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Errors</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSupportBoardSyncResult.errors || 0}</p>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-3 space-y-1 text-slate-600">
+                                                <p>Last heartbeat: <span className="font-medium text-slate-900">{formatDateTime(latestSupportBoardSyncResult.last_heartbeat_at)}</span></p>
+                                                {latestSupportBoardSyncResult.last_processed_client_name ? (
+                                                    <p>
+                                                        Last processed: <span className="font-medium text-slate-900">{latestSupportBoardSyncResult.last_processed_client_name}</span>
+                                                        {latestSupportBoardSyncResult.last_processed_client_id ? ` (#${latestSupportBoardSyncResult.last_processed_client_id})` : ''}
+                                                    </p>
+                                                ) : null}
+                                                {latestSupportBoardSyncResult.finished_at ? (
+                                                    <p>Finished: <span className="font-medium text-slate-900">{formatDateTime(latestSupportBoardSyncResult.finished_at)}</span></p>
+                                                ) : null}
+                                            </div>
+
+                                            {latestSupportBoardSyncResult.queue?.message ? (
+                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                    <p className="font-semibold">Queue attention needed</p>
+                                                    <p className="mt-1">{latestSupportBoardSyncResult.queue.message}</p>
+                                                </div>
+                                            ) : null}
+
+                                            {latestSupportBoardSyncResult.errors_detail?.length ? (
+                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                    <p className="font-semibold">Recent error</p>
+                                                    <p className="mt-1">{latestSupportBoardSyncResult.errors_detail[0]?.message || 'Unknown error'}</p>
+                                                </div>
                                             ) : null}
                                         </div>
-                                    ) : null}
+                                    ) : (
+                                        <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500">
+                                            No Support Board sync has run for this market yet.
+                                        </div>
+                                    )}
                                 </section>
                             </div>
                         )}
@@ -5798,9 +5888,9 @@ function IntegrationsWorkspace({
 
             <ConfirmDialog
                 open={supportBoardSyncConfirmOpen}
-                title="Run Support Board Link Sync?"
-                message="This will resolve Support Board user links for the selected market so chat-match filtering can use the locally cached mapping."
-                confirmLabel="Run sync"
+                title="Start Support Board Link Sync?"
+                message="This will queue a background sync for the selected market so chat-match filtering can use the locally cached mapping."
+                confirmLabel="Start sync"
                 cancelLabel="Cancel"
                 tone="warning"
                 onCancel={() => setSupportBoardSyncConfirmOpen(false)}
@@ -5823,6 +5913,7 @@ function IntegrationsWorkspace({
                 <div className="space-y-1 text-sm text-slate-600">
                     <p><span className="font-semibold text-slate-800">Market:</span> {selectedPlatform?.platform_name}</p>
                     <p><span className="font-semibold text-slate-800">Mode:</span> {supportBoardSyncForm.refresh ? 'Revalidate all clients' : 'Incremental unmatched-only'}</p>
+                    <p className="text-xs text-slate-500">The sync will continue in the background. You can safely leave this page after it starts.</p>
                 </div>
             </ConfirmDialog>
         </div>
