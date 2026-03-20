@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import Timeline from '../components/Timeline';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
+import SupportBoardChat from '../components/SupportBoardChat';
 import { useToast } from '../components/ToastProvider';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 import ClientHealthSection from '../components/ClientHealthSection';
@@ -355,7 +356,7 @@ export default function ClientDetail() {
     const queryClient = useQueryClient();
     const toast = useToast();
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
-    const initialTab = ['overview', 'deals', 'notes', 'timeline', 'wallet', 'payments', 'edit_profile', 'profile_health']
+    const initialTab = ['overview', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
         .includes(requestedTab)
         ? requestedTab
         : 'overview';
@@ -784,6 +785,7 @@ export default function ClientDetail() {
             { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
             { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
             { key: 'timeline', label: 'Timeline' },
+            { key: 'chat', label: 'Chat' },
             { key: 'wallet', label: 'Wallet' },
             { key: 'payments', label: `Payments (${client?.payments?.length || 0})` },
             { key: 'edit_profile', label: 'Edit Profile' },
@@ -794,7 +796,7 @@ export default function ClientDetail() {
             return links;
         }
 
-        return links.filter((tab) => !['edit_profile', 'profile_health'].includes(tab.key));
+        return links.filter((tab) => !['edit_profile', 'profile_health', 'chat'].includes(tab.key));
     }, [client, healthData?.summary?.duplicate_count, isReadOnly]);
 
     useEffect(() => {
@@ -1773,6 +1775,10 @@ export default function ClientDetail() {
                 <section className="crm-surface p-5">
                     <Timeline events={timelineData?.data} isLoading={!timelineData} />
                 </section>
+            ) : null}
+
+            {activeTab === 'chat' ? (
+                <SupportBoardChat clientId={id} client={client} />
             ) : null}
 
             {activeTab === 'wallet' ? (
