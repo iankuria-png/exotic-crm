@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import api from '../services/api';
 import {
     retentionBandClasses,
     retentionBandAccent,
@@ -47,15 +49,16 @@ function formatDaysAgo(days) {
     return `${Math.floor(days / 30)} months ago`;
 }
 
-function SeverityDots({ score, band }) {
-    const filled = score <= 20 ? 1 : score <= 40 ? 2 : score <= 60 ? 3 : score <= 80 ? 4 : 5;
-    const accentColor = retentionBandAccent(band);
+function HealthDots({ healthScore }) {
+    // healthScore is inverted (100 - riskScore), so higher = healthier = more dots
+    const filled = healthScore >= 80 ? 5 : healthScore >= 60 ? 4 : healthScore >= 40 ? 3 : healthScore >= 20 ? 2 : 1;
+    const dotColor = healthScore >= 60 ? 'bg-emerald-500' : healthScore >= 40 ? 'bg-amber-500' : 'bg-rose-500';
     return (
         <div className="mt-1.5 flex gap-1">
             {[1, 2, 3, 4, 5].map((i) => (
                 <span
                     key={i}
-                    className={`h-1.5 w-1.5 rounded-full ${i <= filled ? accentColor : 'bg-slate-200'}`}
+                    className={`h-1.5 w-1.5 rounded-full ${i <= filled ? dotColor : 'bg-slate-200'}`}
                 />
             ))}
         </div>
@@ -66,6 +69,162 @@ function AreaStatusDot({ score }) {
     if (score < 30) return <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600"><span className="h-2 w-2 rounded-full bg-emerald-500" />Good</span>;
     if (score <= 60) return <span className="flex items-center gap-1.5 text-xs font-medium text-amber-600"><span className="h-2 w-2 rounded-full bg-amber-500" />Watch</span>;
     return <span className="flex items-center gap-1.5 text-xs font-medium text-rose-600"><span className="h-2 w-2 rounded-full bg-rose-500" />Issue</span>;
+}
+
+function areaBarColor(riskScore) {
+    if (riskScore < 30) return 'bg-emerald-500';
+    if (riskScore <= 60) return 'bg-amber-500';
+    return 'bg-rose-500';
+}
+
+function HealthTrendChart({ dataPoints }) {
+    if (!dataPoints || dataPoints.length < 2) {
+        return (
+            <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50">
+                <p className="text-xs text-slate-400">Score history will appear as data accumulates.</p>
+            </div>
+        );
+    }
+
+    const W = 400;
+    const H = 100;
+    const padX = 32;
+    const padY = 12;
+    const chartW = W - padX * 2;
+    const chartH = H - padY * 2;
+
+    const points = dataPoints.map((d, i) => {
+        const x = padX + (i / (dataPoints.length - 1)) * chartW;
+        const y = padY + chartH - (d.health_score / 100) * chartH;
+        return { x, y, ...d };
+    });
+
+    const polyline = points.map((p) => `${p.x},${p.y}`).join(' ');
+    const areaPath = `M${points[0].x},${padY + chartH} ${points.map((p) => `L${p.x},${p.y}`).join(' ')} L${points[points.length - 1].x},${padY + chartH} Z`;
+
+    // Y-axis reference lines
+    const yAt = (val) => padY + chartH - (val / 100) * chartH;
+
+    // X-axis labels: first, middle, last
+    const dateLabels = [
+        { x: padX, label: points[0].date_short },
+        { x: padX + chartW / 2, label: points[Math.floor(points.length / 2)].date_short },
+        { x: padX + chartW, label: points[points.length - 1].date_short },
+    ];
+
+    return (
+        <svg viewBox={`0 0 ${W} ${H + 16}`} className="w-full" preserveAspectRatio="xMidYMid meet">
+            {/* Reference lines */}
+            <line x1={padX} y1={yAt(70)} x2={padX + chartW} y2={yAt(70)} stroke="#d1d5db" strokeWidth="0.5" strokeDasharray="4 3" />
+            <line x1={padX} y1={yAt(40)} x2={padX + chartW} y2={yAt(40)} stroke="#d1d5db" strokeWidth="0.5" strokeDasharray="4 3" />
+            <text x={padX - 4} y={yAt(70) + 3} textAnchor="end" className="fill-slate-400" fontSize="8">70</text>
+            <text x={padX - 4} y={yAt(40) + 3} textAnchor="end" className="fill-slate-400" fontSize="8">40</text>
+
+            {/* Area fill */}
+            <path d={areaPath} fill="url(#trendGradient)" />
+            <defs>
+                <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#14b8a6" stopOpacity="0.15" />
+                    <stop offset="100%" stopColor="#14b8a6" stopOpacity="0.02" />
+                </linearGradient>
+            </defs>
+
+            {/* Line */}
+            <polyline points={polyline} fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+
+            {/* Dots */}
+            {points.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r="3" fill="#fff" stroke="#14b8a6" strokeWidth="1.5" />
+            ))}
+
+            {/* X-axis date labels */}
+            {dateLabels.map((dl, i) => (
+                <text key={i} x={dl.x} y={H + 12} textAnchor={i === 0 ? 'start' : i === dateLabels.length - 1 ? 'end' : 'middle'} className="fill-slate-400" fontSize="8">
+                    {dl.label}
+                </text>
+            ))}
+        </svg>
+    );
+}
+
+function BreakdownPanel({ components, signals, clientId }) {
+    const { data: historyData } = useQuery({
+        queryKey: ['client-retention-history', clientId],
+        queryFn: () => api.get(`/crm/clients/${clientId}/retention-history`).then((r) => r.data),
+        staleTime: 5 * 60_000,
+    });
+
+    const trendPoints = (historyData?.history || []).map((d) => ({
+        ...d,
+        health_score: 100 - d.score,
+        date_short: new Date(d.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+    }));
+
+    return (
+        <div className="space-y-0 px-4 pb-4">
+            {/* Score Trend */}
+            <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Score Trend</p>
+                <HealthTrendChart dataPoints={trendPoints} />
+            </div>
+
+            <div className="my-4 border-t border-dashed border-slate-200" />
+
+            {/* What Makes Up This Score */}
+            <div>
+                <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">What makes up this score</p>
+                <div className="space-y-3">
+                    {Object.entries(components).map(([key, comp]) => {
+                        const riskScore = Number(comp?.score || 0);
+                        const healthPct = Math.max(5, 100 - riskScore);
+                        const weight = Number(comp?.effective_weight || comp?.base_weight || 0);
+                        return (
+                            <div key={key}>
+                                <div className="flex items-center justify-between gap-3 mb-1">
+                                    <span className="text-sm font-medium text-slate-700">
+                                        {AREA_LABELS[key] || comp?.label || key}
+                                        <span className="ml-1.5 text-xs font-normal text-slate-400">· {weight}%</span>
+                                    </span>
+                                    <AreaStatusDot score={riskScore} />
+                                </div>
+                                <div className="h-2 w-full rounded-full bg-slate-100">
+                                    <div
+                                        className={`h-2 rounded-full transition-all ${areaBarColor(riskScore)}`}
+                                        style={{ width: `${healthPct}%` }}
+                                    />
+                                </div>
+                                {comp?.summary && (
+                                    <p className="mt-1 text-xs text-slate-500">{comp.summary}</p>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+            <div className="my-4 border-t border-dashed border-slate-200" />
+
+            {/* Key Metrics */}
+            <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Key Metrics</p>
+                <dl className="space-y-2">
+                    {CURATED_SIGNALS.map(({ key, label, component, format, warn }) => {
+                        const value = signals?.[component]?.[key];
+                        if (value === null || value === undefined) return null;
+                        const isWarning = warn && warn(value);
+                        return (
+                            <div key={key} className="flex items-center justify-between gap-3 text-sm">
+                                <dt className="text-slate-500">{label}</dt>
+                                <dd className={`text-right font-medium ${isWarning ? 'text-rose-600' : 'text-slate-900'}`}>
+                                    {format(value)}
+                                </dd>
+                            </div>
+                        );
+                    })}
+                </dl>
+            </div>
+        </div>
+    );
 }
 
 export default function ClientHealthSection({
@@ -165,10 +324,10 @@ export default function ClientHealthSection({
                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                             <p className="text-xs font-medium text-slate-500">Health Score</p>
                             <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
-                                {retentionInsight?.score ?? '—'}
+                                {retentionInsight?.score != null ? 100 - retentionInsight.score : '—'}
                             </p>
                             {retentionInsight?.score != null && (
-                                <SeverityDots score={retentionInsight.score} band={band} />
+                                <HealthDots healthScore={100 - retentionInsight.score} />
                             )}
                         </div>
 
@@ -292,45 +451,11 @@ export default function ClientHealthSection({
                     </button>
 
                     {breakdownExpanded && (
-                        <div className="grid gap-4 px-4 pb-4 md:grid-cols-2">
-                            {/* Health by Area */}
-                            <div>
-                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Health by Area</p>
-                                <div className="space-y-2">
-                                    {Object.entries(components).map(([key, comp]) => (
-                                        <div key={key} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
-                                            <div className="min-w-0">
-                                                <p className="text-sm font-medium text-slate-900">{AREA_LABELS[key] || comp?.label || key}</p>
-                                                <p className="mt-0.5 text-xs text-slate-500">{comp?.summary || '—'}</p>
-                                            </div>
-                                            <AreaStatusDot score={Number(comp?.score || 0)} />
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* Key Metrics */}
-                            <div>
-                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Key Metrics</p>
-                                <div className="rounded-lg border border-slate-200 bg-white px-3 py-3">
-                                    <dl className="space-y-2.5">
-                                        {CURATED_SIGNALS.map(({ key, label, component, format, warn }) => {
-                                            const value = signals?.[component]?.[key];
-                                            if (value === null || value === undefined) return null;
-                                            const isWarning = warn && warn(value);
-                                            return (
-                                                <div key={key} className="flex items-center justify-between gap-3 text-sm">
-                                                    <dt className="text-slate-500">{label}</dt>
-                                                    <dd className={`text-right font-medium ${isWarning ? 'text-rose-600' : 'text-slate-900'}`}>
-                                                        {format(value)}
-                                                    </dd>
-                                                </div>
-                                            );
-                                        })}
-                                    </dl>
-                                </div>
-                            </div>
-                        </div>
+                        <BreakdownPanel
+                            components={components}
+                            signals={signals}
+                            clientId={clientId}
+                        />
                     )}
                 </div>
             )}

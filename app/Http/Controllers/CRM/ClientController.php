@@ -332,6 +332,26 @@ class ClientController extends Controller
         );
     }
 
+    public function retentionHistory(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $rows = DB::table('client_retention_insight_history')
+            ->where('client_id', (int) $client->id)
+            ->orderBy('recorded_date')
+            ->limit(90)
+            ->get(['score', 'band', 'recorded_date']);
+
+        return response()->json([
+            'history' => $rows->map(fn ($row) => [
+                'date' => $row->recorded_date,
+                'score' => (int) $row->score,
+                'health_score' => 100 - (int) $row->score,
+                'band' => $row->band,
+            ])->values()->all(),
+        ]);
+    }
+
     public function update(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);

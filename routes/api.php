@@ -119,6 +119,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/completeness', [ClientController::class, 'profileCompleteness'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/retention-insight', [ClientController::class, 'retentionInsight'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/retention-history', [ClientController::class, 'retentionHistory'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,marketing');
@@ -135,6 +136,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/support-board/status', [SupportBoardController::class, 'status'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/support-board/profile', [SupportBoardController::class, 'profile'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/support-board/profile-sync/preview', [SupportBoardController::class, 'previewProfileSync'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/support-board/profile-sync/apply', [SupportBoardController::class, 'applyProfileSync'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/support-board/conversations', [SupportBoardController::class, 'conversations'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/support-board/conversations/{conversationId}', [SupportBoardController::class, 'conversation'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/support-board/conversations/{conversationId}/reply', [SupportBoardController::class, 'reply'])->middleware('role:admin,sub_admin,sales');
@@ -237,6 +241,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/settings/integrations/platforms/{platform}/wallet/wp-credentials/rotate', [SettingsController::class, 'rotatePlatformWalletWpCredentials'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/test-connection', [SettingsController::class, 'testPlatformConnection'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/support-board/sync', [SettingsController::class, 'runPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/scraper-sources', [SettingsController::class, 'storeScraperSource'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/scraper-sources/{scraperSource}', [SettingsController::class, 'updateScraperSource'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/scraper-sources/{scraperSource}/run', [SettingsController::class, 'runScraperSource'])->middleware('role:admin,sub_admin');

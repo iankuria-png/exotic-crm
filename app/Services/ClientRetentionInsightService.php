@@ -81,12 +81,24 @@ class ClientRetentionInsightService
 
         $insightData = $this->computeInsight($client);
 
-        return ClientRetentionInsight::query()->updateOrCreate(
+        $insight = ClientRetentionInsight::query()->updateOrCreate(
             ['client_id' => (int) $client->id],
             array_merge($insightData, [
                 'platform_id' => $client->platform_id ? (int) $client->platform_id : null,
             ])
         );
+
+        // Log daily history snapshot for trend charts (max 1 per client per day)
+        try {
+            DB::table('client_retention_insight_history')->updateOrInsert(
+                ['client_id' => (int) $client->id, 'recorded_date' => now()->toDateString()],
+                ['score' => (int) ($insightData['score'] ?? 0), 'band' => (string) ($insightData['band'] ?? 'Stable'), 'created_at' => now()]
+            );
+        } catch (\Throwable $e) {
+            Log::debug('Failed to log retention insight history.', ['client_id' => (int) $client->id, 'error' => $e->getMessage()]);
+        }
+
+        return $insight;
     }
 
     public function refreshForClientIds(array $clientIds): void
