@@ -120,8 +120,6 @@ class DeploymentStatusService
         $scriptPath = $this->scriptPath();
         if (!is_file($scriptPath)) {
             $issues[] = 'Deploy script is missing.';
-        } elseif (!is_executable($scriptPath)) {
-            $issues[] = 'Deploy script is not executable.';
         }
 
         if (!$this->commandExecutionAvailable()) {
@@ -442,6 +440,9 @@ class DeploymentStatusService
             'DEPLOY_REPOSITORY_PATH' => $this->repositoryPath(),
             'DEPLOY_HISTORY_FILE' => $this->historyPath(),
             'GITHUB_TOKEN' => config('deployment.github.token'),
+            'HOME' => env('HOME', '/home/' . get_current_user()),
+            'COMPOSER_HOME' => env('COMPOSER_HOME', env('HOME', '/home/' . get_current_user()) . '/.config/composer'),
+            'PATH' => env('PATH', '/usr/local/bin:/usr/bin:/bin'),
             'APP_ENV' => app()->environment(),
         ];
 
@@ -753,6 +754,9 @@ class DeploymentStatusService
             'DEPLOY_REPOSITORY_PATH' => $this->repositoryPath(),
             'DEPLOY_HISTORY_FILE' => $this->historyPath(),
             'GITHUB_TOKEN' => config('deployment.github.token'),
+            'HOME' => env('HOME', '/home/' . get_current_user()),
+            'COMPOSER_HOME' => env('COMPOSER_HOME', env('HOME', '/home/' . get_current_user()) . '/.config/composer'),
+            'PATH' => env('PATH', '/usr/local/bin:/usr/bin:/bin'),
             'ROLLBACK_TARGET_SHA' => $targetSha,
             'ROLLBACK_DB_BACKUP' => $backupPath,
             'APP_ENV' => app()->environment(),
