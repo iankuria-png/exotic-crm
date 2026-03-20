@@ -2,11 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Client;
-use App\Models\Platform;
-use App\Services\SupportBoardService;
+use App\Services\SupportBoardLinkSyncService;
 use Illuminate\Console\Command;
-use Throwable;
 
 class SyncSupportBoardUsers extends Command
 {
@@ -20,13 +17,10 @@ class SyncSupportBoardUsers extends Command
     {
         $platformId = $this->option('platform') ? (int) $this->option('platform') : null;
         $refresh = (bool) $this->option('refresh');
+        /** @var SupportBoardLinkSyncService $linkSyncService */
+        $linkSyncService = app(SupportBoardLinkSyncService::class);
 
-        $platforms = Platform::query()
-            ->when($platformId, fn ($query) => $query->where('id', $platformId))
-            ->orderBy('id')
-            ->get()
-            ->filter(fn (Platform $platform) => (new SupportBoardService($platform))->isConfigured())
-            ->values();
+        $platforms = $linkSyncService->configuredPlatforms($platformId);
 
         if ($platforms->isEmpty()) {
             $this->error($platformId
@@ -47,74 +41,48 @@ class SyncSupportBoardUsers extends Command
 
         foreach ($platforms as $platform) {
             $platformLabel = $platform->name ?: $platform->domain ?: "Platform {$platform->id}";
-            $service = new SupportBoardService($platform);
+            $clientCount = $linkSyncService->countClientsForPlatform($platform, $refresh);
 
-            $clients = Client::query()
-                ->where('platform_id', $platform->id)
-                ->when(!$refresh, fn ($query) => $query->whereNull('sb_user_id'))
-                ->orderBy('id')
-                ->get();
-
-            if ($clients->isEmpty()) {
+            if ($clientCount === 0) {
                 $this->info("Skipping {$platformLabel}: no clients to process.");
                 continue;
             }
 
             $this->info(sprintf(
                 'Processing %d client%s for %s (platform #%d)%s',
-                $clients->count(),
-                $clients->count() === 1 ? '' : 's',
+                $clientCount,
+                $clientCount === 1 ? '' : 's',
                 $platformLabel,
                 $platform->id,
                 $refresh ? ' with refresh mode enabled' : ''
             ));
 
-            $progressBar = $this->output->createProgressBar($clients->count());
+            $progressBar = $this->output->createProgressBar($clientCount);
             $progressBar->start();
 
-            foreach ($clients as $index => $client) {
-                $beforeSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
-                $beforeMatchedBy = $client->sb_matched_by ?: null;
-
-                try {
-                    SupportBoardService::clearResolveCache($client);
-                    $service->resolveClient($client);
-                    $client->refresh();
-
-                    $afterSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
-                    $afterMatchedBy = $client->sb_matched_by ?: null;
-
-                    if ($afterSbUserId && !$beforeSbUserId) {
-                        $totals['matched']++;
-                    } elseif (!$afterSbUserId && $beforeSbUserId) {
-                        $totals['cleared']++;
-                    } elseif ($afterSbUserId !== $beforeSbUserId || $afterMatchedBy !== $beforeMatchedBy) {
-                        $totals['updated']++;
-                    } else {
-                        $totals['unchanged']++;
-                    }
-                } catch (Throwable $exception) {
-                    $totals['errors']++;
-                    $progressBar->clear();
-                    $this->warn(sprintf(
-                        'Client #%d failed on platform #%d: %s',
-                        $client->id,
-                        $platform->id,
-                        $exception->getMessage()
-                    ));
-                    $progressBar->display();
+            $result = $linkSyncService->syncPlatform(
+                $platform,
+                $refresh,
+                function () use ($progressBar): void {
+                    $progressBar->advance();
                 }
+            );
 
-                $totals['processed']++;
-                $progressBar->advance();
-
-                if ($index < ($clients->count() - 1)) {
-                    usleep(100000);
-                }
+            foreach (['processed', 'matched', 'updated', 'cleared', 'unchanged', 'errors'] as $key) {
+                $totals[$key] += (int) ($result[$key] ?? 0);
             }
 
             $progressBar->finish();
             $this->newLine(2);
+
+            foreach (($result['errors_detail'] ?? []) as $error) {
+                $this->warn(sprintf(
+                    'Client #%d failed on platform #%d: %s',
+                    (int) ($error['client_id'] ?? 0),
+                    $platform->id,
+                    (string) ($error['message'] ?? 'Unknown error')
+                ));
+            }
         }
 
         $this->info(sprintf(

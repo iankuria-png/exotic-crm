@@ -2,9 +2,10 @@
 
 namespace App\Console;
 
+use App\Http\Controllers\API\PaymentController;
+use App\Models\Platform;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
-use App\Http\Controllers\API\PaymentController;
 use Illuminate\Support\Facades\Log;
 
 class Kernel extends ConsoleKernel
@@ -59,6 +60,19 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(10)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sync_clients.log'));
+
+        // Backfill Support Board user links shortly after the WordPress client sync completes.
+        $schedule->command('crm:sync-sb-users')
+            ->name('crm_sync_support_board_users')
+            ->cron('2,17,32,47 * * * *')
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->skip(fn () => !Platform::query()
+                ->whereNotNull('support_board_api_url')
+                ->where('support_board_api_url', '!=', '')
+                ->whereNotNull('support_board_token')
+                ->exists())
+            ->sendOutputTo(storage_path('logs/crm_sync_support_board_users.log'));
 
         // Keep lead intake synced from WordPress profiles flagged needs_payment=1.
         $schedule->command('crm:import-leads --per-page=100')

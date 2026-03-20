@@ -8,8 +8,11 @@ use App\Models\ClientNote;
 use App\Models\TimelineEvent;
 use App\Services\AuditService;
 use App\Services\MarketAuthorizationService;
+use App\Services\SupportBoardProfileSyncService;
 use App\Services\SupportBoardService;
+use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
+use RuntimeException;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Throwable;
 
@@ -93,6 +96,192 @@ class SupportBoardController extends Controller
             }
 
             return response()->json($service->getConversations((int) $resolved['sb_user']['id']));
+        } catch (Throwable $exception) {
+            if ($exception instanceof HttpExceptionInterface) {
+                throw $exception;
+            }
+
+            return $this->supportBoardUnavailableResponse($exception);
+        }
+    }
+
+    public function profile(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $client->loadMissing('platform');
+
+        if ($request->boolean('refresh')) {
+            SupportBoardService::clearResolveCache($client);
+        }
+
+        $service = new SupportBoardService($client->platform);
+        if (!$service->isConfigured()) {
+            return response()->json([
+                'configured' => false,
+                'matched' => false,
+                'matched_by' => null,
+                'sb_user' => null,
+                'details' => [],
+                'detail_map' => (object) [],
+                'primary_details' => [],
+                'secondary_details' => [],
+                'suggestions' => [
+                    'market' => null,
+                    'city' => null,
+                    'location' => null,
+                ],
+            ]);
+        }
+
+        try {
+            $profileService = new SupportBoardProfileSyncService($client, $service);
+
+            return response()->json($profileService->buildProfilePayload());
+        } catch (RuntimeException $exception) {
+            if ($exception->getMessage() === 'Client is not linked to Support Board.') {
+                return response()->json([
+                    'configured' => true,
+                    'matched' => false,
+                    'matched_by' => $client->sb_matched_by,
+                    'sb_user' => null,
+                    'details' => [],
+                    'detail_map' => (object) [],
+                    'primary_details' => [],
+                    'secondary_details' => [],
+                    'suggestions' => [
+                        'market' => null,
+                        'city' => null,
+                        'location' => null,
+                    ],
+                ]);
+            }
+
+            return $this->supportBoardUnavailableResponse($exception);
+        } catch (Throwable $exception) {
+            if ($exception instanceof HttpExceptionInterface) {
+                throw $exception;
+            }
+
+            return $this->supportBoardUnavailableResponse($exception);
+        }
+    }
+
+    public function previewProfileSync(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'direction' => 'required|in:support_board_to_crm,crm_to_support_board',
+            'mode' => 'required|in:fill_blanks,overwrite',
+            'fields' => 'required|array|min:1',
+            'fields.*' => 'required|in:name,email,phone,city',
+        ]);
+
+        $client->loadMissing('platform');
+        $service = new SupportBoardService($client->platform);
+        if (!$service->isConfigured()) {
+            return response()->json([
+                'message' => 'Support Board is not configured for this market.',
+            ], 422);
+        }
+
+        try {
+            $profileService = new SupportBoardProfileSyncService($client, $service);
+
+            return response()->json(
+                $profileService->preview(
+                    (string) $validated['direction'],
+                    (string) $validated['mode'],
+                    (array) $validated['fields'],
+                )
+            );
+        } catch (RuntimeException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (Throwable $exception) {
+            if ($exception instanceof HttpExceptionInterface) {
+                throw $exception;
+            }
+
+            return $this->supportBoardUnavailableResponse($exception);
+        }
+    }
+
+    public function applyProfileSync(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'direction' => 'required|in:support_board_to_crm,crm_to_support_board',
+            'mode' => 'required|in:fill_blanks,overwrite',
+            'fields' => 'required|array|min:1',
+            'fields.*' => 'required|in:name,email,phone,city',
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $client->loadMissing('platform');
+        $service = new SupportBoardService($client->platform);
+        if (!$service->isConfigured()) {
+            return response()->json([
+                'message' => 'Support Board is not configured for this market.',
+            ], 422);
+        }
+
+        try {
+            $profileService = new SupportBoardProfileSyncService($client, $service);
+            $result = $profileService->apply(
+                (string) $validated['direction'],
+                (string) $validated['mode'],
+                (array) $validated['fields'],
+            );
+
+            if (($result['applied_count'] ?? 0) > 0) {
+                TimelineEvent::create([
+                    'platform_id' => $client->platform_id,
+                    'entity_type' => 'client',
+                    'entity_id' => $client->id,
+                    'event_type' => 'support_board_profile_sync',
+                    'actor_id' => $request->user()->id,
+                    'content' => [
+                        'direction' => $validated['direction'],
+                        'mode' => $validated['mode'],
+                        'changed_fields' => $result['changed_fields'],
+                        'applied_count' => $result['applied_count'],
+                    ],
+                    'created_at' => now(),
+                ]);
+
+                $this->auditService->fromRequest(
+                    $request,
+                    (int) $client->platform_id,
+                    CrmAuditAction::CLIENT_SUPPORT_BOARD_PROFILE_SYNC,
+                    'client',
+                    (int) $client->id,
+                    $result['before'] ?? null,
+                    array_merge(
+                        $result['after'] ?? [],
+                        [
+                            'direction' => $validated['direction'],
+                            'mode' => $validated['mode'],
+                            'changed_fields' => $result['changed_fields'],
+                        ],
+                    ),
+                    (string) $validated['reason']
+                );
+            }
+
+            return response()->json([
+                'message' => ($result['applied_count'] ?? 0) > 0
+                    ? 'Support Board profile sync applied.'
+                    : 'No profile changes were needed.',
+                'sync' => $result,
+            ]);
+        } catch (RuntimeException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
         } catch (Throwable $exception) {
             if ($exception instanceof HttpExceptionInterface) {
                 throw $exception;

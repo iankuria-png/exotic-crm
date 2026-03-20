@@ -10,6 +10,7 @@ const eventTones = {
     payment_received: 'bg-emerald-100 text-emerald-700',
     status_changed: 'bg-teal-100 text-teal-700',
     support_chat_reply: 'bg-sky-100 text-sky-700',
+    support_board_profile_sync: 'bg-violet-100 text-violet-700',
 };
 
 function formatEventDescription(event) {
@@ -35,6 +36,8 @@ function formatEventDescription(event) {
             return `Status changed from ${content.from || '?'} to ${content.to || '?'}`;
         case 'support_chat_reply':
             return 'Chat reply sent via Support Board';
+        case 'support_board_profile_sync':
+            return `Support Board profile sync applied${content.direction ? ` (${String(content.direction).replace(/_/g, ' ')})` : ''}`;
         default:
             return event.event_type?.replace(/_/g, ' ') || 'Event';
     }

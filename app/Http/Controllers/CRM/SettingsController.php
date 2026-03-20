@@ -18,6 +18,8 @@ use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ScraperSourceService;
+use App\Services\SupportBoardLinkSyncService;
+use App\Services\SupportBoardService;
 use App\Services\WalletSyncService;
 use App\Services\WalletSettingsService;
 use App\Services\WpSyncService;
@@ -1487,6 +1489,80 @@ class SettingsController extends Controller
                 'message' => 'Manual sync failed for this market.',
                 'error' => $exception->getMessage(),
                 'platform' => $this->serializePlatformIntegration($platform),
+            ], 422);
+        }
+    }
+
+    public function runPlatformSupportBoardSync(
+        Request $request,
+        Platform $platform,
+        SupportBoardLinkSyncService $supportBoardLinkSyncService
+    ) {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can run Support Board link sync.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'refresh' => 'nullable|boolean',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (!(new SupportBoardService($platform))->isConfigured()) {
+            return response()->json([
+                'message' => 'Support Board is not configured for this market.',
+            ], 422);
+        }
+
+        $refresh = (bool) ($validated['refresh'] ?? false);
+        $beforeState = array_merge($this->platformAuditState($platform), [
+            'support_board_sync' => null,
+        ]);
+
+        try {
+            $result = $supportBoardLinkSyncService->syncPlatform($platform, $refresh);
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_SYNC_RUN,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                array_merge($this->platformAuditState($platform), [
+                    'support_board_sync' => [
+                        'refresh' => $refresh,
+                        'candidates' => (int) ($result['candidates'] ?? 0),
+                        'processed' => (int) ($result['processed'] ?? 0),
+                        'matched' => (int) ($result['matched'] ?? 0),
+                        'updated' => (int) ($result['updated'] ?? 0),
+                        'cleared' => (int) ($result['cleared'] ?? 0),
+                        'unchanged' => (int) ($result['unchanged'] ?? 0),
+                        'errors' => (int) ($result['errors'] ?? 0),
+                    ],
+                ]),
+                $validated['reason'] ?? ($refresh
+                    ? 'Manual Support Board link revalidation run'
+                    : 'Manual Support Board link sync run')
+            );
+
+            return response()->json([
+                'status' => (int) ($result['errors'] ?? 0) > 0 ? 'partial' : 'success',
+                'result' => $result,
+                'platform' => $this->serializePlatformIntegration($platform->fresh()),
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Support Board link sync failed for this market.',
+                'error' => $exception->getMessage(),
+                'platform' => $this->serializePlatformIntegration($platform->fresh()),
             ], 422);
         }
     }

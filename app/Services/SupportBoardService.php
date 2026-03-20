@@ -136,6 +136,73 @@ class SupportBoardService
             ->all();
     }
 
+    public function getUser(int $sbUserId, bool $extra = false): ?array
+    {
+        if ($sbUserId <= 0) {
+            return null;
+        }
+
+        $response = $this->request('get-user', [
+            'user_id' => $sbUserId,
+            'extra' => $extra,
+        ]);
+
+        if (!$response || !is_array($response)) {
+            return null;
+        }
+
+        return $this->normalizeUser($response);
+    }
+
+    public function getUserExtra(int $sbUserId, ?string $slug = null, mixed $default = false): array
+    {
+        if ($sbUserId <= 0) {
+            return [];
+        }
+
+        $payload = [
+            'user_id' => $sbUserId,
+        ];
+
+        if ($slug !== null && trim($slug) !== '') {
+            $payload['slug'] = trim($slug);
+        }
+
+        if ($default !== false) {
+            $payload['default'] = $default;
+        }
+
+        $response = $this->request('get-user-extra', $payload);
+
+        if (!is_array($response)) {
+            return [];
+        }
+
+        return array_values($response);
+    }
+
+    public function updateUser(int $sbUserId, array $settings = [], array $settingsExtra = []): bool
+    {
+        if ($sbUserId <= 0) {
+            throw new RuntimeException('Support Board user ID is required.');
+        }
+
+        $payload = array_merge([
+            'user_id' => $sbUserId,
+        ], array_filter(
+            $settings,
+            fn ($value) => $value !== null
+        ));
+
+        if (!empty($settingsExtra)) {
+            $payload['settings_extra'] = $settingsExtra;
+        }
+
+        $response = $this->request('update-user', $payload);
+
+        return (bool) $response;
+    }
+
     public function getConversation(int $conversationId): array
     {
         if ($conversationId <= 0) {
@@ -333,7 +400,36 @@ class SupportBoardService
             'email' => $user['email'] ?? null,
             'profile_image' => $user['profile_image'] ?? null,
             'user_type' => $user['user_type'] ?? null,
+            'creation_time' => $user['creation_time'] ?? null,
+            'last_activity' => $user['last_activity'] ?? null,
+            'department' => $user['department'] ?? null,
             'details' => array_values(is_array($user['details'] ?? null) ? $user['details'] : []),
+        ];
+    }
+
+    public function normalizeUserDetails(array $details): array
+    {
+        $items = collect($details)
+            ->filter(fn ($detail) => is_array($detail) && filled($detail['slug'] ?? null))
+            ->map(function (array $detail) {
+                $slug = trim((string) ($detail['slug'] ?? ''));
+                $name = trim((string) ($detail['name'] ?? ''));
+
+                return [
+                    'slug' => $slug,
+                    'name' => $name !== '' ? $name : \Illuminate\Support\Str::title(str_replace('_', ' ', $slug)),
+                    'value' => $detail['value'] ?? null,
+                ];
+            })
+            ->values();
+
+        $map = $items
+            ->keyBy(fn (array $detail) => $detail['slug'])
+            ->all();
+
+        return [
+            'items' => $items->all(),
+            'map' => $map,
         ];
     }
 

@@ -107,6 +107,18 @@ class SupportBoardIntegrationTest extends TestCase
         Sanctum::actingAs($marketing);
 
         $this->getJson("/api/crm/clients/{$client->id}/support-board/status")->assertStatus(403);
+        $this->getJson("/api/crm/clients/{$client->id}/support-board/profile")->assertStatus(403);
+        $this->postJson("/api/crm/clients/{$client->id}/support-board/profile-sync/preview", [
+            'direction' => 'support_board_to_crm',
+            'mode' => 'fill_blanks',
+            'fields' => ['email'],
+        ])->assertStatus(403);
+        $this->postJson("/api/crm/clients/{$client->id}/support-board/profile-sync/apply", [
+            'direction' => 'support_board_to_crm',
+            'mode' => 'fill_blanks',
+            'fields' => ['email'],
+            'reason' => 'Blocked profile sync',
+        ])->assertStatus(403);
         $this->postJson("/api/crm/clients/{$client->id}/support-board/conversations/4084/reply", [
             'message' => 'Blocked message',
         ])->assertStatus(403);
@@ -132,6 +144,19 @@ class SupportBoardIntegrationTest extends TestCase
                 ->assertOk()
                 ->assertJsonPath('configured', true)
                 ->assertJsonPath('matched', true);
+
+            $this->getJson("/api/crm/clients/{$client->id}/support-board/profile")
+                ->assertOk()
+                ->assertJsonPath('configured', true)
+                ->assertJsonPath('matched', true)
+                ->assertJsonPath('sb_user.id', 123);
+
+            $this->postJson("/api/crm/clients/{$client->id}/support-board/profile-sync/preview", [
+                'direction' => 'support_board_to_crm',
+                'mode' => 'fill_blanks',
+                'fields' => ['email', 'phone'],
+            ])->assertOk()
+                ->assertJsonPath('direction', 'support_board_to_crm');
 
             $this->getJson("/api/crm/clients/{$client->id}/support-board/conversations")
                 ->assertOk()
@@ -161,8 +186,20 @@ class SupportBoardIntegrationTest extends TestCase
 
         foreach ([
             ['getJson', "/api/crm/clients/{$clientB->id}/support-board/status", []],
+            ['getJson', "/api/crm/clients/{$clientB->id}/support-board/profile", []],
             ['getJson', "/api/crm/clients/{$clientB->id}/support-board/conversations", []],
             ['getJson', "/api/crm/clients/{$clientB->id}/support-board/conversations/4084", []],
+            ['postJson', "/api/crm/clients/{$clientB->id}/support-board/profile-sync/preview", [
+                'direction' => 'support_board_to_crm',
+                'mode' => 'fill_blanks',
+                'fields' => ['email'],
+            ]],
+            ['postJson', "/api/crm/clients/{$clientB->id}/support-board/profile-sync/apply", [
+                'direction' => 'support_board_to_crm',
+                'mode' => 'fill_blanks',
+                'fields' => ['email'],
+                'reason' => 'Unauthorized',
+            ]],
             ['postJson', "/api/crm/clients/{$clientB->id}/support-board/conversations/4084/reply", ['message' => 'Unauthorized']],
         ] as [$method, $uri, $payload]) {
             $this->{$method}($uri, $payload)->assertStatus(403);
@@ -172,11 +209,248 @@ class SupportBoardIntegrationTest extends TestCase
         Http::fake(fn (ClientRequest $request) => $this->fakeSupportBoardResponse($request, 123));
 
         $this->getJson("/api/crm/clients/{$clientA->id}/support-board/status")->assertOk();
+        $this->getJson("/api/crm/clients/{$clientA->id}/support-board/profile")->assertOk();
+        $this->postJson("/api/crm/clients/{$clientA->id}/support-board/profile-sync/preview", [
+            'direction' => 'support_board_to_crm',
+            'mode' => 'fill_blanks',
+            'fields' => ['email'],
+        ])->assertOk();
         $this->getJson("/api/crm/clients/{$clientA->id}/support-board/conversations")->assertOk();
         $this->getJson("/api/crm/clients/{$clientA->id}/support-board/conversations/4084")->assertOk();
         $this->postJson("/api/crm/clients/{$clientA->id}/support-board/conversations/4084/reply", [
             'message' => 'Authorized',
         ])->assertCreated();
+    }
+
+    public function test_profile_route_returns_metadata_and_preview_highlights_safe_changes(): void
+    {
+        $platform = $this->createPlatform([
+            'phone_prefix' => '255',
+            'country' => 'Kenya',
+        ]);
+        $client = $this->createClient($platform, [
+            'name' => 'Butter',
+            'email' => null,
+            'phone_normalized' => null,
+            'city' => null,
+            'sb_user_id' => 24416,
+            'sb_matched_by' => 'phone',
+        ]);
+        $sales = $this->createUser('sales', [$platform->id], ['sb_agent_id' => 12601]);
+        $this->cacheResolvedClient($client, 24416);
+
+        Http::fake(function (ClientRequest $request) {
+            $function = $request->data()['function'] ?? null;
+
+            return match ($function) {
+                'get-user' => Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 24416,
+                        'first_name' => 'Lovenness',
+                        'last_name' => '',
+                        'email' => 'lovenessjj63@gmail.com',
+                        'user_type' => 'user',
+                        'creation_time' => '2026-03-19 07:05:00',
+                        'last_activity' => '2026-03-20 10:07:00',
+                        'details' => [
+                            ['slug' => 'phone', 'name' => 'Phone', 'value' => '+255710103849'],
+                            ['slug' => 'country_code', 'name' => 'Country code', 'value' => 'TZ'],
+                            ['slug' => 'currency', 'name' => 'Currency', 'value' => 'TZS'],
+                            ['slug' => 'location', 'name' => 'Location', 'value' => 'Dar es Salaam, Tanzania'],
+                            ['slug' => 'current_url', 'name' => 'Current URL', 'value' => 'https://www.exotic-tz.net/chat/'],
+                            ['slug' => 'time_zone', 'name' => 'Timezone', 'value' => 'Africa/Dar_es_Salaam'],
+                            ['slug' => 'browser_language', 'name' => 'Browser language', 'value' => 'en-GB'],
+                        ],
+                    ],
+                ]),
+                default => Http::response(['success' => true, 'response' => []]),
+            };
+        });
+
+        Sanctum::actingAs($sales);
+
+        $this->getJson("/api/crm/clients/{$client->id}/support-board/profile")
+            ->assertOk()
+            ->assertJsonPath('configured', true)
+            ->assertJsonPath('matched', true)
+            ->assertJsonPath('sb_user.id', 24416)
+            ->assertJsonPath('suggestions.market.country_name', 'Tanzania')
+            ->assertJsonPath('suggestions.city.value', 'Dar es Salaam')
+            ->assertJsonFragment([
+                'slug' => 'phone',
+                'value' => '+255710103849',
+            ]);
+
+        $this->postJson("/api/crm/clients/{$client->id}/support-board/profile-sync/preview", [
+            'direction' => 'support_board_to_crm',
+            'mode' => 'fill_blanks',
+            'fields' => ['name', 'email', 'phone', 'city'],
+        ])->assertOk()
+            ->assertJsonPath('counts.applyable', 3)
+            ->assertJsonPath('counts.conflicts', 1)
+            ->assertJsonFragment([
+                'field' => 'name',
+                'outcome' => 'conflict',
+            ])
+            ->assertJsonFragment([
+                'field' => 'email',
+                'outcome' => 'fill',
+            ])
+            ->assertJsonFragment([
+                'field' => 'phone',
+                'outcome' => 'fill',
+            ])
+            ->assertJsonFragment([
+                'field' => 'city',
+                'outcome' => 'fill',
+            ]);
+    }
+
+    public function test_apply_profile_sync_updates_client_and_logs_timeline_and_audit(): void
+    {
+        $platform = $this->createPlatform([
+            'phone_prefix' => '255',
+        ]);
+        $client = $this->createClient($platform, [
+            'name' => 'Butter',
+            'email' => null,
+            'phone_normalized' => null,
+            'city' => null,
+            'sb_user_id' => 24416,
+            'sb_matched_by' => 'phone',
+        ]);
+        $sales = $this->createUser('sales', [$platform->id], ['sb_agent_id' => 12601]);
+        $this->cacheResolvedClient($client, 24416);
+
+        Http::fake(function (ClientRequest $request) {
+            $function = $request->data()['function'] ?? null;
+
+            return match ($function) {
+                'get-user' => Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 24416,
+                        'first_name' => 'Lovenness',
+                        'last_name' => '',
+                        'email' => 'lovenessjj63@gmail.com',
+                        'user_type' => 'user',
+                        'creation_time' => '2026-03-19 07:05:00',
+                        'last_activity' => '2026-03-20 10:07:00',
+                        'details' => [
+                            ['slug' => 'phone', 'name' => 'Phone', 'value' => '+255710103849'],
+                            ['slug' => 'location', 'name' => 'Location', 'value' => 'Dar es Salaam, Tanzania'],
+                            ['slug' => 'country_code', 'name' => 'Country code', 'value' => 'TZ'],
+                        ],
+                    ],
+                ]),
+                default => Http::response(['success' => true, 'response' => []]),
+            };
+        });
+
+        Sanctum::actingAs($sales);
+
+        $this->postJson("/api/crm/clients/{$client->id}/support-board/profile-sync/apply", [
+            'direction' => 'support_board_to_crm',
+            'mode' => 'fill_blanks',
+            'fields' => ['email', 'phone', 'city'],
+            'reason' => 'Backfill CRM profile from matched Support Board contact',
+        ])->assertOk()
+            ->assertJsonPath('sync.applied_count', 3)
+            ->assertJsonPath('sync.changed_fields.0', 'email');
+
+        $client->refresh();
+
+        $this->assertSame('lovenessjj63@gmail.com', $client->email);
+        $this->assertSame('255710103849', $client->phone_normalized);
+        $this->assertSame('Dar es Salaam', $client->city);
+        $this->assertSame(24416, (int) $client->sb_user_id);
+
+        $this->assertDatabaseHas('timeline_events', [
+            'platform_id' => $platform->id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => 'support_board_profile_sync',
+            'actor_id' => $sales->id,
+        ]);
+
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'actor_id' => $sales->id,
+            'action' => 'client_support_board_profile_sync',
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'reason' => 'Backfill CRM profile from matched Support Board contact',
+        ]);
+    }
+
+    public function test_apply_profile_sync_can_push_selected_crm_fields_to_support_board(): void
+    {
+        $platform = $this->createPlatform([
+            'phone_prefix' => '254',
+        ]);
+        $client = $this->createClient($platform, [
+            'name' => 'CRM Client',
+            'email' => 'crm-client@example.test',
+            'phone_normalized' => '254799000111',
+            'city' => 'Nairobi',
+            'sb_user_id' => 24416,
+            'sb_matched_by' => 'phone',
+        ]);
+        $admin = $this->createUser('admin');
+        $this->cacheResolvedClient($client, 24416);
+
+        Http::fake(function (ClientRequest $request) {
+            $function = $request->data()['function'] ?? null;
+
+            return match ($function) {
+                'get-user' => Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 24416,
+                        'first_name' => '',
+                        'last_name' => '',
+                        'email' => '',
+                        'user_type' => 'user',
+                        'details' => [
+                            ['slug' => 'phone', 'name' => 'Phone', 'value' => null],
+                            ['slug' => 'city', 'name' => 'City', 'value' => null],
+                        ],
+                    ],
+                ]),
+                'update-user' => Http::response([
+                    'success' => true,
+                    'response' => true,
+                ]),
+                default => Http::response(['success' => true, 'response' => []]),
+            };
+        });
+
+        Sanctum::actingAs($admin);
+
+        $this->postJson("/api/crm/clients/{$client->id}/support-board/profile-sync/apply", [
+            'direction' => 'crm_to_support_board',
+            'mode' => 'fill_blanks',
+            'fields' => ['name', 'email', 'phone', 'city'],
+            'reason' => 'Push the cleaned CRM profile back to Support Board',
+        ])->assertOk()
+            ->assertJsonPath('sync.applied_count', 4);
+
+        Http::assertSent(function (ClientRequest $request) {
+            if (($request->data()['function'] ?? null) !== 'update-user') {
+                return false;
+            }
+
+            $settingsExtra = json_decode((string) ($request->data()['settings_extra'] ?? ''), true);
+
+            return (int) ($request->data()['user_id'] ?? 0) === 24416
+                && ($request->data()['first_name'] ?? null) === 'CRM'
+                && ($request->data()['last_name'] ?? null) === 'Client'
+                && ($request->data()['email'] ?? null) === 'crm-client@example.test'
+                && is_array($settingsExtra)
+                && ($settingsExtra['phone'][0] ?? null) === '254799000111'
+                && ($settingsExtra['city'][0] ?? null) === 'Nairobi';
+        });
     }
 
     public function test_conversation_and_reply_routes_reject_threads_owned_by_a_different_support_board_user(): void
@@ -385,11 +659,163 @@ class SupportBoardIntegrationTest extends TestCase
             ->assertJsonPath('stats.with_chat', 1);
     }
 
+    public function test_settings_support_board_sync_endpoint_backfills_links_for_selected_market(): void
+    {
+        $platform = $this->createPlatform();
+        $otherPlatform = $this->createPlatform(['domain' => 'second-market.test']);
+        $admin = $this->createUser('admin');
+
+        $matchedClient = $this->createClient($platform, [
+            'name' => 'Already Matched',
+            'phone_normalized' => '254700000001',
+            'sb_user_id' => 999,
+            'sb_matched_by' => 'phone',
+        ]);
+        $unmatchedClient = $this->createClient($platform, [
+            'name' => 'Needs Link',
+            'phone_normalized' => '254700111222',
+            'email' => 'needs-link@example.test',
+        ]);
+        $otherMarketClient = $this->createClient($otherPlatform, [
+            'name' => 'Other Market',
+            'phone_normalized' => '254700333444',
+            'email' => 'other-market@example.test',
+        ]);
+
+        Http::fake(function (ClientRequest $request) {
+            $function = $request->data()['function'] ?? null;
+            $value = $request->data()['value'] ?? null;
+
+            if ($function !== 'get-user-by') {
+                return Http::response(['success' => true, 'response' => []]);
+            }
+
+            if (in_array($value, ['+254700111222', '254700111222', '0700111222', 'needs-link@example.test'], true)) {
+                return Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 1234,
+                        'first_name' => 'Needs',
+                        'last_name' => 'Link',
+                        'email' => 'needs-link@example.test',
+                        'user_type' => 'lead',
+                        'details' => [],
+                    ],
+                ]);
+            }
+
+            return Http::response(['success' => true, 'response' => []]);
+        });
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson("/api/crm/settings/integrations/platforms/{$platform->id}/support-board/sync", [
+            'refresh' => false,
+            'reason' => 'Backfill unmatched Support Board links',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('result.candidates', 1)
+            ->assertJsonPath('result.processed', 1)
+            ->assertJsonPath('result.matched', 1)
+            ->assertJsonPath('result.errors', 0);
+
+        $matchedClient->refresh();
+        $unmatchedClient->refresh();
+        $otherMarketClient->refresh();
+
+        $this->assertSame(999, (int) $matchedClient->sb_user_id);
+        $this->assertSame(1234, (int) $unmatchedClient->sb_user_id);
+        $this->assertSame('phone', $unmatchedClient->sb_matched_by);
+        $this->assertNull($otherMarketClient->sb_user_id);
+    }
+
+    public function test_settings_support_board_sync_endpoint_rejects_sales_role(): void
+    {
+        $platform = $this->createPlatform();
+        $sales = $this->createUser('sales', [$platform->id]);
+
+        Sanctum::actingAs($sales);
+
+        $this->postJson("/api/crm/settings/integrations/platforms/{$platform->id}/support-board/sync", [
+            'refresh' => false,
+            'reason' => 'Sales should not run this',
+        ])->assertStatus(403);
+    }
+
+    public function test_support_board_sync_command_updates_unmatched_clients_for_selected_platform(): void
+    {
+        $platform = $this->createPlatform();
+        $client = $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'command-sync@example.test',
+        ]);
+
+        Http::fake(function (ClientRequest $request) {
+            $function = $request->data()['function'] ?? null;
+            $value = $request->data()['value'] ?? null;
+
+            if ($function !== 'get-user-by') {
+                return Http::response(['success' => true, 'response' => []]);
+            }
+
+            if (in_array($value, ['+254701234567', '254701234567', '0701234567', 'command-sync@example.test'], true)) {
+                return Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 5678,
+                        'first_name' => 'Command',
+                        'last_name' => 'Sync',
+                        'email' => 'command-sync@example.test',
+                        'user_type' => 'lead',
+                        'details' => [],
+                    ],
+                ]);
+            }
+
+            return Http::response(['success' => true, 'response' => []]);
+        });
+
+        $this->artisan("crm:sync-sb-users --platform={$platform->id}")
+            ->assertExitCode(0);
+
+        $client->refresh();
+
+        $this->assertSame(5678, (int) $client->sb_user_id);
+        $this->assertSame('phone', $client->sb_matched_by);
+    }
+
     private function fakeSupportBoardResponse(ClientRequest $request, int $conversationUserId)
     {
         $function = $request->data()['function'] ?? null;
 
         return match ($function) {
+            'get-user' => Http::response([
+                'success' => true,
+                'response' => [
+                    'id' => $conversationUserId,
+                    'first_name' => 'Client',
+                    'last_name' => 'Example',
+                    'email' => 'client@example.test',
+                    'user_type' => 'lead',
+                    'creation_time' => '2026-03-19 07:05:00',
+                    'last_activity' => '2026-03-20 10:07:00',
+                    'details' => [
+                        ['slug' => 'phone', 'name' => 'Phone', 'value' => '+254700000000'],
+                        ['slug' => 'country_code', 'name' => 'Country code', 'value' => 'KE'],
+                        ['slug' => 'location', 'name' => 'Location', 'value' => 'Nairobi, Kenya'],
+                    ],
+                ],
+            ]),
+            'get-user-extra' => Http::response([
+                'success' => true,
+                'response' => [
+                    ['slug' => 'phone', 'name' => 'Phone', 'value' => '+254700000000'],
+                    ['slug' => 'country_code', 'name' => 'Country code', 'value' => 'KE'],
+                    ['slug' => 'location', 'name' => 'Location', 'value' => 'Nairobi, Kenya'],
+                ],
+            ]),
             'get-user-conversations' => Http::response([
                 'success' => true,
                 'response' => [
@@ -459,6 +885,17 @@ class SupportBoardIntegrationTest extends TestCase
                     'queue' => false,
                     'notifications' => ['email'],
                     'message' => $request->data()['message'] ?? '',
+                ],
+            ]),
+            'get-user-by' => Http::response([
+                'success' => true,
+                'response' => [
+                    'id' => $conversationUserId,
+                    'first_name' => 'Client',
+                    'last_name' => 'Example',
+                    'email' => 'client@example.test',
+                    'user_type' => 'lead',
+                    'details' => [],
                 ],
             ]),
             default => Http::response(['success' => true, 'response' => []]),

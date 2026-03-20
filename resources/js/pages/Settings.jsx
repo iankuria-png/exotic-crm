@@ -718,6 +718,7 @@ function dedupeModeLabel(mode) {
 function IntegrationsWorkspace({
     canCreateMarkets,
     canEditPaymentLinks,
+    canManageMarkets,
     canManagePushProviders,
     canManageWalletSystem,
     canManageWalletPlatforms,
@@ -740,6 +741,12 @@ function IntegrationsWorkspace({
     });
     const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
     const [latestSyncResult, setLatestSyncResult] = useState(null);
+    const [supportBoardSyncForm, setSupportBoardSyncForm] = useState({
+        refresh: false,
+        reason: 'Manual Support Board link sync from integrations workspace',
+    });
+    const [supportBoardSyncConfirmOpen, setSupportBoardSyncConfirmOpen] = useState(false);
+    const [latestSupportBoardSyncResult, setLatestSupportBoardSyncResult] = useState(null);
     const [smsProviderForm, setSmsProviderForm] = useState(defaultSmsProviderForm());
     const [smsProviderApiKeyConfigured, setSmsProviderApiKeyConfigured] = useState(false);
     const [smsTestForm, setSmsTestForm] = useState({
@@ -944,6 +951,7 @@ function IntegrationsWorkspace({
 
         setEditor(buildPlatformEditor(selectedPlatform));
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
+        setLatestSupportBoardSyncResult(null);
         setPaymentLinkForm(buildPaymentLinkProviderForm(selectedPlatform));
         setPackageEditor(buildPackageEditor(selectedPlatform));
         setWalletPlatformForm(buildWalletPlatformForm(selectedPlatform));
@@ -1136,6 +1144,26 @@ function IntegrationsWorkspace({
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Manual sync failed.');
+        },
+    });
+
+    const runSupportBoardSyncMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/support-board/sync`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            setLatestSupportBoardSyncResult(response?.result || null);
+            setSupportBoardSyncConfirmOpen(false);
+            toast[response?.status === 'partial' ? 'warning' : 'success'](
+                response?.status === 'partial'
+                    ? 'Support Board link sync completed with warnings.'
+                    : 'Support Board link sync completed.'
+            );
+        },
+        onError: (error) => {
+            const result = error?.response?.data?.result || null;
+            if (result) {
+                setLatestSupportBoardSyncResult(result);
+            }
+            toast.error(error?.response?.data?.message || 'Support Board link sync failed.');
         },
     });
 
@@ -2240,6 +2268,10 @@ function IntegrationsWorkspace({
     ].join('\n');
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
+    const selectedSupportBoardConfigured = Boolean(
+        selectedPlatform?.support_board_api_url
+        && selectedPlatform?.support_board_token_configured
+    );
     const selectedPackageSetup = selectedPlatform?.package_setup || null;
     const selectedPackagesReady = Boolean(selectedPackageSetup?.can_go_live);
     const showInitialFullSyncCta = Boolean(
@@ -4760,6 +4792,90 @@ function IntegrationsWorkspace({
                                         </div>
                                     ) : null}
                                 </section>
+
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Support Board Link Sync</h4>
+                                    <p className="text-xs text-slate-500">Backfill the local chat-match cache so the Clients filter can find matched profiles without opening each chat tab.</p>
+                                    <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-900">
+                                        <p className="font-semibold">How it runs</p>
+                                        <p className="mt-1">
+                                            Incremental mode checks only clients without an existing Support Board link.
+                                            Revalidation mode checks all clients in this market and refreshes stale matches.
+                                        </p>
+                                    </div>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={supportBoardSyncForm.refresh}
+                                                onChange={(event) => setSupportBoardSyncForm((current) => ({ ...current, refresh: event.target.checked }))}
+                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                            />
+                                            Revalidate existing matches
+                                        </label>
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            Scope:
+                                            {' '}
+                                            <span className="font-semibold text-slate-800">{selectedPlatform.platform_name}</span>
+                                        </div>
+                                        <textarea
+                                            value={supportBoardSyncForm.reason}
+                                            onChange={(event) => setSupportBoardSyncForm((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            rows={2}
+                                            placeholder="Reason for Support Board link sync"
+                                        />
+                                    </div>
+                                    <div className="mt-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSupportBoardSyncConfirmOpen(true)}
+                                            disabled={
+                                                !canManageMarkets
+                                                || runSupportBoardSyncMutation.isPending
+                                                || !selectedSupportBoardConfigured
+                                                || !supportBoardSyncForm.reason.trim()
+                                            }
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {runSupportBoardSyncMutation.isPending ? 'Syncing...' : 'Run Support Board sync'}
+                                        </button>
+                                    </div>
+                                    {!canManageMarkets ? (
+                                        <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board link sync.</p>
+                                    ) : null}
+                                    {!selectedSupportBoardConfigured ? (
+                                        <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the link sync.</p>
+                                    ) : null}
+                                    {latestSupportBoardSyncResult ? (
+                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                                            <p className="font-semibold text-slate-800">Latest Support Board sync</p>
+                                            <p className="mt-1">
+                                                Mode: {latestSupportBoardSyncResult.refresh ? 'revalidate all matches' : 'incremental unmatched-only'}
+                                                {' • '}
+                                                Candidates: {latestSupportBoardSyncResult.candidates || 0}
+                                                {' • '}
+                                                Processed: {latestSupportBoardSyncResult.processed || 0}
+                                            </p>
+                                            <p>
+                                                Matched: {latestSupportBoardSyncResult.matched || 0}
+                                                {' • '}
+                                                Updated: {latestSupportBoardSyncResult.updated || 0}
+                                                {' • '}
+                                                Cleared: {latestSupportBoardSyncResult.cleared || 0}
+                                                {' • '}
+                                                Unchanged: {latestSupportBoardSyncResult.unchanged || 0}
+                                                {' • '}
+                                                Errors: {latestSupportBoardSyncResult.errors || 0}
+                                            </p>
+                                            {latestSupportBoardSyncResult.errors_detail?.length ? (
+                                                <p className="mt-1 text-amber-700">
+                                                    First error: {latestSupportBoardSyncResult.errors_detail[0]?.message || 'Unknown error'}
+                                                </p>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                </section>
                             </div>
                         )}
                     </div>
@@ -5677,6 +5793,36 @@ function IntegrationsWorkspace({
                     <p><span className="font-semibold text-slate-800">Scope:</span> {syncForm.scope}</p>
                     <p><span className="font-semibold text-slate-800">Mode:</span> {syncForm.mode}</p>
                     <p><span className="font-semibold text-slate-800">Dry run:</span> {syncForm.dry_run ? 'yes' : 'no'}</p>
+                </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={supportBoardSyncConfirmOpen}
+                title="Run Support Board Link Sync?"
+                message="This will resolve Support Board user links for the selected market so chat-match filtering can use the locally cached mapping."
+                confirmLabel="Run sync"
+                cancelLabel="Cancel"
+                tone="warning"
+                onCancel={() => setSupportBoardSyncConfirmOpen(false)}
+                onConfirm={() => {
+                    if (!selectedPlatform) {
+                        return;
+                    }
+
+                    runSupportBoardSyncMutation.mutate({
+                        platformId: selectedPlatform.platform_id,
+                        payload: {
+                            refresh: supportBoardSyncForm.refresh,
+                            reason: supportBoardSyncForm.reason.trim(),
+                        },
+                    });
+                }}
+                confirmDisabled={!supportBoardSyncForm.reason.trim()}
+                isPending={runSupportBoardSyncMutation.isPending}
+            >
+                <div className="space-y-1 text-sm text-slate-600">
+                    <p><span className="font-semibold text-slate-800">Market:</span> {selectedPlatform?.platform_name}</p>
+                    <p><span className="font-semibold text-slate-800">Mode:</span> {supportBoardSyncForm.refresh ? 'Revalidate all clients' : 'Incremental unmatched-only'}</p>
                 </div>
             </ConfirmDialog>
         </div>
@@ -6778,6 +6924,7 @@ export default function Settings() {
                 <IntegrationsWorkspace
                     canCreateMarkets={canCreateMarkets}
                     canEditPaymentLinks={canEditPaymentLinks}
+                    canManageMarkets={canManageMarkets}
                     canManagePushProviders={canManagePushProviders}
                     canManageWalletSystem={canManageWalletSystem}
                     canManageWalletPlatforms={canManageWalletPlatforms}
