@@ -19,7 +19,7 @@ DEPLOY_HISTORY_MAX="${DEPLOY_HISTORY_MAX:-20}"
 ROLLBACK_TARGET_SHA="${ROLLBACK_TARGET_SHA:-}"
 ROLLBACK_DB_BACKUP="${ROLLBACK_DB_BACKUP:-}"
 PHP_BIN="${DEPLOY_PHP_BINARY:-php}"
-COMPOSER_BIN="${DEPLOY_COMPOSER_BINARY:-composer}"
+COMPOSER_PATH="$(command -v composer 2>/dev/null || echo 'composer')"
 
 mkdir -p "$(dirname "$STATUS_FILE")"
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -380,7 +380,7 @@ if [[ -n "$ROLLBACK_TARGET_SHA" ]]; then
     CURRENT_SHORT_COMMIT="${CURRENT_COMMIT:0:8}"
     echo "Checked out commit: ${CURRENT_COMMIT}"
 
-    "$COMPOSER_BIN" install --no-interaction --prefer-dist --optimize-autoloader
+    "$PHP_BIN" "$COMPOSER_PATH" install --no-interaction --prefer-dist --optimize-autoloader
 
     if [[ -n "$ROLLBACK_DB_BACKUP" ]]; then
         echo "Restoring database from backup: ${ROLLBACK_DB_BACKUP}"
@@ -409,7 +409,7 @@ CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 CURRENT_SHORT_COMMIT="${CURRENT_COMMIT:0:8}"
 echo "Updated to commit: ${CURRENT_COMMIT}"
 
-"$COMPOSER_BIN" install --no-interaction --prefer-dist --optimize-autoloader
+"$PHP_BIN" "$COMPOSER_PATH" install --no-interaction --prefer-dist --optimize-autoloader
 backup_database
 "$PHP_BIN" artisan migrate --force
 "$PHP_BIN" artisan optimize:clear
