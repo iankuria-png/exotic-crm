@@ -172,6 +172,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::patch('/leads/{lead}/assign', [LeadController::class, 'assign']);
         Route::post('/leads/reconcile', [LeadController::class, 'batchReconcile']);
         Route::post('/leads/{lead}/reconcile', [LeadController::class, 'reconcile']);
+        Route::post('/leads/{lead}/convert-to-client', [LeadController::class, 'convertToClient']);
 
         // Conversations
         Route::post('/conversations/clients/{client}/send', [ConversationController::class, 'send']);
@@ -243,6 +244,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/support-board/sync', [SettingsController::class, 'runPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
     Route::get('/settings/integrations/platforms/{platform}/support-board/sync/latest', [SettingsController::class, 'latestPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/support-board/lead-import', [SettingsController::class, 'runSbLeadImport'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/integrations/platforms/{platform}/support-board/lead-import/latest', [SettingsController::class, 'latestSbLeadImportRun'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/scraper-sources', [SettingsController::class, 'storeScraperSource'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/scraper-sources/{scraperSource}', [SettingsController::class, 'updateScraperSource'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/scraper-sources/{scraperSource}/run', [SettingsController::class, 'runScraperSource'])->middleware('role:admin,sub_admin');

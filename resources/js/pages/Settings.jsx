@@ -748,6 +748,12 @@ function IntegrationsWorkspace({
     });
     const [supportBoardSyncConfirmOpen, setSupportBoardSyncConfirmOpen] = useState(false);
     const [latestSupportBoardSyncResult, setLatestSupportBoardSyncResult] = useState(null);
+    const [sbLeadImportForm, setSbLeadImportForm] = useState({
+        mode: 'bootstrap',
+        reason: 'Manual Support Board lead import from integrations workspace',
+    });
+    const [sbLeadImportConfirmOpen, setSbLeadImportConfirmOpen] = useState(false);
+    const [latestSbLeadImportResult, setLatestSbLeadImportResult] = useState(null);
     const [smsProviderForm, setSmsProviderForm] = useState(defaultSmsProviderForm());
     const [smsProviderApiKeyConfigured, setSmsProviderApiKeyConfigured] = useState(false);
     const [smsTestForm, setSmsTestForm] = useState({
@@ -888,6 +894,12 @@ function IntegrationsWorkspace({
         enabled: Boolean(selectedPlatformId) && canManageMarkets,
         refetchInterval: (query) => query.state.data?.run?.in_progress ? 4000 : false,
     });
+    const sbLeadImportStatusQuery = useQuery({
+        queryKey: ['settings-sb-lead-import', selectedPlatformId],
+        queryFn: () => api.get(`/crm/settings/integrations/platforms/${selectedPlatformId}/support-board/lead-import/latest`).then((response) => response.data),
+        enabled: Boolean(selectedPlatformId) && canManageMarkets,
+        refetchInterval: (query) => query.state.data?.run?.in_progress ? 4000 : false,
+    });
     const enabledPaymentLinkProviders = useMemo(() => (
         (paymentLinkForm.providers || [])
             .map((provider) => ({
@@ -973,6 +985,14 @@ function IntegrationsWorkspace({
 
         setLatestSupportBoardSyncResult(supportBoardSyncStatusQuery.data.run || null);
     }, [supportBoardSyncStatusQuery.data]);
+
+    useEffect(() => {
+        if (!sbLeadImportStatusQuery.data) {
+            return;
+        }
+
+        setLatestSbLeadImportResult(sbLeadImportStatusQuery.data.run || null);
+    }, [sbLeadImportStatusQuery.data]);
 
     useEffect(() => {
         const nextActiveProvider = enabledPaymentLinkProviders.some((provider) => provider.key === paymentLinkForm.active_provider)
@@ -1181,6 +1201,27 @@ function IntegrationsWorkspace({
                 setLatestSupportBoardSyncResult(run);
             }
             toast.error(error?.response?.data?.message || 'Support Board link sync failed.');
+        },
+    });
+
+    const runSbLeadImportMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/support-board/lead-import`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            setLatestSbLeadImportResult(response?.run || null);
+            setSbLeadImportConfirmOpen(false);
+            toast[response?.reused_run ? 'warning' : 'success'](
+                response?.reused_run
+                    ? (response?.message || 'A Support Board lead import is already running for this market.')
+                    : (response?.message || 'Support Board lead import has been queued.')
+            );
+        },
+        onError: (error) => {
+            const run = error?.response?.data?.run || null;
+            if (run) {
+                setLatestSbLeadImportResult(run);
+            }
+            toast.error(error?.response?.data?.message || 'Support Board lead import failed.');
         },
     });
 
@@ -2297,6 +2338,12 @@ function IntegrationsWorkspace({
     const supportBoardSyncQueueReady = Boolean(supportBoardSyncQueue?.available ?? true);
     const supportBoardSyncStatusLabel = latestSupportBoardSyncResult?.status
         ? latestSupportBoardSyncResult.status.replaceAll('_', ' ')
+        : 'idle';
+    const sbLeadImportActive = Boolean(latestSbLeadImportResult?.in_progress);
+    const sbLeadImportQueue = latestSbLeadImportResult?.queue || null;
+    const sbLeadImportQueueReady = Boolean(sbLeadImportQueue?.available ?? true);
+    const sbLeadImportStatusLabel = latestSbLeadImportResult?.status
+        ? latestSbLeadImportResult.status.replaceAll('_', ' ')
         : 'idle';
     const selectedPackageSetup = selectedPlatform?.package_setup || null;
     const selectedPackagesReady = Boolean(selectedPackageSetup?.can_go_live);
@@ -4966,6 +5013,173 @@ function IntegrationsWorkspace({
                                         </div>
                                     )}
                                 </section>
+
+                                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                    <h4 className="text-sm font-semibold text-slate-900">Support Board Lead Import</h4>
+                                    <p className="text-xs text-slate-500">Import chat-origin contacts from Support Board as CRM leads. Runs in the background and continues even if you leave this page.</p>
+                                    <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-900">
+                                        <p className="font-semibold">How it runs</p>
+                                        <p className="mt-1">
+                                            Bootstrap mode fetches all conversations and imports every unique user.
+                                            Incremental mode imports only users from new conversations since the last run.
+                                        </p>
+                                    </div>
+                                    {!sbLeadImportQueueReady ? (
+                                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                            <p className="font-semibold">Background queue not ready</p>
+                                            <p className="mt-1">{sbLeadImportQueue?.issues?.[0] || 'Background lead import is currently unavailable.'}</p>
+                                        </div>
+                                    ) : null}
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                        <div className="flex items-center gap-4">
+                                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                <input
+                                                    type="radio"
+                                                    name="sb_lead_import_mode"
+                                                    value="bootstrap"
+                                                    checked={sbLeadImportForm.mode === 'bootstrap'}
+                                                    onChange={() => setSbLeadImportForm((current) => ({ ...current, mode: 'bootstrap' }))}
+                                                    className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                Bootstrap (all)
+                                            </label>
+                                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                <input
+                                                    type="radio"
+                                                    name="sb_lead_import_mode"
+                                                    value="incremental"
+                                                    checked={sbLeadImportForm.mode === 'incremental'}
+                                                    onChange={() => setSbLeadImportForm((current) => ({ ...current, mode: 'incremental' }))}
+                                                    className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                />
+                                                Incremental (new only)
+                                            </label>
+                                        </div>
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            Scope:
+                                            {' '}
+                                            <span className="font-semibold text-slate-800">{selectedPlatform.platform_name}</span>
+                                        </div>
+                                        <textarea
+                                            value={sbLeadImportForm.reason}
+                                            onChange={(event) => setSbLeadImportForm((current) => ({ ...current, reason: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            rows={2}
+                                            placeholder="Reason for Support Board lead import"
+                                        />
+                                    </div>
+                                    <div className="mt-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSbLeadImportConfirmOpen(true)}
+                                            disabled={
+                                                !canManageMarkets
+                                                || runSbLeadImportMutation.isPending
+                                                || sbLeadImportActive
+                                                || !sbLeadImportQueueReady
+                                                || !selectedSupportBoardConfigured
+                                                || !sbLeadImportForm.reason.trim()
+                                            }
+                                            className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {runSbLeadImportMutation.isPending
+                                                ? 'Starting...'
+                                                : sbLeadImportActive
+                                                    ? 'Import in progress'
+                                                    : 'Start Lead Import'}
+                                        </button>
+                                    </div>
+                                    {!canManageMarkets ? (
+                                        <p className="mt-2 text-xs text-slate-500">Only admin and sub-admin users can run Support Board lead import.</p>
+                                    ) : null}
+                                    {!selectedSupportBoardConfigured ? (
+                                        <p className="mt-2 text-xs text-amber-700">Save a Support Board API URL and token for this market before running the lead import.</p>
+                                    ) : null}
+                                    {latestSbLeadImportResult ? (
+                                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <div>
+                                                    <p className="font-semibold text-slate-800">Latest lead import</p>
+                                                    <p className="mt-1 text-slate-500">
+                                                        Mode: {latestSbLeadImportResult.mode === 'bootstrap' ? 'bootstrap (all conversations)' : 'incremental (new only)'}
+                                                        {' \u2022 '}
+                                                        Started: {formatDateTime(latestSbLeadImportResult.started_at || latestSbLeadImportResult.created_at)}
+                                                    </p>
+                                                </div>
+                                                <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestSbLeadImportResult.status)}`}>
+                                                    {sbLeadImportStatusLabel}
+                                                </span>
+                                            </div>
+
+                                            <div className="mt-3">
+                                                <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-slate-500">
+                                                    <span>Progress</span>
+                                                    <span>{latestSbLeadImportResult.progress_percent || 0}%</span>
+                                                </div>
+                                                <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200">
+                                                    <div
+                                                        className="h-full rounded-full bg-teal-600 transition-all"
+                                                        style={{ width: `${Math.max(0, Math.min(100, latestSbLeadImportResult.progress_percent || 0))}%` }}
+                                                    />
+                                                </div>
+                                                <p className="mt-2 text-slate-600">
+                                                    Processed {latestSbLeadImportResult.processed || 0} of {latestSbLeadImportResult.candidates || 0} candidates.
+                                                    {latestSbLeadImportResult.in_progress ? ' You can leave this page while the import continues.' : ''}
+                                                </p>
+                                            </div>
+
+                                            <div className="mt-3 grid gap-2 md:grid-cols-4">
+                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Created</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.created_leads || 0}</p>
+                                                </div>
+                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Updated</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.updated_leads || 0}</p>
+                                                </div>
+                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Skipped</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{(latestSbLeadImportResult.skipped_existing_client || 0) + (latestSbLeadImportResult.skipped_existing_lead || 0)}</p>
+                                                </div>
+                                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Errors</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{latestSbLeadImportResult.errors || 0}</p>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-3 space-y-1 text-slate-600">
+                                                <p>Last heartbeat: <span className="font-medium text-slate-900">{formatDateTime(latestSbLeadImportResult.last_heartbeat_at)}</span></p>
+                                                {latestSbLeadImportResult.last_processed_name ? (
+                                                    <p>
+                                                        Last processed: <span className="font-medium text-slate-900">{latestSbLeadImportResult.last_processed_name}</span>
+                                                        {latestSbLeadImportResult.last_processed_sb_user_id ? ` (SB #${latestSbLeadImportResult.last_processed_sb_user_id})` : ''}
+                                                    </p>
+                                                ) : null}
+                                                {latestSbLeadImportResult.finished_at ? (
+                                                    <p>Finished: <span className="font-medium text-slate-900">{formatDateTime(latestSbLeadImportResult.finished_at)}</span></p>
+                                                ) : null}
+                                            </div>
+
+                                            {latestSbLeadImportResult.queue?.message ? (
+                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                    <p className="font-semibold">Queue attention needed</p>
+                                                    <p className="mt-1">{latestSbLeadImportResult.queue.message}</p>
+                                                </div>
+                                            ) : null}
+
+                                            {latestSbLeadImportResult.error_details?.length ? (
+                                                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                                    <p className="font-semibold">Recent error</p>
+                                                    <p className="mt-1">{latestSbLeadImportResult.error_details[0]?.message || 'Unknown error'}</p>
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : (
+                                        <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500">
+                                            No Support Board lead import has run for this market yet.
+                                        </div>
+                                    )}
+                                </section>
                             </div>
                         )}
                     </div>
@@ -5914,6 +6128,37 @@ function IntegrationsWorkspace({
                     <p><span className="font-semibold text-slate-800">Market:</span> {selectedPlatform?.platform_name}</p>
                     <p><span className="font-semibold text-slate-800">Mode:</span> {supportBoardSyncForm.refresh ? 'Revalidate all clients' : 'Incremental unmatched-only'}</p>
                     <p className="text-xs text-slate-500">The sync will continue in the background. You can safely leave this page after it starts.</p>
+                </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={sbLeadImportConfirmOpen}
+                title="Start Support Board Lead Import?"
+                message="This will queue a background import of Support Board chat users as CRM leads for the selected market."
+                confirmLabel="Start import"
+                cancelLabel="Cancel"
+                tone="warning"
+                onCancel={() => setSbLeadImportConfirmOpen(false)}
+                onConfirm={() => {
+                    if (!selectedPlatform) {
+                        return;
+                    }
+
+                    runSbLeadImportMutation.mutate({
+                        platformId: selectedPlatform.platform_id,
+                        payload: {
+                            mode: sbLeadImportForm.mode,
+                            reason: sbLeadImportForm.reason.trim(),
+                        },
+                    });
+                }}
+                confirmDisabled={!sbLeadImportForm.reason.trim()}
+                isPending={runSbLeadImportMutation.isPending}
+            >
+                <div className="space-y-1 text-sm text-slate-600">
+                    <p><span className="font-semibold text-slate-800">Market:</span> {selectedPlatform?.platform_name}</p>
+                    <p><span className="font-semibold text-slate-800">Mode:</span> {sbLeadImportForm.mode === 'bootstrap' ? 'Bootstrap (all conversations)' : 'Incremental (new only)'}</p>
+                    <p className="text-xs text-slate-500">The import will continue in the background. You can safely leave this page after it starts.</p>
                 </div>
             </ConfirmDialog>
         </div>

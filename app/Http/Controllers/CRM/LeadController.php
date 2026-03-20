@@ -9,6 +9,7 @@ use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Services\AuditService;
 use App\Services\LeadAssignmentService;
+use App\Services\LeadConversionService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
 use App\Services\ScraperSourceService;
@@ -29,6 +30,7 @@ class LeadController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly LeadImportService $leadImportService,
         private readonly LeadAssignmentService $leadAssignmentService,
+        private readonly LeadConversionService $leadConversionService,
         private readonly AuditService $auditService,
         private readonly ScraperSourceService $scraperSourceService
     ) {
@@ -666,6 +668,44 @@ class LeadController extends Controller
         return response()->json([
             'lead' => $lead,
             'message' => 'Lead reconciliation applied.',
+        ]);
+    }
+
+    public function convertToClient(Request $request, Lead $lead)
+    {
+        $this->authorizeLeadAccess($request, $lead);
+
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'phone_normalized' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'city' => 'nullable|string|max:100',
+            'profile_status' => 'nullable|in:publish,private,draft,pending',
+            'assigned_to' => 'nullable|integer|exists:users,id',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $result = $this->leadConversionService->convert($request, $lead, $validated);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 500);
+        }
+
+        if (!empty($result['duplicate'])) {
+            return response()->json([
+                'duplicate' => true,
+                'matched_by' => $result['matched_by'],
+                'existing_client' => $result['existing_client'],
+                'message' => 'A likely existing client already matches this lead.',
+            ], 409);
+        }
+
+        return response()->json([
+            'message' => 'Lead converted to client.',
+            'client' => $result['client'],
+            'lead' => $result['lead'],
         ]);
     }
 

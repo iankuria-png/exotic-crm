@@ -16,12 +16,16 @@ class Lead extends Model
         'first_contact_at', 'last_contact_at',
         'response_time_seconds', 'converted_client_id',
         'archived_at',
+        'sb_user_id', 'sb_conversation_id', 'sb_user_type',
+        'sb_last_activity_at', 'sb_metadata_snapshot',
     ];
 
     protected $casts = [
         'first_contact_at' => 'datetime',
         'last_contact_at' => 'datetime',
         'archived_at' => 'datetime',
+        'sb_last_activity_at' => 'datetime',
+        'sb_metadata_snapshot' => 'array',
     ];
 
     public function platform()

@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
 use App\Models\AuditLog;
 use App\Models\Platform;
+use App\Models\SbLeadImportRun;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\ScraperRun;
@@ -17,6 +19,8 @@ use App\Services\AuditService;
 use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
+use App\Services\SbLeadImportRunService;
+use App\Services\SupportBoardLeadImportService;
 use App\Services\NotificationService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ScraperSourceService;
@@ -43,6 +47,8 @@ class SettingsController extends Controller
         private readonly NotificationService $notificationService,
         private readonly PushProviderService $pushProviderService,
         private readonly ScraperSourceService $scraperSourceService,
+        private readonly SbLeadImportRunService $sbLeadImportRunService,
+        private readonly SupportBoardLeadImportService $supportBoardLeadImportService,
         private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService
@@ -3408,6 +3414,126 @@ class SettingsController extends Controller
         $config['platforms'] = $scopedPlatforms;
 
         return $config;
+    }
+
+    public function runSbLeadImport(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can run Support Board lead import.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'mode' => 'nullable|string|in:bootstrap,incremental',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (!(new SupportBoardService($platform))->isConfigured()) {
+            return response()->json([
+                'message' => 'Support Board is not configured for this market.',
+            ], 422);
+        }
+
+        $queue = $this->sbLeadImportRunService->queueReadiness();
+        if (!($queue['available'] ?? false)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $queue['issues'][0] ?? 'Background lead import is not available.',
+                'queue' => $queue,
+            ], 503);
+        }
+
+        $mode = $validated['mode'] ?? 'bootstrap';
+
+        try {
+            // Pre-fetch candidate user IDs (synchronous, but fast — just API calls)
+            $candidateUserIds = $this->supportBoardLeadImportService->fetchCandidateUserIds($platform, $mode);
+
+            if (empty($candidateUserIds)) {
+                return response()->json([
+                    'status' => 'empty',
+                    'message' => 'No Support Board conversations found to import.',
+                    'run' => null,
+                ], 200);
+            }
+
+            $started = $this->sbLeadImportRunService->startRun(
+                $platform,
+                $request->user(),
+                $mode,
+                $validated['reason'] ?? null,
+                $candidateUserIds
+            );
+            $run = $started['run'];
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::LEAD_SB_IMPORT_COMMIT,
+                'platform',
+                (int) $platform->id,
+                [],
+                [
+                    'sb_lead_import' => [
+                        'run_id' => (int) $run->id,
+                        'status' => $run->status,
+                        'mode' => $mode,
+                        'candidates' => (int) ($run->candidates ?? 0),
+                    ],
+                ],
+                $validated['reason'] ?? 'Manual Support Board lead import run'
+            );
+
+            if (!$started['reused']) {
+                RunSbLeadImportJob::dispatch((int) $run->id);
+            }
+
+            return response()->json([
+                'status' => $started['reused'] ? 'running' : 'queued',
+                'message' => $started['reused']
+                    ? 'A Support Board lead import is already running for this market.'
+                    : 'Support Board lead import has been queued.',
+                'reused_run' => (bool) $started['reused'],
+                'run' => $this->sbLeadImportRunService->serializeRun($run),
+            ], 202);
+        } catch (\Throwable $exception) {
+            $failedRun = isset($run) && $run instanceof SbLeadImportRun
+                ? $this->sbLeadImportRunService->markFailed($run, $exception)
+                : null;
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to queue the Support Board lead import.',
+                'error' => $exception->getMessage(),
+                'run' => $this->sbLeadImportRunService->serializeRun($failedRun),
+            ], 500);
+        }
+    }
+
+    public function latestSbLeadImportRun(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can view Support Board lead import status.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $run = $this->sbLeadImportRunService->latestRunForPlatform((int) $platform->id);
+
+        return response()->json([
+            'run' => $this->sbLeadImportRunService->serializeRun($run),
+        ]);
     }
 
     private function resolveAuditPlatformId(array $assignedMarketIds): ?int

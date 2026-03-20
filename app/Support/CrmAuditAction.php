@@ -56,6 +56,9 @@ final class CrmAuditAction
     public const WALLET_PIN_UPDATE = 'wallet_pin_update';
     public const FREE_TRIAL_PIN_UPDATE = 'free_trial_pin_update';
     public const LEAD_RECONCILE = 'lead_reconcile';
+    public const LEAD_CONVERT_TO_CLIENT = 'lead_convert_to_client';
+    public const LEAD_SB_IMPORT_PREVIEW = 'lead_sb_import_preview';
+    public const LEAD_SB_IMPORT_COMMIT = 'lead_sb_import_commit';
     public const PUSH_CAMPAIGN_CREATE = 'push_campaign_create';
     public const PUSH_CAMPAIGN_EXECUTE = 'push_campaign_execute';
     public const PUSH_CAMPAIGN_SCHEDULE = 'push_campaign_schedule';

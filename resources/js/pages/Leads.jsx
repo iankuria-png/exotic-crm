@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
@@ -47,6 +47,7 @@ function normalizePlatformFilter(value) {
 
 export default function Leads() {
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
     const toast = useToast();
     const [searchParams] = useSearchParams();
 
@@ -100,6 +101,17 @@ export default function Leads() {
         reason: 'Batch lead reconciliation from leads page',
         leads: [],
         mode: 'auto',
+    });
+
+    const [convertDialog, setConvertDialog] = useState(null);
+    const [convertForm, setConvertForm] = useState({
+        name: '',
+        phone_normalized: '',
+        email: '',
+        city: '',
+        profile_status: 'private',
+        assigned_to: '',
+        reason: 'Lead converted to client from leads page',
     });
 
     const [createForm, setCreateForm] = useState({
@@ -306,6 +318,30 @@ export default function Leads() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Lead reconciliation failed.');
+        },
+    });
+
+    const convertToClientMutation = useMutation({
+        mutationFn: ({ leadId, payload }) =>
+            api.post(`/crm/leads/${leadId}/convert-to-client`, payload).then((r) => r.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['leads'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            setConvertDialog(null);
+            toast.success('Lead converted. Opening client profile...');
+            if (result?.client?.id) {
+                navigate(`/clients/${result.client.id}`);
+            }
+        },
+        onError: (error) => {
+            const data = error?.response?.data;
+            if (data?.duplicate) {
+                setConvertDialog((prev) => prev ? { ...prev, duplicateMatch: data } : prev);
+                toast.warning(data.message || 'A matching client already exists.');
+                return;
+            }
+            toast.error(data?.message || 'Lead conversion failed.');
         },
     });
 
@@ -784,6 +820,27 @@ export default function Leads() {
                             assigned_to: row.assigned_to ? String(row.assigned_to) : '',
                             reason: 'Lead reassigned from leads page',
                         }),
+                    },
+                    {
+                        key: 'convert_to_client',
+                        label: 'Convert to Client',
+                        variant: 'success',
+                        hidden: row.status === 'converted' || !!row.converted_client_id,
+                        onClick: () => {
+                            const platform = platformOptions.find(
+                                (p) => String(p.platform_id) === String(row.platform_id),
+                            );
+                            setConvertForm({
+                                name: row.name || '',
+                                phone_normalized: row.phone_normalized || '',
+                                email: row.email || '',
+                                city: '',
+                                profile_status: 'private',
+                                assigned_to: row.assigned_to ? String(row.assigned_to) : '',
+                                reason: 'Lead converted to client from leads page',
+                            });
+                            setConvertDialog({ lead: row, platform, duplicateMatch: null });
+                        },
                     },
                     {
                         key: 'reconcile',
@@ -1949,6 +2006,222 @@ export default function Leads() {
                                 Confirm upload
                             </button>
                         </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            {/* Convert Lead to Client Modal */}
+            {convertDialog ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4"
+                    onClick={() => { if (!convertToClientMutation.isPending) setConvertDialog(null); }}
+                >
+                    <div
+                        className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <header className="crm-panel-header">
+                            <h3 className="crm-panel-title">Convert Lead to Client</h3>
+                            <p className="crm-panel-subtitle">{convertDialog.lead?.name || 'Lead'}</p>
+                        </header>
+
+                        <div className="space-y-4 p-4">
+                            {/* Lead summary */}
+                            <div className="rounded-md bg-slate-50 p-3">
+                                <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-slate-400">Lead summary</p>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-700">
+                                    <span><strong>Name:</strong> {convertDialog.lead?.name || '—'}</span>
+                                    <span><strong>Phone:</strong> {convertDialog.lead?.phone_normalized || '—'}</span>
+                                    <span><strong>Email:</strong> {convertDialog.lead?.email || '—'}</span>
+                                    <span><strong>Market:</strong> {convertDialog.lead?.platform?.name || `Platform #${convertDialog.lead?.platform_id}`}</span>
+                                    <span><strong>Source:</strong> {convertDialog.lead?.source || '—'}</span>
+                                    <span><strong>Owner:</strong> {convertDialog.lead?.assigned_agent?.name || 'Unassigned'}</span>
+                                </div>
+                            </div>
+
+                            {/* Duplicate match warning */}
+                            {convertDialog.duplicateMatch ? (
+                                <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                                    <p className="text-xs font-semibold text-amber-800">
+                                        A likely existing client already matches this lead (matched by {convertDialog.duplicateMatch.matched_by}).
+                                    </p>
+                                    <div className="mt-1 text-xs text-amber-700">
+                                        <strong>{convertDialog.duplicateMatch.existing_client?.name}</strong>
+                                        {convertDialog.duplicateMatch.existing_client?.phone_normalized && (
+                                            <span> — {convertDialog.duplicateMatch.existing_client.phone_normalized}</span>
+                                        )}
+                                        {convertDialog.duplicateMatch.existing_client?.email && (
+                                            <span> — {convertDialog.duplicateMatch.existing_client.email}</span>
+                                        )}
+                                    </div>
+                                    <div className="mt-2 flex gap-2">
+                                        <button
+                                            type="button"
+                                            className="crm-btn-primary text-xs"
+                                            onClick={() => {
+                                                const existingId = convertDialog.duplicateMatch.existing_client?.id;
+                                                if (existingId && convertDialog.lead) {
+                                                    reconcileLeadMutation.mutate({
+                                                        leadId: convertDialog.lead.id,
+                                                        action: 'convert',
+                                                        clientId: existingId,
+                                                        reason: 'Linked to existing client during conversion attempt',
+                                                    });
+                                                    setConvertDialog(null);
+                                                }
+                                            }}
+                                        >
+                                            Use existing client
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="crm-btn-secondary text-xs"
+                                            onClick={() => setConvertDialog(null)}
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Client fields form */}
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <div>
+                                            <label htmlFor="convert-name" className="mb-1 block text-sm font-medium text-slate-700">
+                                                Name <span className="text-rose-500">*</span>
+                                            </label>
+                                            <input
+                                                id="convert-name"
+                                                type="text"
+                                                value={convertForm.name}
+                                                onChange={(e) => setConvertForm((f) => ({ ...f, name: e.target.value }))}
+                                                className="crm-input"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="convert-phone" className="mb-1 block text-sm font-medium text-slate-700">
+                                                Phone
+                                            </label>
+                                            <input
+                                                id="convert-phone"
+                                                type="text"
+                                                value={convertForm.phone_normalized}
+                                                onChange={(e) => setConvertForm((f) => ({ ...f, phone_normalized: e.target.value }))}
+                                                className="crm-input"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="convert-email" className="mb-1 block text-sm font-medium text-slate-700">
+                                                Email
+                                            </label>
+                                            <input
+                                                id="convert-email"
+                                                type="email"
+                                                value={convertForm.email}
+                                                onChange={(e) => setConvertForm((f) => ({ ...f, email: e.target.value }))}
+                                                className="crm-input"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="convert-city" className="mb-1 block text-sm font-medium text-slate-700">
+                                                City
+                                            </label>
+                                            <input
+                                                id="convert-city"
+                                                type="text"
+                                                value={convertForm.city}
+                                                onChange={(e) => setConvertForm((f) => ({ ...f, city: e.target.value }))}
+                                                className="crm-input"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="convert-status" className="mb-1 block text-sm font-medium text-slate-700">
+                                                Profile status
+                                            </label>
+                                            <select
+                                                id="convert-status"
+                                                value={convertForm.profile_status}
+                                                onChange={(e) => setConvertForm((f) => ({ ...f, profile_status: e.target.value }))}
+                                                className="crm-select"
+                                            >
+                                                <option value="private">Private</option>
+                                                <option value="publish">Publish</option>
+                                                <option value="draft">Draft</option>
+                                                <option value="pending">Pending</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label htmlFor="convert-owner" className="mb-1 block text-sm font-medium text-slate-700">
+                                                Assigned to
+                                            </label>
+                                            <select
+                                                id="convert-owner"
+                                                value={convertForm.assigned_to}
+                                                onChange={(e) => setConvertForm((f) => ({ ...f, assigned_to: e.target.value }))}
+                                                className="crm-select"
+                                            >
+                                                <option value="">Unassigned</option>
+                                                {(integrationData?.owners || []).map((owner) => (
+                                                    <option key={owner.id} value={String(owner.id)}>{owner.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* Contact method warning */}
+                                    {!convertForm.phone_normalized.trim() && !convertForm.email.trim() ? (
+                                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                                            At least one contact method (phone or email) is recommended for WordPress provisioning.
+                                        </div>
+                                    ) : null}
+
+                                    <div>
+                                        <label htmlFor="convert-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                                        <textarea
+                                            id="convert-reason"
+                                            rows={2}
+                                            value={convertForm.reason}
+                                            onChange={(e) => setConvertForm((f) => ({ ...f, reason: e.target.value }))}
+                                            className="crm-input"
+                                        />
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {!convertDialog.duplicateMatch ? (
+                            <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                                <button
+                                    type="button"
+                                    className="crm-btn-secondary"
+                                    onClick={() => setConvertDialog(null)}
+                                    disabled={convertToClientMutation.isPending}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={!convertForm.name.trim() || convertToClientMutation.isPending}
+                                    onClick={() => {
+                                        convertToClientMutation.mutate({
+                                            leadId: convertDialog.lead.id,
+                                            payload: {
+                                                name: convertForm.name.trim(),
+                                                phone_normalized: convertForm.phone_normalized.trim() || null,
+                                                email: convertForm.email.trim() || null,
+                                                city: convertForm.city.trim() || null,
+                                                profile_status: convertForm.profile_status,
+                                                assigned_to: convertForm.assigned_to ? Number(convertForm.assigned_to) : null,
+                                                reason: convertForm.reason.trim() || null,
+                                            },
+                                        });
+                                    }}
+                                >
+                                    {convertToClientMutation.isPending ? 'Converting...' : 'Convert to Client'}
+                                </button>
+                            </footer>
+                        ) : null}
                     </div>
                 </div>
             ) : null}

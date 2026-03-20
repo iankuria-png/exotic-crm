@@ -136,6 +136,46 @@ class SupportBoardService
             ->all();
     }
 
+    /**
+     * Fetch all conversations (not filtered by user). Used for bulk lead import.
+     * Supports pagination via $pagination param (1-based page index).
+     */
+    public function getAllConversations(int $pagination = 1, ?int $statusCode = null): array
+    {
+        $payload = [
+            'pagination' => $pagination,
+        ];
+
+        if ($statusCode !== null) {
+            $payload['status_code'] = $statusCode;
+        }
+
+        $response = $this->request('get-conversations', $payload);
+
+        return collect(is_array($response) ? $response : [])
+            ->map(fn ($conversation) => $this->normalizeConversationSummary($conversation))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Fetch conversations created after the given ID (incremental import).
+     */
+    public function getNewConversations(?int $afterId = null): array
+    {
+        $payload = [];
+        if ($afterId !== null && $afterId > 0) {
+            $payload['datetime'] = $afterId;
+        }
+
+        $response = $this->request('get-new-conversations', $payload);
+
+        return collect(is_array($response) ? $response : [])
+            ->map(fn ($conversation) => $this->normalizeConversationSummary($conversation))
+            ->values()
+            ->all();
+    }
+
     public function getUser(int $sbUserId, bool $extra = false): ?array
     {
         if ($sbUserId <= 0) {
