@@ -148,7 +148,7 @@ function isImageAttachment(attachment) {
     return ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].some((extension) => source.includes(extension));
 }
 
-function EmptyStateCard({ tone = 'info', title, description, actionLabel, onAction }) {
+function EmptyStateCard({ tone = 'info', title, description, actionLabel, onAction, actionDisabled = false }) {
     const toneClasses = tone === 'error'
         ? 'border-rose-200 bg-rose-50 text-rose-900'
         : 'border-teal-200 bg-teal-50 text-teal-900';
@@ -163,7 +163,8 @@ function EmptyStateCard({ tone = 'info', title, description, actionLabel, onActi
                 <button
                     type="button"
                     onClick={onAction}
-                    className="mt-4 inline-flex min-h-11 items-center rounded-md border border-current/20 bg-white px-3 py-2 text-sm font-semibold text-current transition hover:bg-white/80"
+                    disabled={actionDisabled}
+                    className="mt-4 inline-flex min-h-11 items-center rounded-md border border-current/20 bg-white px-3 py-2 text-sm font-semibold text-current transition hover:bg-white/80 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                     {actionLabel}
                 </button>
@@ -319,7 +320,12 @@ export default function SupportBoardChat({ clientId, client }) {
         staleTime: 60_000,
     });
 
-    const canLoadSupportBoardProfile = Boolean(statusQuery.data?.configured) && Boolean(statusQuery.data?.matched);
+    const statusDetails = statusQuery.data || null;
+    const statusUnavailable = Boolean(statusDetails?.support_board_unavailable)
+        || Boolean(statusQuery.error?.response?.data?.support_board_unavailable);
+    const canLoadSupportBoardProfile = !statusUnavailable
+        && Boolean(statusDetails?.configured)
+        && Boolean(statusDetails?.matched);
 
     const profileQuery = useQuery({
         queryKey: ['client-support-board-profile', resolvedClientId],
@@ -480,7 +486,6 @@ export default function SupportBoardChat({ clientId, client }) {
         },
     });
 
-    const statusDetails = statusQuery.data || null;
     const profileDetails = profileQuery.data || null;
     const messages = Array.isArray(conversationQuery.data?.messages) ? conversationQuery.data.messages : [];
     const hasCollapsedMessages = messages.length > 50;
@@ -488,7 +493,9 @@ export default function SupportBoardChat({ clientId, client }) {
         ? messages.slice(-30)
         : messages;
     const hiddenMessageCount = Math.max(messages.length - visibleMessages.length, 0);
-    const statusErrorMessage = statusQuery.error?.response?.data?.message || 'Could not load Support Board chat right now.';
+    const statusErrorMessage = statusQuery.error?.response?.data?.message
+        || statusDetails?.message
+        || 'Could not load Support Board chat right now.';
     const conversationsErrorMessage = conversationsQuery.error?.response?.data?.message || 'Could not load conversation threads right now.';
     const conversationErrorMessage = conversationQuery.error?.response?.data?.message || 'Could not load this conversation.';
     const profileErrorMessage = profileQuery.error?.response?.data?.message || 'Could not load Support Board profile details right now.';
@@ -514,20 +521,28 @@ export default function SupportBoardChat({ clientId, client }) {
         </section>
     );
 
+    const isSupportBoardUnavailableError = (error) => Boolean(error?.response?.data?.support_board_unavailable);
+    const retrySupportBoard = () => {
+        if (!refreshMutation.isPending) {
+            refreshMutation.mutate();
+        }
+    };
+
     if (statusQuery.isLoading) {
         return renderStateSection(
             <p className="text-sm text-slate-500">Loading Support Board chat...</p>,
         );
     }
 
-    if (statusQuery.error) {
+    if (statusQuery.error || statusUnavailable) {
         return renderStateSection(
             <EmptyStateCard
                 tone="error"
                 title="Support Board is temporarily unavailable"
                 description={statusErrorMessage}
-                actionLabel="Try again"
-                onAction={() => statusQuery.refetch()}
+                actionLabel={refreshMutation.isPending ? 'Retrying...' : 'Try again'}
+                actionDisabled={refreshMutation.isPending}
+                onAction={retrySupportBoard}
             />,
         );
     }
@@ -587,8 +602,11 @@ export default function SupportBoardChat({ clientId, client }) {
                                     tone="error"
                                     title="Conversation list unavailable"
                                     description={conversationsErrorMessage}
-                                    actionLabel="Retry"
-                                    onAction={() => conversationsQuery.refetch()}
+                                    actionLabel={isSupportBoardUnavailableError(conversationsQuery.error) && refreshMutation.isPending ? 'Refreshing...' : 'Retry'}
+                                    actionDisabled={isSupportBoardUnavailableError(conversationsQuery.error) && refreshMutation.isPending}
+                                    onAction={isSupportBoardUnavailableError(conversationsQuery.error)
+                                        ? retrySupportBoard
+                                        : () => conversationsQuery.refetch()}
                                 />
                             ) : !conversations.length ? (
                                 <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-5 text-sm text-slate-500">
@@ -681,8 +699,11 @@ export default function SupportBoardChat({ clientId, client }) {
                                     tone="error"
                                     title="Conversation workspace unavailable"
                                     description={conversationsErrorMessage}
-                                    actionLabel="Retry"
-                                    onAction={() => conversationsQuery.refetch()}
+                                    actionLabel={isSupportBoardUnavailableError(conversationsQuery.error) && refreshMutation.isPending ? 'Refreshing...' : 'Retry'}
+                                    actionDisabled={isSupportBoardUnavailableError(conversationsQuery.error) && refreshMutation.isPending}
+                                    onAction={isSupportBoardUnavailableError(conversationsQuery.error)
+                                        ? retrySupportBoard
+                                        : () => conversationsQuery.refetch()}
                                 />
                             ) : !selectedConversationId ? (
                                 <EmptyStateCard
@@ -698,8 +719,11 @@ export default function SupportBoardChat({ clientId, client }) {
                                     tone="error"
                                     title="Conversation unavailable"
                                     description={conversationErrorMessage}
-                                    actionLabel="Retry conversation"
-                                    onAction={() => conversationQuery.refetch()}
+                                    actionLabel={isSupportBoardUnavailableError(conversationQuery.error) && refreshMutation.isPending ? 'Refreshing...' : 'Retry conversation'}
+                                    actionDisabled={isSupportBoardUnavailableError(conversationQuery.error) && refreshMutation.isPending}
+                                    onAction={isSupportBoardUnavailableError(conversationQuery.error)
+                                        ? retrySupportBoard
+                                        : () => conversationQuery.refetch()}
                                 />
                             ) : !conversationQuery.data ? (
                                 <EmptyStateCard
@@ -819,8 +843,11 @@ export default function SupportBoardChat({ clientId, client }) {
                                         tone="error"
                                         title="Profile details unavailable"
                                         description={profileErrorMessage}
-                                        actionLabel="Retry profile"
-                                        onAction={() => profileQuery.refetch()}
+                                        actionLabel={isSupportBoardUnavailableError(profileQuery.error) && refreshMutation.isPending ? 'Refreshing...' : 'Retry profile'}
+                                        actionDisabled={isSupportBoardUnavailableError(profileQuery.error) && refreshMutation.isPending}
+                                        onAction={isSupportBoardUnavailableError(profileQuery.error)
+                                            ? retrySupportBoard
+                                            : () => profileQuery.refetch()}
                                     />
                                 ) : !profileDetails?.sb_user ? (
                                     <EmptyStateCard

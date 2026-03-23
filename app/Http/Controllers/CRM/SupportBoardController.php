@@ -29,12 +29,13 @@ class SupportBoardController extends Controller
         $this->authorizeClientAccess($request, $client);
 
         $client->loadMissing('platform');
+        $service = new SupportBoardService($client->platform);
 
         if ($request->boolean('refresh')) {
             SupportBoardService::clearResolveCache($client);
+            $service->clearFailureCache();
         }
 
-        $service = new SupportBoardService($client->platform);
         if (!$service->isConfigured()) {
             return response()->json([
                 'configured' => false,
@@ -77,12 +78,13 @@ class SupportBoardController extends Controller
         $this->authorizeClientAccess($request, $client);
 
         $client->loadMissing('platform');
+        $service = new SupportBoardService($client->platform);
 
         if ($request->boolean('refresh')) {
             SupportBoardService::clearResolveCache($client);
+            $service->clearFailureCache();
         }
 
-        $service = new SupportBoardService($client->platform);
         if (!$service->isConfigured()) {
             return response()->json([
                 'message' => 'Support Board is not configured for this market.',
@@ -110,12 +112,13 @@ class SupportBoardController extends Controller
         $this->authorizeClientAccess($request, $client);
 
         $client->loadMissing('platform');
+        $service = new SupportBoardService($client->platform);
 
         if ($request->boolean('refresh')) {
             SupportBoardService::clearResolveCache($client);
+            $service->clearFailureCache();
         }
 
-        $service = new SupportBoardService($client->platform);
         if (!$service->isConfigured()) {
             return response()->json([
                 'configured' => false,
@@ -452,6 +455,8 @@ class SupportBoardController extends Controller
         return response()->json([
             'message' => "Couldn't reach Support Board.",
             'details' => $exception->getMessage(),
+            'support_board_unavailable' => true,
+            'retryable' => true,
         ], 503);
     }
 }

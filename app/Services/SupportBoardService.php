@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Models\User;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -13,6 +15,14 @@ use RuntimeException;
 
 class SupportBoardService
 {
+    private const REQUEST_TIMEOUT_SECONDS = 20;
+
+    private const REQUEST_ATTEMPTS = 2;
+
+    private const REQUEST_RETRY_DELAY_MICROSECONDS = 1_000_000;
+
+    private const FAILURE_CACHE_MINUTES = 5;
+
     private string $apiUrl;
 
     private ?string $token;
@@ -36,9 +46,19 @@ class SupportBoardService
         return "sb_resolve:{$platformId}:{$clientId}";
     }
 
+    public static function failureCacheKey(int $platformId): string
+    {
+        return "sb_failure:{$platformId}";
+    }
+
     public static function clearResolveCache(Client $client): void
     {
         Cache::forget(self::resolveCacheKey((int) $client->platform_id, (int) $client->id));
+    }
+
+    public function clearFailureCache(): void
+    {
+        Cache::forget(self::failureCacheKey((int) $this->platform->id));
     }
 
     public function isConfigured(): bool
@@ -335,15 +355,14 @@ class SupportBoardService
             throw new RuntimeException('Support Board is not configured for this market.');
         }
 
+        $this->throwIfFailureCached();
+
         $requestPayload = array_merge([
             'token' => $this->token,
             'function' => $function,
         ], $this->normalizeRequestPayload($payload));
 
-        $response = Http::asForm()
-            ->acceptJson()
-            ->timeout(20)
-            ->post($this->apiUrl, $requestPayload);
+        $response = $this->performRequest($function, $requestPayload);
 
         if ($response->failed()) {
             Log::error('SupportBoardService request failed', [
@@ -353,13 +372,36 @@ class SupportBoardService
                 'body' => $response->body(),
             ]);
 
+            $this->cacheFailure(
+                $function,
+                sprintf('Support Board returned HTTP %d.', $response->status()),
+                $response->status(),
+                $response->body(),
+            );
+
             $response->throw();
         }
 
-        $body = $response->json();
+        $body = json_decode(ltrim($response->body(), "\xEF\xBB\xBF"), true);
         if (!is_array($body) || !array_key_exists('success', $body)) {
+            Log::error('SupportBoardService invalid response format', [
+                'api_url' => $this->apiUrl,
+                'function' => $function,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            $this->cacheFailure(
+                $function,
+                'Support Board returned an invalid response.',
+                $response->status(),
+                $response->body(),
+            );
+
             throw new RuntimeException('Support Board returned an invalid response.');
         }
+
+        $this->clearFailureCache();
 
         if (!($body['success'] ?? false)) {
             $error = $body['response'] ?? 'Unknown Support Board error.';
@@ -371,6 +413,75 @@ class SupportBoardService
         }
 
         return $body['response'] ?? null;
+    }
+
+    private function performRequest(string $function, array $requestPayload): Response
+    {
+        for ($attempt = 1; $attempt <= self::REQUEST_ATTEMPTS; $attempt++) {
+            try {
+                return Http::asForm()
+                    ->acceptJson()
+                    ->timeout(self::REQUEST_TIMEOUT_SECONDS)
+                    ->post($this->apiUrl, $requestPayload);
+            } catch (ConnectionException $exception) {
+                if ($attempt < self::REQUEST_ATTEMPTS && $this->shouldRetryConnectionException($exception)) {
+                    usleep(self::REQUEST_RETRY_DELAY_MICROSECONDS);
+                    continue;
+                }
+
+                Log::error('SupportBoardService connection failed', [
+                    'api_url' => $this->apiUrl,
+                    'function' => $function,
+                    'attempt' => $attempt,
+                    'message' => $exception->getMessage(),
+                ]);
+
+                $this->cacheFailure($function, $exception->getMessage());
+
+                throw $exception;
+            }
+        }
+
+        throw new RuntimeException('Support Board request failed.');
+    }
+
+    private function shouldRetryConnectionException(ConnectionException $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+
+        return str_contains($message, 'curl error 28')
+            || str_contains($message, 'timed out');
+    }
+
+    private function throwIfFailureCached(): void
+    {
+        $cachedFailure = Cache::get(self::failureCacheKey((int) $this->platform->id));
+        if (!is_array($cachedFailure)) {
+            return;
+        }
+
+        $message = trim((string) ($cachedFailure['message'] ?? ''));
+
+        throw new RuntimeException($message !== '' ? $message : 'Support Board is temporarily unavailable.');
+    }
+
+    private function cacheFailure(
+        string $function,
+        string $message,
+        ?int $status = null,
+        ?string $body = null,
+    ): void {
+        Cache::put(
+            self::failureCacheKey((int) $this->platform->id),
+            [
+                'function' => $function,
+                'message' => $message,
+                'status' => $status,
+                'body' => $body,
+                'recorded_at' => now()->toIso8601String(),
+            ],
+            now()->addMinutes(self::FAILURE_CACHE_MINUTES)
+        );
     }
 
     private function normalizeRequestPayload(array $payload): array
