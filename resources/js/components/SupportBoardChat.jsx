@@ -315,10 +315,22 @@ export default function SupportBoardChat({ clientId, client }) {
 
     const statusQuery = useQuery({
         queryKey: ['client-support-board-status', resolvedClientId],
-        queryFn: () => api.get(`/crm/clients/${resolvedClientId}/support-board/status`).then((response) => response.data),
+        queryFn: () => api.get(`/crm/clients/${resolvedClientId}/support-board/status`, {
+            params: { include_conversations: 1 },
+        }).then((response) => response.data),
         enabled: numericClientId > 0,
         staleTime: 60_000,
     });
+
+    // Seed conversations cache from bundled status response to eliminate waterfall
+    useEffect(() => {
+        if (statusQuery.data?.conversations) {
+            queryClient.setQueryData(
+                ['client-support-board-conversations', resolvedClientId],
+                statusQuery.data.conversations,
+            );
+        }
+    }, [statusQuery.data, resolvedClientId, queryClient]);
 
     const statusDetails = statusQuery.data || null;
     const statusUnavailable = Boolean(statusDetails?.support_board_unavailable)

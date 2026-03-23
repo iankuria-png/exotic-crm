@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Platform;
 use App\Models\User;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -99,18 +100,27 @@ class SupportBoardService
             self::resolveCacheKey((int) $client->platform_id, (int) $client->id),
             now()->addHour(),
             function () use ($client): array {
+                // Fast path: client already linked — skip phone/email lookup
+                if ($client->sb_user_id) {
+                    $sbUser = $this->getUser((int) $client->sb_user_id);
+                    if ($sbUser) {
+                        return [
+                            'matched' => true,
+                            'sb_user' => $sbUser,
+                            'matched_by' => $client->sb_matched_by ?? 'phone',
+                            'tried' => [],
+                        ];
+                    }
+                    // SB user no longer exists — fall through to full resolution
+                }
+
                 $phoneVariants = $this->phoneVariants((string) ($client->phone_normalized ?: ''));
                 $email = strtolower(trim((string) ($client->email ?: '')));
 
                 $matchedBy = null;
-                $sbUser = null;
-
-                foreach ($phoneVariants as $phoneVariant) {
-                    $sbUser = $this->findUserBy('phone', $phoneVariant);
-                    if ($sbUser) {
-                        $matchedBy = 'phone';
-                        break;
-                    }
+                $sbUser = $this->findUserByPhoneParallel($phoneVariants);
+                if ($sbUser) {
+                    $matchedBy = 'phone';
                 }
 
                 if (!$sbUser && $email !== '') {
@@ -145,15 +155,26 @@ class SupportBoardService
             return [];
         }
 
-        $response = $this->request('get-user-conversations', [
-            'user_id' => $sbUserId,
-        ]);
+        return Cache::remember(
+            "sb_conversations:{$this->platform->id}:{$sbUserId}",
+            now()->addMinutes(2),
+            function () use ($sbUserId): array {
+                $response = $this->request('get-user-conversations', [
+                    'user_id' => $sbUserId,
+                ]);
 
-        return collect(is_array($response) ? $response : [])
-            ->map(fn ($conversation) => $this->normalizeConversationSummary($conversation))
-            ->filter(fn (array $conversation) => (int) $conversation['status_code'] !== 4)
-            ->values()
-            ->all();
+                return collect(is_array($response) ? $response : [])
+                    ->map(fn ($conversation) => $this->normalizeConversationSummary($conversation))
+                    ->filter(fn (array $conversation) => (int) $conversation['status_code'] !== 4)
+                    ->values()
+                    ->all();
+            }
+        );
+    }
+
+    public function clearConversationsCache(int $sbUserId): void
+    {
+        Cache::forget("sb_conversations:{$this->platform->id}:{$sbUserId}");
     }
 
     /**
@@ -347,6 +368,55 @@ class SupportBoardService
         }
 
         return $this->normalizeUser($response);
+    }
+
+    private function findUserByPhoneParallel(array $variants): ?array
+    {
+        $variants = array_values(array_filter($variants, fn ($v) => trim($v) !== ''));
+        if (empty($variants)) {
+            return null;
+        }
+
+        if (count($variants) === 1) {
+            return $this->findUserBy('phone', $variants[0]);
+        }
+
+        $apiUrl = $this->apiUrl;
+        $token = $this->token;
+        $timeout = self::REQUEST_TIMEOUT_SECONDS;
+
+        $responses = Http::pool(fn (Pool $pool) => collect($variants)->map(
+            fn (string $variant, int $index) => $pool->as("v{$index}")
+                ->asForm()
+                ->acceptJson()
+                ->timeout($timeout)
+                ->post($apiUrl, [
+                    'token' => $token,
+                    'function' => 'get-user-by',
+                    'by' => 'phone',
+                    'value' => $variant,
+                ])
+        )->all());
+
+        // Check responses in variant priority order
+        foreach ($variants as $index => $variant) {
+            $response = $responses["v{$index}"] ?? null;
+            if (!$response || $response instanceof \Throwable || $response->failed()) {
+                continue;
+            }
+
+            $body = json_decode(ltrim($response->body(), "\xEF\xBB\xBF"), true);
+            if (!is_array($body) || !($body['success'] ?? false) || empty($body['response'])) {
+                continue;
+            }
+
+            $user = $body['response'];
+            if (is_array($user) && !empty($user['id'])) {
+                return $this->normalizeUser($user);
+            }
+        }
+
+        return null;
     }
 
     private function request(string $function, array $payload = []): mixed

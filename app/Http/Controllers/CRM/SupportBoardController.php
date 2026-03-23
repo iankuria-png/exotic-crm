@@ -53,7 +53,7 @@ class SupportBoardController extends Controller
         try {
             $resolved = $service->resolveClient($client);
 
-            return response()->json([
+            $payload = [
                 'configured' => true,
                 'matched' => (bool) ($resolved['matched'] ?? false),
                 'can_reply' => $service->canReply($request->user()),
@@ -63,7 +63,13 @@ class SupportBoardController extends Controller
                     'phone' => [],
                     'email' => null,
                 ],
-            ]);
+            ];
+
+            if ($request->boolean('include_conversations') && ($resolved['matched'] ?? false) && !empty($resolved['sb_user']['id'])) {
+                $payload['conversations'] = $service->getConversations((int) $resolved['sb_user']['id']);
+            }
+
+            return response()->json($payload);
         } catch (Throwable $exception) {
             if ($exception instanceof HttpExceptionInterface) {
                 throw $exception;
@@ -418,6 +424,8 @@ class SupportBoardController extends Controller
                 ],
                 'Support Board chat reply sent from CRM'
             );
+
+            $service->clearConversationsCache($sbUserId);
 
             $note->load('author');
 
