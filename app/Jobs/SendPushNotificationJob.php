@@ -101,8 +101,13 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             $scheduleAt = $item->scheduled_at->toIso8601String();
         }
 
+        $title = $item->profile_name ?: 'New profile';
+        if ($item->profile_city) {
+            $title = "{$item->profile_name} from {$item->profile_city}";
+        }
+
         $notification = [
-            'title' => $item->profile_name ?: 'New profile',
+            'title' => $title,
             'message' => $item->custom_message,
             'target_url' => $item->profile_url,
             'icon_url' => $item->profile_image_url,

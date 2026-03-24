@@ -707,12 +707,17 @@ class ProfileExtractionService
             ?? ($profile['birthday'] ?? null)
             ?? null;
 
+        $city = $profile['city']
+            ?? ($meta['city'] ?? null)
+            ?? null;
+
         return [
             'name' => $name ? trim((string) $name) : null,
             'phone' => $phone ? trim((string) $phone) : null,
             'image' => $image ? trim((string) $image) : null,
             'age_value' => $age ? trim((string) $age) : null,
             'birthday' => $birthday ? trim((string) $birthday) : null,
+            'city' => $city ? trim((string) $city) : null,
         ];
     }
 
@@ -739,6 +744,7 @@ class ProfileExtractionService
             'client_id' => null,
             'wp_post_id' => $wpPostId > 0 ? $wpPostId : null,
             'profile_name' => $fields['name'],
+            'profile_city' => $fields['city'] ?? null,
             'profile_phone' => $fields['phone'],
             'profile_image_url' => $fields['image'],
             'profile_age' => $profileAge,
@@ -759,6 +765,7 @@ class ProfileExtractionService
             'wp_post_id' => $clientWpPostId > 0 ? $clientWpPostId : null,
             'profile_url' => $profileUrl,
             'profile_name' => $client->name,
+            'profile_city' => $client->city ?: null,
             'profile_phone' => $client->phone_normalized,
             'profile_image_url' => $client->main_image_url,
             'status' => 'pending',
@@ -785,6 +792,9 @@ class ProfileExtractionService
         }
         if (!empty($fields['image'])) {
             $updates['profile_image_url'] = $fields['image'];
+        }
+        if (!empty($fields['city']) && empty($updates['profile_city'])) {
+            $updates['profile_city'] = $fields['city'];
         }
         if (!empty($fields['age_value'])) {
             $updates['profile_age'] = $fields['age_value'];

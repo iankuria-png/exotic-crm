@@ -15,6 +15,7 @@ class PushCampaignItem extends Model
         'profile_url',
         'wp_post_id',
         'profile_name',
+        'profile_city',
         'profile_phone',
         'profile_image_url',
         'profile_age',

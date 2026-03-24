@@ -701,7 +701,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                         )}
                                         <div className="min-w-0 flex-1">
                                             <p className="truncate text-sm font-semibold text-slate-900">
-                                                {previewItem?.profile_name || 'Escort Profile'}
+                                                {previewItem?.profile_city ? `${previewItem.profile_name} from ${previewItem.profile_city}` : (previewItem?.profile_name || 'Escort Profile')}
                                             </p>
                                             <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
                                                 <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-slate-700">{previewItem?.profile_phone || 'phone n/a'}</span>
@@ -770,7 +770,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                 >
                                                     <td className="whitespace-nowrap px-2 py-1">{formatDateTime(item.scheduled_at, item.date_label || '--')}</td>
                                                     <td className="px-2 py-1">
-                                                        <p className="font-medium text-slate-700">{item.profile_name || 'Unknown'}</p>
+                                                        <p className="font-medium text-slate-700">{item.profile_name || 'Unknown'}{item.profile_city ? ` — ${item.profile_city}` : ''}</p>
                                                         <p className="max-w-[250px] truncate text-slate-500">{item.profile_url}</p>
                                                         <p className="text-[11px] text-slate-500">{item.profile_phone || 'phone n/a'} • age {item.profile_age || 'n/a'}</p>
                                                         {timingMeta ? (
