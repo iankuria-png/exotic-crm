@@ -596,7 +596,7 @@ export default function SystemHealthWorkspace({
                                 >
                                     {copiedQueueCron ? 'Copied' : 'Copy cron command'}
                                 </button>
-                                <p className="mt-2 text-xs text-slate-500">Add this to cPanel cron jobs. The worker starts every minute, processes all queued jobs, then exits.</p>
+                                <p className="mt-2 text-xs text-slate-500">Queue worker runs automatically via the Laravel scheduler — no separate cron job needed. Fallback: add this command to cPanel cron jobs if the scheduler cron is not set up.</p>
                             </div>
                         ) : null}
                     </div>

@@ -117,6 +117,15 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(30)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
+
+        // Queue worker: process all pending jobs every minute then exit.
+        // Piggybacks on the existing schedule:run cron — no separate cron entry needed.
+        $schedule->command('queue:work database --stop-when-empty --max-time=55 --tries=3')
+            ->name('queue_worker')
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/queue_worker.log'));
     }
 
     /**
