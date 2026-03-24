@@ -437,8 +437,8 @@ export default function UploadModal({ open, onClose, onCreated, onQueueChanged, 
     const isSubmittingUpload = uploadMutation.isPending || pasteUploadMutation.isPending;
 
     return (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4">
-            <div className="w-full max-w-5xl rounded-xl bg-white shadow-xl">
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 p-4" onClick={onClose}>
+            <div className="w-full max-w-5xl rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
                 <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                     <div>
                         <h3 className="text-lg font-semibold text-slate-900">Upload Push Workbook</h3>

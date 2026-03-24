@@ -96,13 +96,18 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             }
         }
 
+        $scheduleAt = null;
+        if ($item->scheduled_at && $item->scheduled_at->greaterThan(now()->addMinutes(5))) {
+            $scheduleAt = $item->scheduled_at->toIso8601String();
+        }
+
         $notification = [
             'title' => $item->profile_name ?: 'New profile',
             'message' => $item->custom_message,
             'target_url' => $item->profile_url,
             'icon_url' => $item->profile_image_url,
             'campaign_name' => $campaign->name,
-            'schedule_at' => $item->scheduled_at?->toIso8601String(),
+            'schedule_at' => $scheduleAt,
         ];
 
         $result = $pushProviderService->sendPush($notification, [

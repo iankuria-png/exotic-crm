@@ -392,7 +392,6 @@ class SettingsController extends Controller
             'target_url' => (string) $validated['target_url'],
             'icon_url' => $validated['icon_url'] ?? null,
             'campaign_name' => 'CRM Push Provider Test',
-            'schedule_at' => now()->toIso8601String(),
         ], [
             'platform_id' => $platformId,
         ]);

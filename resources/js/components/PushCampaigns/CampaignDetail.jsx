@@ -328,7 +328,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     });
 
     const executeMutation = useMutation({
-        mutationFn: () => api.post(`/crm/push-campaigns/${campaignId}/execute`, {}).then((response) => response.data),
+        mutationFn: (payload) => api.post(`/crm/push-campaigns/${campaignId}/execute`, payload || {}).then((response) => response.data),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
             queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
@@ -1280,14 +1280,25 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                             >
                                 Close
                             </button>
-                            <button
-                                type="button"
-                                onClick={() => executeMutation.mutate()}
-                                disabled={executeMutation.isPending || !executeReadiness?.can_activate}
-                                className="crm-btn-primary px-3 py-1.5 text-xs disabled:opacity-60"
-                            >
-                                {executeMutation.isPending ? 'Executing...' : 'Confirm execute'}
-                            </button>
+                            {!executeReadiness?.can_activate && (executeReadiness?.counts?.overdue || 0) > 0 ? (
+                                <button
+                                    type="button"
+                                    onClick={() => executeMutation.mutate({ reschedule_overdue: true })}
+                                    disabled={executeMutation.isPending}
+                                    className="crm-btn-primary px-3 py-1.5 text-xs disabled:opacity-60"
+                                >
+                                    {executeMutation.isPending ? 'Rescheduling...' : 'Reschedule overdue & execute'}
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => executeMutation.mutate()}
+                                    disabled={executeMutation.isPending || !executeReadiness?.can_activate}
+                                    className="crm-btn-primary px-3 py-1.5 text-xs disabled:opacity-60"
+                                >
+                                    {executeMutation.isPending ? 'Executing...' : 'Confirm execute'}
+                                </button>
+                            )}
                         </footer>
                     </div>
                 </div>

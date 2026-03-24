@@ -1390,6 +1390,19 @@ class PushCampaignController extends Controller
         }
 
         $pushCampaign->loadMissing('platform:id,timezone');
+
+        if ($request->boolean('reschedule_overdue')) {
+            $graceThreshold = now()->utc()->subMinutes(
+                PushCampaignDispatchReadinessService::LATE_GRACE_MINUTES
+            );
+            PushCampaignItem::query()
+                ->where('campaign_id', (int) $pushCampaign->id)
+                ->where('status', 'pending')
+                ->whereNotNull('scheduled_at')
+                ->where('scheduled_at', '<', $graceThreshold->toDateTimeString())
+                ->update(['scheduled_at' => now()->utc()->toDateTimeString()]);
+        }
+
         $readiness = $this->pushCampaignDispatchReadinessService->analyzeActivation(
             $pushCampaign,
             now()->utc(),
