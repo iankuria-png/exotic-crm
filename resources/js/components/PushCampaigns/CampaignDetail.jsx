@@ -602,12 +602,71 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                         </article>
                     </section>
 
-                    {analytics ? (
-                        <section className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-                            <p className="font-semibold text-slate-900">Analytics</p>
-                            <p className="mt-1">sent: {analytics.total_sent || 0} • delivered: {analytics.delivered || 0} • clicked: {analytics.clicked || 0} • failed: {analytics.failed || 0}</p>
-                        </section>
-                    ) : null}
+                    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                            <p className="text-sm font-semibold text-slate-900">Analytics</p>
+                            <button
+                                type="button"
+                                onClick={() => refreshAnalyticsMutation.mutate()}
+                                disabled={refreshAnalyticsMutation.isPending}
+                                className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {refreshAnalyticsMutation.isPending ? 'Refreshing...' : 'Refresh analytics'}
+                            </button>
+                        </div>
+                        {analytics && (analytics.total_sent > 0 || analytics.delivered > 0) ? (
+                            <div className="space-y-4 p-4">
+                                <div className="grid gap-3 sm:grid-cols-5">
+                                    {[
+                                        { label: 'Sent', value: analytics.total_sent || 0, color: 'text-slate-900' },
+                                        { label: 'Delivered', value: analytics.delivered || 0, color: 'text-slate-900' },
+                                        { label: 'Clicked', value: analytics.clicked || 0, color: 'text-slate-900' },
+                                        { label: 'Failed', value: analytics.failed || 0, color: (analytics.failed || 0) > 0 ? 'text-rose-700' : 'text-slate-900' },
+                                        { label: 'CTR', value: analytics.ctr != null ? `${analytics.ctr}%` : 'n/a', color: analytics.ctr > 0 ? 'text-emerald-700' : 'text-slate-400' },
+                                    ].map((stat) => (
+                                        <div key={stat.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{stat.label}</p>
+                                            <p className={`mt-1 text-lg font-semibold ${stat.color}`}>{typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}</p>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {(analytics.total_sent || 0) > 0 ? (() => {
+                                    const sent = analytics.total_sent || 0;
+                                    const bars = [
+                                        { label: 'Sent', value: sent, color: 'bg-slate-700' },
+                                        { label: 'Delivered', value: analytics.delivered || 0, color: 'bg-emerald-500' },
+                                        { label: 'Clicked', value: analytics.clicked || 0, color: 'bg-blue-500' },
+                                        { label: 'Closed', value: analytics.closed || 0, color: 'bg-amber-500' },
+                                    ];
+                                    return (
+                                        <div className="rounded-md border border-slate-200 bg-white p-3">
+                                            <p className="mb-3 text-xs font-semibold text-slate-700">Delivery Funnel</p>
+                                            <div className="space-y-2">
+                                                {bars.map((bar) => {
+                                                    const pct = sent > 0 ? Math.max(((bar.value / sent) * 100), bar.value > 0 ? 1 : 0) : 0;
+                                                    const pctLabel = sent > 0 ? ((bar.value / sent) * 100).toFixed(1) : '0.0';
+                                                    return (
+                                                        <div key={bar.label} className="flex items-center gap-3 text-xs">
+                                                            <span className="w-16 shrink-0 text-right font-medium text-slate-600">{bar.label}</span>
+                                                            <div className="h-5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                                                                <div className={`h-full rounded-full ${bar.color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                                                            </div>
+                                                            <span className="w-28 shrink-0 text-right tabular-nums text-slate-600">{bar.value.toLocaleString()} ({pctLabel}%)</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    );
+                                })() : null}
+                            </div>
+                        ) : (
+                            <div className="px-4 py-6 text-center text-xs text-slate-500">
+                                No analytics available yet. Execute the campaign and refresh analytics to see delivery metrics.
+                            </div>
+                        )}
+                    </section>
 
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
                         <div className="flex flex-wrap items-end gap-2">
@@ -638,15 +697,6 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                     {scheduleMutation.isPending ? 'Scheduling...' : 'Schedule'}
                                 </button>
                             </div>
-
-                            <button
-                                type="button"
-                                onClick={() => refreshAnalyticsMutation.mutate()}
-                                disabled={refreshAnalyticsMutation.isPending}
-                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                {refreshAnalyticsMutation.isPending ? 'Refreshing...' : 'Refresh analytics'}
-                            </button>
 
                             <button
                                 type="button"
@@ -773,6 +823,13 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                         <p className="font-medium text-slate-700">{item.profile_name || 'Unknown'}{item.profile_city ? ` — ${item.profile_city}` : ''}</p>
                                                         <p className="max-w-[250px] truncate text-slate-500">{item.profile_url}</p>
                                                         <p className="text-[11px] text-slate-500">{item.profile_phone || 'phone n/a'} • age {item.profile_age || 'n/a'}</p>
+                                                        {item.delivery_stats && (item.delivery_stats.total_sent > 0 || item.delivery_stats.delivered > 0) ? (
+                                                            <p className="text-[10px] text-emerald-700">
+                                                                {item.delivery_stats.delivered != null ? `${item.delivery_stats.delivered} delivered` : ''}
+                                                                {item.delivery_stats.clicked > 0 ? ` · ${item.delivery_stats.clicked} clicked` : ''}
+                                                                {item.delivery_stats.closed > 0 ? ` · ${item.delivery_stats.closed} closed` : ''}
+                                                            </p>
+                                                        ) : null}
                                                         {timingMeta ? (
                                                             <span className={`mr-1 inline-flex max-w-[250px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase ${timingMeta.className}`}>
                                                                 {timingMeta.label}

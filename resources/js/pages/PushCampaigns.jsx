@@ -65,6 +65,8 @@ export default function PushCampaigns() {
     const [activeCampaignId, setActiveCampaignId] = useState(null);
     const [queuePage, setQueuePage] = useState(1);
     const [queuePerPage, setQueuePerPage] = useState(10);
+    const [syncDiagnostics, setSyncDiagnostics] = useState([]);
+    const [syncingPlatformId, setSyncingPlatformId] = useState(null);
 
     useEffect(() => {
         const handle = window.setTimeout(() => {
@@ -120,6 +122,7 @@ export default function PushCampaigns() {
         mutationFn: () => api.post('/crm/push-campaigns/subscribers/sync', {}).then((response) => response.data),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['push-campaigns-subscribers'] });
+            setSyncDiagnostics(response?.diagnostics || []);
             const synced = Number(response?.synced || 0);
             if (synced > 0) {
                 toast.success(response?.message || `Subscriber sync complete (${synced} market${synced === 1 ? '' : 's'}).`);
@@ -135,6 +138,28 @@ export default function PushCampaigns() {
             }
 
             toast.error(error?.response?.data?.message || 'Failed to sync subscriber metrics.');
+        },
+    });
+
+    const syncSingleMarketMutation = useMutation({
+        mutationFn: (platformId) => api.post('/crm/push-campaigns/subscribers/sync', { platform_id: platformId }).then((r) => r.data),
+        onSuccess: (response, platformId) => {
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-subscribers'] });
+            setSyncingPlatformId(null);
+            if (response?.diagnostics?.length > 0) {
+                setSyncDiagnostics((prev) => {
+                    const filtered = prev.filter((d) => d.platform_id !== platformId);
+                    return [...filtered, ...response.diagnostics];
+                });
+                toast.warning(response?.message || 'Sync failed for this market.');
+            } else {
+                setSyncDiagnostics((prev) => prev.filter((d) => d.platform_id !== platformId));
+                toast.success(response?.message || 'Market synced.');
+            }
+        },
+        onError: (error) => {
+            setSyncingPlatformId(null);
+            toast.error(error?.response?.data?.message || 'Failed to sync market.');
         },
     });
 
@@ -475,25 +500,56 @@ export default function PushCampaigns() {
                                 <th className="px-2 py-2 font-medium">Market</th>
                                 <th className="px-2 py-2 font-medium">Domain</th>
                                 <th className="px-2 py-2 font-medium">Provider</th>
+                                <th className="px-2 py-2 font-medium">Status</th>
                                 <th className="px-2 py-2 font-medium">Active</th>
                                 <th className="px-2 py-2 font-medium">Total</th>
                                 <th className="px-2 py-2 font-medium">Last Sync</th>
+                                <th className="px-2 py-2 font-medium"></th>
                             </tr>
                         </thead>
                         <tbody>
-                            {subscriberRows.map((row) => (
-                                <tr key={row.platform_id} className="border-b border-slate-100">
-                                    <td className="px-2 py-2 font-medium text-slate-700">{row.platform_name}</td>
-                                    <td className="px-2 py-2 text-slate-600">{row.domain || '—'}</td>
-                                    <td className="px-2 py-2 text-slate-600">{row.provider || 'n/a'}</td>
-                                    <td className="px-2 py-2 text-slate-600">{row.active_subscribers ?? '—'}</td>
-                                    <td className="px-2 py-2 text-slate-600">{row.total_subscribers ?? '—'}</td>
-                                    <td className="px-2 py-2 text-slate-600">{row.last_synced_at || '—'}</td>
-                                </tr>
-                            ))}
+                            {subscriberRows.map((row) => {
+                                const diag = syncDiagnostics.find((d) => d.platform_id === row.platform_id);
+                                const hasSyncData = row.total_subscribers != null && row.total_subscribers > 0;
+                                const isSyncing = syncingPlatformId === row.platform_id;
+
+                                return (
+                                    <tr key={row.platform_id} className="border-b border-slate-100">
+                                        <td className="px-2 py-2 font-medium text-slate-700">{row.platform_name}</td>
+                                        <td className="px-2 py-2 text-slate-600">{row.domain || '—'}</td>
+                                        <td className="px-2 py-2 text-slate-600">{row.provider || 'n/a'}</td>
+                                        <td className="px-2 py-2">
+                                            {hasSyncData ? (
+                                                <span className="inline-flex items-center rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">synced</span>
+                                            ) : diag?.error ? (
+                                                <span className="inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20" title={diag.error}>{diag.error}</span>
+                                            ) : (
+                                                <span className="inline-flex items-center rounded-md bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-inset ring-slate-500/10">not configured</span>
+                                            )}
+                                        </td>
+                                        <td className="px-2 py-2 text-slate-600">{row.active_subscribers ?? '—'}</td>
+                                        <td className="px-2 py-2 text-slate-600">{row.total_subscribers ?? '—'}</td>
+                                        <td className="px-2 py-2 text-slate-600">{row.last_synced_at || '—'}</td>
+                                        <td className="px-2 py-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setSyncingPlatformId(row.platform_id);
+                                                    syncSingleMarketMutation.mutate(row.platform_id);
+                                                }}
+                                                disabled={isSyncing || syncSubscribersMutation.isPending}
+                                                className="crm-btn-secondary px-2 py-1 text-[11px] disabled:cursor-not-allowed disabled:opacity-60"
+                                                title="Sync this market"
+                                            >
+                                                {isSyncing ? '...' : '\u21BB'}
+                                            </button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                             {!subscribersQuery.isLoading && subscriberRows.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} className="px-2 py-4 text-center text-slate-500">No subscriber rows available.</td>
+                                    <td colSpan={8} className="px-2 py-4 text-center text-slate-500">No subscriber rows available.</td>
                                 </tr>
                             ) : null}
                         </tbody>

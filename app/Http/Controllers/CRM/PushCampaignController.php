@@ -2477,6 +2477,10 @@ class PushCampaignController extends Controller
             }
         }
 
+        $totals['ctr'] = $totals['delivered'] > 0
+            ? round(($totals['clicked'] / $totals['delivered']) * 100, 1)
+            : null;
+
         return $totals;
     }
 
