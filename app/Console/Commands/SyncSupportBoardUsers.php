@@ -60,7 +60,7 @@ class SyncSupportBoardUsers extends Command
             $progressBar = $this->output->createProgressBar($clientCount);
             $progressBar->start();
 
-            $result = $linkSyncService->syncPlatform(
+            $result = $linkSyncService->syncPlatformBulk(
                 $platform,
                 $refresh,
                 function () use ($progressBar): void {

@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Platform;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
@@ -111,7 +112,71 @@ class SupportBoardLinkSyncService
             ];
         }
 
-        usleep(100000);
+        return $result;
+    }
+
+    /**
+     * Bulk sync all clients for a platform using a single SB API call.
+     * Falls back to per-client syncPlatform() if the bulk fetch fails.
+     */
+    public function syncPlatformBulk(Platform $platform, bool $refresh = false, ?callable $onProcessed = null): array
+    {
+        $supportBoard = new SupportBoardService($platform);
+
+        if (!$supportBoard->isConfigured()) {
+            throw new RuntimeException('Support Board is not configured for this market.');
+        }
+
+        $result = [
+            'platform_id' => (int) $platform->id,
+            'platform_name' => $platform->name ?: $platform->domain ?: "Platform {$platform->id}",
+            'refresh' => $refresh,
+            'ran_at' => now()->toDateTimeString(),
+            'candidates' => 0,
+            'processed' => 0,
+            'matched' => 0,
+            'updated' => 0,
+            'cleared' => 0,
+            'unchanged' => 0,
+            'errors' => 0,
+            'errors_detail' => [],
+        ];
+
+        $clients = $this->platformClientQuery($platform, $refresh)->get();
+        $result['candidates'] = $clients->count();
+
+        if ($clients->isEmpty()) {
+            return $result;
+        }
+
+        try {
+            $bulkResults = $supportBoard->bulkResolveClients($clients);
+        } catch (Throwable $e) {
+            Log::warning('Bulk SB sync failed, falling back to per-client.', [
+                'platform_id' => $platform->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->syncPlatform($platform, $refresh, $onProcessed);
+        }
+
+        foreach ($bulkResults as $clientId => $resolved) {
+            $result['processed']++;
+
+            if ($resolved['matched']) {
+                if ($resolved['changed']) {
+                    $result['matched']++;
+                } else {
+                    $result['unchanged']++;
+                }
+            } else {
+                $result['unchanged']++;
+            }
+
+            if ($onProcessed) {
+                $onProcessed();
+            }
+        }
 
         return $result;
     }

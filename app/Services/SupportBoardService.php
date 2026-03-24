@@ -591,7 +591,103 @@ class SupportBoardService
         return array_values(array_unique(array_filter($variants)));
     }
 
-    private function syncClientLink(Client $client, ?int $sbUserId, ?string $matchedBy): void
+    /**
+     * Fetch all SB users' phone and email values in a single API call.
+     *
+     * @return array{phone?: list<array{id: int, value: string}>, email?: list<array{id: int, value: string}>}
+     */
+    public function fetchAllUsersWithDetails(): array
+    {
+        $response = $this->request('get-users-with-details', [
+            'details' => ['phone', 'email'],
+        ]);
+
+        return is_array($response) ? $response : [];
+    }
+
+    /**
+     * Bulk resolve SB user links for a collection of clients.
+     * Makes 1 API call to fetch all SB users, then matches locally.
+     *
+     * @param  \Illuminate\Support\Collection<int, Client>  $clients
+     * @return array<int, array{matched: bool, sb_user_id: ?int, matched_by: ?string, changed: bool}>
+     */
+    public function bulkResolveClients(Collection $clients): array
+    {
+        $rawDetails = $this->fetchAllUsersWithDetails();
+
+        // Build phone→userId lookup (normalized: digits only)
+        $phoneMap = [];
+        foreach ($rawDetails['phone'] ?? [] as $entry) {
+            $digits = preg_replace('/\D+/', '', (string) ($entry['value'] ?? ''));
+            if ($digits !== '' && !empty($entry['id'])) {
+                $phoneMap[$digits] = (int) $entry['id'];
+            }
+        }
+
+        // Build email→userId lookup (lowercased)
+        $emailMap = [];
+        foreach ($rawDetails['email'] ?? [] as $entry) {
+            $email = strtolower(trim((string) ($entry['value'] ?? '')));
+            if ($email !== '' && !empty($entry['id'])) {
+                $emailMap[$email] = (int) $entry['id'];
+            }
+        }
+
+        $results = [];
+
+        foreach ($clients as $client) {
+            $clientId = (int) $client->id;
+
+            // Fast path: already linked
+            if ($client->sb_user_id) {
+                $results[$clientId] = [
+                    'matched' => true,
+                    'sb_user_id' => (int) $client->sb_user_id,
+                    'matched_by' => $client->sb_matched_by ?? 'phone',
+                    'changed' => false,
+                ];
+                continue;
+            }
+
+            // Try phone variants against the map
+            $phoneVariants = $this->phoneVariants((string) ($client->phone_normalized ?: ''));
+            $matchedUserId = null;
+            $matchedBy = null;
+
+            foreach ($phoneVariants as $variant) {
+                $digits = preg_replace('/\D+/', '', $variant);
+                if (isset($phoneMap[$digits])) {
+                    $matchedUserId = $phoneMap[$digits];
+                    $matchedBy = 'phone';
+                    break;
+                }
+            }
+
+            // Fallback: try email
+            if (!$matchedUserId) {
+                $email = strtolower(trim((string) ($client->email ?: '')));
+                if ($email !== '' && isset($emailMap[$email])) {
+                    $matchedUserId = $emailMap[$email];
+                    $matchedBy = 'email';
+                }
+            }
+
+            // Persist the link (same path as resolveClient)
+            $this->syncClientLink($client, $matchedUserId, $matchedBy);
+
+            $results[$clientId] = [
+                'matched' => $matchedUserId !== null,
+                'sb_user_id' => $matchedUserId,
+                'matched_by' => $matchedBy,
+                'changed' => true,
+            ];
+        }
+
+        return $results;
+    }
+
+    protected function syncClientLink(Client $client, ?int $sbUserId, ?string $matchedBy): void
     {
         $currentSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
         $currentMatchedBy = $client->sb_matched_by ?: null;
