@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
+import { proxyImageUrl } from '../../utils/imageProxy';
 
 function prettyStatus(status) {
     return (status || 'unknown').replaceAll('_', ' ');
@@ -843,7 +844,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                         {previewItem?.profile_image_url ? (
                                             <div className="relative h-11 w-11 shrink-0">
                                                 <img
-                                                    src={previewItem.profile_image_url}
+                                                    src={proxyImageUrl(previewItem.profile_image_url)}
                                                     alt={previewItem.profile_name || 'Profile'}
                                                     className="h-11 w-11 rounded-full object-cover"
                                                     onError={(e) => { e.target.style.display = 'none'; if (e.target.nextSibling) e.target.nextSibling.style.display = 'flex'; }}
@@ -1074,7 +1075,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                 <div className="flex items-center gap-3">
                                     {selectedMediaUrl ? (
                                         <img
-                                            src={selectedMediaUrl}
+                                            src={proxyImageUrl(selectedMediaUrl)}
                                             alt={editForm.profile_name || 'Profile'}
                                             className="h-16 w-16 rounded-md object-cover"
                                         />
@@ -1113,7 +1114,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
 
                                             return (
                                                 <div key={media.id} className={`rounded-md border p-2 ${isSelected ? 'border-teal-300 bg-teal-50/50' : 'border-slate-200 bg-white'}`}>
-                                                    <img src={media.url} alt={media.filename || 'Media'} className="h-24 w-full rounded object-cover" />
+                                                    <img src={proxyImageUrl(media.url)} alt={media.filename || 'Media'} className="h-24 w-full rounded object-cover" />
                                                     <p className="mt-1 truncate text-[11px] text-slate-600">{media.filename || `media #${media.id}`}</p>
                                                     <div className="mt-1 flex flex-wrap items-center gap-1">
                                                         {media.is_main ? (
@@ -1304,7 +1305,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                 <td className="px-2 py-2">
                                                     <div className="flex items-center gap-2">
                                                         {candidate.main_image_url ? (
-                                                            <img src={candidate.main_image_url} alt={candidate.name || 'Profile'} className="h-8 w-8 rounded-full object-cover" />
+                                                            <img src={proxyImageUrl(candidate.main_image_url)} alt={candidate.name || 'Profile'} className="h-8 w-8 rounded-full object-cover" />
                                                         ) : (
                                                             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-[11px] font-semibold text-slate-700">
                                                                 {(candidate.name || 'E').charAt(0).toUpperCase()}

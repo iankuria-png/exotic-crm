@@ -22,6 +22,7 @@ use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
+use App\Http\Controllers\CRM\ImageProxyController;
 use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
@@ -40,6 +41,9 @@ Route::get('/ping', function () {
 Route::post('/crm/login', [CrmAuthController::class, 'login']);
 Route::get('/billing/health', [BillingController::class, 'health']);
 Route::get('/payments/link/{token}', [PaymentLinkProxyController::class, 'handle']);
+
+// Image proxy — public but rate-limited; domain allowlist enforced server-side
+Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:120,1');
 
 Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
     Route::get('/status', [SetupController::class, 'status']);
