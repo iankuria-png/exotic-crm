@@ -281,6 +281,39 @@ export default function SystemHealthWorkspace({
         },
     });
 
+    const flushFailedMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/system-health/queue-flush-failed').then((r) => r.data),
+        onSuccess: (data) => {
+            queueStatusQuery.refetch();
+            toast.success(data?.message || 'Failed jobs flushed.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Unable to flush failed jobs.');
+        },
+    });
+
+    const clearPendingMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/system-health/queue-clear-pending', payload || {}).then((r) => r.data),
+        onSuccess: (data) => {
+            queueStatusQuery.refetch();
+            toast.success(data?.message || 'Pending jobs cleared.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Unable to clear pending jobs.');
+        },
+    });
+
+    const clearAllMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/system-health/queue-clear-all').then((r) => r.data),
+        onSuccess: (data) => {
+            queueStatusQuery.refetch();
+            toast.success(data?.message || 'All jobs cleared.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Unable to clear all jobs.');
+        },
+    });
+
     const [copiedQueueCron, setCopiedQueueCron] = useState(false);
 
     const handleBackupUpload = async (e) => {
@@ -542,7 +575,24 @@ export default function SystemHealthWorkspace({
                                     {Object.entries(queueStatusQuery.data.job_breakdown).map(([jobClass, count]) => (
                                         <div key={jobClass} className="flex items-center justify-between text-sm">
                                             <span className="font-mono text-xs text-slate-700">{jobClass.split('\\').pop()}</span>
-                                            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">{count}</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">{count}</span>
+                                                {canDeployUpdates ? (
+                                                    <button
+                                                        type="button"
+                                                        title={`Clear all pending ${jobClass.split('\\').pop()} jobs`}
+                                                        onClick={() => {
+                                                            if (window.confirm(`Clear ${count} pending ${jobClass.split('\\').pop()} job(s)?`)) {
+                                                                clearPendingMutation.mutate({ job_class: jobClass });
+                                                            }
+                                                        }}
+                                                        disabled={clearPendingMutation.isPending}
+                                                        className="rounded px-1.5 py-0.5 text-[10px] font-medium text-rose-600 hover:bg-rose-100 disabled:opacity-40"
+                                                    >
+                                                        Clear
+                                                    </button>
+                                                ) : null}
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -562,15 +612,46 @@ export default function SystemHealthWorkspace({
                                     </div>
                                 ) : null}
                                 {canDeployUpdates ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => retryFailedMutation.mutate()}
-                                        disabled={retryFailedMutation.isPending}
-                                        className="mt-3 crm-btn-primary px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        {retryFailedMutation.isPending ? 'Retrying...' : `Retry all failed (${queueStatusQuery.data.failed})`}
-                                    </button>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => retryFailedMutation.mutate()}
+                                            disabled={retryFailedMutation.isPending}
+                                            className="crm-btn-primary px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {retryFailedMutation.isPending ? 'Retrying...' : `Retry all failed (${queueStatusQuery.data.failed})`}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (window.confirm(`Permanently delete ${queueStatusQuery.data.failed} failed job(s)? This cannot be undone.`)) {
+                                                    flushFailedMutation.mutate();
+                                                }
+                                            }}
+                                            disabled={flushFailedMutation.isPending}
+                                            className="crm-btn-danger px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {flushFailedMutation.isPending ? 'Flushing...' : `Flush failed (${queueStatusQuery.data.failed})`}
+                                        </button>
+                                    </div>
                                 ) : null}
+                            </div>
+                        ) : null}
+
+                        {canDeployUpdates && ((queueStatusQuery.data?.pending || 0) > 0 || (queueStatusQuery.data?.failed || 0) > 0) ? (
+                            <div className="flex justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (window.confirm('Clear ALL pending and failed jobs? This will stop all queued work and cannot be undone.')) {
+                                            clearAllMutation.mutate();
+                                        }
+                                    }}
+                                    disabled={clearAllMutation.isPending}
+                                    className="rounded border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {clearAllMutation.isPending ? 'Clearing...' : 'Clear all jobs'}
+                                </button>
                             </div>
                         ) : null}
 

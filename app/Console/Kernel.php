@@ -139,7 +139,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('queue:work database --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3')
             ->name('queue_worker')
             ->everyMinute()
-            ->withoutOverlapping()
+            ->withoutOverlapping(2)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/queue_worker.log'));
     }

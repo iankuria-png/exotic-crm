@@ -841,11 +841,17 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Exotic Push</p>
                                     <div className="mt-2 flex items-start gap-3">
                                         {previewItem?.profile_image_url ? (
-                                            <img
-                                                src={previewItem.profile_image_url}
-                                                alt={previewItem.profile_name || 'Profile'}
-                                                className="h-11 w-11 rounded-full object-cover"
-                                            />
+                                            <div className="relative h-11 w-11 shrink-0">
+                                                <img
+                                                    src={previewItem.profile_image_url}
+                                                    alt={previewItem.profile_name || 'Profile'}
+                                                    className="h-11 w-11 rounded-full object-cover"
+                                                    onError={(e) => { e.target.style.display = 'none'; if (e.target.nextSibling) e.target.nextSibling.style.display = 'flex'; }}
+                                                />
+                                                <div className="hidden h-11 w-11 items-center justify-center rounded-full bg-teal-100 text-sm font-semibold text-teal-700">
+                                                    {(previewItem?.profile_name || 'E').charAt(0).toUpperCase()}
+                                                </div>
+                                            </div>
                                         ) : (
                                             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-700">
                                                 {(previewItem?.profile_name || 'E').charAt(0).toUpperCase()}

@@ -202,4 +202,56 @@ class SystemHealthUpdateController extends Controller
             'message' => sprintf('Retried %d failed job(s).', $failedCount),
         ]);
     }
+
+    public function flushFailedJobs(): JsonResponse
+    {
+        $count = DB::table('failed_jobs')->count();
+        DB::table('failed_jobs')->truncate();
+
+        return response()->json([
+            'flushed' => $count,
+            'message' => $count > 0
+                ? sprintf('Flushed %d failed job(s).', $count)
+                : 'No failed jobs to flush.',
+        ]);
+    }
+
+    public function clearPendingJobs(Request $request): JsonResponse
+    {
+        $jobClass = $request->input('job_class');
+
+        $query = DB::table('jobs')->whereNull('reserved_at');
+
+        if ($jobClass) {
+            $query->where(
+                DB::raw("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.displayName'))"),
+                $jobClass
+            );
+        }
+
+        $count = $query->count();
+        $query->delete();
+
+        return response()->json([
+            'cleared' => $count,
+            'message' => $count > 0
+                ? sprintf('Cleared %d pending job(s).%s', $count, $jobClass ? " ({$jobClass})" : '')
+                : 'No matching pending jobs to clear.',
+        ]);
+    }
+
+    public function clearAllJobs(): JsonResponse
+    {
+        $pendingCount = DB::table('jobs')->count();
+        $failedCount = DB::table('failed_jobs')->count();
+
+        DB::table('jobs')->truncate();
+        DB::table('failed_jobs')->truncate();
+
+        return response()->json([
+            'cleared_pending' => $pendingCount,
+            'cleared_failed' => $failedCount,
+            'message' => sprintf('Cleared %d pending and %d failed job(s).', $pendingCount, $failedCount),
+        ]);
+    }
 }
