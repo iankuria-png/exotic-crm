@@ -5,13 +5,13 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class AgentGoal extends Model
+class AgentGoalOverride extends Model
 {
     use HasFactory;
 
     protected $fillable = [
+        'user_id',
         'platform_id',
-        'role_scope',
         'metric',
         'target',
         'period',
@@ -19,9 +19,15 @@ class AgentGoal extends Model
     ];
 
     protected $casts = [
+        'user_id' => 'integer',
         'platform_id' => 'integer',
         'target' => 'integer',
     ];
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
 
     public function platform()
     {

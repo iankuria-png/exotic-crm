@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\AgentGoal;
+use App\Models\AgentGoalOverride;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\InteractsWithTeamActivityFixtures;
@@ -13,7 +14,7 @@ class TeamGoalsTest extends TestCase
     use InteractsWithTeamActivityFixtures;
     use RefreshDatabase;
 
-    public function test_admin_can_upsert_and_delete_a_goal(): void
+    public function test_admin_can_upsert_and_delete_a_sales_default_goal(): void
     {
         $admin = $this->createTeamUser('admin');
         $platform = $this->createTeamPlatform();
@@ -25,9 +26,11 @@ class TeamGoalsTest extends TestCase
             'target' => 10,
             'period' => 'weekly',
             'platform_id' => $platform->id,
+            'role_scope' => 'sales',
         ])->assertCreated()
             ->assertJsonPath('goal.metric', 'subs_activated')
-            ->assertJsonPath('goal.target', 10);
+            ->assertJsonPath('goal.target', 10)
+            ->assertJsonPath('goal.role_scope', 'sales');
 
         $this->assertDatabaseCount('agent_goals', 1);
 
@@ -36,6 +39,7 @@ class TeamGoalsTest extends TestCase
             'target' => 12,
             'period' => 'weekly',
             'platform_id' => $platform->id,
+            'role_scope' => 'sales',
         ])->assertCreated()
             ->assertJsonPath('goal.target', 12);
 
@@ -48,7 +52,45 @@ class TeamGoalsTest extends TestCase
         $this->assertDatabaseCount('agent_goals', 0);
     }
 
-    public function test_goals_endpoint_returns_per_agent_progress_rows(): void
+    public function test_admin_can_upsert_and_delete_an_individual_goal_override(): void
+    {
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform();
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'override-agent@example.test']);
+
+        Sanctum::actingAs($admin);
+
+        $this->postJson('/api/crm/team/goals/overrides', [
+            'user_id' => $agent->id,
+            'metric' => 'subs_activated',
+            'target' => 5,
+            'period' => 'weekly',
+            'platform_id' => $platform->id,
+        ])->assertCreated()
+            ->assertJsonPath('goal_override.user_id', $agent->id)
+            ->assertJsonPath('goal_override.target', 5);
+
+        $this->assertDatabaseCount('agent_goal_overrides', 1);
+
+        $this->postJson('/api/crm/team/goals/overrides', [
+            'user_id' => $agent->id,
+            'metric' => 'subs_activated',
+            'target' => 9,
+            'period' => 'weekly',
+            'platform_id' => $platform->id,
+        ])->assertCreated()
+            ->assertJsonPath('goal_override.target', 9);
+
+        $this->assertDatabaseCount('agent_goal_overrides', 1);
+
+        $goalOverride = AgentGoalOverride::query()->firstOrFail();
+        $this->assertSame(9, (int) $goalOverride->target);
+
+        $this->deleteJson('/api/crm/team/goals/overrides/' . $goalOverride->id)->assertNoContent();
+        $this->assertDatabaseCount('agent_goal_overrides', 0);
+    }
+
+    public function test_sales_scoped_default_goals_exclude_marketing_progress_rows(): void
     {
         $admin = $this->createTeamUser('admin');
         $platform = $this->createTeamPlatform();
@@ -60,6 +102,7 @@ class TeamGoalsTest extends TestCase
             'metric' => 'subs_activated',
             'target' => 10,
             'period' => 'weekly',
+            'role_scope' => 'sales',
             'set_by' => $admin->id,
         ]);
 
@@ -73,13 +116,74 @@ class TeamGoalsTest extends TestCase
         $response = $this->getJson('/api/crm/team/goals?period=weekly&platform_id=' . $platform->id);
 
         $response->assertOk()
-            ->assertJsonPath('data.0.id', $goal->id)
-            ->assertJsonPath('data.0.metric', 'subs_activated')
-            ->assertJsonPath('data.0.progress.0.current', 7)
-            ->assertJsonPath('data.0.progress.0.percentage', 70)
-            ->assertJsonPath('data.0.progress.1.current', 0);
+            ->assertJsonPath('defaults.0.id', $goal->id)
+            ->assertJsonPath('defaults.0.metric', 'subs_activated')
+            ->assertJsonPath('defaults.0.role_scope', 'sales')
+            ->assertJsonPath('defaults.0.progress.0.current', 7)
+            ->assertJsonPath('defaults.0.progress.0.percentage', 70);
 
-        $progressNames = collect($response->json('data.0.progress'))->pluck('name')->all();
-        $this->assertSame([$agentA->name, $agentB->name], $progressNames);
+        $progressNames = collect($response->json('defaults.0.progress'))->pluck('name')->all();
+        $this->assertSame([$agentA->name], $progressNames);
+    }
+
+    public function test_my_stats_prefers_individual_goal_override_over_market_default(): void
+    {
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform();
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'agent-self@example.test']);
+
+        AgentGoal::query()->create([
+            'platform_id' => $platform->id,
+            'metric' => 'subs_activated',
+            'target' => 10,
+            'period' => 'weekly',
+            'role_scope' => 'sales',
+            'set_by' => $admin->id,
+        ]);
+
+        AgentGoalOverride::query()->create([
+            'user_id' => $agent->id,
+            'platform_id' => $platform->id,
+            'metric' => 'subs_activated',
+            'target' => 15,
+            'period' => 'weekly',
+            'set_by' => $admin->id,
+        ]);
+
+        $this->createTeamDailyStat($agent, $platform, now()->startOfWeek(), [
+            'subs_activated' => 3,
+            'total_actions' => 3,
+        ]);
+
+        Sanctum::actingAs($agent);
+
+        $response = $this->getJson('/api/crm/team/me?period=week&platform_id=' . $platform->id);
+
+        $response->assertOk();
+
+        $goal = collect($response->json('goals'))
+            ->firstWhere('metric', 'subs_activated');
+
+        $this->assertNotNull($goal);
+        $this->assertSame('override', $goal['source_type']);
+        $this->assertSame(15, $goal['target']);
+        $this->assertSame(3, $goal['current']);
+    }
+
+    public function test_manager_cannot_assign_sales_only_metric_to_marketing_user(): void
+    {
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform();
+        $marketingUser = $this->createTeamUser('marketing', [$platform->id], ['email' => 'marketing-goal@example.test']);
+
+        Sanctum::actingAs($admin);
+
+        $this->postJson('/api/crm/team/goals/overrides', [
+            'user_id' => $marketingUser->id,
+            'metric' => 'subs_activated',
+            'target' => 4,
+            'period' => 'weekly',
+            'platform_id' => $platform->id,
+        ])->assertStatus(422);
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
 use App\Models\AgentGoal;
+use App\Models\AgentGoalOverride;
 use App\Models\User;
 use App\Services\TeamActivityService;
 use Illuminate\Http\Request;
@@ -136,6 +137,7 @@ class TeamController extends Controller
             'target' => 'required|integer|min:1',
             'period' => 'required|in:weekly,monthly',
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'role_scope' => 'nullable|in:sales,marketing,all',
         ]);
 
         $goal = $this->teamActivityService->setGoal(
@@ -143,6 +145,7 @@ class TeamController extends Controller
             (int) $validated['target'],
             (string) $validated['period'],
             isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
+            (string) ($validated['role_scope'] ?? 'sales'),
             $request->user()
         );
 
@@ -153,6 +156,7 @@ class TeamController extends Controller
                 'target' => (int) $goal->target,
                 'period' => $goal->period,
                 'platform_id' => $goal->platform_id ? (int) $goal->platform_id : null,
+                'role_scope' => $goal->role_scope,
             ],
         ], 201);
     }
@@ -160,6 +164,44 @@ class TeamController extends Controller
     public function deleteGoal(Request $request, AgentGoal $goal)
     {
         $this->teamActivityService->deleteGoal($goal, $request->user());
+
+        return response()->noContent();
+    }
+
+    public function setGoalOverride(Request $request)
+    {
+        $validated = $request->validate([
+            'user_id' => 'required|integer|exists:users,id',
+            'metric' => 'required|string|max:50',
+            'target' => 'required|integer|min:1',
+            'period' => 'required|in:weekly,monthly',
+            'platform_id' => 'required|integer|exists:platforms,id',
+        ]);
+
+        $goalOverride = $this->teamActivityService->setGoalOverride(
+            (int) $validated['user_id'],
+            (string) $validated['metric'],
+            (int) $validated['target'],
+            (string) $validated['period'],
+            (int) $validated['platform_id'],
+            $request->user()
+        );
+
+        return response()->json([
+            'goal_override' => [
+                'id' => (int) $goalOverride->id,
+                'user_id' => (int) $goalOverride->user_id,
+                'metric' => $goalOverride->metric,
+                'target' => (int) $goalOverride->target,
+                'period' => $goalOverride->period,
+                'platform_id' => (int) $goalOverride->platform_id,
+            ],
+        ], 201);
+    }
+
+    public function deleteGoalOverride(Request $request, AgentGoalOverride $goalOverride)
+    {
+        $this->teamActivityService->deleteGoalOverride($goalOverride, $request->user());
 
         return response()->noContent();
     }

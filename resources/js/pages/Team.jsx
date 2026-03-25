@@ -15,6 +15,7 @@ import { getCountryFlag, platformOptionsWithFlags } from '../utils/flags';
 const TEAM_PERIOD_STORAGE_KEY = 'exoticcrm.team.period';
 const DEFAULT_PERIOD = 'week';
 const DEFAULT_GOAL_PERIOD = 'weekly';
+const DEFAULT_GOAL_ROLE_SCOPE = 'sales';
 const PERIOD_OPTIONS = [
     { value: 'today', label: 'Today' },
     { value: 'week', label: 'This Week' },
@@ -23,6 +24,11 @@ const PERIOD_OPTIONS = [
 const GOAL_PERIOD_OPTIONS = [
     { value: 'weekly', label: 'Weekly' },
     { value: 'monthly', label: 'Monthly' },
+];
+const GOAL_ROLE_SCOPE_OPTIONS = [
+    { value: 'sales', label: 'Sales only' },
+    { value: 'marketing', label: 'Marketing only' },
+    { value: 'all', label: 'Everyone' },
 ];
 
 function asNumber(value) {
@@ -36,6 +42,10 @@ function normalizePeriod(value) {
 
 function normalizeGoalPeriod(value) {
     return GOAL_PERIOD_OPTIONS.some((option) => option.value === value) ? value : DEFAULT_GOAL_PERIOD;
+}
+
+function normalizeGoalRoleScope(value) {
+    return GOAL_ROLE_SCOPE_OPTIONS.some((option) => option.value === value) ? value : DEFAULT_GOAL_ROLE_SCOPE;
 }
 
 function normalizePlatformFilter(value) {
@@ -233,7 +243,7 @@ function percentage(current, target) {
 }
 
 function averageGoalCompletion(goals) {
-    const progressRows = (goals || []).flatMap((goal) => goal.progress || []);
+    const progressRows = goalProgressRows(goals);
     if (progressRows.length === 0) {
         return null;
     }
@@ -243,13 +253,35 @@ function averageGoalCompletion(goals) {
 }
 
 function goalCoverage(goals) {
-    const progressRows = (goals || []).flatMap((goal) => goal.progress || []);
+    const progressRows = goalProgressRows(goals);
     if (progressRows.length === 0) {
         return 'No goals set';
     }
 
     const completed = progressRows.filter((row) => asNumber(row.current) >= asNumber(row.target)).length;
     return `${completed}/${progressRows.length} targets met`;
+}
+
+function goalProgressRows(goals) {
+    return (goals || []).flatMap((goal) => {
+        if (Array.isArray(goal.progress)) {
+            return goal.progress;
+        }
+
+        return goal.progress ? [goal.progress] : [];
+    });
+}
+
+function goalSourceLabel(sourceType) {
+    if (sourceType === 'override') {
+        return 'Manager override';
+    }
+
+    return 'Team default';
+}
+
+function roleScopeLabel(goal) {
+    return goal?.role_scope_label || '';
 }
 
 function getApiErrorMessage(error, fallback) {
@@ -463,10 +495,15 @@ export default function Team() {
     const [platformFilter, setPlatformFilter] = useState('');
     const [activeTab, setActiveTab] = useState(() => (isManager ? 'presence' : 'my-stats'));
     const [goalPeriod, setGoalPeriod] = useState(DEFAULT_GOAL_PERIOD);
+    const [goalRoleScope, setGoalRoleScope] = useState(DEFAULT_GOAL_ROLE_SCOPE);
     const [goalMetric, setGoalMetric] = useState('subs_activated');
     const [goalTarget, setGoalTarget] = useState('');
+    const [goalOverrideAssigneeId, setGoalOverrideAssigneeId] = useState('');
+    const [goalOverrideMetric, setGoalOverrideMetric] = useState('subs_activated');
+    const [goalOverrideTarget, setGoalOverrideTarget] = useState('');
     const [selectedAgent, setSelectedAgent] = useState(null);
     const [goalToDelete, setGoalToDelete] = useState(null);
+    const [goalOverrideToDelete, setGoalOverrideToDelete] = useState(null);
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -564,6 +601,63 @@ export default function Team() {
         refetchOnWindowFocus: false,
     });
 
+    const availableGoalMetrics = goalsQuery.data?.available_metrics || [];
+    const availableRoleScopes = goalsQuery.data?.role_scopes || GOAL_ROLE_SCOPE_OPTIONS;
+    const assignableAgents = goalsQuery.data?.assignable_agents || [];
+    const defaultGoals = goalsQuery.data?.defaults || goalsQuery.data?.data || [];
+    const individualGoals = goalsQuery.data?.overrides || [];
+
+    const defaultGoalMetricOptions = useMemo(
+        () => availableGoalMetrics.filter((metric) => (metric.allowed_role_scopes || []).includes(goalRoleScope)),
+        [availableGoalMetrics, goalRoleScope],
+    );
+
+    const selectedOverrideAssignee = useMemo(
+        () => assignableAgents.find((agent) => String(agent.user_id) === String(goalOverrideAssigneeId)) || null,
+        [assignableAgents, goalOverrideAssigneeId],
+    );
+
+    const individualGoalMetricOptions = useMemo(() => {
+        if (!selectedOverrideAssignee) {
+            return availableGoalMetrics.filter((metric) => (metric.allowed_role_scopes || []).includes('sales'));
+        }
+
+        return availableGoalMetrics.filter((metric) => {
+            const scopes = metric.allowed_role_scopes || [];
+            return scopes.includes(selectedOverrideAssignee.role) || scopes.includes('all');
+        });
+    }, [availableGoalMetrics, selectedOverrideAssignee]);
+
+    useEffect(() => {
+        if (!defaultGoalMetricOptions.length) {
+            return;
+        }
+
+        const isValid = defaultGoalMetricOptions.some((metric) => metric.value === goalMetric);
+        if (!isValid) {
+            setGoalMetric(defaultGoalMetricOptions[0].value);
+        }
+    }, [defaultGoalMetricOptions, goalMetric]);
+
+    useEffect(() => {
+        if (!individualGoalMetricOptions.length) {
+            return;
+        }
+
+        const isValid = individualGoalMetricOptions.some((metric) => metric.value === goalOverrideMetric);
+        if (!isValid) {
+            setGoalOverrideMetric(individualGoalMetricOptions[0].value);
+        }
+    }, [goalOverrideMetric, individualGoalMetricOptions]);
+
+    useEffect(() => {
+        if (goalOverrideAssigneeId || !assignableAgents.length) {
+            return;
+        }
+
+        setGoalOverrideAssigneeId(String(assignableAgents[0].user_id));
+    }, [assignableAgents, goalOverrideAssigneeId]);
+
     const agentDateRange = useMemo(() => getPeriodDateRange(period), [period]);
 
     const agentStatsQuery = useQuery({
@@ -599,7 +693,7 @@ export default function Team() {
     const createGoalMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/team/goals', payload).then((response) => response.data),
         onSuccess: () => {
-            toast.success('Goal saved successfully.');
+            toast.success('Default goal saved successfully.');
             setGoalTarget('');
             queryClient.invalidateQueries({ queryKey: ['team', 'goals'] });
             queryClient.invalidateQueries({ queryKey: ['team', 'me'] });
@@ -610,10 +704,24 @@ export default function Team() {
         },
     });
 
+    const createGoalOverrideMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/team/goals/overrides', payload).then((response) => response.data),
+        onSuccess: () => {
+            toast.success('Individual goal saved successfully.');
+            setGoalOverrideTarget('');
+            queryClient.invalidateQueries({ queryKey: ['team', 'goals'] });
+            queryClient.invalidateQueries({ queryKey: ['team', 'me'] });
+            queryClient.invalidateQueries({ queryKey: ['team', 'agent-detail'] });
+        },
+        onError: (error) => {
+            toast.error(getApiErrorMessage(error, 'We could not save that individual goal.'));
+        },
+    });
+
     const deleteGoalMutation = useMutation({
         mutationFn: (goalId) => api.delete(`/crm/team/goals/${goalId}`),
         onSuccess: () => {
-            toast.success('Goal removed.');
+            toast.success('Default goal removed.');
             setGoalToDelete(null);
             queryClient.invalidateQueries({ queryKey: ['team', 'goals'] });
             queryClient.invalidateQueries({ queryKey: ['team', 'me'] });
@@ -621,6 +729,20 @@ export default function Team() {
         },
         onError: (error) => {
             toast.error(getApiErrorMessage(error, 'We could not delete that goal.'));
+        },
+    });
+
+    const deleteGoalOverrideMutation = useMutation({
+        mutationFn: (goalId) => api.delete(`/crm/team/goals/overrides/${goalId}`),
+        onSuccess: () => {
+            toast.success('Individual goal removed.');
+            setGoalOverrideToDelete(null);
+            queryClient.invalidateQueries({ queryKey: ['team', 'goals'] });
+            queryClient.invalidateQueries({ queryKey: ['team', 'me'] });
+            queryClient.invalidateQueries({ queryKey: ['team', 'agent-detail'] });
+        },
+        onError: (error) => {
+            toast.error(getApiErrorMessage(error, 'We could not delete that individual goal.'));
         },
     });
 
@@ -642,7 +764,6 @@ export default function Team() {
 
     const presenceRows = presenceQuery.data?.data || [];
     const leaderboardRows = leaderboardQuery.data?.data || [];
-    const goals = goalsQuery.data?.data || [];
     const mySummary = myStatsQuery.data?.summary || {};
     const myTrend = myStatsQuery.data?.trend || {};
     const myGoals = myStatsQuery.data?.goals || [];
@@ -651,6 +772,7 @@ export default function Team() {
     const agentTrend = agentStatsQuery.data?.trend || {};
     const agentGoals = agentStatsQuery.data?.goals || [];
     const agentActivity = agentActivityQuery.data?.data || [];
+    const managerGoals = useMemo(() => [...defaultGoals, ...individualGoals], [defaultGoals, individualGoals]);
 
     const topLevelManagerMetrics = useMemo(() => [
         {
@@ -673,11 +795,11 @@ export default function Team() {
         },
         {
             label: 'Goal Completion',
-            value: averageGoalCompletion(goals) === null ? '--' : `${averageGoalCompletion(goals)}%`,
-            meta: goalCoverage(goals),
+            value: averageGoalCompletion(managerGoals) === null ? '--' : `${averageGoalCompletion(managerGoals)}%`,
+            meta: goalCoverage(managerGoals),
             tone: 'slate',
         },
-    ], [goals, presenceQuery.data]);
+    ], [managerGoals, presenceQuery.data]);
 
     const myMetricCards = useMemo(() => [
         {
@@ -925,6 +1047,33 @@ export default function Team() {
             target,
             period: goalPeriod,
             platform_id: platformFilter ? Number(platformFilter) : null,
+            role_scope: goalRoleScope,
+        });
+    };
+
+    const handleCreateGoalOverride = () => {
+        const target = Number(goalOverrideTarget);
+        if (!goalOverrideAssigneeId) {
+            toast.warning('Select a team member for the individual goal.');
+            return;
+        }
+
+        if (!platformFilter) {
+            toast.warning('Choose a market before assigning an individual goal.');
+            return;
+        }
+
+        if (!goalOverrideMetric || !Number.isFinite(target) || target < 1) {
+            toast.warning('Set a metric and a target greater than zero.');
+            return;
+        }
+
+        createGoalOverrideMutation.mutate({
+            user_id: Number(goalOverrideAssigneeId),
+            metric: goalOverrideMetric,
+            target,
+            period: goalPeriod,
+            platform_id: Number(platformFilter),
         });
     };
 
@@ -1199,6 +1348,16 @@ export default function Team() {
                                                             {goalPeriodLabel(goal.period)} goal
                                                             {goal.platform_name ? ` • ${goal.platform_name}` : ' • All markets'}
                                                         </p>
+                                                        <div className="mt-2 flex flex-wrap gap-2">
+                                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                                                                {goalSourceLabel(goal.source_type)}
+                                                            </span>
+                                                            {roleScopeLabel(goal) ? (
+                                                                <span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-medium text-teal-700">
+                                                                    {roleScopeLabel(goal)}
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
                                                     </div>
                                                     <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
                                                         {formatCount(goal.current)}/{formatCount(goal.target)} ({goal.percentage}%)
@@ -1254,8 +1413,8 @@ export default function Team() {
             {activeTab === 'goals' ? (
                 <>
                     <SectionFrame
-                        title="Create goal"
-                        subtitle={`Scope: ${selectedPlatformLabel}`}
+                        title="Create default goal"
+                        subtitle={`Defaults apply to ${selectedPlatformLabel}. Role scope keeps each target aligned to the right team.`}
                         action={
                             <FilterSelect
                                 label="Goal period"
@@ -1266,12 +1425,18 @@ export default function Team() {
                             />
                         }
                     >
-                        <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(0,0.9fr)_auto]">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_auto]">
+                            <FilterSelect
+                                label="Role scope"
+                                value={goalRoleScope}
+                                onChange={(event) => setGoalRoleScope(normalizeGoalRoleScope(event.target.value))}
+                                options={availableRoleScopes}
+                            />
                             <FilterSelect
                                 label="Metric"
                                 value={goalMetric}
                                 onChange={(event) => setGoalMetric(event.target.value)}
-                                options={(goalsQuery.data?.available_metrics || []).map((metric) => ({
+                                options={defaultGoalMetricOptions.map((metric) => ({
                                     value: metric.value,
                                     label: metric.label,
                                 }))}
@@ -1293,18 +1458,91 @@ export default function Team() {
                                 <button
                                     type="button"
                                     onClick={handleCreateGoal}
-                                    disabled={createGoalMutation.isPending}
+                                    disabled={createGoalMutation.isPending || !defaultGoalMetricOptions.length}
                                     className="crm-btn-primary w-full px-4 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
                                 >
                                     {createGoalMutation.isPending ? 'Saving...' : 'Save goal'}
                                 </button>
                             </div>
                         </div>
+                        {!defaultGoalMetricOptions.length ? (
+                            <p className="mt-3 text-sm text-slate-500">
+                                No goal metrics are available for this role scope yet.
+                            </p>
+                        ) : null}
                     </SectionFrame>
 
                     <SectionFrame
-                        title={`${goalPeriodLabel(goalPeriod)} goals`}
-                        subtitle={`Progress for ${selectedPlatformLabel}.`}
+                        title="Assign individual goal"
+                        subtitle={platformFilter
+                            ? `Overrides apply only to the selected market, ${selectedPlatformLabel}, and replace the matching default for that teammate.`
+                            : 'Choose a market first. Individual goals are market-specific overrides.'}
+                    >
+                        {!platformFilter ? (
+                            <TeamEmptyState
+                                title="Choose a market to assign individual goals"
+                                message="Individual goals are tied to a specific market so the right target follows the right revenue and activity."
+                            />
+                        ) : assignableAgents.length === 0 ? (
+                            <TeamEmptyState
+                                title="No visible team members in this market"
+                                message="Once sales or marketing teammates are assigned to this market, you can create individual overrides here."
+                            />
+                        ) : (
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
+                                <FilterSelect
+                                    label="Assignee"
+                                    value={goalOverrideAssigneeId}
+                                    onChange={(event) => setGoalOverrideAssigneeId(event.target.value)}
+                                    options={assignableAgents.map((agent) => ({
+                                        value: String(agent.user_id),
+                                        label: `${agent.name} • ${formatRole(agent.role)}`,
+                                    }))}
+                                />
+                                <FilterSelect
+                                    label="Metric"
+                                    value={goalOverrideMetric}
+                                    onChange={(event) => setGoalOverrideMetric(event.target.value)}
+                                    options={individualGoalMetricOptions.map((metric) => ({
+                                        value: metric.value,
+                                        label: metric.label,
+                                    }))}
+                                />
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                                        Target
+                                    </span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={goalOverrideTarget}
+                                        onChange={(event) => setGoalOverrideTarget(event.target.value)}
+                                        className="crm-select-enhanced"
+                                        placeholder="15"
+                                    />
+                                </label>
+                                <div className="flex items-end">
+                                    <button
+                                        type="button"
+                                        onClick={handleCreateGoalOverride}
+                                        disabled={createGoalOverrideMutation.isPending || !individualGoalMetricOptions.length}
+                                        className="crm-btn-primary w-full px-4 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
+                                    >
+                                        {createGoalOverrideMutation.isPending ? 'Saving...' : 'Assign goal'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                        {platformFilter && !individualGoalMetricOptions.length ? (
+                            <p className="mt-3 text-sm text-slate-500">
+                                No goal metrics are available for the selected teammate.
+                            </p>
+                        ) : null}
+                    </SectionFrame>
+
+                    <SectionFrame
+                        title={`${goalPeriodLabel(goalPeriod)} default goals`}
+                        subtitle={`Shared goals for ${selectedPlatformLabel}. Each default only appears for the roles it targets.`}
                     >
                         {goalsQuery.isLoading && !goalsQuery.data ? (
                             <div className="space-y-3">
@@ -1316,21 +1554,25 @@ export default function Team() {
                                 message={getApiErrorMessage(goalsQuery.error, 'Goals could not be loaded.')}
                                 onRetry={() => goalsQuery.refetch()}
                             />
-                        ) : goals.length === 0 ? (
+                        ) : defaultGoals.length === 0 ? (
                             <TeamEmptyState
-                                title="No goals have been set for this scope yet."
-                                message="Create one above to give the team a clear target for this period."
+                                title="No default goals have been set for this scope yet."
+                                message="Create one above to give the right team a clear target for this period."
                             />
                         ) : (
                             <div className="space-y-4">
-                                {goals.map((goal) => (
+                                {defaultGoals.map((goal) => (
                                     <article key={goal.id} className="rounded-xl border border-slate-200 bg-white">
                                         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
                                             <div>
                                                 <p className="font-semibold text-slate-900">{goal.label}</p>
-                                                <p className="text-xs text-slate-500">
-                                                    {goal.platform_name || 'All markets'} • target {formatCount(goal.target)}
-                                                </p>
+                                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                                    <span>{goal.platform_name || 'All markets'}</span>
+                                                    <span>•</span>
+                                                    <span>{roleScopeLabel(goal)}</span>
+                                                    <span>•</span>
+                                                    <span>Target {formatCount(goal.target)}</span>
+                                                </div>
                                             </div>
                                             <button
                                                 type="button"
@@ -1362,6 +1604,94 @@ export default function Team() {
                                                     </div>
                                                 </button>
                                             ))}
+                                        </div>
+                                    </article>
+                                ))}
+                            </div>
+                        )}
+                    </SectionFrame>
+
+                    <SectionFrame
+                        title={`${goalPeriodLabel(goalPeriod)} individual goals`}
+                        subtitle={platformFilter
+                            ? `Manager overrides for ${selectedPlatformLabel}. These take precedence over the matching default goal.`
+                            : 'Choose a market above to review individual overrides for that market.'}
+                    >
+                        {goalsQuery.isLoading && !goalsQuery.data ? (
+                            <div className="space-y-3">
+                                <div className="h-20 animate-pulse rounded-xl bg-slate-100" />
+                                <div className="h-20 animate-pulse rounded-xl bg-slate-100" />
+                            </div>
+                        ) : goalsQuery.isError ? (
+                            <TeamErrorState
+                                message={getApiErrorMessage(goalsQuery.error, 'Individual goals could not be loaded.')}
+                                onRetry={() => goalsQuery.refetch()}
+                            />
+                        ) : !platformFilter ? (
+                            <TeamEmptyState
+                                title="No market selected"
+                                message="Use the market filter at the top of the page to review or edit individual goal overrides."
+                            />
+                        ) : individualGoals.length === 0 ? (
+                            <TeamEmptyState
+                                title="No individual overrides yet"
+                                message="When one teammate needs a different target than the team default, assign it above and it will appear here."
+                            />
+                        ) : (
+                            <div className="space-y-4">
+                                {individualGoals.map((goal) => (
+                                    <article key={goal.id} className="rounded-xl border border-slate-200 bg-white">
+                                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                                            <div>
+                                                <p className="font-semibold text-slate-900">{goal.label}</p>
+                                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                                    <span>{goal.user?.name || 'Unknown teammate'}</span>
+                                                    {goal.user?.role ? (
+                                                        <>
+                                                            <span>•</span>
+                                                            <span>{formatRole(goal.user.role)}</span>
+                                                        </>
+                                                    ) : null}
+                                                    <span>•</span>
+                                                    <span>{goal.platform_name || 'Selected market'}</span>
+                                                    <span>•</span>
+                                                    <span>Target {formatCount(goal.target)}</span>
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setGoalOverrideToDelete(goal)}
+                                                className="crm-btn-secondary px-3 py-1.5 text-xs text-rose-700 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-800"
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                        <div className="px-4 py-4">
+                                            {goal.progress ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleSelectAgent(goal.progress)}
+                                                    className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-left transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                                >
+                                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                                        <div>
+                                                            <p className="font-semibold text-slate-900">{goal.progress.name}</p>
+                                                            <p className="text-xs text-slate-500">{formatRole(goal.progress.role)}</p>
+                                                        </div>
+                                                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
+                                                            {formatCount(goal.progress.current)}/{formatCount(goal.progress.target)} ({goal.progress.percentage}%)
+                                                        </span>
+                                                    </div>
+                                                    <div className="mt-3">
+                                                        <GoalProgressBar current={goal.progress.current} target={goal.progress.target} />
+                                                    </div>
+                                                </button>
+                                            ) : (
+                                                <TeamEmptyState
+                                                    title="This teammate is no longer available"
+                                                    message="The override is still stored, but the assignee is not currently visible in this scope."
+                                                />
+                                            )}
                                         </div>
                                     </article>
                                 ))}
@@ -1485,6 +1815,16 @@ export default function Team() {
                                                     {goalPeriodLabel(goal.period)} goal
                                                     {goal.platform_name ? ` • ${goal.platform_name}` : ' • All markets'}
                                                 </p>
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                                                        {goalSourceLabel(goal.source_type)}
+                                                    </span>
+                                                    {roleScopeLabel(goal) ? (
+                                                        <span className="rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-medium text-teal-700">
+                                                            {roleScopeLabel(goal)}
+                                                        </span>
+                                                    ) : null}
+                                                </div>
                                             </div>
                                             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
                                                 {formatCount(goal.current)}/{formatCount(goal.target)} ({goal.percentage}%)
@@ -1531,6 +1871,24 @@ export default function Team() {
                 onConfirm={() => {
                     if (goalToDelete) {
                         deleteGoalMutation.mutate(goalToDelete.id);
+                    }
+                }}
+            />
+
+            <ConfirmDialog
+                open={Boolean(goalOverrideToDelete)}
+                title="Remove individual goal?"
+                message={goalOverrideToDelete
+                    ? `This will remove the ${goalOverrideToDelete.label} override for ${goalOverrideToDelete.user?.name || 'this teammate'} in ${goalOverrideToDelete.platform_name || 'the selected market'}.`
+                    : ''}
+                confirmLabel="Remove override"
+                cancelLabel="Keep override"
+                tone="danger"
+                isPending={deleteGoalOverrideMutation.isPending}
+                onCancel={() => setGoalOverrideToDelete(null)}
+                onConfirm={() => {
+                    if (goalOverrideToDelete) {
+                        deleteGoalOverrideMutation.mutate(goalOverrideToDelete.id);
                     }
                 }}
             />

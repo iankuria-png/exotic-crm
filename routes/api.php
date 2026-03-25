@@ -77,6 +77,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::get('/leaderboard', [TeamController::class, 'leaderboard']);
         Route::get('/goals', [TeamController::class, 'goals']);
         Route::post('/goals', [TeamController::class, 'setGoal']);
+        Route::post('/goals/overrides', [TeamController::class, 'setGoalOverride']);
+        Route::delete('/goals/overrides/{goalOverride}', [TeamController::class, 'deleteGoalOverride']);
         Route::delete('/goals/{goal}', [TeamController::class, 'deleteGoal']);
         Route::get('/{user}/stats', [TeamController::class, 'agentStats']);
         Route::get('/{user}/activity', [TeamController::class, 'activityFeed']);

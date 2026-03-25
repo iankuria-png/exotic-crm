@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\AgentDailyStat;
 use App\Models\AgentGoal;
+use App\Models\AgentGoalOverride;
 use App\Models\AgentSession;
 use App\Models\AuditLog;
 use App\Models\Deal;
@@ -26,6 +27,16 @@ class TeamActivityService
     public const AGENT_ROLES = [
         MarketAuthorizationService::ROLE_SALES,
         MarketAuthorizationService::ROLE_MARKETING,
+    ];
+
+    public const GOAL_ROLE_SCOPE_SALES = MarketAuthorizationService::ROLE_SALES;
+    public const GOAL_ROLE_SCOPE_MARKETING = MarketAuthorizationService::ROLE_MARKETING;
+    public const GOAL_ROLE_SCOPE_ALL = 'all';
+
+    public const GOAL_ROLE_SCOPES = [
+        self::GOAL_ROLE_SCOPE_SALES,
+        self::GOAL_ROLE_SCOPE_MARKETING,
+        self::GOAL_ROLE_SCOPE_ALL,
     ];
 
     public const GOAL_METRICS = [
@@ -56,6 +67,25 @@ class TeamActivityService
         'credentials_sent',
         'free_trials_given',
         'total_actions',
+    ];
+
+    private const GOAL_METRIC_ROLE_SCOPES = [
+        'profiles_created' => [self::GOAL_ROLE_SCOPE_SALES],
+        'subs_activated' => [self::GOAL_ROLE_SCOPE_SALES],
+        'subs_renewed' => [self::GOAL_ROLE_SCOPE_SALES],
+        'payments_matched' => [self::GOAL_ROLE_SCOPE_SALES],
+        'subscriptions_created' => [self::GOAL_ROLE_SCOPE_SALES],
+        'leads_contacted' => [self::GOAL_ROLE_SCOPE_SALES],
+        'leads_converted' => [self::GOAL_ROLE_SCOPE_SALES],
+        'chats_replied' => [self::GOAL_ROLE_SCOPE_SALES],
+        'sms_sent' => [self::GOAL_ROLE_SCOPE_SALES],
+        'credentials_sent' => [self::GOAL_ROLE_SCOPE_SALES],
+        'free_trials_given' => [self::GOAL_ROLE_SCOPE_SALES],
+        'total_actions' => [
+            self::GOAL_ROLE_SCOPE_SALES,
+            self::GOAL_ROLE_SCOPE_MARKETING,
+            self::GOAL_ROLE_SCOPE_ALL,
+        ],
     ];
 
     public function __construct(
@@ -445,32 +475,54 @@ class TeamActivityService
         $this->assertPlatformAccessible($viewer, $platformId);
 
         $normalizedPeriod = $this->normalizeGoalPeriod($period);
-        $goals = $this->goalsQuery($viewer, $platformId, $normalizedPeriod)
+        $agents = $this->visibleAgentsForViewer($viewer, $platformId);
+        $defaults = $this->goalsQuery($viewer, $platformId, $normalizedPeriod)
             ->with(['platform:id,name', 'setter:id,name'])
             ->orderBy('platform_id')
+            ->orderBy('role_scope')
+            ->orderBy('metric')
+            ->get();
+        $overrides = $this->goalOverridesQuery($viewer, $platformId, $normalizedPeriod)
+            ->with(['platform:id,name', 'setter:id,name', 'user:id,name,role,status'])
+            ->orderBy('platform_id')
+            ->orderBy('user_id')
             ->orderBy('metric')
             ->get();
 
-        $agents = $this->visibleAgentsForViewer($viewer);
+        $formattedDefaults = $defaults
+            ->map(fn (AgentGoal $goal) => $this->formatGoal($goal, $agents, $viewer))
+            ->all();
 
         return [
             'period' => $normalizedPeriod,
             'available_metrics' => $this->availableGoalMetrics(),
-            'data' => $goals->map(fn (AgentGoal $goal) => $this->formatGoal($goal, $agents, $viewer))->all(),
+            'role_scopes' => $this->availableGoalRoleScopes(),
+            'assignable_agents' => $agents
+                ->map(fn (User $agent) => $this->formatAssignableGoalAgent($agent))
+                ->values()
+                ->all(),
+            'data' => $formattedDefaults,
+            'defaults' => $formattedDefaults,
+            'overrides' => $overrides
+                ->map(fn (AgentGoalOverride $goalOverride) => $this->formatGoalOverride($goalOverride, $viewer))
+                ->all(),
         ];
     }
 
-    public function setGoal(string $metric, int $target, string $period, ?int $platformId, User $setter): AgentGoal
+    public function setGoal(string $metric, int $target, string $period, ?int $platformId, string $roleScope, User $setter): AgentGoal
     {
         $this->assertManager($setter);
         $this->assertPlatformAccessible($setter, $platformId);
 
         $metric = $this->normalizeGoalMetric($metric);
         $period = $this->normalizeGoalPeriod($period);
+        $roleScope = $this->normalizeGoalRoleScope($roleScope);
+        $this->assertGoalMetricAllowedForRoleScope($metric, $roleScope);
 
         $goal = AgentGoal::query()
             ->when($platformId === null, fn ($query) => $query->whereNull('platform_id'))
             ->when($platformId !== null, fn ($query) => $query->where('platform_id', $platformId))
+            ->where('role_scope', $roleScope)
             ->where('metric', $metric)
             ->where('period', $period)
             ->first();
@@ -478,12 +530,14 @@ class TeamActivityService
         if (!$goal) {
             $goal = new AgentGoal([
                 'platform_id' => $platformId,
+                'role_scope' => $roleScope,
                 'metric' => $metric,
                 'period' => $period,
             ]);
         }
 
         $goal->fill([
+            'role_scope' => $roleScope,
             'target' => $target,
             'set_by' => $setter->id,
         ]);
@@ -500,12 +554,60 @@ class TeamActivityService
         $goal->delete();
     }
 
+    public function setGoalOverride(int $userId, string $metric, int $target, string $period, int $platformId, User $setter): AgentGoalOverride
+    {
+        $this->assertManager($setter);
+        $this->assertPlatformAccessible($setter, $platformId);
+
+        $user = User::query()
+            ->with('platforms:id')
+            ->findOrFail($userId);
+
+        $this->assertGoalAssigneeAccessible($setter, $user, $platformId);
+
+        $metric = $this->normalizeGoalMetric($metric);
+        $period = $this->normalizeGoalPeriod($period);
+        $this->assertGoalMetricAllowedForRole($metric, $user->role);
+
+        $goalOverride = AgentGoalOverride::query()
+            ->where('user_id', $user->id)
+            ->where('platform_id', $platformId)
+            ->where('metric', $metric)
+            ->where('period', $period)
+            ->first();
+
+        if (!$goalOverride) {
+            $goalOverride = new AgentGoalOverride([
+                'user_id' => $user->id,
+                'platform_id' => $platformId,
+                'metric' => $metric,
+                'period' => $period,
+            ]);
+        }
+
+        $goalOverride->fill([
+            'target' => $target,
+            'set_by' => $setter->id,
+        ]);
+        $goalOverride->save();
+
+        return $goalOverride->fresh(['platform:id,name', 'setter:id,name', 'user:id,name,role,status']);
+    }
+
+    public function deleteGoalOverride(AgentGoalOverride $goalOverride, User $viewer): void
+    {
+        $this->assertManager($viewer);
+        $this->assertPlatformAccessible($viewer, (int) $goalOverride->platform_id);
+
+        $goalOverride->delete();
+    }
+
     public function getGoalProgress(User $user, ?int $platformId = null): array
     {
         $this->assertPlatformAccessible($user, $platformId);
 
         $accessiblePlatforms = $this->accessiblePlatformIdsForUser($user);
-        $goals = AgentGoal::query()
+        $defaults = AgentGoal::query()
             ->with('platform:id,name')
             ->where(function ($query) use ($platformId, $accessiblePlatforms) {
                 $query->whereNull('platform_id');
@@ -524,10 +626,41 @@ class TeamActivityService
             ->orderBy('period')
             ->orderBy('platform_id')
             ->orderBy('metric')
+            ->orderBy('role_scope')
             ->get();
 
-        return $goals
-            ->map(fn (AgentGoal $goal) => $this->formatSingleUserGoalProgress($goal, $user))
+        $overrides = AgentGoalOverride::query()
+            ->with('platform:id,name')
+            ->where('user_id', $user->id)
+            ->when($platformId !== null, fn ($query) => $query->where('platform_id', $platformId))
+            ->when($platformId === null && is_array($accessiblePlatforms), function ($query) use ($accessiblePlatforms) {
+                if (empty($accessiblePlatforms)) {
+                    $query->whereRaw('1 = 0');
+                    return;
+                }
+
+                $query->whereIn('platform_id', $accessiblePlatforms);
+            })
+            ->orderBy('period')
+            ->orderBy('platform_id')
+            ->orderBy('metric')
+            ->get();
+
+        $effectiveGoals = [];
+
+        foreach ($defaults as $goal) {
+            if (!$this->goalAppliesToUser($goal, $user)) {
+                continue;
+            }
+
+            $effectiveGoals[$this->goalKey($goal->platform_id ? (int) $goal->platform_id : null, $goal->metric, $goal->period)] = $this->formatSingleUserGoalProgress($goal, $user);
+        }
+
+        foreach ($overrides as $goalOverride) {
+            $effectiveGoals[$this->goalKey((int) $goalOverride->platform_id, $goalOverride->metric, $goalOverride->period)] = $this->formatSingleUserGoalOverrideProgress($goalOverride, $user);
+        }
+
+        return collect($effectiveGoals)
             ->values()
             ->all();
     }
@@ -611,6 +744,18 @@ class TeamActivityService
             ->map(fn (string $metric) => [
                 'value' => $metric,
                 'label' => $this->metricLabel($metric),
+                'allowed_role_scopes' => $this->allowedGoalRoleScopesForMetric($metric),
+            ])
+            ->values()
+            ->all();
+    }
+
+    public function availableGoalRoleScopes(): array
+    {
+        return collect(self::GOAL_ROLE_SCOPES)
+            ->map(fn (string $scope) => [
+                'value' => $scope,
+                'label' => $this->goalRoleScopeLabel($scope),
             ])
             ->values()
             ->all();
@@ -1218,23 +1363,53 @@ class TeamActivityService
     private function formatGoal(AgentGoal $goal, Collection $agents, User $viewer): array
     {
         $progress = $agents
+            ->filter(fn (User $agent) => $this->goalAppliesToUser($goal, $agent))
             ->map(fn (User $agent) => $this->formatGoalProgressRow($goal, $agent, $viewer))
             ->values()
             ->all();
 
         return [
             'id' => (int) $goal->id,
+            'goal_type' => 'default',
             'metric' => $goal->metric,
             'label' => $this->metricLabel($goal->metric),
             'target' => (int) $goal->target,
             'period' => $goal->period,
             'platform_id' => $goal->platform_id ? (int) $goal->platform_id : null,
             'platform_name' => $goal->platform?->name,
+            'role_scope' => $goal->role_scope,
+            'role_scope_label' => $this->goalRoleScopeLabel($goal->role_scope),
             'set_by' => $goal->setter ? [
                 'id' => (int) $goal->setter->id,
                 'name' => $goal->setter->name,
             ] : null,
             'progress' => $progress,
+        ];
+    }
+
+    private function formatGoalOverride(AgentGoalOverride $goalOverride, User $viewer): array
+    {
+        return [
+            'id' => (int) $goalOverride->id,
+            'goal_type' => 'individual',
+            'metric' => $goalOverride->metric,
+            'label' => $this->metricLabel($goalOverride->metric),
+            'target' => (int) $goalOverride->target,
+            'period' => $goalOverride->period,
+            'platform_id' => (int) $goalOverride->platform_id,
+            'platform_name' => $goalOverride->platform?->name,
+            'user' => $goalOverride->user ? [
+                'id' => (int) $goalOverride->user->id,
+                'name' => $goalOverride->user->name,
+                'role' => $goalOverride->user->role,
+            ] : null,
+            'set_by' => $goalOverride->setter ? [
+                'id' => (int) $goalOverride->setter->id,
+                'name' => $goalOverride->setter->name,
+            ] : null,
+            'progress' => $goalOverride->user
+                ? $this->formatGoalOverrideProgressRow($goalOverride, $goalOverride->user, $viewer)
+                : null,
         ];
     }
 
@@ -1258,6 +1433,35 @@ class TeamActivityService
         ];
     }
 
+    private function formatGoalOverrideProgressRow(AgentGoalOverride $goalOverride, User $agent, User $viewer): array
+    {
+        $range = $this->goalPeriodRange($goalOverride->period);
+        $platformId = (int) $goalOverride->platform_id;
+        $metrics = $this->aggregateActionMetricsForRange($range['start'], $range['end'], $viewer, $platformId, [$agent->id]);
+        $current = (int) (($metrics[$agent->id][$goalOverride->metric] ?? 0));
+        $percentage = $goalOverride->target > 0
+            ? (int) min(100, round(($current / $goalOverride->target) * 100))
+            : 0;
+
+        return [
+            'user_id' => (int) $agent->id,
+            'name' => $agent->name,
+            'role' => $agent->role,
+            'current' => $current,
+            'target' => (int) $goalOverride->target,
+            'percentage' => $percentage,
+        ];
+    }
+
+    private function formatAssignableGoalAgent(User $agent): array
+    {
+        return [
+            'user_id' => (int) $agent->id,
+            'name' => $agent->name,
+            'role' => $agent->role,
+        ];
+    }
+
     private function formatSingleUserGoalProgress(AgentGoal $goal, User $user): array
     {
         $range = $this->goalPeriodRange($goal->period);
@@ -1270,6 +1474,8 @@ class TeamActivityService
 
         return [
             'goal_id' => (int) $goal->id,
+            'goal_type' => 'default',
+            'source_type' => 'default',
             'metric' => $goal->metric,
             'label' => $this->metricLabel($goal->metric),
             'period' => $goal->period,
@@ -1278,6 +1484,35 @@ class TeamActivityService
             'percentage' => $percentage,
             'platform_id' => $goal->platform_id ? (int) $goal->platform_id : null,
             'platform_name' => $goal->platform?->name,
+            'role_scope' => $goal->role_scope,
+            'role_scope_label' => $this->goalRoleScopeLabel($goal->role_scope),
+        ];
+    }
+
+    private function formatSingleUserGoalOverrideProgress(AgentGoalOverride $goalOverride, User $user): array
+    {
+        $range = $this->goalPeriodRange($goalOverride->period);
+        $platformId = (int) $goalOverride->platform_id;
+        $metrics = $this->aggregateActionMetricsForRange($range['start'], $range['end'], $user, $platformId, [$user->id]);
+        $current = (int) (($metrics[$user->id][$goalOverride->metric] ?? 0));
+        $percentage = $goalOverride->target > 0
+            ? (int) min(100, round(($current / $goalOverride->target) * 100))
+            : 0;
+
+        return [
+            'goal_id' => (int) $goalOverride->id,
+            'goal_type' => 'individual',
+            'source_type' => 'override',
+            'metric' => $goalOverride->metric,
+            'label' => $this->metricLabel($goalOverride->metric),
+            'period' => $goalOverride->period,
+            'target' => (int) $goalOverride->target,
+            'current' => $current,
+            'percentage' => $percentage,
+            'platform_id' => (int) $goalOverride->platform_id,
+            'platform_name' => $goalOverride->platform?->name,
+            'role_scope' => null,
+            'role_scope_label' => null,
         ];
     }
 
@@ -1303,6 +1538,92 @@ class TeamActivityService
                     $query->orWhereIn('platform_id', $accessiblePlatforms);
                 }
             });
+    }
+
+    private function goalOverridesQuery(User $viewer, ?int $platformId, string $period)
+    {
+        $visibleAgentIds = $this->visibleAgentsForViewer($viewer, $platformId)
+            ->pluck('id')
+            ->all();
+
+        return AgentGoalOverride::query()
+            ->where('period', $period)
+            ->when(empty($visibleAgentIds), fn ($query) => $query->whereRaw('1 = 0'))
+            ->when(!empty($visibleAgentIds), fn ($query) => $query->whereIn('user_id', $visibleAgentIds))
+            ->when($platformId !== null, fn ($query) => $query->where('platform_id', $platformId))
+            ->when($platformId === null, function ($query) use ($viewer) {
+                $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
+            });
+    }
+
+    private function goalKey(?int $platformId, string $metric, string $period): string
+    {
+        return implode(':', [
+            $platformId === null ? 'all' : (string) $platformId,
+            $metric,
+            $period,
+        ]);
+    }
+
+    private function goalAppliesToUser(AgentGoal $goal, User $user): bool
+    {
+        if (!$this->goalRoleScopeMatchesUser($goal->role_scope, $user)) {
+            return false;
+        }
+
+        return $this->goalMetricAllowedForRole($goal->metric, $user->role);
+    }
+
+    private function goalRoleScopeMatchesUser(string $roleScope, User $user): bool
+    {
+        if ($roleScope === self::GOAL_ROLE_SCOPE_ALL) {
+            return in_array($user->role, self::AGENT_ROLES, true);
+        }
+
+        return $user->role === $roleScope;
+    }
+
+    private function allowedGoalRoleScopesForMetric(string $metric): array
+    {
+        return self::GOAL_METRIC_ROLE_SCOPES[$metric] ?? [self::GOAL_ROLE_SCOPE_SALES];
+    }
+
+    private function goalMetricAllowedForRoleScope(string $metric, string $roleScope): bool
+    {
+        return in_array($roleScope, $this->allowedGoalRoleScopesForMetric($metric), true);
+    }
+
+    private function goalMetricAllowedForRole(string $metric, string $role): bool
+    {
+        if (!in_array($role, self::AGENT_ROLES, true)) {
+            return false;
+        }
+
+        return in_array($role, $this->allowedGoalRoleScopesForMetric($metric), true)
+            || in_array(self::GOAL_ROLE_SCOPE_ALL, $this->allowedGoalRoleScopesForMetric($metric), true);
+    }
+
+    private function assertGoalMetricAllowedForRoleScope(string $metric, string $roleScope): void
+    {
+        if (!$this->goalMetricAllowedForRoleScope($metric, $roleScope)) {
+            abort(422, 'This metric is not supported for the selected role scope.');
+        }
+    }
+
+    private function assertGoalMetricAllowedForRole(string $metric, string $role): void
+    {
+        if (!$this->goalMetricAllowedForRole($metric, $role)) {
+            abort(422, 'This metric is not supported for the selected user role.');
+        }
+    }
+
+    private function assertGoalAssigneeAccessible(User $viewer, User $agent, int $platformId): void
+    {
+        $this->assertAgentVisibleToViewer($viewer, $agent);
+
+        if (!$this->userHasPlatform($agent, $platformId)) {
+            abort(422, 'The selected user does not have access to this market.');
+        }
     }
 
     private function buildUserSummary(array $metrics, array $sessions, array $revenue): array
@@ -1492,6 +1813,16 @@ class TeamActivityService
         };
     }
 
+    private function goalRoleScopeLabel(string $roleScope): string
+    {
+        return match ($roleScope) {
+            self::GOAL_ROLE_SCOPE_SALES => 'Sales only',
+            self::GOAL_ROLE_SCOPE_MARKETING => 'Marketing only',
+            self::GOAL_ROLE_SCOPE_ALL => 'Everyone',
+            default => ucwords(str_replace('_', ' ', $roleScope)),
+        };
+    }
+
     private function formatMoney(float $amount): string
     {
         $decimals = abs($amount - floor($amount)) < 0.00001 ? 0 : 2;
@@ -1528,6 +1859,18 @@ class TeamActivityService
         }
 
         return $metric;
+    }
+
+    private function normalizeGoalRoleScope(string $roleScope): string
+    {
+        $roleScope = strtolower(trim($roleScope));
+
+        return match ($roleScope) {
+            self::GOAL_ROLE_SCOPE_SALES,
+            self::GOAL_ROLE_SCOPE_MARKETING,
+            self::GOAL_ROLE_SCOPE_ALL => $roleScope,
+            default => self::GOAL_ROLE_SCOPE_SALES,
+        };
     }
 
     private function resolveNamedPeriodRange(string $period): array
