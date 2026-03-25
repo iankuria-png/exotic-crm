@@ -180,7 +180,7 @@ class SystemHealthUpdateController extends Controller
             'latest_failed_job' => $latestFailedPayload ? class_basename($latestFailedPayload['displayName'] ?? '') : null,
             'job_breakdown' => $jobBreakdown,
             'queue_cron_command' => sprintf(
-                '* * * * * cd %s && %s artisan queue:work database --queue=push,default --max-time=55 --tries=3 --sleep=3 >> /dev/null 2>&1',
+                '* * * * * cd %s && %s artisan queue:work database --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
                 base_path(),
                 config('deployment.php_binary', '/usr/local/bin/php')
             ),

@@ -121,7 +121,8 @@ class Kernel extends ConsoleKernel
         // Queue worker: processes push queue first (time-sensitive), then default queue.
         // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
         // --queue=push,default ensures push notifications are never blocked by slow sync jobs.
-        $schedule->command('queue:work database --queue=push,default --max-time=55 --tries=3 --sleep=3')
+        // --max-jobs=100 prevents memory leaks during long-running batches.
+        $schedule->command('queue:work database --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3')
             ->name('queue_worker')
             ->everyMinute()
             ->withoutOverlapping()
