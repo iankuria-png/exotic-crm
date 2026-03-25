@@ -120,24 +120,18 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             $title = "{$item->profile_name} from {$city}";
         }
 
-        // Verify image is accessible before sending to provider; omit if broken.
-        $iconUrl = $item->profile_image_url;
-        if ($iconUrl) {
-            try {
-                $headResponse = Http::timeout(3)->head($iconUrl);
-                if (!$headResponse->successful()) {
-                    $iconUrl = null;
-                }
-            } catch (\Throwable) {
-                $iconUrl = null;
-            }
-        }
+        // Use profile image as both notification icon (small) and image (large banner).
+        // Skip the HEAD pre-check — it can be blocked by Cloudflare bot protection on
+        // the production server, causing images to be silently dropped. WebPushr handles
+        // unreachable images gracefully by simply omitting them from the notification.
+        $imageUrl = $item->profile_image_url ?: null;
 
         $notification = [
             'title' => $title,
             'message' => $item->custom_message,
             'target_url' => $item->profile_url,
-            'icon_url' => $iconUrl,
+            'icon_url' => $imageUrl,
+            'image_url' => $imageUrl,
             'campaign_name' => $campaign->name,
             'schedule_at' => $scheduleAt,
         ];
