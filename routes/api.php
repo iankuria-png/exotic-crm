@@ -27,6 +27,7 @@ use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
 use App\Http\Controllers\CRM\SetupController;
 use App\Http\Controllers\CRM\SupportBoardController;
+use App\Http\Controllers\CRM\TeamController;
 use App\Http\Controllers\CRM\SystemHealthUpdateController;
 
 Route::get('/ping', function () {
@@ -60,10 +61,22 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Auth
     Route::get('/me', [CrmAuthController::class, 'me']);
     Route::post('/logout', [CrmAuthController::class, 'logout']);
+    Route::post('/heartbeat', [TeamController::class, 'heartbeat']);
+    Route::get('/team/me', [TeamController::class, 'myStats']);
 
     // Dashboard
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
     Route::get('/products', [CrmDashboardController::class, 'products']);
+
+    Route::middleware('role:admin,sub_admin')->prefix('team')->group(function () {
+        Route::get('/presence', [TeamController::class, 'presence']);
+        Route::get('/leaderboard', [TeamController::class, 'leaderboard']);
+        Route::get('/goals', [TeamController::class, 'goals']);
+        Route::post('/goals', [TeamController::class, 'setGoal']);
+        Route::delete('/goals/{goal}', [TeamController::class, 'deleteGoal']);
+        Route::get('/{user}/stats', [TeamController::class, 'agentStats']);
+        Route::get('/{user}/activity', [TeamController::class, 'activityFeed']);
+    });
 
     // Push Campaigns (static routes before dynamic route-model binding segments)
     Route::middleware('role:marketing,admin,sub_admin')->prefix('push-campaigns')->group(function () {

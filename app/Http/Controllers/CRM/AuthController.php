@@ -3,12 +3,18 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Services\TeamActivityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use App\Models\User;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly TeamActivityService $teamActivityService
+    ) {
+    }
+
     public function login(Request $request)
     {
         $request->validate([
@@ -57,6 +63,17 @@ class AuthController extends Controller
 
     public function logout(Request $request)
     {
+        $validated = $request->validate([
+            'session_token' => 'nullable|string|max:36',
+        ]);
+
+        if (!empty($validated['session_token'])) {
+            $this->teamActivityService->closeUserSession(
+                $request->user(),
+                (string) $validated['session_token']
+            );
+        }
+
         $request->user()->currentAccessToken()->delete();
 
         return response()->json(['message' => 'Logged out']);

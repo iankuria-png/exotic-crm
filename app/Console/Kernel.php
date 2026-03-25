@@ -34,6 +34,20 @@ class Kernel extends ConsoleKernel
                  ->dailyAt('00:05') 
                  ->onOneServer() 
                  ->sendOutputTo(storage_path('logs/subscription_check.log'));
+
+        $schedule->command('crm:compute-daily-stats')
+            ->name('crm_compute_daily_stats')
+            ->dailyAt('00:07')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_compute_daily_stats.log'));
+
+        $schedule->command('crm:close-stale-sessions')
+            ->name('crm_close_stale_sessions')
+            ->everyMinute()
+            ->withoutOverlapping(1)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_close_stale_sessions.log'));
                  
         // Payment timeout handler - RUNS EVERY 5 MINUTES
         $schedule->call(function () {
