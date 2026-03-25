@@ -69,7 +69,7 @@
     }
 
     .crm-select-enhanced {
-        @apply appearance-none rounded-lg border border-slate-300 bg-white py-2 pr-9 pl-3 text-sm text-slate-700 transition
+        @apply w-full appearance-none rounded-lg border border-slate-300 bg-white py-2 pr-9 pl-3 text-sm text-slate-700 transition
                focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100;
     }
 
