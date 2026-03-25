@@ -243,6 +243,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/settings/system-health/queue-flush-failed', [SystemHealthUpdateController::class, 'flushFailedJobs'])->middleware('role:admin');
     Route::post('/settings/system-health/queue-clear-pending', [SystemHealthUpdateController::class, 'clearPendingJobs'])->middleware('role:admin');
     Route::post('/settings/system-health/queue-clear-all', [SystemHealthUpdateController::class, 'clearAllJobs'])->middleware('role:admin');
+    Route::post('/settings/system-health/queue-nudge', [SystemHealthUpdateController::class, 'nudgeWorker'])->middleware('role:admin');
     Route::get('/settings/wallet', [SettingsController::class, 'wallet']);
     Route::patch('/settings/wallet', [SettingsController::class, 'updateWallet'])->middleware('role:admin');
     Route::patch('/settings/wallet/pin', [SettingsController::class, 'updateWalletPin'])->middleware('role:admin');

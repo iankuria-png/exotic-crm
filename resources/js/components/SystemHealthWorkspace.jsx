@@ -314,6 +314,17 @@ export default function SystemHealthWorkspace({
         },
     });
 
+    const nudgeWorkerMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/system-health/queue-nudge').then((r) => r.data),
+        onSuccess: (data) => {
+            queueStatusQuery.refetch();
+            toast.success(data?.message || 'Worker nudged.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Unable to start worker.');
+        },
+    });
+
     const [copiedQueueCron, setCopiedQueueCron] = useState(false);
 
     const handleBackupUpload = async (e) => {
@@ -529,6 +540,16 @@ export default function SystemHealthWorkspace({
                             <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(queueStatusQuery.data?.status || 'pending')}`}>
                                 {(queueStatusQuery.data?.status || 'loading').replaceAll('_', ' ')}
                             </span>
+                            {canDeployUpdates && ['pending', 'stalled'].includes(queueStatusQuery.data?.status) && (queueStatusQuery.data?.pending || 0) > 0 ? (
+                                <button
+                                    type="button"
+                                    onClick={() => nudgeWorkerMutation.mutate()}
+                                    disabled={nudgeWorkerMutation.isPending}
+                                    className="crm-btn-primary px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {nudgeWorkerMutation.isPending ? 'Processing...' : 'Start worker'}
+                                </button>
+                            ) : null}
                             <button type="button" onClick={() => queueStatusQuery.refetch()} className="crm-btn-secondary px-3 py-2">
                                 Refresh
                             </button>

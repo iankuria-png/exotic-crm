@@ -254,4 +254,46 @@ class SystemHealthUpdateController extends Controller
             'message' => sprintf('Cleared %d pending and %d failed job(s).', $pendingCount, $failedCount),
         ]);
     }
+
+    /**
+     * Manually trigger a short-lived queue worker run.
+     * Processes up to 20 jobs or 45 seconds, whichever comes first.
+     * This clears any stale scheduler lock and immediately processes pending jobs.
+     */
+    public function nudgeWorker(): JsonResponse
+    {
+        $pendingBefore = DB::table('jobs')->whereNull('reserved_at')->count();
+
+        if ($pendingBefore === 0) {
+            return response()->json([
+                'processed' => 0,
+                'message' => 'No pending jobs to process.',
+            ]);
+        }
+
+        // Clear any stale scheduler mutex lock so the cron worker can resume normally.
+        $mutexKey = 'framework/schedule-' . sha1('queue_worker');
+        cache()->forget($mutexKey);
+
+        // Run a short-lived worker synchronously — processes jobs immediately.
+        Artisan::call('queue:work', [
+            'connection' => 'database',
+            '--queue' => 'push,default',
+            '--stop-when-empty' => true,
+            '--max-time' => 45,
+            '--max-jobs' => 20,
+            '--tries' => 3,
+        ]);
+
+        $pendingAfter = DB::table('jobs')->whereNull('reserved_at')->count();
+        $processed = max(0, $pendingBefore - $pendingAfter);
+
+        return response()->json([
+            'processed' => $processed,
+            'remaining' => $pendingAfter,
+            'message' => $processed > 0
+                ? sprintf('Processed %d job(s). %d remaining.', $processed, $pendingAfter)
+                : 'Worker started but no jobs were completed yet. They may still be processing.',
+        ]);
+    }
 }
