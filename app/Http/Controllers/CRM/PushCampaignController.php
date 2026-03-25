@@ -18,6 +18,7 @@ use App\Services\PushCampaign\SelectorDetectionService;
 use App\Services\PushCampaign\UploadBatchStatusService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
+use App\Services\AuditService;
 use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -1552,10 +1553,10 @@ class PushCampaignController extends Controller
 
         $newCampaign->forceFill(['total_items' => $created])->save();
 
-        $this->auditService->record([
+        app(AuditService::class)->record([
             'platform_id' => (int) $newCampaign->platform_id,
             'actor_id' => $request->user()?->id,
-            'action' => CrmAuditAction::PUSH_CAMPAIGN_CREATE,
+            'action' => 'push_campaign_create',
             'entity_type' => 'push_campaign',
             'entity_id' => (int) $newCampaign->id,
             'after_state' => [
