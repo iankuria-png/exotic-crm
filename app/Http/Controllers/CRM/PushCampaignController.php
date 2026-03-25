@@ -1468,9 +1468,112 @@ class PushCampaignController extends Controller
         $campaign = $this->pushCampaignService->refreshAnalytics($pushCampaign);
         $totals = $this->deliveryTotals((int) $campaign->id);
 
+        // Item-level status breakdown (always available, doesn't depend on provider stats).
+        $itemCounts = PushCampaignItem::query()
+            ->where('campaign_id', (int) $campaign->id)
+            ->selectRaw('status, COUNT(*) as cnt')
+            ->groupBy('status')
+            ->pluck('cnt', 'status');
+
         return response()->json([
             'campaign' => $campaign,
             'analytics' => $totals,
+            'item_summary' => [
+                'total' => (int) $itemCounts->sum(),
+                'sent' => (int) $itemCounts->get('sent', 0),
+                'failed' => (int) $itemCounts->get('failed', 0),
+                'skipped' => (int) $itemCounts->get('skipped', 0),
+                'pending' => (int) $itemCounts->get('pending', 0),
+                'scheduled' => (int) $itemCounts->get('scheduled', 0),
+            ],
+        ]);
+    }
+
+    /**
+     * Create a new campaign from the failed/missed/skipped items of an existing campaign,
+     * shifting each item's scheduled_at forward by a given number of days.
+     */
+    public function reschedule(Request $request, PushCampaign $pushCampaign)
+    {
+        $this->ensureCampaignAccess($request, $pushCampaign);
+
+        $request->validate([
+            'shift_days' => 'required|integer|min:0|max:30',
+            'include_statuses' => 'nullable|array',
+            'include_statuses.*' => 'string|in:failed,skipped,pending,scheduled',
+        ]);
+
+        $shiftDays = (int) $request->input('shift_days', 1);
+        $includeStatuses = $request->input('include_statuses', ['failed', 'skipped']);
+
+        $sourceItems = PushCampaignItem::query()
+            ->where('campaign_id', (int) $pushCampaign->id)
+            ->whereIn('status', $includeStatuses)
+            ->get();
+
+        if ($sourceItems->isEmpty()) {
+            return response()->json([
+                'message' => 'No items match the selected statuses to reschedule.',
+            ], 422);
+        }
+
+        $newCampaign = PushCampaign::query()->create([
+            'platform_id' => (int) $pushCampaign->platform_id,
+            'name' => sprintf('%s (rescheduled)', $pushCampaign->name),
+            'status' => 'draft',
+            'provider' => $pushCampaign->provider,
+            'source_filename' => $pushCampaign->source_filename,
+            'upload_batch_id' => null,
+            'created_by' => $request->user()?->id,
+        ]);
+
+        $created = 0;
+        foreach ($sourceItems as $srcItem) {
+            $newScheduledAt = $srcItem->scheduled_at
+                ? $srcItem->scheduled_at->copy()->addDays($shiftDays)
+                : ($shiftDays > 0 ? now()->utc()->addDays($shiftDays) : null);
+
+            PushCampaignItem::query()->create([
+                'campaign_id' => (int) $newCampaign->id,
+                'client_id' => $srcItem->client_id,
+                'wp_post_id' => $srcItem->wp_post_id,
+                'profile_url' => $srcItem->profile_url,
+                'profile_name' => $srcItem->profile_name,
+                'profile_city' => $srcItem->profile_city,
+                'profile_phone' => $srcItem->profile_phone,
+                'profile_image_url' => $srcItem->profile_image_url,
+                'profile_age' => $srcItem->profile_age,
+                'custom_message' => $srcItem->custom_message,
+                'scheduled_at' => $newScheduledAt,
+                'status' => 'pending',
+            ]);
+            $created++;
+        }
+
+        $newCampaign->forceFill(['total_items' => $created])->save();
+
+        $this->auditService->record([
+            'platform_id' => (int) $newCampaign->platform_id,
+            'actor_id' => $request->user()?->id,
+            'action' => CrmAuditAction::PUSH_CAMPAIGN_CREATE,
+            'entity_type' => 'push_campaign',
+            'entity_id' => (int) $newCampaign->id,
+            'after_state' => [
+                'source_campaign_id' => (int) $pushCampaign->id,
+                'shift_days' => $shiftDays,
+                'items_rescheduled' => $created,
+            ],
+            'reason' => sprintf(
+                'Rescheduled %d items from campaign #%d with %d-day shift.',
+                $created,
+                $pushCampaign->id,
+                $shiftDays
+            ),
+        ]);
+
+        return response()->json([
+            'message' => sprintf('%d items rescheduled into new campaign.', $created),
+            'campaign' => $newCampaign->fresh(),
         ]);
     }
 

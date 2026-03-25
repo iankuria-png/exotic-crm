@@ -105,6 +105,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::post('/{pushCampaign}/execute', [PushCampaignController::class, 'execute']);
         Route::post('/{pushCampaign}/schedule', [PushCampaignController::class, 'schedule']);
         Route::get('/{pushCampaign}/analytics', [PushCampaignController::class, 'analytics']);
+        Route::post('/{pushCampaign}/reschedule', [PushCampaignController::class, 'reschedule']);
         Route::delete('/{pushCampaign}', [PushCampaignController::class, 'destroy']);
     });
 

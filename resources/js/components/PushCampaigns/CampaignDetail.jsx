@@ -365,10 +365,13 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
         },
     });
 
+    const [itemSummary, setItemSummary] = useState(null);
+
     const refreshAnalyticsMutation = useMutation({
         mutationFn: () => api.get(`/crm/push-campaigns/${campaignId}/analytics`).then((response) => response.data),
         onSuccess: (response) => {
             setAnalytics(response?.analytics || null);
+            setItemSummary(response?.item_summary || null);
             queryClient.invalidateQueries({ queryKey: ['push-campaign-detail', campaignId] });
             toast.success('Analytics refreshed.');
         },
@@ -387,6 +390,19 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to delete campaign.');
+        },
+    });
+
+    const [rescheduleShiftDays, setRescheduleShiftDays] = useState(1);
+    const rescheduleMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/push-campaigns/${campaignId}/reschedule`, payload).then((r) => r.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['push-campaigns-list'] });
+            onChanged?.();
+            toast.success(response?.message || 'Campaign rescheduled.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to reschedule.');
         },
     });
 
@@ -614,58 +630,110 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                 {refreshAnalyticsMutation.isPending ? 'Refreshing...' : 'Refresh analytics'}
                             </button>
                         </div>
-                        {analytics && (analytics.total_sent > 0 || analytics.delivered > 0) ? (
-                            <div className="space-y-4 p-4">
-                                <div className="grid gap-3 sm:grid-cols-5">
-                                    {[
-                                        { label: 'Sent', value: analytics.total_sent || 0, color: 'text-slate-900' },
-                                        { label: 'Delivered', value: analytics.delivered || 0, color: 'text-slate-900' },
-                                        { label: 'Clicked', value: analytics.clicked || 0, color: 'text-slate-900' },
-                                        { label: 'Failed', value: analytics.failed || 0, color: (analytics.failed || 0) > 0 ? 'text-rose-700' : 'text-slate-900' },
-                                        { label: 'CTR', value: analytics.ctr != null ? `${analytics.ctr}%` : 'n/a', color: analytics.ctr > 0 ? 'text-emerald-700' : 'text-slate-400' },
-                                    ].map((stat) => (
-                                        <div key={stat.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{stat.label}</p>
-                                            <p className={`mt-1 text-lg font-semibold ${stat.color}`}>{typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}</p>
-                                        </div>
-                                    ))}
-                                </div>
 
-                                {(analytics.total_sent || 0) > 0 ? (() => {
-                                    const sent = analytics.total_sent || 0;
-                                    const bars = [
-                                        { label: 'Sent', value: sent, color: 'bg-slate-700' },
-                                        { label: 'Delivered', value: analytics.delivered || 0, color: 'bg-emerald-500' },
-                                        { label: 'Clicked', value: analytics.clicked || 0, color: 'bg-blue-500' },
-                                        { label: 'Closed', value: analytics.closed || 0, color: 'bg-amber-500' },
-                                    ];
-                                    return (
-                                        <div className="rounded-md border border-slate-200 bg-white p-3">
-                                            <p className="mb-3 text-xs font-semibold text-slate-700">Delivery Funnel</p>
-                                            <div className="space-y-2">
-                                                {bars.map((bar) => {
-                                                    const pct = sent > 0 ? Math.max(((bar.value / sent) * 100), bar.value > 0 ? 1 : 0) : 0;
-                                                    const pctLabel = sent > 0 ? ((bar.value / sent) * 100).toFixed(1) : '0.0';
-                                                    return (
-                                                        <div key={bar.label} className="flex items-center gap-3 text-xs">
-                                                            <span className="w-16 shrink-0 text-right font-medium text-slate-600">{bar.label}</span>
-                                                            <div className="h-5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                                                                <div className={`h-full rounded-full ${bar.color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-                                                            </div>
-                                                            <span className="w-28 shrink-0 text-right tabular-nums text-slate-600">{bar.value.toLocaleString()} ({pctLabel}%)</span>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
+                        <div className="space-y-4 p-4">
+                            {/* Tier 1: Campaign item status breakdown — always available */}
+                            {(() => {
+                                const s = itemSummary || {
+                                    total: campaign?.total_items || 0,
+                                    sent: campaign?.sent_count || 0,
+                                    failed: campaign?.failed_count || 0,
+                                    skipped: 0,
+                                    pending: 0,
+                                    scheduled: 0,
+                                };
+                                const total = s.total || 1;
+                                const segments = [
+                                    { label: 'Sent', value: s.sent, color: 'bg-emerald-500', text: 'text-emerald-700' },
+                                    { label: 'Failed', value: s.failed, color: 'bg-rose-500', text: 'text-rose-700' },
+                                    { label: 'Skipped', value: s.skipped, color: 'bg-slate-400', text: 'text-slate-600' },
+                                    { label: 'Scheduled', value: s.scheduled, color: 'bg-blue-400', text: 'text-blue-600' },
+                                    { label: 'Pending', value: s.pending, color: 'bg-amber-400', text: 'text-amber-600' },
+                                ].filter((seg) => seg.value > 0);
+
+                                return (
+                                    <div>
+                                        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Campaign Progress</p>
+                                        {/* Stacked progress bar */}
+                                        <div className="flex h-6 w-full overflow-hidden rounded-full bg-slate-100">
+                                            {segments.map((seg) => (
+                                                <div
+                                                    key={seg.label}
+                                                    className={`${seg.color} transition-all duration-300`}
+                                                    style={{ width: `${Math.max((seg.value / total) * 100, seg.value > 0 ? 2 : 0)}%` }}
+                                                    title={`${seg.label}: ${seg.value}`}
+                                                />
+                                            ))}
                                         </div>
-                                    );
-                                })() : null}
-                            </div>
-                        ) : (
-                            <div className="px-4 py-6 text-center text-xs text-slate-500">
-                                No analytics available yet. Execute the campaign and refresh analytics to see delivery metrics.
-                            </div>
-                        )}
+                                        {/* Legend */}
+                                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                                            {segments.map((seg) => (
+                                                <span key={seg.label} className="flex items-center gap-1.5 text-xs">
+                                                    <span className={`inline-block h-2.5 w-2.5 rounded-full ${seg.color}`} />
+                                                    <span className={`font-medium ${seg.text}`}>{seg.value}</span>
+                                                    <span className="text-slate-500">{seg.label}</span>
+                                                </span>
+                                            ))}
+                                            <span className="text-xs text-slate-400">of {s.total} total</span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* Tier 2: Provider delivery stats — only when provider data is available */}
+                            {analytics && (analytics.total_sent > 0 || analytics.delivered > 0) ? (
+                                <>
+                                    <div className="grid gap-3 sm:grid-cols-5">
+                                        {[
+                                            { label: 'Sent', value: analytics.total_sent || 0, color: 'text-slate-900' },
+                                            { label: 'Delivered', value: analytics.delivered || 0, color: 'text-emerald-700' },
+                                            { label: 'Clicked', value: analytics.clicked || 0, color: 'text-blue-700' },
+                                            { label: 'Failed', value: analytics.failed || 0, color: (analytics.failed || 0) > 0 ? 'text-rose-700' : 'text-slate-900' },
+                                            { label: 'CTR', value: analytics.ctr != null ? `${analytics.ctr}%` : 'n/a', color: analytics.ctr > 0 ? 'text-emerald-700' : 'text-slate-400' },
+                                        ].map((stat) => (
+                                            <div key={stat.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{stat.label}</p>
+                                                <p className={`mt-1 text-lg font-semibold ${stat.color}`}>{typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {(analytics.total_sent || 0) > 0 ? (() => {
+                                        const sent = analytics.total_sent || 0;
+                                        const bars = [
+                                            { label: 'Sent', value: sent, color: 'bg-slate-700' },
+                                            { label: 'Delivered', value: analytics.delivered || 0, color: 'bg-emerald-500' },
+                                            { label: 'Clicked', value: analytics.clicked || 0, color: 'bg-blue-500' },
+                                            { label: 'Closed', value: analytics.closed || 0, color: 'bg-amber-500' },
+                                        ];
+                                        return (
+                                            <div className="rounded-md border border-slate-200 bg-white p-3">
+                                                <p className="mb-3 text-xs font-semibold text-slate-700">Delivery Funnel</p>
+                                                <div className="space-y-2">
+                                                    {bars.map((bar) => {
+                                                        const pct = sent > 0 ? Math.max(((bar.value / sent) * 100), bar.value > 0 ? 1 : 0) : 0;
+                                                        const pctLabel = sent > 0 ? ((bar.value / sent) * 100).toFixed(1) : '0.0';
+                                                        return (
+                                                            <div key={bar.label} className="flex items-center gap-3 text-xs">
+                                                                <span className="w-16 shrink-0 text-right font-medium text-slate-600">{bar.label}</span>
+                                                                <div className="h-5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                                                                    <div className={`h-full rounded-full ${bar.color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                                                                </div>
+                                                                <span className="w-28 shrink-0 text-right tabular-nums text-slate-600">{bar.value.toLocaleString()} ({pctLabel}%)</span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })() : null}
+                                </>
+                            ) : (
+                                <p className="text-center text-xs text-slate-400">
+                                    Provider delivery stats will appear after refreshing analytics on sent campaigns.
+                                </p>
+                            )}
+                        </div>
                     </section>
 
                     <section className="rounded-lg border border-slate-200 bg-white p-3">
@@ -710,6 +778,40 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                         <p className="mt-2 text-[11px] text-slate-500">
                             Campaign schedule sets activation time only. Each item still sends at its own date/time.
                         </p>
+
+                        {/* Reschedule: only show for campaigns with failed/skipped items */}
+                        {['partial', 'failed', 'completed', 'running'].includes(campaign?.status) &&
+                            ((campaign?.failed_count || 0) > 0 || (itemSummary?.skipped || 0) > 0) && (
+                            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                <p className="text-xs font-semibold text-amber-800">Reschedule failed/missed items</p>
+                                <p className="mt-1 text-[11px] text-amber-700">
+                                    Creates a new draft campaign from failed and skipped items, with dates shifted forward.
+                                </p>
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <label className="text-xs text-slate-600">Shift by</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="30"
+                                        value={rescheduleShiftDays}
+                                        onChange={(e) => setRescheduleShiftDays(Math.max(0, Math.min(30, parseInt(e.target.value) || 0)))}
+                                        className="crm-input w-16 text-center"
+                                    />
+                                    <span className="text-xs text-slate-600">day{rescheduleShiftDays !== 1 ? 's' : ''}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => rescheduleMutation.mutate({
+                                            shift_days: rescheduleShiftDays,
+                                            include_statuses: ['failed', 'skipped'],
+                                        })}
+                                        disabled={rescheduleMutation.isPending}
+                                        className="crm-btn-secondary border-amber-300 text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {rescheduleMutation.isPending ? 'Creating...' : 'Reschedule'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </section>
 
                     <section className="rounded-lg border border-slate-200 bg-white p-3">

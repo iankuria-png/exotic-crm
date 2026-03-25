@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Client;
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Models\TimelineEvent;
@@ -104,9 +105,18 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
             $scheduleAt = $item->scheduled_at->toIso8601String();
         }
 
+        // Resolve city: use stored value, or look up from linked client as fallback.
+        $city = $item->profile_city;
+        if (!$city && $item->client_id) {
+            $city = Client::query()->where('id', (int) $item->client_id)->value('city');
+            if ($city) {
+                $item->forceFill(['profile_city' => $city])->save();
+            }
+        }
+
         $title = $item->profile_name ?: 'New profile';
-        if ($item->profile_city) {
-            $title = "{$item->profile_name} from {$item->profile_city}";
+        if ($city) {
+            $title = "{$item->profile_name} from {$city}";
         }
 
         $notification = [
