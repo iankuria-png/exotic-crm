@@ -117,14 +117,13 @@ This is the execution tracker for the production rollout described in:
   - `resources/js/hooks/useAuth.js`
   - `resources/js/layouts/MainLayout.jsx`
   - `resources/js/services/api.js`
-- [ ] Ensure session token rotation/clearing is safe across login/logout
 - [x] Ensure session token rotation/clearing is safe across login/logout
 - [x] Ensure heartbeat respects visible-tab rules from the V2 UX contract
-- [ ] Verification gate:
+- [x] Verification gate:
   - `npm run build`
   - `php artisan test --filter=TeamHeartbeatSessionLifecycleTest`
   - targeted browser verification of login, 60-second heartbeat refresh, and logout session close
-- [ ] Commit tranche 4
+- [x] Commit tranche 4 (`88eba98`, session heartbeat lifecycle milestone)
 
 ## Tranche 5: Team Page UI
 
@@ -164,6 +163,6 @@ This is the execution tracker for the production rollout described in:
 - [x] Tranche 1 commit created (`7916b4e`, shared backend foundation milestone)
 - [x] Tranche 2 commit created (`7916b4e`, shared backend foundation milestone)
 - [x] Tranche 3 commit created (`7916b4e`, shared backend foundation milestone)
-- [ ] Tranche 4 commit created
+- [x] Tranche 4 commit created (`88eba98`, session heartbeat lifecycle milestone)
 - [ ] Tranche 5 commit created
 - [ ] Tranche 6 / final hardening commit created
