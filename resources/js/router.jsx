@@ -14,6 +14,7 @@ import PushCampaigns from './pages/PushCampaigns';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
+import Team from './pages/Team';
 import { useAuth } from './hooks/useAuth';
 
 function ProtectedRoute({ children }) {
@@ -34,7 +35,7 @@ function ProtectedRoute({ children }) {
 
     if (user.role === 'marketing') {
         const path = location.pathname || '/';
-        const allowed = path === '/' || path.startsWith('/clients') || path.startsWith('/push-campaigns');
+        const allowed = path === '/' || path.startsWith('/clients') || path.startsWith('/push-campaigns') || path.startsWith('/team');
 
         if (!allowed) {
             return <Navigate to="/push-campaigns" replace />;
@@ -70,6 +71,7 @@ export default function AppRouter() {
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />
                 <Route path="push-campaigns" element={<PushCampaigns />} />
+                <Route path="team" element={<Team />} />
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />

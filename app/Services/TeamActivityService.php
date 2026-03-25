@@ -152,9 +152,11 @@ class TeamActivityService
         return $sessions->count();
     }
 
-    public function getPresence(User $viewer): array
+    public function getPresence(User $viewer, ?int $platformId = null): array
     {
-        $agents = $this->visibleAgentsForViewer($viewer);
+        $this->assertPlatformAccessible($viewer, $platformId);
+
+        $agents = $this->visibleAgentsForViewer($viewer, $platformId);
 
         if ($agents->isEmpty()) {
             return [
@@ -175,12 +177,12 @@ class TeamActivityService
             ->get()
             ->groupBy('user_id');
 
-        $latestActions = $this->latestActionsByUser($agentIds, $viewer, null);
+        $latestActions = $this->latestActionsByUser($agentIds, $viewer, $platformId);
         $todayMetrics = $this->aggregateActionMetricsForRange(
             now()->startOfDay(),
             now(),
             $viewer,
-            null,
+            $platformId,
             $agentIds
         );
 
@@ -392,6 +394,7 @@ class TeamActivityService
         return [
             'period' => $this->normalizeNamedPeriod($period),
             'platform_id' => $platformId,
+            'platforms' => $this->availablePlatformsForUser($user),
             'summary' => $summary,
             'previous_summary' => $previousSummary,
             'trend' => $this->buildTrendPayload($summary, $previousSummary),
@@ -956,7 +959,7 @@ class TeamActivityService
         return $totals;
     }
 
-    private function visibleAgentsForViewer(User $viewer): Collection
+    private function visibleAgentsForViewer(User $viewer, ?int $platformId = null): Collection
     {
         $agents = User::query()
             ->where('status', 'active')
@@ -966,7 +969,9 @@ class TeamActivityService
             ->get();
 
         if ($viewer->role === MarketAuthorizationService::ROLE_ADMIN) {
-            return $agents->values();
+            return $agents
+                ->filter(fn (User $agent) => $platformId === null || $this->userHasPlatform($agent, $platformId))
+                ->values();
         }
 
         $viewerPlatforms = $this->accessiblePlatformIdsForUser($viewer);
@@ -975,8 +980,25 @@ class TeamActivityService
         }
 
         return $agents
-            ->filter(fn (User $agent) => $this->userHasPlatformOverlap($viewerPlatforms, $agent))
+            ->filter(function (User $agent) use ($platformId, $viewerPlatforms) {
+                if ($platformId !== null) {
+                    return in_array($platformId, $viewerPlatforms, true) && $this->userHasPlatform($agent, $platformId);
+                }
+
+                return $this->userHasPlatformOverlap($viewerPlatforms, $agent);
+            })
             ->values();
+    }
+
+    private function userHasPlatform(User $candidate, int $platformId): bool
+    {
+        $candidatePlatforms = $this->accessiblePlatformIdsForUser($candidate);
+
+        if ($candidatePlatforms === null) {
+            return true;
+        }
+
+        return in_array($platformId, $candidatePlatforms, true);
     }
 
     private function userHasPlatformOverlap(array $viewerPlatformIds, User $candidate): bool
@@ -1005,6 +1027,32 @@ class TeamActivityService
             ->map(fn ($id) => (int) $id)
             ->filter(fn ($id) => $id > 0)
             ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function availablePlatformsForUser(User $user): array
+    {
+        $platformIds = $this->accessiblePlatformIdsForUser($user);
+
+        return Platform::query()
+            ->where('is_active', true)
+            ->when(is_array($platformIds), function ($query) use ($platformIds) {
+                if (empty($platformIds)) {
+                    $query->whereRaw('1 = 0');
+                    return;
+                }
+
+                $query->whereIn('id', $platformIds);
+            })
+            ->orderBy('name')
+            ->get(['id', 'name', 'country', 'currency_code'])
+            ->map(fn (Platform $platform) => [
+                'platform_id' => (int) $platform->id,
+                'platform_name' => $platform->name,
+                'country' => $platform->country,
+                'currency' => $platform->currency_code,
+            ])
             ->values()
             ->all();
     }

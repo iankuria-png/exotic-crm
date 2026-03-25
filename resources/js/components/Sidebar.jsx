@@ -9,6 +9,7 @@ const navGroups = [
         title: 'Workspace',
         items: [
             { to: '/', label: 'Dashboard', icon: 'M3.75 4.5h7.5v6.75h-7.5V4.5Zm0 8.25h7.5V19.5h-7.5v-6.75Zm9 0h7.5V19.5h-7.5v-6.75Zm0-8.25h7.5v6.75h-7.5V4.5Z' },
+            { to: '/team', label: 'Team', icon: 'M16.5 18.75a3.75 3.75 0 0 0-7.5 0m7.5 0H21m-4.5 0H7.5m0 0H3m4.5 0a3.75 3.75 0 0 1 7.5 0m-6-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm12 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm-6-1.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z' },
             { to: '/clients', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
             { to: '/leads', label: 'Leads', icon: 'M3.75 6.75h16.5v10.5H3.75V6.75Zm0 0L12 13.125 20.25 6.75' },
             { to: '/conversations', label: 'Conversations', icon: 'M8.25 9.75h7.5m-7.5 3.75h4.5m-8.25-7.5h15A1.5 1.5 0 0 1 21 7.5v7.5a1.5 1.5 0 0 1-1.5 1.5H12l-4.5 3v-3H4.5A1.5 1.5 0 0 1 3 15V7.5A1.5 1.5 0 0 1 4.5 6Z' },
@@ -47,6 +48,7 @@ export default function Sidebar({ onClose }) {
                 title: 'Workspace',
                 items: [
                     { to: '/', label: 'Dashboard', icon: 'M3.75 4.5h7.5v6.75h-7.5V4.5Zm0 8.25h7.5V19.5h-7.5v-6.75Zm9 0h7.5V19.5h-7.5v-6.75Zm0-8.25h7.5v6.75h-7.5V4.5Z' },
+                    { to: '/team', label: 'Team', icon: 'M16.5 18.75a3.75 3.75 0 0 0-7.5 0m7.5 0H21m-4.5 0H7.5m0 0H3m4.5 0a3.75 3.75 0 0 1 7.5 0m-6-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm12 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm-6-1.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z' },
                     { to: '/clients', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
                 ],
             },

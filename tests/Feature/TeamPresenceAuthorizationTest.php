@@ -59,6 +59,29 @@ class TeamPresenceAuthorizationTest extends TestCase
         $this->assertSame([$agentA->id, $agentBoth->id], $ids);
     }
 
+    public function test_presence_can_be_filtered_to_a_single_accessible_market(): void
+    {
+        $platformA = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $platformB = $this->createTeamPlatform(['name' => 'Tanzania', 'currency_code' => 'TZS', 'domain' => 'tz-market.test']);
+        $subAdmin = $this->createTeamUser('sub_admin', [$platformA->id, $platformB->id]);
+        $agentA = $this->createTeamUser('sales', [$platformA->id], ['email' => 'only-a@example.test']);
+        $agentB = $this->createTeamUser('marketing', [$platformB->id], ['email' => 'only-b@example.test']);
+        $agentBoth = $this->createTeamUser('sales', [$platformA->id, $platformB->id], ['email' => 'both@example.test']);
+
+        $this->createTeamSession($agentA, '11111111-2222-3333-4444-555555555555');
+        $this->createTeamSession($agentB, '66666666-7777-8888-9999-000000000000');
+        $this->createTeamSession($agentBoth, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+
+        Sanctum::actingAs($subAdmin);
+
+        $response = $this->getJson('/api/crm/team/presence?platform_id=' . $platformB->id);
+
+        $response->assertOk();
+
+        $ids = collect($response->json('data'))->pluck('user_id')->sort()->values()->all();
+        $this->assertSame([$agentB->id, $agentBoth->id], $ids);
+    }
+
     public function test_sales_user_cannot_access_presence_route(): void
     {
         $platform = $this->createTeamPlatform();

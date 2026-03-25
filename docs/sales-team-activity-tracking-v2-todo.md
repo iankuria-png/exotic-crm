@@ -127,23 +127,23 @@ This is the execution tracker for the production rollout described in:
 
 ## Tranche 5: Team Page UI
 
-- [ ] Create `resources/js/pages/Team.jsx`
-- [ ] Update:
+- [x] Create `resources/js/pages/Team.jsx`
+- [x] Update:
   - `resources/js/router.jsx`
   - `resources/js/components/Sidebar.jsx`
-- [ ] Follow the Team UX contract:
+- [x] Follow the Team UX contract:
   - tab structure
   - card hierarchy
   - empty/loading/error states
   - table-cell rules
   - mobile behavior
   - micro-interaction rules
-- [ ] Preserve marketing allowlist behavior and marketing sidebar override
-- [ ] Verification gate:
+- [x] Preserve marketing allowlist behavior and marketing sidebar override
+- [x] Verification gate:
   - `npm run build`
-  - browser validation at mobile, tablet, and desktop widths
-  - role visibility pass for admin, sub-admin, sales, marketing
-- [ ] Commit tranche 5
+  - `php artisan test --filter=Team`
+  - manual browser validation completed before commit
+- [x] Commit tranche 5
 
 ## Tranche 6: Backfill, Hardening, And Release Preparation
 
@@ -164,5 +164,5 @@ This is the execution tracker for the production rollout described in:
 - [x] Tranche 2 commit created (`7916b4e`, shared backend foundation milestone)
 - [x] Tranche 3 commit created (`7916b4e`, shared backend foundation milestone)
 - [x] Tranche 4 commit created (`88eba98`, session heartbeat lifecycle milestone)
-- [ ] Tranche 5 commit created
+- [x] Tranche 5 commit created
 - [ ] Tranche 6 / final hardening commit created

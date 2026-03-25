@@ -33,8 +33,15 @@ class TeamController extends Controller
 
     public function presence(Request $request)
     {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+        ]);
+
         return response()->json(
-            $this->teamActivityService->getPresence($request->user())
+            $this->teamActivityService->getPresence(
+                $request->user(),
+                isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
+            )
         );
     }
 
