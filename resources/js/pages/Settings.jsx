@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Navigate } from 'react-router-dom';
 import api from '../services/api';
 import DataTable from '../components/DataTable';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -7214,6 +7215,7 @@ function DashboardSettingsPanel() {
 
 export default function Settings() {
     const { user } = useAuth();
+    const isSales = (user?.role || '') === 'sales';
     const [activeTab, setActiveTab] = useState('integrations');
     const canManageTemplates = ['admin', 'sub_admin'].includes(user?.role || '');
     const canViewRoles = (user?.role || '') === 'admin';
@@ -7236,6 +7238,10 @@ export default function Settings() {
             setActiveTab(tabs[0]?.id || 'integrations');
         }
     }, [activeTab, tabs]);
+
+    if (isSales) {
+        return <Navigate to="/" replace />;
+    }
 
     return (
         <div className="space-y-4">

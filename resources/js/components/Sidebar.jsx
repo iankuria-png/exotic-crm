@@ -72,6 +72,8 @@ export default function Sidebar({ onClose }) {
                     items: [...group.items, pushCampaignNavItem],
                 };
             })
+            : role === 'sales'
+                ? navGroups.filter((group) => group.title !== 'Admin')
             : navGroups;
 
     return (

@@ -42,7 +42,13 @@ function ProtectedRoute({ children }) {
         }
     }
 
-    if (user.role === 'sales' && (location.pathname || '').startsWith('/push-campaigns')) {
+    if (
+        user.role === 'sales'
+        && (
+            (location.pathname || '').startsWith('/push-campaigns')
+            || (location.pathname || '').startsWith('/settings')
+        )
+    ) {
         return <Navigate to="/" replace />;
     }
 
