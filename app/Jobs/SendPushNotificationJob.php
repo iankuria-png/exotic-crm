@@ -22,10 +22,13 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
 
     public int $tries = 3;
 
-    public int $uniqueFor = 7200;
+    public int $timeout = 45;
+
+    public int $uniqueFor = 600;
 
     public function __construct(public readonly int $pushCampaignItemId)
     {
+        $this->onQueue('push');
     }
 
     public function handle(PushProviderService $pushProviderService, AuditService $auditService): void
@@ -175,34 +178,31 @@ class SendPushNotificationJob implements ShouldQueue, ShouldBeUnique
 
     public function backoff(): array
     {
-        return [60, 120, 300];
+        return [30, 60, 120];
     }
 
     private function completeCampaignIfDone(int $campaignId): void
     {
-        $campaign = PushCampaign::query()->find($campaignId);
-        if (!$campaign) {
-            return;
-        }
-
-        $remaining = PushCampaignItem::query()
+        // Single query: group all item statuses for this campaign.
+        $counts = PushCampaignItem::query()
             ->where('campaign_id', $campaignId)
-            ->whereNotIn('status', ['sent', 'failed', 'skipped'])
-            ->count();
+            ->selectRaw('status, COUNT(*) as cnt')
+            ->groupBy('status')
+            ->pluck('cnt', 'status');
+
+        $remaining = ($counts->get('pending', 0) + $counts->get('scheduled', 0));
 
         if ($remaining > 0) {
             return;
         }
 
-        $sent = PushCampaignItem::query()
-            ->where('campaign_id', $campaignId)
-            ->where('status', 'sent')
-            ->count();
+        $campaign = PushCampaign::query()->find($campaignId);
+        if (!$campaign) {
+            return;
+        }
 
-        $failed = PushCampaignItem::query()
-            ->where('campaign_id', $campaignId)
-            ->where('status', 'failed')
-            ->count();
+        $sent = (int) $counts->get('sent', 0);
+        $failed = (int) $counts->get('failed', 0);
 
         $status = $sent > 0 && $failed === 0
             ? 'completed'

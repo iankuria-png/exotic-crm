@@ -60,8 +60,8 @@ class IZootoProvider implements PushProviderInterface
             ->withHeaders([
                 'Authentication-Token' => (string) $config['api_token'],
             ])
-            ->timeout(20)
-            ->retry(2, 500)
+            ->timeout(10)
+            ->retry(2, 500, throw: false)
             ->post('https://apis.izooto.com/v1/notifications', $payload);
 
         $raw = $response->json();

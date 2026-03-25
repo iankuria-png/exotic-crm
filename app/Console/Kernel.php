@@ -118,9 +118,10 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
-        // Queue worker: process all pending jobs every minute then exit.
-        // Piggybacks on the existing schedule:run cron — no separate cron entry needed.
-        $schedule->command('queue:work database --stop-when-empty --max-time=55 --tries=3')
+        // Queue worker: processes push queue first (time-sensitive), then default queue.
+        // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
+        // --queue=push,default ensures push notifications are never blocked by slow sync jobs.
+        $schedule->command('queue:work database --queue=push,default --max-time=55 --tries=3 --sleep=3')
             ->name('queue_worker')
             ->everyMinute()
             ->withoutOverlapping()

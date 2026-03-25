@@ -67,8 +67,8 @@ class WonderPushProvider implements PushProviderInterface
         $endpoint = 'https://management-api.wonderpush.com/v1/deliveries?accessToken=' . urlencode((string) $config['access_token']);
 
         $response = Http::acceptJson()
-            ->timeout(20)
-            ->retry(2, 500)
+            ->timeout(10)
+            ->retry(2, 500, throw: false)
             ->post($endpoint, $payload);
 
         $raw = $response->json();

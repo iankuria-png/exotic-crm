@@ -139,7 +139,7 @@ class WebPushrProvider implements PushProviderInterface
                 'webpushrKey' => (string) $config['api_key'],
                 'webpushrAuthToken' => (string) $config['auth_token'],
             ])
-            ->timeout(20)
+            ->timeout(10)
             ->retry(2, 500, throw: false);
     }
 
