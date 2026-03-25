@@ -2,11 +2,14 @@ import React, { useState } from 'react';
 import { Link, Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import { useAuth } from '../hooks/useAuth';
+import { useHeartbeat } from '../hooks/useHeartbeat';
 
 export default function MainLayout() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const { user } = useAuth();
     const isMarketing = user?.role === 'marketing';
+
+    useHeartbeat(user);
 
     return (
         <div className="flex h-screen min-h-svh overflow-hidden">

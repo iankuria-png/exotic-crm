@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearAuthSnapshot } from '../utils/authStorage';
 
 const api = axios.create({
     baseURL: '/api',
@@ -23,8 +24,7 @@ api.interceptors.response.use(
     (response) => response,
     (error) => {
         if (error.response?.status === 401) {
-            localStorage.removeItem('crm_token');
-            localStorage.removeItem('crm_user');
+            clearAuthSnapshot({ clearSessionToken: true });
             window.location.href = '/login';
         }
         return Promise.reject(error);

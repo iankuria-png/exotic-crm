@@ -49,7 +49,7 @@ This is the execution tracker for the production rollout described in:
   - historical revenue stability after status changes
 - [x] Verification gate:
   - red or pending tests are acceptable here only if they accurately encode the contract
-- [ ] Commit tranche 0
+- [x] Commit tranche 0 (covered by backend foundation commit `7916b4e`)
 
 ## Tranche 1: Schema, Models, And Data Contracts
 
@@ -64,7 +64,7 @@ This is the execution tracker for the production rollout described in:
 - [x] Verify indexes, casts, and relations match the V2 architecture doc
 - [x] Verification gate:
   - `php artisan test --filter=Team`
-- [ ] Commit tranche 1
+- [x] Commit tranche 1 (covered by backend foundation commit `7916b4e`)
 
 ## Tranche 2: TeamActivityService And Session Lifecycle
 
@@ -87,7 +87,7 @@ This is the execution tracker for the production rollout described in:
 - [x] Verification gate:
   - `php artisan test --filter=Team`
   - targeted revenue/history coverage inside the new feature tests
-- [ ] Commit tranche 2
+- [x] Commit tranche 2 (covered by backend foundation commit `7916b4e`)
 
 ## Tranche 3: Controller, Routes, Auth, And Commands
 
@@ -106,19 +106,24 @@ This is the execution tracker for the production rollout described in:
   - `php artisan test --filter=Team`
   - `php artisan route:list | grep team`
   - `php artisan list | grep crm:`
-- [ ] Commit tranche 3
+- [x] Commit tranche 3 (covered by backend foundation commit `7916b4e`)
 
 ## Tranche 4: Frontend Session Integration
 
-- [ ] Create `resources/js/hooks/useHeartbeat.js`
-- [ ] Update:
+- [x] Create `resources/js/hooks/useHeartbeat.js`
+- [x] Add shared auth/session storage helpers:
+  - `resources/js/utils/authStorage.js`
+- [x] Update:
   - `resources/js/hooks/useAuth.js`
   - `resources/js/layouts/MainLayout.jsx`
+  - `resources/js/services/api.js`
 - [ ] Ensure session token rotation/clearing is safe across login/logout
-- [ ] Ensure heartbeat respects visible-tab rules from the V2 UX contract
+- [x] Ensure session token rotation/clearing is safe across login/logout
+- [x] Ensure heartbeat respects visible-tab rules from the V2 UX contract
 - [ ] Verification gate:
   - `npm run build`
-  - targeted browser verification of login, logout, and heartbeat behavior
+  - `php artisan test --filter=TeamHeartbeatSessionLifecycleTest`
+  - targeted browser verification of login, 60-second heartbeat refresh, and logout session close
 - [ ] Commit tranche 4
 
 ## Tranche 5: Team Page UI
@@ -155,10 +160,10 @@ This is the execution tracker for the production rollout described in:
 
 ## Commit Log
 
-- [ ] Tranche 0 commit created
-- [ ] Tranche 1 commit created
-- [ ] Tranche 2 commit created
-- [ ] Tranche 3 commit created
+- [x] Tranche 0 commit created (`7916b4e`, shared backend foundation milestone)
+- [x] Tranche 1 commit created (`7916b4e`, shared backend foundation milestone)
+- [x] Tranche 2 commit created (`7916b4e`, shared backend foundation milestone)
+- [x] Tranche 3 commit created (`7916b4e`, shared backend foundation milestone)
 - [ ] Tranche 4 commit created
 - [ ] Tranche 5 commit created
 - [ ] Tranche 6 / final hardening commit created

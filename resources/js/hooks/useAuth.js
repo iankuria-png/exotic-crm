@@ -1,47 +1,82 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import api from '../services/api';
+import {
+    clearAuthSnapshot,
+    ensureSessionToken,
+    readAuthSnapshot,
+    readSessionToken,
+    rotateSessionToken,
+    storeAuthSnapshot,
+    subscribeToAuthChanges,
+    updateStoredUser,
+} from '../utils/authStorage';
 
 export function useAuth() {
-    const [user, setUser] = useState(() => {
-        const saved = localStorage.getItem('crm_user');
-        return saved ? JSON.parse(saved) : null;
-    });
-    const [isLoading, setIsLoading] = useState(!user);
+    const auth = useSyncExternalStore(
+        subscribeToAuthChanges,
+        readAuthSnapshot,
+        () => ({ token: null, user: null }),
+    );
+    const user = auth.user;
+    const token = auth.token;
+    const [isLoading, setIsLoading] = useState(() => Boolean(token && !user));
 
     useEffect(() => {
-        const token = localStorage.getItem('crm_token');
+        let cancelled = false;
+
         if (token && !user) {
             api.get('/crm/me')
                 .then(({ data }) => {
-                    setUser(data.user);
-                    localStorage.setItem('crm_user', JSON.stringify(data.user));
+                    if (cancelled) {
+                        return;
+                    }
+
+                    updateStoredUser(data.user);
+                    ensureSessionToken();
                 })
                 .catch(() => {
-                    localStorage.removeItem('crm_token');
-                    localStorage.removeItem('crm_user');
-                    setUser(null);
+                    if (cancelled) {
+                        return;
+                    }
+
+                    clearAuthSnapshot({ clearSessionToken: true });
                 })
-                .finally(() => setIsLoading(false));
+                .finally(() => {
+                    if (!cancelled) {
+                        setIsLoading(false);
+                    }
+                });
         } else {
             setIsLoading(false);
         }
-    }, []);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [token, user]);
+
+    useEffect(() => {
+        if (token && user) {
+            ensureSessionToken();
+        }
+    }, [token, user]);
 
     const login = useCallback(async (email, password) => {
         const { data } = await api.post('/crm/login', { email, password });
-        localStorage.setItem('crm_token', data.token);
-        localStorage.setItem('crm_user', JSON.stringify(data.user));
-        setUser(data.user);
+        rotateSessionToken();
+        storeAuthSnapshot(data.token, data.user);
+        setIsLoading(false);
         return data;
     }, []);
 
     const logout = useCallback(async () => {
+        const sessionToken = readSessionToken();
+
         try {
-            await api.post('/crm/logout');
+            await api.post('/crm/logout', sessionToken ? { session_token: sessionToken } : {});
         } finally {
-            localStorage.removeItem('crm_token');
-            localStorage.removeItem('crm_user');
-            setUser(null);
+            clearAuthSnapshot({ clearSessionToken: true });
+            setIsLoading(false);
         }
     }, []);
 
