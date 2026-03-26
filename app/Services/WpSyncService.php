@@ -65,6 +65,32 @@ class WpSyncService
     }
 
     /**
+     * Fetch profile analytics for a single WordPress profile.
+     */
+    public function getAnalytics(int $postId, ?string $from = null, ?string $to = null): array
+    {
+        $params = array_filter([
+            'from' => $from,
+            'to' => $to,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        return $this->get("/analytics/{$postId}", $params);
+    }
+
+    /**
+     * Fetch paginated analytics rankings for one WordPress platform.
+     */
+    public function getAnalyticsRankings(array $params = []): array
+    {
+        $params = array_filter(
+            $params,
+            fn ($value) => $value !== null && $value !== ''
+        );
+
+        return $this->get('/analytics/rankings', $params);
+    }
+
+    /**
      * Update editable profile fields on WordPress.
      */
     public function updateClientProfile(int $postId, array $fields): array

@@ -141,6 +141,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/clients/{client}/retention-insight', [ClientController::class, 'retentionInsight'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/retention-history', [ClientController::class, 'retentionHistory'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/analytics', [ClientController::class, 'profileAnalytics'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/media', [ClientController::class, 'uploadMedia'])->middleware('role:admin,sub_admin,sales');
@@ -162,6 +163,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/clients/{client}/support-board/conversations', [SupportBoardController::class, 'conversations'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/support-board/conversations/{conversationId}', [SupportBoardController::class, 'conversation'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/support-board/conversations/{conversationId}/reply', [SupportBoardController::class, 'reply'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/reports/profile-engagement', [ReportController::class, 'profileEngagement'])->middleware('role:admin,sub_admin,sales,marketing');
 
     Route::middleware('role:admin,sub_admin,sales')->group(function () {
         // Deals

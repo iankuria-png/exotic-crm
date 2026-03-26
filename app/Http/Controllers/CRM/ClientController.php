@@ -522,6 +522,38 @@ class ClientController extends Controller
         }
     }
 
+    public function profileAnalytics(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+        ]);
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $analytics = $wpSync->getAnalytics(
+                (int) $client->wp_post_id,
+                $validated['from'] ?? null,
+                $validated['to'] ?? null
+            );
+
+            return response()->json($analytics);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to fetch WordPress profile analytics.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+    }
+
     public function updateWpProfile(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);

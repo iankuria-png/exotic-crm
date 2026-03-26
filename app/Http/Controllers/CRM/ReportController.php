@@ -10,9 +10,11 @@ use App\Models\Lead;
 use App\Models\Payment;
 use App\Models\RenewalRun;
 use App\Services\MarketAuthorizationService;
+use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
@@ -299,6 +301,75 @@ class ReportController extends Controller
         ]);
     }
 
+    public function profileEngagement(Request $request)
+    {
+        $validated = $request->validate([
+            'platform_id' => 'nullable|exists:platforms,id',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'compare_from' => 'nullable|date',
+            'compare_to' => 'nullable|date|after_or_equal:compare_from',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
+            'sort_by' => 'nullable|in:engagement_score,profile_view,contact_rate,contact_total',
+            'order' => 'nullable|in:asc,desc',
+            'status' => 'nullable|in:publish,private,draft,pending',
+        ]);
+
+        $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this report market.'
+        );
+
+        if (!$selectedPlatformId) {
+            $accessiblePlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+            if (is_array($accessiblePlatformIds) && count($accessiblePlatformIds) === 1) {
+                $selectedPlatformId = (int) $accessiblePlatformIds[0];
+            }
+        }
+
+        if (!$selectedPlatformId) {
+            return response()->json([
+                'message' => 'Select a market to view profile engagement analytics.',
+            ], 422);
+        }
+
+        $params = array_filter([
+            'from' => $validated['from'] ?? null,
+            'to' => $validated['to'] ?? null,
+            'compare_from' => $validated['compare_from'] ?? null,
+            'compare_to' => $validated['compare_to'] ?? null,
+            'page' => $validated['page'] ?? null,
+            'per_page' => $validated['per_page'] ?? null,
+            'sort_by' => $validated['sort_by'] ?? null,
+            'order' => $validated['order'] ?? null,
+            'status' => $validated['status'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        try {
+            $payload = WpSyncService::forPlatform((int) $selectedPlatformId)
+                ->getAnalyticsRankings($params);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Failed to fetch profile engagement analytics.',
+                'error' => $exception->getMessage(),
+            ], 502);
+        }
+
+        $payload['filters'] = array_merge(
+            is_array($payload['filters'] ?? null) ? $payload['filters'] : [],
+            ['platform_id' => (int) $selectedPlatformId]
+        );
+        $payload['profiles'] = $this->enrichAnalyticsProfiles(
+            (int) $selectedPlatformId,
+            is_array($payload['profiles'] ?? null) ? $payload['profiles'] : []
+        );
+
+        return response()->json($payload);
+    }
+
     private function resolveBaselineCutoff(): ?Carbon
     {
         try {
@@ -334,5 +405,74 @@ class ReportController extends Controller
         } catch (\Throwable) {
             return $monthKey;
         }
+    }
+
+    private function enrichAnalyticsProfiles(int $platformId, array $profiles): array
+    {
+        if (empty($profiles)) {
+            return [];
+        }
+
+        $postIds = collect($profiles)
+            ->pluck('post_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($postIds->isEmpty()) {
+            return $profiles;
+        }
+
+        $clients = Client::query()
+            ->where('platform_id', $platformId)
+            ->whereIn('wp_post_id', $postIds)
+            ->with([
+                'assignedAgent:id,name',
+                'activeDeal:id,client_id,status,plan_type,product_id',
+                'activeDeal.product:id,name,display_name,tier',
+            ])
+            ->get()
+            ->keyBy(fn (Client $client) => (int) $client->wp_post_id);
+
+        return array_map(function (array $profile) use ($clients) {
+            $postId = (int) ($profile['post_id'] ?? 0);
+            /** @var Client|null $client */
+            $client = $clients->get($postId);
+
+            $profile['crm_client_id'] = $client ? (int) $client->id : null;
+            $profile['assigned_agent'] = $client && $client->assignedAgent
+                ? [
+                    'id' => (int) $client->assignedAgent->id,
+                    'name' => $client->assignedAgent->name,
+                ]
+                : null;
+            $profile['assigned_agent_name'] = $client?->assignedAgent?->name;
+            $profile['subscription_tier'] = $client ? $this->resolveAnalyticsPlanLabel($client) : null;
+            $profile['subscription_status'] = $client?->activeDeal?->status ?? $client?->profile_status;
+            $profile['crm_profile_status'] = $client?->profile_status;
+            $profile['wp_profile_url'] = $client?->wp_profile_url;
+
+            return $profile;
+        }, $profiles);
+    }
+
+    private function resolveAnalyticsPlanLabel(Client $client): string
+    {
+        $product = $client->activeDeal?->product;
+
+        if ($product?->display_name) {
+            return (string) $product->display_name;
+        }
+
+        if ($product?->name) {
+            return (string) $product->name;
+        }
+
+        if ($client->activeDeal?->plan_type) {
+            return Str::title((string) $client->activeDeal->plan_type);
+        }
+
+        return (string) $client->plan_label;
     }
 }
