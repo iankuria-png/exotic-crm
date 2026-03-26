@@ -7,27 +7,21 @@ use Illuminate\Http\Request;
 use App\Models\Deal;
 use App\Models\Client;
 use App\Models\Payment;
-use App\Models\Product;
-use App\Models\ProductPrice;
 use App\Models\Template;
 use App\Models\TimelineEvent;
 use App\Models\Platform;
 use App\Services\AuditService;
 use App\Services\WpSyncService;
 use App\Services\ClientSyncService;
-use App\Services\LegacyStkService;
+use App\Services\DealPaymentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
-use App\Services\PaymentLinkService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
-use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Validation\ValidationException;
 
 class DealController extends Controller
 {
@@ -35,9 +29,8 @@ class DealController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
         private readonly \App\Services\RenewalService $renewalService,
+        private readonly DealPaymentService $dealPaymentService,
         private readonly NotificationService $notificationService,
-        private readonly PaymentLinkService $paymentLinkService,
-        private readonly LegacyStkService $legacyStkService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly WalletSettingsService $walletSettingsService
     ) {
@@ -100,19 +93,19 @@ class DealController extends Controller
                 ]);
             }
 
-            $product = $this->resolveScopedProduct($productId, (int) $deal->platform_id);
+            $product = $this->dealPaymentService->resolveScopedProduct($productId, (int) $deal->platform_id);
             $validated['product_id'] = $product->id;
-            $validated['plan_type'] = $this->derivePlanTypeFromProduct($product);
+            $validated['plan_type'] = $this->dealPaymentService->derivePlanTypeFromProduct($product);
 
             $productPriceId = isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null;
-            $priceRow = $productPriceId ? $this->resolveScopedProductPrice($productPriceId, $product) : null;
+            $priceRow = $productPriceId ? $this->dealPaymentService->resolveScopedProductPrice($productPriceId, $product) : null;
 
             if ($priceRow) {
                 $validated['amount'] = (float) $priceRow->price;
-                $validated['duration'] = $this->mapDurationKeyToLegacy($priceRow->duration_key);
+                $validated['duration'] = $this->dealPaymentService->mapDurationKeyToLegacy($priceRow->duration_key);
             } else {
                 $duration = $validated['duration'] ?? $deal->duration;
-                $validated['amount'] = $this->resolveAmountForDuration($product, (string) $duration);
+                $validated['amount'] = $this->dealPaymentService->resolveAmountForDuration($product, (string) $duration);
             }
 
             $validated['currency'] = $product->currency ?: ($deal->platform?->currency_code ?: $deal->currency ?: 'KES');
@@ -192,65 +185,14 @@ class DealController extends Controller
             'You do not have access to this client market.'
         );
 
-        $product = $this->resolveScopedProduct((int) $validated['product_id'], (int) $client->platform_id);
-        $planType = $this->derivePlanTypeFromProduct($product);
-
-        // Resolve amount and duration from product_price_id if provided, otherwise fall back to legacy
-        $productPriceId = isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null;
-        $priceRow = $productPriceId ? $this->resolveScopedProductPrice($productPriceId, $product) : null;
-
-        if ($priceRow) {
-            $amount = (float) $priceRow->price;
-            $duration = $this->mapDurationKeyToLegacy($priceRow->duration_key);
-            $durationDays = $priceRow->duration_days;
-        } else {
-            $duration = $validated['duration'] ?? 'monthly';
-            $amount = $this->resolveAmountForDuration($product, $duration);
-            $durationDays = null;
-        }
-
-        $deal = Deal::create([
-            'platform_id' => $client->platform_id,
-            'client_id' => $client->id,
-            'lead_id' => $validated['lead_id'] ?? null,
-            'product_id' => $product->id,
-            'plan_type' => $planType,
-            'amount' => $amount,
-            'currency' => $product->currency ?: ($client->platform->currency_code ?? 'KES'),
-            'duration' => $duration,
-            'status' => 'pending',
-            'assigned_to' => $request->user()->id,
-        ]);
-
-        TimelineEvent::create([
-            'platform_id' => $client->platform_id,
-            'entity_type' => 'deal',
-            'entity_id' => $deal->id,
-            'event_type' => 'deal_created',
-            'actor_id' => $request->user()->id,
-            'content' => [
-                'plan_type' => $deal->plan_type,
-                'duration' => $deal->duration,
-                'amount' => $deal->amount,
-                'product_price_id' => $productPriceId,
-                'duration_days' => $durationDays,
-            ],
-            'created_at' => now(),
-        ]);
-
-        TimelineEvent::create([
-            'platform_id' => $client->platform_id,
-            'entity_type' => 'client',
-            'entity_id' => $client->id,
-            'event_type' => 'deal_created',
-            'actor_id' => $request->user()->id,
-            'content' => [
-                'deal_id' => $deal->id,
-                'plan_type' => $deal->plan_type,
-                'amount' => $deal->amount,
-            ],
-            'created_at' => now(),
-        ]);
+        $deal = $this->dealPaymentService->createPendingDealFromCatalog(
+            $client,
+            (int) $validated['product_id'],
+            isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null,
+            $validated['duration'] ?? null,
+            (int) $request->user()->id,
+            isset($validated['lead_id']) ? (int) $validated['lead_id'] : null
+        );
 
         $deal->load(['client', 'product', 'platform']);
         return response()->json($deal, 201);
@@ -287,7 +229,7 @@ class DealController extends Controller
             return $freeTrialGuard;
         }
         $paymentLinkProvider = $paymentMethod === 'link'
-            ? $this->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
             : null;
 
         // Resolve duration days: explicit request param → ProductPrice lookup → legacy enum fallback
@@ -296,7 +238,7 @@ class DealController extends Controller
             $durationDays = $explicitDays;
         } else {
             // Try to resolve from the deal's product + duration via product_prices table
-            $durationDays = $this->resolveDurationDaysFromCatalog($deal);
+            $durationDays = $this->dealPaymentService->resolveDurationDaysFromCatalog($deal);
         }
         if ($durationDays < 1) {
             $durationDays = 30;
@@ -316,14 +258,28 @@ class DealController extends Controller
             $payment = null;
 
             if ($paymentMethod === 'manual') {
-                $payment = $this->createManualPaymentForDeal(
+                $payment = $this->dealPaymentService->createManualPaymentForDeal(
                     $deal,
                     $client,
                     (string) $validated['payment_reference'],
                     (int) $request->user()->id
                 );
-            } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
+            } elseif ($paymentMethod === 'link') {
+                $result = $this->dealPaymentService->startLinkPaymentForDeal($deal, $client, $request, $paymentLinkProvider);
+                DB::commit();
+
+                /** @var \App\Models\Payment $payment */
+                $payment = $result['payment'];
+                $deal = $result['deal'];
+                $deal->load(['client', 'product', 'platform']);
+
+                return response()->json([
+                    'message' => $result['message'] ?? 'Payment initiated. Subscription will activate when payment succeeds.',
+                    'deal' => $deal,
+                    'payment' => $payment,
+                ], 202);
+            } elseif ($paymentMethod === 'stk') {
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -597,7 +553,7 @@ class DealController extends Controller
             return $freeTrialGuard;
         }
         $paymentLinkProvider = $paymentMethod === 'link'
-            ? $this->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
             : null;
 
         $beforeState = [
@@ -615,14 +571,14 @@ class DealController extends Controller
 
             $payment = null;
             if ($paymentMethod === 'manual') {
-                $payment = $this->createManualPaymentForDeal(
+                $payment = $this->dealPaymentService->createManualPaymentForDeal(
                     $deal,
                     $client,
                     (string) $validated['payment_reference'],
                     (int) $request->user()->id
                 );
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -742,7 +698,7 @@ class DealController extends Controller
             return $freeTrialGuard;
         }
         $paymentLinkProvider = $paymentMethod === 'link'
-            ? $this->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
             : null;
         $isFreeTrial = $paymentMethod === 'free_trial';
 
@@ -781,7 +737,7 @@ class DealController extends Controller
 
             $payment = null;
             if ($paymentMethod === 'manual') {
-                $payment = $this->createManualPaymentForDeal(
+                $payment = $this->dealPaymentService->createManualPaymentForDeal(
                     $newDeal,
                     $client,
                     (string) $validated['payment_reference'],
@@ -792,7 +748,7 @@ class DealController extends Controller
                     'payment_reference' => $payment->transaction_reference,
                 ]);
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->initiatePaymentForDeal($newDeal, $client, $paymentMethod, $request, $paymentLinkProvider);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal($newDeal, $client, $paymentMethod, $request, $paymentLinkProvider);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -914,231 +870,6 @@ class DealController extends Controller
         }
     }
 
-    private function createManualPaymentForDeal(Deal $deal, Client $client, string $paymentReference, int $actorId): Payment
-    {
-        $reference = trim($paymentReference);
-        if ($reference === '') {
-            throw new \InvalidArgumentException('Manual payment reference is required.');
-        }
-
-        return Payment::create([
-            'platform_id' => (int) $deal->platform_id,
-            'product_id' => $deal->product_id,
-            'deal_id' => (int) $deal->id,
-            'client_id' => (int) $client->id,
-            'phone' => $client->phone_normalized,
-            'amount' => (float) ($deal->amount ?? 0),
-            'currency' => $deal->currency ?: ($client->platform?->currency_code ?: 'KES'),
-            'transaction_uuid' => 'manual_' . $deal->id . '_' . now()->timestamp,
-            'transaction_reference' => $reference,
-            'status' => 'completed',
-            'duration' => $deal->duration,
-            'raw_payload' => [
-                'source' => 'deal_manual_payment',
-                'deal_id' => (int) $deal->id,
-            ],
-            'match_confidence' => 'manual',
-            'confirmed_by' => $actorId,
-            'confirmed_at' => now(),
-        ]);
-    }
-
-    private function initiatePaymentForDeal(Deal $deal, Client $client, string $method, Request $request, ?string $paymentLinkProvider = null): array
-    {
-        $client->loadMissing('platform');
-
-        $phonePrefix = (string) ($client->platform?->phone_prefix ?: '254');
-        $phone = PhoneNormalizer::normalize($client->phone_normalized, $phonePrefix);
-        if (!$phone) {
-            return [
-                'success' => false,
-                'message' => 'Client has no valid phone number for payment initiation.',
-            ];
-        }
-
-        $payment = Payment::create([
-            'platform_id' => (int) $deal->platform_id,
-            'product_id' => $deal->product_id,
-            'deal_id' => (int) $deal->id,
-            'client_id' => (int) $client->id,
-            'phone' => $phone,
-            'amount' => (float) ($deal->amount ?? 0),
-            'currency' => $deal->currency ?: ($client->platform?->currency_code ?: 'KES'),
-            'transaction_uuid' => $method . '_' . $deal->id . '_' . now()->timestamp,
-            'transaction_reference' => strtoupper($method) . '-' . $deal->id . '-' . now()->format('YmdHis'),
-            'status' => 'initiated',
-            'duration' => $deal->duration,
-            'raw_payload' => [
-                'source' => 'deal_payment_initiation',
-                'method' => $method,
-                'deal_id' => (int) $deal->id,
-                'payment_link_provider' => $paymentLinkProvider,
-            ],
-        ]);
-
-        if ($method === 'stk') {
-            $nameParts = preg_split('/\s+/', trim((string) $client->name), 2) ?: [];
-            try {
-                $result = $this->legacyStkService->initiateWithTelemetry($payment, [
-                    'phone' => $phone,
-                    'duration' => $payment->duration ?: $deal->duration ?: 'monthly',
-                    'first_name' => $nameParts[0] ?? null,
-                    'last_name' => $nameParts[1] ?? null,
-                    'email' => $client->email,
-                ], $request, optional($request->user())->id);
-            } catch (\Throwable $exception) {
-                $payment->update([
-                    'status' => 'failed',
-                    'failure_reason' => mb_substr($exception->getMessage(), 0, 190),
-                    'provider_key' => 'mpesa_stk',
-                    'raw_payload' => [
-                        'source' => 'deal_payment_initiation',
-                        'method' => 'stk',
-                        'error' => $exception->getMessage(),
-                    ],
-                ]);
-
-                return [
-                    'success' => false,
-                    'message' => $exception->getMessage(),
-                    'payment' => $payment,
-                ];
-            }
-
-            if ($result['success']) {
-                $updates = [
-                    'status' => 'initiated',
-                    'failure_reason' => null,
-                    'provider_key' => 'mpesa_stk',
-                    'provider_environment' => $result['provider_environment'] ?? null,
-                    'raw_payload' => [
-                        'source' => 'deal_payment_initiation',
-                        'method' => 'stk',
-                        'transport' => $result['transport'] ?? null,
-                        'upstream_url' => $result['upstream_url'] ?? null,
-                        'provider_response' => $result['provider_response'] ?? null,
-                    ],
-                ];
-                if (!empty($result['provider_reference'])) {
-                    $updates['transaction_reference'] = $result['provider_reference'];
-                }
-                $payment->update($updates);
-
-                return [
-                    'success' => true,
-                    'message' => 'STK push sent. Subscription will activate after payment confirmation.',
-                    'payment' => $payment->fresh(['platform', 'product', 'client']),
-                ];
-            }
-
-            Log::warning('Deal STK initiation failed', [
-                'deal_id' => $deal->id,
-                'payment_id' => $payment->id,
-                'provider' => $result['provider'] ?? null,
-                'transport' => $result['transport'] ?? null,
-                'upstream_url' => $result['upstream_url'] ?? null,
-                'http_status' => $result['http_status'] ?? null,
-                'redirect_location' => $result['redirect_location'] ?? null,
-                'response_body' => $result['response_body'] ?? null,
-                'provider_response' => $result['provider_response'] ?? null,
-            ]);
-
-            $payment->update([
-                'status' => 'failed',
-                'failure_reason' => mb_substr((string) ($result['message'] ?? 'STK push could not be initiated.'), 0, 190),
-                'provider_key' => 'mpesa_stk',
-                'provider_environment' => $result['provider_environment'] ?? null,
-                'raw_payload' => [
-                    'source' => 'deal_payment_initiation',
-                    'method' => 'stk',
-                    'transport' => $result['transport'] ?? null,
-                    'upstream_url' => $result['upstream_url'] ?? null,
-                    'http_status' => $result['http_status'] ?? null,
-                    'redirect_location' => $result['redirect_location'] ?? null,
-                    'response_body' => $result['response_body'] ?? null,
-                    'provider_response' => $result['provider_response'] ?? null,
-                ],
-            ]);
-
-            return [
-                'success' => false,
-                'message' => $result['message'] ?? 'STK push could not be initiated.',
-                'payment' => $payment,
-            ];
-        }
-
-        if ($method === 'link') {
-            $sendResult = $this->paymentLinkService->sendLink($payment, [
-                'request' => $request,
-                'channel' => 'sms',
-                'phone' => $phone,
-                'provider' => $paymentLinkProvider,
-                'reason' => (string) ($request->input('reason') ?: 'Send payment link from deal flow'),
-                'notification_purpose' => 'deal_activation_payment_link',
-                'notification_context' => [
-                    'deal_id' => $deal->id,
-                ],
-                'success_message' => 'Payment link sent by SMS. Subscription will activate after payment confirmation.',
-                'disabled_message' => 'Payment link prepared (SMS disabled). Subscription will activate after payment confirmation.',
-            ]);
-
-            if (!($sendResult['success'] ?? false)) {
-                $payment->update([
-                    'status' => 'failed',
-                    'raw_payload' => [
-                        'source' => 'deal_payment_initiation',
-                        'method' => 'link',
-                        'payment_link_provider' => $paymentLinkProvider,
-                        'resolved_provider' => $sendResult['provider'] ?? $paymentLinkProvider,
-                        'payment_url' => $sendResult['payment_url'] ?? null,
-                        'error' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
-                        'sms_result' => $sendResult['notification_result'] ?? null,
-                    ],
-                ]);
-
-                return [
-                    'success' => false,
-                    'message' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
-                    'payment' => $payment,
-                ];
-            }
-
-            $payment->update([
-                'status' => 'initiated',
-                'provider_key' => $sendResult['provider'] ?? $paymentLinkProvider,
-                'raw_payload' => [
-                    'source' => 'deal_payment_initiation',
-                    'method' => 'link',
-                    'payment_link_provider' => $paymentLinkProvider,
-                    'resolved_provider' => $sendResult['provider'] ?? $paymentLinkProvider,
-                    'payment_url' => $sendResult['payment_url'] ?? null,
-                    'sms_status' => data_get($sendResult, 'notification_result.status'),
-                ],
-            ]);
-
-            return [
-                'success' => true,
-                'message' => $sendResult['message'] ?? 'Payment link sent by SMS. Subscription will activate after payment confirmation.',
-                'payment' => $payment->fresh(['platform', 'product', 'client']),
-            ];
-        }
-
-        $payment->update([
-            'status' => 'failed',
-            'raw_payload' => [
-                'source' => 'deal_payment_initiation',
-                'method' => $method,
-                'error' => 'Unsupported payment method',
-            ],
-        ]);
-
-        return [
-            'success' => false,
-            'message' => 'Unsupported payment method.',
-            'payment' => $payment,
-        ];
-    }
-
     /**
      * @deprecated Kept for backwards compatibility while external clients move to payment_method contract.
      */
@@ -1201,41 +932,6 @@ class DealController extends Controller
         ], 422);
     }
 
-    private function resolvePaymentLinkProvider(Client $client, ?string $requestedProvider): ?string
-    {
-        $client->loadMissing('platform');
-        $config = is_array($client->platform?->payment_link_providers)
-            ? $client->platform->payment_link_providers
-            : [];
-
-        $providers = collect($config['providers'] ?? [])
-            ->filter(fn ($provider): bool => is_array($provider) && (bool) ($provider['enabled'] ?? true));
-
-        if ($providers->isEmpty()) {
-            throw ValidationException::withMessages([
-                'payment_link_provider' => 'No enabled payment-link providers are configured for this market.',
-            ]);
-        }
-
-        $requestedProvider = trim((string) $requestedProvider);
-        if ($requestedProvider !== '') {
-            if (!$providers->has($requestedProvider)) {
-                throw ValidationException::withMessages([
-                    'payment_link_provider' => 'Selected payment-link provider is not enabled for this market.',
-                ]);
-            }
-
-            return $requestedProvider;
-        }
-
-        $activeProvider = trim((string) ($config['active_provider'] ?? ''));
-        if ($activeProvider !== '' && $providers->has($activeProvider)) {
-            return $activeProvider;
-        }
-
-        return (string) $providers->keys()->first();
-    }
-
     private function missingSprint6DealColumnsResponse(): ?\Illuminate\Http\JsonResponse
     {
         static $missingColumns = null;
@@ -1293,111 +989,4 @@ class DealController extends Controller
         );
     }
 
-    private function resolveScopedProduct(int $productId, int $platformId): Product
-    {
-        $product = Product::query()->findOrFail($productId);
-        if ((int) ($product->platform_id ?? 0) !== $platformId) {
-            throw ValidationException::withMessages([
-                'product_id' => 'Selected product does not belong to this market.',
-            ]);
-        }
-
-        return $product;
-    }
-
-    private function derivePlanTypeFromProduct(Product $product): string
-    {
-        // Use tier field if set by dynamic catalog
-        $tier = strtolower(trim((string) ($product->tier ?? '')));
-        if (in_array($tier, ['basic', 'premium', 'vip', 'vvip'], true)) {
-            return $tier;
-        }
-
-        $name = strtolower((string) $product->name);
-        if (str_contains($name, 'vvip')) {
-            return 'vvip';
-        }
-        if (str_contains($name, 'vip')) {
-            return 'vip';
-        }
-        if (str_contains($name, 'premium')) {
-            return 'premium';
-        }
-
-        return 'basic';
-    }
-
-    private function resolveAmountForDuration(Product $product, string $duration): float
-    {
-        return (float) match ($duration) {
-            'weekly' => $product->weekly_price ?? 0,
-            'biweekly' => $product->biweekly_price ?? 0,
-            'monthly' => $product->monthly_price ?? 0,
-            'manual' => 0,
-            default => 0,
-        };
-    }
-
-    private function resolveScopedProductPrice(int $productPriceId, Product $product): ProductPrice
-    {
-        $priceRow = ProductPrice::query()
-            ->where('id', $productPriceId)
-            ->where('product_id', (int) $product->id)
-            ->where('is_active', true)
-            ->first();
-
-        if (!$priceRow) {
-            throw ValidationException::withMessages([
-                'product_price_id' => 'The selected pricing option is not available for this package.',
-            ]);
-        }
-
-        return $priceRow;
-    }
-
-    private function mapDurationKeyToLegacy(string $durationKey): string
-    {
-        return match ($durationKey) {
-            '1_week' => 'weekly',
-            '2_weeks' => 'biweekly',
-            '1_month' => 'monthly',
-            default => 'manual',
-        };
-    }
-
-    /**
-     * Look up duration_days from the product_prices table using deal's product + duration.
-     * Falls back to legacy enum-based defaults if no matching row is found.
-     */
-    private function resolveDurationDaysFromCatalog(Deal $deal): int
-    {
-        $legacyToDurationKey = [
-            'weekly' => '1_week',
-            'biweekly' => '2_weeks',
-            'monthly' => '1_month',
-        ];
-
-        $duration = (string) $deal->duration;
-        $durationKey = $legacyToDurationKey[$duration] ?? null;
-
-        if ($durationKey && $deal->product_id) {
-            $catalogDays = ProductPrice::query()
-                ->where('product_id', (int) $deal->product_id)
-                ->where('duration_key', $durationKey)
-                ->where('is_active', true)
-                ->value('duration_days');
-
-            if ($catalogDays && (int) $catalogDays > 0) {
-                return (int) $catalogDays;
-            }
-        }
-
-        return match ($duration) {
-            'weekly' => 7,
-            'biweekly' => 14,
-            'monthly' => 30,
-            'manual' => 30,
-            default => 30,
-        };
-    }
 }
