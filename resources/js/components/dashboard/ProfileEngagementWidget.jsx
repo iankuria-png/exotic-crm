@@ -1,0 +1,190 @@
+import React, { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import api from '../../services/api';
+import SectionFrame from '../SectionFrame';
+
+function asNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatPercent(value, digits = 1) {
+    return `${asNumber(value).toFixed(digits)}%`;
+}
+
+function MiniStat({ label, value, meta }) {
+    return (
+        <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3.5 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+            <p className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{value}</p>
+            {meta ? <p className="mt-1 text-xs text-slate-500">{meta}</p> : null}
+        </div>
+    );
+}
+
+function EmptyState({ message }) {
+    return (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+            {message}
+        </div>
+    );
+}
+
+function LoadingList() {
+    return (
+        <div className="space-y-2">
+            {Array.from({ length: 4 }).map((_, index) => (
+                <div key={index} className="h-14 animate-pulse rounded-lg bg-slate-200" />
+            ))}
+        </div>
+    );
+}
+
+function RankingList({ title, rows, onOpenProfile }) {
+    if (!rows.length) {
+        return (
+            <div className="space-y-2">
+                <p className="text-sm font-semibold text-slate-800">{title}</p>
+                <EmptyState message="No profiles available for this slice yet." />
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-2">
+            <p className="text-sm font-semibold text-slate-800">{title}</p>
+            <div className="space-y-2">
+                {rows.map((profile) => (
+                    <button
+                        key={`${title}-${profile.post_id}`}
+                        type="button"
+                        disabled={!profile.crm_client_id}
+                        onClick={() => profile.crm_client_id && onOpenProfile?.(profile.crm_client_id)}
+                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 px-3.5 py-3 text-left transition hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-default disabled:hover:border-slate-200"
+                    >
+                        <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{profile.name}</p>
+                            <p className="truncate text-xs text-slate-500">
+                                {profile.subscription_tier || 'No plan'} • {profile.assigned_agent_name || 'Unassigned'}
+                            </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                            <p className="text-sm font-semibold text-slate-900">{formatPercent(profile.contact_rate_percent)}</p>
+                            <p className="text-xs text-slate-500">{asNumber(profile.contact_actions_total).toLocaleString()} contacts</p>
+                        </div>
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+export default function ProfileEngagementWidget({
+    platformFilter,
+    fromDate,
+    toDate,
+    onOpenProfile,
+    onOpenReport,
+}) {
+    const enabled = Boolean(platformFilter);
+    const sharedParams = useMemo(() => ({
+        platform_id: Number(platformFilter),
+        ...(fromDate ? { from: fromDate } : {}),
+        ...(toDate ? { to: toDate } : {}),
+    }), [fromDate, platformFilter, toDate]);
+
+    const topQuery = useQuery({
+        queryKey: ['dashboard-profile-engagement', 'top', sharedParams],
+        queryFn: () => api.get('/crm/reports/profile-engagement', {
+            params: {
+                ...sharedParams,
+                per_page: 5,
+                sort_by: 'engagement_score',
+                order: 'desc',
+            },
+        }).then((response) => response.data),
+        enabled,
+        staleTime: 300_000,
+    });
+
+    const bottomQuery = useQuery({
+        queryKey: ['dashboard-profile-engagement', 'bottom', sharedParams],
+        queryFn: () => api.get('/crm/reports/profile-engagement', {
+            params: {
+                ...sharedParams,
+                per_page: 3,
+                sort_by: 'engagement_score',
+                order: 'asc',
+            },
+        }).then((response) => response.data),
+        enabled,
+        staleTime: 300_000,
+    });
+
+    const topRows = topQuery.data?.profiles || [];
+    const topIds = new Set(topRows.map((profile) => profile.post_id));
+    const bottomRows = (bottomQuery.data?.profiles || []).filter((profile) => !topIds.has(profile.post_id));
+    const platformTotals = topQuery.data?.platform_totals || {};
+
+    return (
+        <SectionFrame
+            title="Profile Engagement"
+            subtitle="Top and trailing profiles for the selected market."
+            action={onOpenReport ? (
+                <button
+                    type="button"
+                    onClick={onOpenReport}
+                    disabled={!enabled}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Open report
+                </button>
+            ) : null}
+        >
+            {!enabled ? (
+                <EmptyState message="Select a market to load WordPress profile engagement analytics." />
+            ) : topQuery.isLoading || bottomQuery.isLoading ? (
+                <div className="space-y-4">
+                    <div className="grid gap-2 sm:grid-cols-4">
+                        {Array.from({ length: 4 }).map((_, index) => (
+                            <div key={index} className="h-20 animate-pulse rounded-lg bg-slate-200" />
+                        ))}
+                    </div>
+                    <LoadingList />
+                </div>
+            ) : topQuery.error || bottomQuery.error ? (
+                <EmptyState message={topQuery.error?.response?.data?.message || bottomQuery.error?.response?.data?.message || 'Profile engagement analytics are currently unavailable.'} />
+            ) : (
+                <div className="space-y-4">
+                    <div className="grid gap-2 sm:grid-cols-4">
+                        <MiniStat
+                            label="Views"
+                            value={asNumber(platformTotals.profile_view?.total).toLocaleString()}
+                            meta={`${asNumber(platformTotals.profile_view?.delta_percent).toFixed(1)}% vs previous`}
+                        />
+                        <MiniStat
+                            label="Unique visitors"
+                            value={asNumber(platformTotals.unique_visitors?.total).toLocaleString()}
+                            meta={`${asNumber(platformTotals.unique_visitors?.delta_percent).toFixed(1)}% vs previous`}
+                        />
+                        <MiniStat
+                            label="Contacts"
+                            value={asNumber(platformTotals.contact_actions?.total).toLocaleString()}
+                            meta={`${asNumber(platformTotals.contact_actions?.delta_percent).toFixed(1)}% vs previous`}
+                        />
+                        <MiniStat
+                            label="Contact rate"
+                            value={formatPercent(platformTotals.contact_rate_percent?.value)}
+                            meta={`${asNumber(platformTotals.contact_rate_percent?.delta_pp).toFixed(1)}pp vs previous`}
+                        />
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                        <RankingList title="Top 5 performers" rows={topRows} onOpenProfile={onOpenProfile} />
+                        <RankingList title="Bottom 3 to watch" rows={bottomRows} onOpenProfile={onOpenProfile} />
+                    </div>
+                </div>
+            )}
+        </SectionFrame>
+    );
+}

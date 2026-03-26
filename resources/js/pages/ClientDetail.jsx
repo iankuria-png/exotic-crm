@@ -10,6 +10,7 @@ import SupportBoardChat from '../components/SupportBoardChat';
 import { useToast } from '../components/ToastProvider';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 import ClientHealthSection from '../components/ClientHealthSection';
+import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -43,6 +44,14 @@ function formatRelativeFromUnix(unixTs) {
 
     const years = Math.floor(months / 12);
     return `${years}y ago`;
+}
+
+function toDateString(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return date.toISOString().slice(0, 10);
 }
 
 const FOREVER_PLAN_TOOLTIP = 'Reference: This profile is intentionally kept active to avoid zero-escort locations, which protects search ranking.';
@@ -467,6 +476,27 @@ export default function ClientDetail() {
         enabled: activeTab === 'wallet',
     });
 
+    const [analyticsPeriod, setAnalyticsPeriod] = useState('30d');
+    const analyticsRange = useMemo(() => {
+        const to = new Date();
+        const from = new Date();
+        const periodDays = analyticsPeriod === '7d' ? 7 : analyticsPeriod === '90d' ? 90 : 30;
+
+        from.setDate(from.getDate() - periodDays);
+
+        return {
+            from: toDateString(from),
+            to: toDateString(to),
+        };
+    }, [analyticsPeriod]);
+
+    const { data: analyticsData, isLoading: analyticsLoading } = useQuery({
+        queryKey: ['client-analytics', id, analyticsRange],
+        queryFn: () => api.get(`/crm/clients/${id}/analytics`, { params: analyticsRange }).then((response) => response.data),
+        enabled: activeTab === 'analytics' && Number(client?.wp_post_id || 0) > 0,
+        staleTime: 300_000,
+    });
+
     const { data: completenessData } = useQuery({
         queryKey: ['client-completeness', id],
         queryFn: () => api.get(`/crm/clients/${id}/completeness`).then((r) => r.data),
@@ -781,6 +811,7 @@ export default function ClientDetail() {
     const tabLinks = useMemo(() => {
         const links = [
             { key: 'overview', label: 'Overview' },
+            { key: 'analytics', label: 'Analytics' },
             { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
             { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
             { key: 'timeline', label: 'Timeline' },
@@ -1405,6 +1436,16 @@ export default function ClientDetail() {
                     activeDeal={client?.deals?.find((d) => ['pending', 'awaiting_payment'].includes(d.status))}
                 />
                 </>
+            ) : null}
+
+            {activeTab === 'analytics' ? (
+                <ClientAnalyticsTab
+                    client={client}
+                    data={analyticsData}
+                    isLoading={analyticsLoading}
+                    analyticsPeriod={analyticsPeriod}
+                    onPeriodChange={setAnalyticsPeriod}
+                />
             ) : null}
 
             {activeTab === 'deals' ? (

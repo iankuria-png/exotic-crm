@@ -7,6 +7,7 @@ import CountryRevenueWidget from '../components/dashboard/CountryRevenueWidget';
 import QuickStatsWidget from '../components/dashboard/QuickStatsWidget';
 import RecentActivityWidget from '../components/dashboard/RecentActivityWidget';
 import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
+import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import { getCountryFlag } from '../utils/flags';
 
@@ -849,6 +850,16 @@ export default function Dashboard() {
                                 />
                             </div>
                         </SectionFrame>
+                    ) : null}
+
+                    {widgetConfig.profile_engagement ? (
+                        <ProfileEngagementWidget
+                            platformFilter={platformFilter}
+                            fromDate={appliedRangeFrom}
+                            toDate={appliedRangeTo}
+                            onOpenProfile={(clientId) => navigate(`/clients/${clientId}?tab=analytics`)}
+                            onOpenReport={() => navigate('/reports')}
+                        />
                     ) : null}
 
                     {widgetConfig.retention_watch ? (
