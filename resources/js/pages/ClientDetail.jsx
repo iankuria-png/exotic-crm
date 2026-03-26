@@ -384,6 +384,8 @@ export default function ClientDetail() {
     const [activeTab, setActiveTab] = useState(initialTab);
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
+    const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
+    const [paymentLinkResult, setPaymentLinkResult] = useState(null);
     const [activationDialog, setActivationDialog] = useState({
         open: false,
         dealId: null,
@@ -579,6 +581,25 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription creation failed.');
+        },
+    });
+
+    const sendPaymentLinkMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/clients/${id}/payment-link`, payload).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setPaymentLinkResult(payload);
+
+            if (payload?.sms_result?.success === false) {
+                toast.warning(payload?.message || 'SMS failed, but the payment link is ready to share manually.');
+                return;
+            }
+
+            toast.success(payload?.message || 'Payment link prepared.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Payment link could not be prepared.');
         },
     });
 
@@ -1047,6 +1068,7 @@ export default function ClientDetail() {
     const selectedDealBaseAmount = Number(dealActionDialog.deal?.original_amount ?? dealActionDialog.deal?.amount ?? 0);
     const selectedDealDiscountValue = dealApplyDiscount ? normalizeDiscountPercentage(dealDiscountPercentage) : 0;
     const selectedDealDiscountedTotal = discountedAmount(selectedDealBaseAmount, selectedDealDiscountValue);
+    const paymentLinkEligibleDeals = (client.deals || []).filter((deal) => ['pending', 'awaiting_payment'].includes(deal.status));
     const renderDealAmount = (deal) => {
         const hasDiscount = normalizeDiscountPercentage(deal?.discount_percentage) > 0 && deal?.original_amount !== null;
         if (!hasDiscount) {
@@ -1077,6 +1099,40 @@ export default function ClientDetail() {
         setActivationApplyDiscount(false);
         setActivationDiscountPercentage('');
         setActivationDiscountPin('');
+    };
+
+    const openPaymentLinkModal = () => {
+        setPaymentLinkResult(null);
+        setShowPaymentLinkModal(true);
+    };
+
+    const closePaymentLinkModal = () => {
+        if (sendPaymentLinkMutation.isPending) {
+            return;
+        }
+
+        setShowPaymentLinkModal(false);
+        setPaymentLinkResult(null);
+    };
+
+    const copyPaymentLinkUrl = async () => {
+        const paymentUrl = paymentLinkResult?.payment_url;
+        if (!paymentUrl) {
+            toast.error('No payment URL is available to copy.');
+            return;
+        }
+
+        if (!navigator?.clipboard?.writeText) {
+            toast.error('Clipboard copy is not available in this browser.');
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(paymentUrl);
+            toast.success('Payment link copied.');
+        } catch (error) {
+            toast.error('Payment link could not be copied.');
+        }
     };
 
     const closeActivationDialog = () => {
@@ -1355,6 +1411,13 @@ export default function ClientDetail() {
                                     title={!canDispatchCredentials ? 'Credential send is available for WP-linked client profiles.' : undefined}
                                 >
                                     Send credentials
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={openPaymentLinkModal}
+                                    className="crm-btn-secondary"
+                                >
+                                    Payment Link
                                 </button>
                             </>
                         ) : null}
@@ -3005,6 +3068,22 @@ export default function ClientDetail() {
                 </div>
             ) : null}
 
+            {!isReadOnly && showPaymentLinkModal ? (
+                <PaymentLinkModal
+                    client={client}
+                    products={products}
+                    deals={paymentLinkEligibleDeals}
+                    providerOptions={paymentLinkProviderOptions}
+                    defaultProvider={defaultPaymentLinkProvider}
+                    result={paymentLinkResult}
+                    isPending={sendPaymentLinkMutation.isPending}
+                    onClose={closePaymentLinkModal}
+                    onCopyLink={copyPaymentLinkUrl}
+                    onSendQuickSubscribe={(payload) => sendPaymentLinkMutation.mutate(payload)}
+                    onSendExistingDeal={(payload) => sendPaymentLinkMutation.mutate(payload)}
+                />
+            ) : null}
+
             {!isReadOnly && showDealModal ? (
                 <DealModal
                     client={client}
@@ -3145,6 +3224,301 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
                         </button>
                     </div>
                 </form>
+            </div>
+        </div>
+    );
+}
+
+function PaymentLinkModal({
+    client,
+    products,
+    deals,
+    providerOptions,
+    defaultProvider,
+    result,
+    isPending,
+    onClose,
+    onCopyLink,
+    onSendQuickSubscribe,
+    onSendExistingDeal,
+}) {
+    const platformCurrency = client?.platform?.currency_code || 'KES';
+    const [quickForm, setQuickForm] = useState({
+        product_id: '',
+        product_price_id: '',
+        payment_link_provider: defaultProvider || '',
+    });
+    const [existingProvider, setExistingProvider] = useState(defaultProvider || '');
+
+    useEffect(() => {
+        if (!quickForm.payment_link_provider && defaultProvider) {
+            setQuickForm((current) => ({
+                ...current,
+                payment_link_provider: defaultProvider,
+            }));
+        }
+
+        if (!existingProvider && defaultProvider) {
+            setExistingProvider(defaultProvider);
+        }
+    }, [defaultProvider, existingProvider, quickForm.payment_link_provider]);
+
+    const selectedProduct = products?.find((product) => String(product.id) === String(quickForm.product_id));
+    const availablePrices = selectedProduct?.active_prices || [];
+    const selectedPrice = availablePrices.find((price) => String(price.id) === String(quickForm.product_price_id));
+    const smsStatus = result?.sms_result?.status || '';
+    const smsFailed = result?.sms_result?.success === false;
+    const smsDisabled = smsStatus === 'disabled';
+    const smsStatusClasses = smsFailed
+        ? 'bg-rose-50 text-rose-700 ring-rose-200'
+        : smsDisabled
+            ? 'bg-amber-50 text-amber-700 ring-amber-200'
+            : 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+
+    const handleQuickProductChange = (event) => {
+        const productId = event.target.value;
+        const product = products?.find((entry) => String(entry.id) === String(productId));
+        const prices = product?.active_prices || [];
+
+        setQuickForm((current) => ({
+            ...current,
+            product_id: productId,
+            product_price_id: prices.length === 1 ? String(prices[0].id) : '',
+        }));
+    };
+
+    const handleQuickSubmit = (event) => {
+        event.preventDefault();
+
+        if (!quickForm.product_id || !quickForm.product_price_id || !quickForm.payment_link_provider) {
+            return;
+        }
+
+        onSendQuickSubscribe({
+            mode: 'quick_subscribe',
+            product_id: Number(quickForm.product_id),
+            product_price_id: Number(quickForm.product_price_id),
+            payment_link_provider: quickForm.payment_link_provider,
+            reason: 'Create and send payment link from client profile',
+        });
+    };
+
+    const handleExistingDealSend = (dealId) => {
+        if (!existingProvider) {
+            return;
+        }
+
+        onSendExistingDeal({
+            mode: 'existing_deal',
+            deal_id: Number(dealId),
+            payment_link_provider: existingProvider,
+            reason: 'Resend payment link from client profile',
+        });
+    };
+
+    const canSendQuick = Boolean(quickForm.product_id && quickForm.product_price_id && quickForm.payment_link_provider && !isPending);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={onClose}>
+            <div className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Payment Link</h3>
+                        <p className="crm-panel-subtitle">{client.name} • {client.platform?.name || 'Market'}</p>
+                    </div>
+                </header>
+
+                <div className="max-h-[80vh] space-y-5 overflow-y-auto p-4">
+                    {result ? (
+                        <section className="space-y-4 rounded-lg border border-teal-200 bg-teal-50/70 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">Latest link</p>
+                                    <h4 className="mt-1 text-lg font-semibold text-slate-900">Ready to share</h4>
+                                    <p className="mt-1 text-sm text-slate-600">{result.message}</p>
+                                </div>
+                                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${smsStatusClasses}`}>
+                                    {smsFailed ? 'SMS failed' : smsDisabled ? 'SMS disabled' : 'SMS sent'}
+                                </span>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Payment URL</label>
+                                <div className="flex flex-col gap-2 sm:flex-row">
+                                    <input
+                                        type="text"
+                                        readOnly
+                                        value={result.payment_url || ''}
+                                        className="crm-input crm-mono flex-1 text-xs"
+                                    />
+                                    <button type="button" onClick={onCopyLink} className="crm-btn-primary whitespace-nowrap">
+                                        Copy Link
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="grid gap-3 sm:grid-cols-3">
+                                <div className="rounded-md border border-white/70 bg-white/80 px-3 py-2">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Subscription</p>
+                                    <p className="mt-1 text-sm font-medium text-slate-900">{result.deal?.product?.name || result.deal?.plan_type || 'Subscription'}</p>
+                                </div>
+                                <div className="rounded-md border border-white/70 bg-white/80 px-3 py-2">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Amount</p>
+                                    <p className="mt-1 text-sm font-medium text-slate-900">{formatCurrency(result.deal?.amount, result.deal?.currency || platformCurrency)}</p>
+                                </div>
+                                <div className="rounded-md border border-white/70 bg-white/80 px-3 py-2">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Phone</p>
+                                    <p className="mt-1 text-sm font-medium text-slate-900">{result.phone || 'Unavailable'}</p>
+                                </div>
+                            </div>
+
+                            {smsFailed ? (
+                                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                                    SMS failed but the link is ready. Copy and share it manually.
+                                </p>
+                            ) : null}
+                        </section>
+                    ) : null}
+
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr),minmax(0,1.1fr)]">
+                        <section className="rounded-lg border border-slate-200 p-4">
+                            <div className="mb-4">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Quick Subscribe</p>
+                                <h4 className="mt-1 text-base font-semibold text-slate-900">Create a new pending subscription and send a link</h4>
+                            </div>
+
+                            <form className="space-y-4" onSubmit={handleQuickSubmit}>
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Package</label>
+                                    <select
+                                        value={quickForm.product_id}
+                                        onChange={handleQuickProductChange}
+                                        className="crm-select w-full"
+                                    >
+                                        <option value="">Select a package...</option>
+                                        {products?.map((product) => (
+                                            <option key={product.id} value={product.id}>
+                                                {product.display_name || product.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {quickForm.product_id && availablePrices.length > 0 ? (
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Duration &amp; Price</label>
+                                        <select
+                                            value={quickForm.product_price_id}
+                                            onChange={(event) => setQuickForm((current) => ({ ...current, product_price_id: event.target.value }))}
+                                            className="crm-select w-full"
+                                        >
+                                            <option value="">Select a duration...</option>
+                                            {availablePrices.map((price) => (
+                                                <option key={price.id} value={price.id}>
+                                                    {price.duration_label} — {formatCurrency(price.price, price.currency || platformCurrency)}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                ) : quickForm.product_id ? (
+                                    <p className="text-sm text-amber-600">No active pricing options are available for this package.</p>
+                                ) : null}
+
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
+                                    <select
+                                        value={quickForm.payment_link_provider}
+                                        onChange={(event) => setQuickForm((current) => ({ ...current, payment_link_provider: event.target.value }))}
+                                        className="crm-select w-full"
+                                        disabled={!providerOptions.length}
+                                    >
+                                        <option value="">{providerOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
+                                        {providerOptions.map((provider) => (
+                                            <option key={provider.key} value={provider.key}>
+                                                {provider.optionLabel}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {selectedPrice ? (
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                                        <span className="font-medium">{selectedProduct?.display_name || selectedProduct?.name}</span>
+                                        {' · '}
+                                        {selectedPrice.duration_label}
+                                        {' · '}
+                                        <span className="font-semibold text-slate-900">{formatCurrency(selectedPrice.price, selectedPrice.currency || platformCurrency)}</span>
+                                    </div>
+                                ) : null}
+
+                                <button type="submit" disabled={!canSendQuick} className="crm-btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50">
+                                    {isPending ? 'Preparing...' : 'Send & Get Link'}
+                                </button>
+                            </form>
+                        </section>
+
+                        <section className="rounded-lg border border-slate-200 p-4">
+                            <div className="mb-4">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Existing Deals</p>
+                                <h4 className="mt-1 text-base font-semibold text-slate-900">Resend a link for pending checkout</h4>
+                            </div>
+
+                            <div className="mb-4">
+                                <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
+                                <select
+                                    value={existingProvider}
+                                    onChange={(event) => setExistingProvider(event.target.value)}
+                                    className="crm-select w-full"
+                                    disabled={!providerOptions.length}
+                                >
+                                    <option value="">{providerOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
+                                    {providerOptions.map((provider) => (
+                                        <option key={provider.key} value={provider.key}>
+                                            {provider.optionLabel}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {deals.length ? (
+                                <div className="space-y-3">
+                                    {deals.map((deal) => (
+                                        <div key={deal.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                                <div className="space-y-1">
+                                                    <p className="text-sm font-semibold text-slate-900">{deal.product?.name || deal.plan_type || 'Subscription'}</p>
+                                                    <p className="text-xs text-slate-500">
+                                                        {deal.status === 'awaiting_payment' ? 'Awaiting payment' : 'Pending activation'}
+                                                        {' · '}
+                                                        {formatCurrency(deal.amount, deal.currency || platformCurrency)}
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleExistingDealSend(deal.id)}
+                                                    disabled={isPending || !existingProvider}
+                                                    className="crm-btn-secondary whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    {isPending ? 'Preparing...' : 'Resend Link'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                                    No pending or awaiting-payment deals are available for link resend.
+                                </div>
+                            )}
+                        </section>
+                    </div>
+                </div>
+
+                <footer className="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
+                    <button type="button" onClick={onClose} className="crm-btn-secondary" disabled={isPending}>
+                        Close
+                    </button>
+                </footer>
             </div>
         </div>
     );
