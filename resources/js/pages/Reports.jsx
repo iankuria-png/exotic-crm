@@ -22,6 +22,10 @@ function formatCurrency(value, currency = 'KES') {
     return `${currency} ${asNumber(value).toLocaleString()}`;
 }
 
+function formatPercent(value, digits = 1) {
+    return `${asNumber(value).toFixed(digits)}%`;
+}
+
 function percent(value, total) {
     if (!total) return 0;
     return Math.round((value / total) * 100);
