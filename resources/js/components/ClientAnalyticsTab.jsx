@@ -15,12 +15,29 @@ const PERIOD_OPTIONS = [
     { key: '90d', label: '90d' },
 ];
 
-const CONTENT_EVENT_KEYS = ['gallery_click', 'video_play', 'service_click', 'rate_click'];
+const CONTENT_EVENT_META = [
+    { key: 'gallery_click', label: 'Gallery Clicks', accent: 'bg-indigo-500' },
+    { key: 'video_play', label: 'Video Plays', accent: 'bg-fuchsia-500' },
+    { key: 'service_click', label: 'Service Clicks', accent: 'bg-amber-500' },
+    { key: 'rate_click', label: 'Rate Views', accent: 'bg-sky-500' },
+];
+
 const CONTACT_EVENT_META = [
     { key: 'whatsapp_click', label: 'WhatsApp', accent: 'bg-emerald-500', text: 'text-emerald-700' },
     { key: 'phone_click', label: 'Phone', accent: 'bg-cyan-500', text: 'text-cyan-700' },
     { key: 'viber_click', label: 'Viber', accent: 'bg-violet-500', text: 'text-violet-700' },
 ];
+
+const PLACEMENT_LABELS = {
+    hero: 'Hero Bar',
+    sticky_bar: 'Sticky Bar',
+    contact_card: 'Contact Card',
+    mobile_cta: 'Mobile CTA',
+    listing_card: 'Listing Card',
+    gallery: 'Gallery',
+    services: 'Services',
+    rates: 'Rates',
+};
 
 function asNumber(value) {
     const parsed = Number(value);
@@ -35,8 +52,17 @@ function formatPercent(value, digits = 1) {
     return `${asNumber(value).toFixed(digits)}%`;
 }
 
+function formatRatio(current, benchmark) {
+    if (asNumber(benchmark) <= 0) {
+        return current > 0 ? 'New activity' : 'No benchmark';
+    }
+
+    return `${(asNumber(current) / asNumber(benchmark)).toFixed(1)}x avg`;
+}
+
 function formatDuration(seconds) {
     const total = Math.max(0, Math.round(asNumber(seconds)));
+
     if (total < 60) {
         return `${total}s`;
     }
@@ -53,14 +79,6 @@ function formatDuration(seconds) {
     return `${hours}h ${restMinutes}m`;
 }
 
-function toSentenceCase(value) {
-    return String(value || '')
-        .replace(/[_-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/\b\w/g, (match) => match.toUpperCase()) || 'Unknown';
-}
-
 function formatChartDate(value) {
     if (!value) {
         return '—';
@@ -74,44 +92,33 @@ function formatChartDate(value) {
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function sumTotals(totals, keys) {
-    return keys.reduce((sum, key) => sum + asNumber(totals?.[key]?.total), 0);
+function toSentenceCase(value) {
+    return String(value || '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (match) => match.toUpperCase()) || 'Unknown';
 }
 
-function StatCard({ label, value, meta }) {
-    return (
-        <article className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
-            {meta ? <p className="mt-1 text-sm text-slate-500">{meta}</p> : null}
-        </article>
-    );
-}
+function classifyBenchmark(current, benchmark, percentile) {
+    if (asNumber(percentile) >= 90) {
+        return 'Top 10%';
+    }
 
-function ComparisonBar({ label, current, benchmark, currentLabel, benchmarkLabel }) {
-    const maxValue = Math.max(asNumber(current), asNumber(benchmark), 1);
-    const currentWidth = `${Math.max(6, Math.round((asNumber(current) / maxValue) * 100))}%`;
-    const benchmarkWidth = `${Math.max(6, Math.round((asNumber(benchmark) / maxValue) * 100))}%`;
+    if (asNumber(benchmark) <= 0) {
+        return current > 0 ? 'Above avg' : 'Average';
+    }
 
-    return (
-        <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium text-slate-700">{label}</p>
-                <div className="text-right text-xs text-slate-500">
-                    <p className="font-semibold text-slate-800">{currentLabel}</p>
-                    <p>Market: {benchmarkLabel}</p>
-                </div>
-            </div>
-            <div className="space-y-1.5">
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-teal-600" style={{ width: currentWidth }} />
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-slate-400" style={{ width: benchmarkWidth }} />
-                </div>
-            </div>
-        </div>
-    );
+    const ratio = asNumber(current) / asNumber(benchmark);
+    if (ratio >= 1.05) {
+        return 'Above avg';
+    }
+
+    if (ratio <= 0.95) {
+        return 'Below avg';
+    }
+
+    return 'Average';
 }
 
 function EmptyAnalyticsState({ title, message }) {
@@ -123,29 +130,123 @@ function EmptyAnalyticsState({ title, message }) {
     );
 }
 
+function FunnelStage({ index, label, count, note, uniqueLabel }) {
+    return (
+        <article className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                {index}. {label}
+            </p>
+            <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{count.toLocaleString()}</p>
+            <p className="mt-1 text-sm font-medium text-slate-700">{note}</p>
+            <p className="mt-1 text-sm text-slate-500">{uniqueLabel}</p>
+        </article>
+    );
+}
+
+function FunnelArrow({ value, label }) {
+    return (
+        <div className="hidden xl:flex xl:min-w-[96px] xl:flex-col xl:items-center xl:justify-center">
+            <div className="h-px w-full bg-slate-300" />
+            <div className="mt-3 rounded-full border border-slate-200 bg-white px-3 py-1 text-center shadow-sm">
+                <p className="text-sm font-semibold text-slate-900">{formatPercent(value)}</p>
+                <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{label}</p>
+            </div>
+        </div>
+    );
+}
+
+function ComparisonMetricRow({ label, current, benchmark, currentLabel, benchmarkLabel, ratioLabel, status }) {
+    const maxValue = Math.max(asNumber(current), asNumber(benchmark), 1);
+    const currentWidth = `${Math.max(8, Math.round((asNumber(current) / maxValue) * 100))}%`;
+    const benchmarkWidth = `${Math.max(8, Math.round((asNumber(benchmark) / maxValue) * 100))}%`;
+
+    return (
+        <div className="space-y-2">
+            <div className="flex items-start justify-between gap-3">
+                <div>
+                    <p className="text-sm font-semibold text-slate-800">{label}</p>
+                    <p className="text-xs text-slate-500">Market avg: {benchmarkLabel}</p>
+                </div>
+                <div className="text-right">
+                    <p className="text-sm font-semibold text-slate-900">{currentLabel}</p>
+                    <p className="text-xs text-slate-500">{ratioLabel}</p>
+                </div>
+            </div>
+            <div className="space-y-1.5">
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-teal-600" style={{ width: currentWidth }} />
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-slate-400" style={{ width: benchmarkWidth }} />
+                </div>
+            </div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{status}</p>
+        </div>
+    );
+}
+
+function BreakdownRow({ label, total, percent, accentClass }) {
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                    <span className={`h-2.5 w-2.5 rounded-full ${accentClass}`} aria-hidden="true" />
+                    <p className="text-sm font-medium text-slate-700">{label}</p>
+                </div>
+                <div className="text-right">
+                    <p className="text-sm font-semibold text-slate-900">{total.toLocaleString()}</p>
+                    <p className="text-xs text-slate-500">{formatPercent(percent)}</p>
+                </div>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                    className={`h-full rounded-full ${accentClass}`}
+                    style={{ width: `${Math.max(0, Math.min(100, Math.round(percent)))}%` }}
+                />
+            </div>
+        </div>
+    );
+}
+
 export default function ClientAnalyticsTab({
     client,
     data,
+    error,
     isLoading,
     analyticsPeriod,
     onPeriodChange,
 }) {
     const totals = data?.totals || {};
+    const impressions = asNumber(totals.card_impression?.total);
+    const impressionUnique = asNumber(totals.card_impression?.unique);
     const views = asNumber(totals.profile_view?.total);
     const uniqueVisitors = asNumber(totals.profile_view?.unique);
-    const contentActions = sumTotals(totals, CONTENT_EVENT_KEYS);
     const contactActions = asNumber(data?.contact_actions_total);
     const contactRate = asNumber(data?.contact_rate_percent);
     const avgSessionDuration = asNumber(data?.avg_session_duration_sec);
-
+    const longSessionPercent = asNumber(data?.sessions_over_120_percent);
     const marketAverages = data?.market_averages || {};
-    const chartRows = useMemo(() => (
+    const marketPercentiles = data?.market_percentiles || {};
+
+    const contentRows = useMemo(() => (
+        CONTENT_EVENT_META.map((meta) => ({
+            ...meta,
+            total: asNumber(totals?.[meta.key]?.total),
+        }))
+    ), [totals]);
+
+    const contentActions = contentRows.reduce((sum, row) => sum + row.total, 0);
+    const viewClickThrough = impressions > 0 ? roundPercent((views / impressions) * 100) : 0;
+    const contentEngageRate = views > 0 ? roundPercent((contentActions / views) * 100) : 0;
+    const contactFromContentRate = contentActions > 0 ? roundPercent((contactActions / contentActions) * 100) : 0;
+
+    const dailyRows = useMemo(() => (
         Array.isArray(data?.daily)
             ? data.daily.map((row) => ({
                 date: row.date,
                 label: formatChartDate(row.date),
                 views: asNumber(row.profile_view),
-                contacts: CONTACT_EVENT_META.reduce((sum, meta) => sum + asNumber(row[meta.key]), 0),
+                uniqueVisitors: asNumber(row.profile_view_unique),
             }))
             : []
     ), [data?.daily]);
@@ -153,72 +254,116 @@ export default function ClientAnalyticsTab({
     const contactMix = useMemo(() => {
         const grandTotal = Math.max(1, contactActions);
 
-        return CONTACT_EVENT_META
-            .map((meta) => {
-                const total = asNumber(totals?.[meta.key]?.total);
-                return {
-                    ...meta,
-                    total,
-                    share: total > 0 ? roundPercent((total / grandTotal) * 100) : 0,
-                    placement: data?.placement_breakdown?.[meta.key] || {},
-                };
-            })
-            .filter((row) => row.total > 0);
+        return CONTACT_EVENT_META.map((meta) => {
+            const total = asNumber(totals?.[meta.key]?.total);
+            return {
+                ...meta,
+                total,
+                percent: total > 0 ? roundPercent((total / grandTotal) * 100) : 0,
+                placements: data?.placement_breakdown?.[meta.key] || {},
+            };
+        }).filter((row) => row.total > 0);
     }, [contactActions, data?.placement_breakdown, totals]);
 
-    const placementRows = useMemo(() => (
-        contactMix.flatMap((channel) => (
-            Object.entries(channel.placement || {}).map(([placement, count]) => ({
-                id: `${channel.key}-${placement}`,
-                channel: channel.label,
-                placement: toSentenceCase(placement),
-                count: asNumber(count),
+    const placementRows = useMemo(() => {
+        const aggregated = {};
+
+        contactMix.forEach((channel) => {
+            Object.entries(channel.placements || {}).forEach(([placement, count]) => {
+                if (!aggregated[placement]) {
+                    aggregated[placement] = 0;
+                }
+
+                aggregated[placement] += asNumber(count);
+            });
+        });
+
+        return Object.entries(aggregated)
+            .map(([placement, total]) => ({
+                key: placement,
+                label: PLACEMENT_LABELS[placement] || toSentenceCase(placement),
+                total,
+                percent: contactActions > 0 ? roundPercent((total / contactActions) * 100) : 0,
             }))
-        )).sort((left, right) => right.count - left.count)
-    ), [contactMix]);
+            .sort((left, right) => right.total - left.total);
+    }, [contactActions, contactMix]);
 
     const dominantContact = contactMix[0] || null;
     const topPlacement = placementRows[0] || null;
-    const viewToContentRate = views > 0 ? roundPercent((contentActions / views) * 100) : 0;
-    const contentToContactRate = contentActions > 0 ? roundPercent((contactActions / contentActions) * 100) : 0;
+    const galleryClicks = asNumber(totals.gallery_click?.total);
+    const galleryAverage = asNumber(marketAverages.gallery_click?.total);
 
-    const marketComparisons = [
+    const comparisonRows = [
         {
             label: 'Views',
             current: views,
             benchmark: asNumber(marketAverages.profile_view?.total),
             currentLabel: views.toLocaleString(),
             benchmarkLabel: asNumber(marketAverages.profile_view?.total).toLocaleString(),
+            ratioLabel: formatRatio(views, marketAverages.profile_view?.total),
+            status: classifyBenchmark(views, marketAverages.profile_view?.total, marketPercentiles.profile_view),
         },
         {
-            label: 'Contacts',
-            current: contactActions,
-            benchmark: asNumber(marketAverages.contact_actions_total),
-            currentLabel: contactActions.toLocaleString(),
-            benchmarkLabel: asNumber(marketAverages.contact_actions_total).toLocaleString(),
-        },
-        {
-            label: 'Contact rate',
+            label: 'Contact Rate',
             current: contactRate,
             benchmark: asNumber(marketAverages.contact_rate_percent),
             currentLabel: formatPercent(contactRate),
             benchmarkLabel: formatPercent(marketAverages.contact_rate_percent),
+            ratioLabel: formatRatio(contactRate, marketAverages.contact_rate_percent),
+            status: classifyBenchmark(contactRate, marketAverages.contact_rate_percent, marketPercentiles.contact_rate_percent),
+        },
+        {
+            label: 'Avg Duration',
+            current: avgSessionDuration,
+            benchmark: asNumber(marketAverages.avg_session_duration_sec),
+            currentLabel: formatDuration(avgSessionDuration),
+            benchmarkLabel: formatDuration(marketAverages.avg_session_duration_sec),
+            ratioLabel: formatRatio(avgSessionDuration, marketAverages.avg_session_duration_sec),
+            status: classifyBenchmark(avgSessionDuration, marketAverages.avg_session_duration_sec, marketPercentiles.avg_session_duration_sec),
+        },
+        {
+            label: 'Gallery Hits',
+            current: galleryClicks,
+            benchmark: galleryAverage,
+            currentLabel: galleryClicks.toLocaleString(),
+            benchmarkLabel: galleryAverage.toLocaleString(),
+            ratioLabel: formatRatio(galleryClicks, galleryAverage),
+            status: classifyBenchmark(galleryClicks, galleryAverage, marketPercentiles.gallery_click),
         },
     ];
 
-    const marketRate = asNumber(marketAverages.contact_rate_percent);
-    const rateRatio = marketRate > 0 ? contactRate / marketRate : 0;
-    const insight = dominantContact
-        ? `${dominantContact.label} drives ${dominantContact.share}% of contact actions. `
-            + `${contactRate >= marketRate ? 'This profile is outperforming' : 'This profile is trailing'} `
-            + `the market rate ${marketRate > 0 ? `at ${rateRatio.toFixed(1)}x` : 'with limited benchmark data'}.`
-        : 'Engagement data will become more useful once contact actions begin flowing from the live profile.';
+    const insightLines = useMemo(() => {
+        const lines = [];
+        const marketRate = asNumber(marketAverages.contact_rate_percent);
+
+        if (marketRate > 0 && contactRate > 0) {
+            lines.push(`This profile converts visitors to contacts at ${formatRatio(contactRate, marketRate)} the market average.`);
+        }
+
+        if (dominantContact) {
+            lines.push(`${dominantContact.label} is the preferred contact method (${formatPercent(dominantContact.percent)} of all contact actions).`);
+        }
+
+        if (galleryClicks > 0 && galleryAverage > 0 && galleryClicks >= galleryAverage) {
+            lines.push('Gallery engagement is strong - visitors are spending time browsing media.');
+        } else if (longSessionPercent > 0) {
+            lines.push(`${formatPercent(longSessionPercent)} of measured sessions lasted more than 2 minutes.`);
+        }
+
+        if (lines.length < 1) {
+            lines.push('Analytics are available, but this profile needs more activity in the selected window before meaningful sales guidance appears.');
+        }
+
+        return lines.slice(0, 3);
+    }, [contactRate, dominantContact, galleryAverage, galleryClicks, longSessionPercent, marketAverages.contact_rate_percent]);
+
+    const totalTrackedActivity = impressions + views + contentActions + contactActions;
 
     if (!client?.wp_post_id) {
         return (
             <EmptyAnalyticsState
-                title="No WordPress profile linked"
-                message="This client does not have a WordPress profile ID yet, so profile engagement analytics are unavailable."
+                title="Analytics are not available"
+                message="The profile must be published on the website to collect engagement data."
             />
         );
     }
@@ -231,16 +376,30 @@ export default function ClientAnalyticsTab({
                         <span key={option.key} className="inline-block h-9 w-14 animate-pulse rounded-md bg-slate-200" />
                     ))}
                 </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    {Array.from({ length: 4 }).map((_, index) => (
-                        <div key={index} className="h-28 animate-pulse rounded-xl bg-slate-200" />
-                    ))}
-                </div>
-                <div className="grid gap-4 xl:grid-cols-12">
-                    <div className="xl:col-span-8 h-80 animate-pulse rounded-xl bg-slate-200" />
-                    <div className="xl:col-span-4 h-80 animate-pulse rounded-xl bg-slate-200" />
+                <div className="h-56 animate-pulse rounded-xl bg-slate-200" />
+                <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="h-80 animate-pulse rounded-xl bg-slate-200" />
+                    <div className="h-80 animate-pulse rounded-xl bg-slate-200" />
                 </div>
             </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <EmptyAnalyticsState
+                title="Analytics are unavailable"
+                message={error?.response?.data?.message || 'The analytics service could not load this profile right now.'}
+            />
+        );
+    }
+
+    if (totalTrackedActivity < 1) {
+        return (
+            <EmptyAnalyticsState
+                title="Analytics are not available"
+                message="The profile must be published on the website to collect engagement data."
+            />
         );
     }
 
@@ -248,8 +407,8 @@ export default function ClientAnalyticsTab({
         <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div>
-                    <p className="text-sm font-semibold text-slate-800">Profile engagement window</p>
-                    <p className="text-sm text-slate-500">Compare views, content actions, and contact intent for this profile.</p>
+                    <p className="text-sm font-semibold text-slate-800">Analytics</p>
+                    <p className="text-sm text-slate-500">Every number needs context. Track discovery, engagement, and contact intent.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     {PERIOD_OPTIONS.map((option) => (
@@ -269,34 +428,98 @@ export default function ClientAnalyticsTab({
                 </div>
             </div>
 
-            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <StatCard label="Total Views" value={views.toLocaleString()} meta={`${uniqueVisitors.toLocaleString()} unique visitors`} />
-                <StatCard label="Content Actions" value={contentActions.toLocaleString()} meta={`${formatPercent(viewToContentRate)} of views engaged with content`} />
-                <StatCard label="Contact Actions" value={contactActions.toLocaleString()} meta={`${formatPercent(contentToContactRate)} of engaged actions became contacts`} />
-                <StatCard label="Contact Rate" value={formatPercent(contactRate)} meta={`Avg session ${formatDuration(avgSessionDuration)}`} />
-            </section>
+            <article className="crm-surface">
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Engagement funnel</h3>
+                        <p className="crm-panel-subtitle">How visitors discover and interact with this profile.</p>
+                    </div>
+                </header>
+                <div className="space-y-4 p-4">
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)]">
+                        <FunnelStage
+                            index={1}
+                            label="Seen"
+                            count={impressions}
+                            note="Card Impressions"
+                            uniqueLabel={`${impressionUnique.toLocaleString()} unique`}
+                        />
+                        <FunnelArrow value={viewClickThrough} label="click-thru" />
+                        <FunnelStage
+                            index={2}
+                            label="Viewed"
+                            count={views}
+                            note="Profile Views"
+                            uniqueLabel={`${uniqueVisitors.toLocaleString()} unique`}
+                        />
+                        <FunnelArrow value={contentEngageRate} label="engage rate" />
+                        <FunnelStage
+                            index={3}
+                            label="Engaged"
+                            count={contentActions}
+                            note="Content Actions"
+                            uniqueLabel="gal + vid + svc + rate"
+                        />
+                        <FunnelArrow value={contactFromContentRate} label="contact rate" />
+                        <FunnelStage
+                            index={4}
+                            label="Contacted"
+                            count={contactActions}
+                            note="Contacts"
+                            uniqueLabel="ph + wa + vb"
+                        />
+                    </div>
 
-            <section className="grid gap-4 xl:grid-cols-12">
-                <article className="crm-surface xl:col-span-8">
+                    <p className="text-sm text-slate-500">
+                        Contact = phone + WhatsApp + Viber. Content actions = gallery + video + service + rate totals.
+                    </p>
+                </div>
+            </article>
+
+            <div className="grid gap-4 xl:grid-cols-12">
+                <article className="crm-surface xl:col-span-5">
                     <header className="crm-panel-header">
                         <div>
-                            <h3 className="crm-panel-title">Engagement over time</h3>
-                            <p className="crm-panel-subtitle">Daily views and contact actions for the selected period.</p>
+                            <h3 className="crm-panel-title">Performance vs market</h3>
+                            <p className="crm-panel-subtitle">Market average = all active profiles on this platform for the same period.</p>
+                        </div>
+                    </header>
+                    <div className="space-y-4 p-4">
+                        {comparisonRows.map((row) => (
+                            <ComparisonMetricRow
+                                key={row.label}
+                                label={row.label}
+                                current={row.current}
+                                benchmark={row.benchmark}
+                                currentLabel={row.currentLabel}
+                                benchmarkLabel={row.benchmarkLabel}
+                                ratioLabel={row.ratioLabel}
+                                status={row.status}
+                            />
+                        ))}
+                    </div>
+                </article>
+
+                <article className="crm-surface xl:col-span-7">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Daily views</h3>
+                            <p className="crm-panel-subtitle">Views and unique visitors for the selected period.</p>
                         </div>
                     </header>
                     <div className="p-4">
-                        {chartRows.length > 0 ? (
+                        {dailyRows.length > 0 ? (
                             <div className="h-72">
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={chartRows} margin={{ top: 12, right: 12, bottom: 0, left: -18 }}>
+                                    <AreaChart data={dailyRows} margin={{ top: 12, right: 12, bottom: 0, left: -18 }}>
                                         <defs>
-                                            <linearGradient id="viewsGradient" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#0f766e" stopOpacity={0.25} />
+                                            <linearGradient id="dailyViewsGradient" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#0f766e" stopOpacity={0.24} />
                                                 <stop offset="95%" stopColor="#0f766e" stopOpacity={0} />
                                             </linearGradient>
-                                            <linearGradient id="contactsGradient" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#16a34a" stopOpacity={0.22} />
-                                                <stop offset="95%" stopColor="#16a34a" stopOpacity={0} />
+                                            <linearGradient id="dailyUniqueGradient" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#2563eb" stopOpacity={0.22} />
+                                                <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
                                             </linearGradient>
                                         </defs>
                                         <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
@@ -304,82 +527,30 @@ export default function ClientAnalyticsTab({
                                         <YAxis tick={{ fill: '#64748b', fontSize: 12 }} tickLine={false} axisLine={false} allowDecimals={false} />
                                         <Tooltip
                                             contentStyle={{ borderRadius: 12, borderColor: '#cbd5e1' }}
-                                            formatter={(value, name) => [Number(value).toLocaleString(), name === 'views' ? 'Views' : 'Contacts']}
+                                            formatter={(value, name) => [Number(value).toLocaleString(), name === 'views' ? 'Views' : 'Unique Visitors']}
                                             labelFormatter={(label, payload) => payload?.[0]?.payload?.date || label}
                                         />
-                                        <Area type="monotone" dataKey="views" stroke="#0f766e" fill="url(#viewsGradient)" strokeWidth={2.5} />
-                                        <Area type="monotone" dataKey="contacts" stroke="#16a34a" fill="url(#contactsGradient)" strokeWidth={2.5} />
+                                        <Area type="monotone" dataKey="views" stroke="#0f766e" fill="url(#dailyViewsGradient)" strokeWidth={2.5} />
+                                        <Area type="monotone" dataKey="uniqueVisitors" stroke="#2563eb" fill="url(#dailyUniqueGradient)" strokeWidth={2.5} />
                                     </AreaChart>
                                 </ResponsiveContainer>
                             </div>
                         ) : (
                             <EmptyAnalyticsState
-                                title="No tracked activity yet"
-                                message="The tracking pipeline is live, but this profile has not generated enough activity in the selected window to chart yet."
+                                title="No daily trend yet"
+                                message="This profile has activity in the selected window, but not enough daily spread to chart yet."
                             />
                         )}
                     </div>
                 </article>
+            </div>
 
-                <article className="crm-surface xl:col-span-4">
+            <div className="grid gap-4 xl:grid-cols-2">
+                <article className="crm-surface">
                     <header className="crm-panel-header">
                         <div>
-                            <h3 className="crm-panel-title">Performance vs market</h3>
-                            <p className="crm-panel-subtitle">How this profile stacks up against the current market average.</p>
-                        </div>
-                    </header>
-                    <div className="space-y-4 p-4">
-                        {marketComparisons.map((row) => (
-                            <ComparisonBar
-                                key={row.label}
-                                label={row.label}
-                                current={row.current}
-                                benchmark={row.benchmark}
-                                currentLabel={row.currentLabel}
-                                benchmarkLabel={row.benchmarkLabel}
-                            />
-                        ))}
-
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sales insight</p>
-                            <p className="mt-2 text-sm leading-6 text-slate-700">{insight}</p>
-                        </div>
-                    </div>
-                </article>
-            </section>
-
-            <section className="grid gap-4 xl:grid-cols-12">
-                <article className="crm-surface xl:col-span-7">
-                    <header className="crm-panel-header">
-                        <div>
-                            <h3 className="crm-panel-title">Funnel snapshot</h3>
-                            <p className="crm-panel-subtitle">Viewers who explored content and then reached out.</p>
-                        </div>
-                    </header>
-                    <div className="grid gap-3 p-4 md:grid-cols-3">
-                        <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                            <p className="text-sm font-semibold text-slate-800">1. Viewers</p>
-                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{views.toLocaleString()}</p>
-                            <p className="mt-1 text-sm text-slate-500">{uniqueVisitors.toLocaleString()} unique visitors</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                            <p className="text-sm font-semibold text-slate-800">2. Content actions</p>
-                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{contentActions.toLocaleString()}</p>
-                            <p className="mt-1 text-sm text-slate-500">{formatPercent(viewToContentRate)} from profile views</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                            <p className="text-sm font-semibold text-slate-800">3. Contact actions</p>
-                            <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{contactActions.toLocaleString()}</p>
-                            <p className="mt-1 text-sm text-slate-500">{formatPercent(contentToContactRate)} from content engagement</p>
-                        </div>
-                    </div>
-                </article>
-
-                <article className="crm-surface xl:col-span-5">
-                    <header className="crm-panel-header">
-                        <div>
-                            <h3 className="crm-panel-title">Contact mix</h3>
-                            <p className="crm-panel-subtitle">Channel preference plus the placements driving contact intent.</p>
+                            <h3 className="crm-panel-title">Contact breakdown</h3>
+                            <p className="crm-panel-subtitle">Which channel users prefer and where that click happened.</p>
                         </div>
                     </header>
                     <div className="space-y-4 p-4">
@@ -387,43 +558,29 @@ export default function ClientAnalyticsTab({
                             <>
                                 <div className="space-y-3">
                                     {contactMix.map((channel) => (
-                                        <div key={channel.key} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`h-2.5 w-2.5 rounded-full ${channel.accent}`} aria-hidden="true" />
-                                                    <p className="text-sm font-semibold text-slate-800">{channel.label}</p>
-                                                </div>
-                                                <div className="text-right">
-                                                    <p className="text-base font-semibold text-slate-950">{channel.total.toLocaleString()}</p>
-                                                    <p className={`text-xs font-medium ${channel.text}`}>{channel.share}% share</p>
-                                                </div>
-                                            </div>
-                                        </div>
+                                        <BreakdownRow
+                                            key={channel.key}
+                                            label={channel.label}
+                                            total={channel.total}
+                                            percent={channel.percent}
+                                            accentClass={channel.accent}
+                                        />
                                     ))}
                                 </div>
 
                                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Best-performing placement</p>
-                                    <p className="mt-2 text-sm text-slate-700">
-                                        {topPlacement
-                                            ? `${topPlacement.channel} performs best from ${topPlacement.placement} (${topPlacement.count.toLocaleString()} actions).`
-                                            : 'Placement detail will appear after contact events fire from multiple surfaces.'}
+                                    <p className="text-sm font-semibold text-slate-800">
+                                        Most used: {dominantContact ? `${dominantContact.label} (${formatPercent(dominantContact.percent)})` : '—'}
                                     </p>
-                                </div>
-
-                                {placementRows.length > 0 ? (
-                                    <div className="space-y-2">
-                                        {placementRows.slice(0, 6).map((row) => (
-                                            <div key={row.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                                                <div>
-                                                    <p className="text-sm font-semibold text-slate-800">{row.placement}</p>
-                                                    <p className="text-xs text-slate-500">{row.channel}</p>
-                                                </div>
-                                                <span className="text-sm font-semibold text-slate-900">{row.count.toLocaleString()}</span>
+                                    <div className="mt-3 space-y-2">
+                                        {placementRows.map((row) => (
+                                            <div key={row.key} className="flex items-center justify-between gap-3 text-sm">
+                                                <p className="font-medium text-slate-700">{row.label}</p>
+                                                <p className="font-semibold text-slate-900">{formatPercent(row.percent)}</p>
                                             </div>
                                         ))}
                                     </div>
-                                ) : null}
+                                </div>
                             </>
                         ) : (
                             <EmptyAnalyticsState
@@ -433,7 +590,51 @@ export default function ClientAnalyticsTab({
                         )}
                     </div>
                 </article>
-            </section>
+
+                <article className="crm-surface">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Content engagement</h3>
+                            <p className="crm-panel-subtitle">What visitors interacted with before contacting this profile.</p>
+                        </div>
+                    </header>
+                    <div className="space-y-4 p-4">
+                        <div className="space-y-3">
+                            {contentRows.map((row) => (
+                                <BreakdownRow
+                                    key={row.key}
+                                    label={row.label}
+                                    total={row.total}
+                                    percent={contentActions > 0 ? roundPercent((row.total / contentActions) * 100) : 0}
+                                    accentClass={row.accent}
+                                />
+                            ))}
+                        </div>
+
+                        <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 sm:grid-cols-2">
+                            <p><span className="font-semibold">Avg Session:</span> {formatDuration(avgSessionDuration)}</p>
+                            <p><span className="font-semibold">Sessions &gt; 2min:</span> {formatPercent(longSessionPercent)}</p>
+                        </div>
+                    </div>
+                </article>
+            </div>
+
+            <article className="crm-surface">
+                <header className="crm-panel-header">
+                    <div>
+                        <h3 className="crm-panel-title">Sales insight</h3>
+                        <p className="crm-panel-subtitle">Auto-generated guidance from the profile’s engagement ratios.</p>
+                    </div>
+                </header>
+                <div className="space-y-2 p-4 text-sm leading-6 text-slate-700">
+                    {insightLines.map((line) => (
+                        <p key={line}>{line}</p>
+                    ))}
+                    {topPlacement ? (
+                        <p>The strongest contact surface right now is {topPlacement.label} at {formatPercent(topPlacement.percent)} of all contact actions.</p>
+                    ) : null}
+                </div>
+            </article>
         </div>
     );
 }

@@ -516,7 +516,11 @@ export default function ClientDetail() {
         };
     }, [analyticsPeriod]);
 
-    const { data: analyticsData, isLoading: analyticsLoading } = useQuery({
+    const {
+        data: analyticsData,
+        isLoading: analyticsLoading,
+        error: analyticsError,
+    } = useQuery({
         queryKey: ['client-analytics', id, analyticsRange],
         queryFn: () => api.get(`/crm/clients/${id}/analytics`, { params: analyticsRange }).then((response) => response.data),
         enabled: activeTab === 'analytics' && Number(client?.wp_post_id || 0) > 0,
@@ -1663,6 +1667,7 @@ export default function ClientDetail() {
                 <ClientAnalyticsTab
                     client={client}
                     data={analyticsData}
+                    error={analyticsError}
                     isLoading={analyticsLoading}
                     analyticsPeriod={analyticsPeriod}
                     onPeriodChange={setAnalyticsPeriod}
