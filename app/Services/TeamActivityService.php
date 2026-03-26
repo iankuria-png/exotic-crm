@@ -429,13 +429,14 @@ class TeamActivityService
             'previous_summary' => $previousSummary,
             'trend' => $this->buildTrendPayload($summary, $previousSummary),
             'goals' => $this->getGoalProgress($user, $platformId),
-            'activity' => $this->recentActivity($user, $user, $platformId),
+            'activity' => $this->recentActivity($user, $start, $end, $user, $platformId),
         ];
     }
 
     public function getAgentActivityFeed(
         User $agent,
-        CarbonInterface $date,
+        CarbonInterface $from,
+        CarbonInterface $to,
         ?int $platformId = null,
         ?User $viewer = null
     ): array {
@@ -444,28 +445,14 @@ class TeamActivityService
             $this->assertPlatformAccessible($viewer, $platformId);
         }
 
-        $viewerForScope = $viewer ?? $agent;
-        $start = Carbon::instance($date)->startOfDay();
-        $end = $start->copy()->addDay();
-
-        $query = AuditLog::query()
-            ->where('actor_id', $agent->id)
-            ->where('created_at', '>=', $start)
-            ->where('created_at', '<', $end)
-            ->orderByDesc('created_at');
-
-        if ($platformId) {
-            $query->where('platform_id', $platformId);
-        } else {
-            $this->marketAuthorizationService->applyPlatformScope($query, $viewerForScope);
-        }
-
-        $logs = $query->get();
+        $start = Carbon::instance($from)->startOfDay();
+        $end = Carbon::instance($to)->addDay()->startOfDay();
 
         return [
-            'date' => $start->toDateString(),
+            'from' => $start->toDateString(),
+            'to' => Carbon::instance($to)->toDateString(),
             'platform_id' => $platformId,
-            'data' => $logs->map(fn (AuditLog $log) => $this->formatActivityLog($log))->all(),
+            'data' => $this->recentActivity($agent, $start, $end, $viewer ?? $agent, $platformId, 100),
         ];
     }
 
@@ -1181,7 +1168,6 @@ class TeamActivityService
         $platformIds = $this->accessiblePlatformIdsForUser($user);
 
         return Platform::query()
-            ->where('is_active', true)
             ->when(is_array($platformIds), function ($query) use ($platformIds) {
                 if (empty($platformIds)) {
                     $query->whereRaw('1 = 0');
@@ -1291,10 +1277,19 @@ class TeamActivityService
             ->all();
     }
 
-    private function recentActivity(User $agent, ?User $viewer, ?int $platformId, int $limit = 20): array
+    private function recentActivity(
+        User $agent,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        ?User $viewer,
+        ?int $platformId,
+        int $limit = 20
+    ): array
     {
         $query = AuditLog::query()
             ->where('actor_id', $agent->id)
+            ->where('created_at', '>=', $start)
+            ->where('created_at', '<', $end)
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->limit($limit);

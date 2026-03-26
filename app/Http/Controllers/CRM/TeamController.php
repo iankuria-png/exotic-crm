@@ -84,14 +84,36 @@ class TeamController extends Controller
     public function activityFeed(Request $request, User $user)
     {
         $validated = $request->validate([
-            'date' => 'required|date',
+            'date' => 'nullable|date',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
         ]);
+
+        $hasDate = isset($validated['date']);
+        $hasRange = isset($validated['from'], $validated['to']);
+
+        if (!$hasDate && !$hasRange) {
+            return response()->json([
+                'message' => 'Provide either a date or a from/to range.',
+                'errors' => [
+                    'date' => ['Provide either a date or a from/to range.'],
+                ],
+            ], 422);
+        }
+
+        $from = $hasRange
+            ? now()->parse((string) $validated['from'])
+            : now()->parse((string) $validated['date']);
+        $to = $hasRange
+            ? now()->parse((string) $validated['to'])
+            : now()->parse((string) $validated['date']);
 
         return response()->json(
             $this->teamActivityService->getAgentActivityFeed(
                 $user,
-                now()->parse((string) $validated['date']),
+                $from,
+                $to,
                 isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
                 $request->user()
             )

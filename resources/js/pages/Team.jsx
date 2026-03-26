@@ -190,6 +190,14 @@ function formatCount(value) {
     return asNumber(value).toLocaleString();
 }
 
+function formatTrendMetricValue(metricKey, value) {
+    if (metricKey === 'active_seconds') {
+        return formatDuration(value);
+    }
+
+    return formatCount(value);
+}
+
 function formatCurrencyRows(rows) {
     if (!Array.isArray(rows) || rows.length === 0) {
         return ['--'];
@@ -677,11 +685,12 @@ export default function Team() {
 
     const agentActivityQuery = useQuery({
         enabled: isManager && activeTab === 'agent-detail' && Boolean(selectedAgent?.user_id),
-        queryKey: ['team', 'agent-activity', selectedAgent?.user_id, platformFilter || 'all'],
+        queryKey: ['team', 'agent-activity', selectedAgent?.user_id, period, agentDateRange.from, agentDateRange.to, platformFilter || 'all'],
         queryFn: () =>
             api.get(`/crm/team/${selectedAgent.user_id}/activity`, {
                 params: {
-                    date: toInputDateString(new Date()),
+                    from: agentDateRange.from,
+                    to: agentDateRange.to,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                 },
             }).then((response) => response.data),
@@ -1378,7 +1387,7 @@ export default function Team() {
                                                 <div>
                                                     <p className="text-sm font-semibold text-slate-900">{item.label}</p>
                                                     <p className="text-xs text-slate-500">
-                                                        {formatCount(myTrend[item.key]?.current)} now vs {formatCount(myTrend[item.key]?.previous)} before
+                                                        {formatTrendMetricValue(item.key, myTrend[item.key]?.current)} now vs {formatTrendMetricValue(item.key, myTrend[item.key]?.previous)} before
                                                     </p>
                                                 </div>
                                                 <TrendBadge trend={myTrend[item.key]} period={period} />
@@ -1392,7 +1401,7 @@ export default function Team() {
 
                     <SectionFrame
                         title="Recent activity"
-                        subtitle="Contextual links make it easy to jump back into the relevant client, lead, or deal."
+                        subtitle={`Most recent work captured in ${periodLabel(period).toLowerCase()}. Contextual links make it easy to jump back into the relevant client, lead, or deal.`}
                     >
                         {myStatsQuery.isError ? (
                             <TeamErrorState
@@ -1779,7 +1788,7 @@ export default function Team() {
                                             <div>
                                                 <p className="text-sm font-semibold text-slate-900">{item.label}</p>
                                                 <p className="text-xs text-slate-500">
-                                                    {formatCount(agentTrend[item.key]?.current)} now vs {formatCount(agentTrend[item.key]?.previous)} before
+                                                    {formatTrendMetricValue(item.key, agentTrend[item.key]?.current)} now vs {formatTrendMetricValue(item.key, agentTrend[item.key]?.previous)} before
                                                 </p>
                                             </div>
                                             <TrendBadge trend={agentTrend[item.key]} period={period} />
@@ -1840,8 +1849,8 @@ export default function Team() {
                     </SectionFrame>
 
                     <SectionFrame
-                        title="Recent activity today"
-                        subtitle="Daily timeline for the selected agent."
+                        title="Recent activity"
+                        subtitle={`Recent timeline for the selected agent in ${periodLabel(period).toLowerCase()}.`}
                     >
                         {agentActivityQuery.isError ? (
                             <TeamErrorState
@@ -1852,7 +1861,7 @@ export default function Team() {
                             <ActivityList
                                 items={agentActivity}
                                 emptyTitle="No activity yet"
-                                emptyMessage="No tracked activity has been recorded for this agent today."
+                                emptyMessage={`No tracked activity has been recorded for this agent in ${periodLabel(period).toLowerCase()}.`}
                             />
                         )}
                     </SectionFrame>
