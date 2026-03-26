@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Client;
+use App\Models\ClientSyncExclusion;
 use App\Models\Platform;
 use Illuminate\Support\Facades\Log;
 
@@ -26,6 +27,7 @@ class ClientSyncService
         $page = 1;
         $created = 0;
         $updated = 0;
+        $skipped = 0;
         $total = 0;
 
         do {
@@ -37,6 +39,8 @@ class ClientSyncService
                 $result = $this->upsertClient($wpClient);
                 if ($result === 'created') {
                     $created++;
+                } elseif ($result === 'skipped') {
+                    $skipped++;
                 } else {
                     $updated++;
                 }
@@ -55,6 +59,7 @@ class ClientSyncService
         return [
             'created' => $created,
             'updated' => $updated,
+            'skipped' => $skipped,
             'total'   => $total,
         ];
     }
@@ -74,6 +79,7 @@ class ClientSyncService
         $page = 1;
         $created = 0;
         $updated = 0;
+        $skipped = 0;
         $total = 0;
 
         do {
@@ -85,6 +91,8 @@ class ClientSyncService
                 $result = $this->upsertClient($wpClient);
                 if ($result === 'created') {
                     $created++;
+                } elseif ($result === 'skipped') {
+                    $skipped++;
                 } else {
                     $updated++;
                 }
@@ -97,6 +105,7 @@ class ClientSyncService
         return [
             'created' => $created,
             'updated' => $updated,
+            'skipped' => $skipped,
             'total'   => $total,
         ];
     }
@@ -116,6 +125,18 @@ class ClientSyncService
 
     private function upsertClient(array $wpClient): string
     {
+        $wpPostId = (int) ($wpClient['wp_post_id'] ?? 0);
+        if ($wpPostId > 0) {
+            $isExcluded = ClientSyncExclusion::query()
+                ->where('platform_id', (int) $this->platform->id)
+                ->where('wp_post_id', $wpPostId)
+                ->exists();
+
+            if ($isExcluded) {
+                return 'skipped';
+            }
+        }
+
         $phone = $this->normalizePhone($wpClient['phone'] ?? '', $this->platform->phone_prefix);
 
         // Truncate fields to fit column limits — WP data can have junk
@@ -131,7 +152,7 @@ class ClientSyncService
         $client = Client::updateOrCreate(
             [
                 'platform_id' => $this->platform->id,
-                'wp_post_id'  => $wpClient['wp_post_id'],
+                'wp_post_id'  => $wpPostId,
             ],
             [
                 'wp_user_id'      => $wpClient['wp_user_id'] ?? null,

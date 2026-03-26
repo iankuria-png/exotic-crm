@@ -132,8 +132,12 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');
+    Route::post('/clients/bulk-delete', [ClientController::class, 'bulkDelete'])->middleware('role:admin,sub_admin');
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/delete-preview', [ClientController::class, 'deletePreview'])->middleware('role:admin,sub_admin');
+    Route::delete('/clients/{client}', [ClientController::class, 'destroy'])->middleware('role:admin,sub_admin');
     Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');

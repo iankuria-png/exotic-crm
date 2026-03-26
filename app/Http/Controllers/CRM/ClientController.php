@@ -14,6 +14,7 @@ use App\Models\TimelineEvent;
 use App\Models\Platform;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\ClientDeletionService;
 use App\Services\ClientRetentionInsightService;
 use App\Services\DealPaymentService;
 use App\Services\LeadAssignmentService;
@@ -41,6 +42,7 @@ class ClientController extends Controller
         private readonly AuditService $auditService,
         private readonly CredentialDeliveryService $credentialDeliveryService,
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
+        private readonly ClientDeletionService $clientDeletionService,
         private readonly DealPaymentService $dealPaymentService,
         private readonly PaymentLinkService $paymentLinkService
     ) {
@@ -315,6 +317,16 @@ class ClientController extends Controller
         return response()->json($client);
     }
 
+    public function deletePreview(Request $request, Client $client)
+    {
+        $this->marketAuthorizationService->ensureManager($request->user());
+        $this->authorizeClientAccess($request, $client);
+
+        return response()->json(
+            $this->clientDeletionService->previewDeletion($client)
+        );
+    }
+
     public function sendPaymentLink(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);
@@ -472,6 +484,126 @@ class ClientController extends Controller
         return response()->json([
             'message' => 'This deal cannot receive a new payment link in its current payment state.',
         ], 422);
+    }
+
+    public function destroy(Request $request, Client $client)
+    {
+        $this->marketAuthorizationService->ensureManager($request->user());
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'confirm' => 'required|string|max:255',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (trim((string) $validated['confirm']) !== trim((string) $client->name)) {
+            return response()->json([
+                'message' => 'Confirmation text must match the client name exactly.',
+            ], 422);
+        }
+
+        $result = $this->clientDeletionService->deleteClient(
+            $client,
+            (int) $request->user()->id,
+            (string) ($validated['reason'] ?? 'Client deleted from CRM')
+        );
+
+        return response()->json($result);
+    }
+
+    public function bulkDeletePreview(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager($request->user());
+
+        $validated = $request->validate([
+            'client_ids' => 'nullable|array|max:500',
+            'client_ids.*' => 'integer|min:1',
+            'filters' => 'nullable|array',
+            'filters.platform_id' => 'nullable|integer|min:1',
+            'filters.inactive_days' => 'nullable|integer|min:1',
+            'filters.has_no_chat' => 'nullable|boolean',
+            'filters.has_no_subscription_or_payment' => 'nullable|boolean',
+        ]);
+
+        $clientIds = collect($validated['client_ids'] ?? [])
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $filters = $validated['filters'] ?? [];
+
+        if (empty($clientIds) && empty($filters)) {
+            return response()->json([
+                'message' => 'Provide selected client IDs or smart-delete filters to preview.',
+            ], 422);
+        }
+
+        if (!empty($filters['platform_id'])) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                (int) $filters['platform_id'],
+                'You do not have access to this client market.'
+            );
+        }
+
+        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        return response()->json(
+            $this->clientDeletionService->bulkPreview($filters, $clientIds, $platformIds)
+        );
+    }
+
+    public function bulkDelete(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager($request->user());
+
+        $validated = $request->validate([
+            'client_ids' => 'required|array|max:500',
+            'client_ids.*' => 'integer|min:1',
+            'confirm' => 'required|string',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        if (trim((string) $validated['confirm']) !== 'DELETE') {
+            return response()->json([
+                'message' => 'Type DELETE to confirm the bulk deletion.',
+            ], 422);
+        }
+
+        $clientIds = collect($validated['client_ids'])
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+        $accessibleQuery = Client::query()->whereIn('id', $clientIds);
+        if (is_array($platformIds)) {
+            if (empty($platformIds)) {
+                $accessibleQuery->whereRaw('1 = 0');
+            } else {
+                $accessibleQuery->whereIn('platform_id', $platformIds);
+            }
+        }
+
+        $accessibleCount = $accessibleQuery->count();
+
+        if ($accessibleCount !== count($clientIds)) {
+            return response()->json([
+                'message' => 'One or more selected clients are not accessible for deletion.',
+            ], 403);
+        }
+
+        return response()->json(
+            $this->clientDeletionService->bulkDelete(
+                $clientIds,
+                (int) $request->user()->id,
+                (string) ($validated['reason'] ?? 'Bulk client deletion from CRM')
+            )
+        );
     }
 
     /**

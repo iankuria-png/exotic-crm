@@ -52,6 +52,8 @@ final class CrmAuditAction
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
     public const CLIENT_CREDENTIAL_SEND = 'client_credential_send';
     public const CLIENT_CREDENTIAL_RETRY = 'client_credential_retry';
+    public const CLIENT_DELETE = 'client_delete';
+    public const CLIENT_BULK_DELETE = 'client_bulk_delete';
     public const CLIENT_WALLET_TOPUP = 'client_wallet_topup';
     public const CLIENT_WALLET_ADJUSTMENT = 'client_wallet_adjustment';
     public const WALLET_PIN_UPDATE = 'wallet_pin_update';

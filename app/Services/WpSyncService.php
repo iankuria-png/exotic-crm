@@ -141,6 +141,11 @@ class WpSyncService
         return $this->post("/clients/{$postId}/deactivate");
     }
 
+    public function deleteClient(int $postId): array
+    {
+        return $this->delete("/clients/{$postId}/delete");
+    }
+
     /**
      * Extend a client profile
      */

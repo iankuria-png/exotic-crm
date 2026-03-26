@@ -149,6 +149,27 @@ class Client extends Model
         return $query->where('platform_id', $platformId);
     }
 
+    public function scopeInactiveFor($query, int $days)
+    {
+        $threshold = now()->subDays($days)->timestamp;
+
+        return $query->where(function ($builder) use ($threshold) {
+            $builder->where('last_online_at', '<', $threshold)
+                ->orWhereNull('last_online_at');
+        });
+    }
+
+    public function scopeHasNoChat($query)
+    {
+        return $query->whereNull('sb_user_id');
+    }
+
+    public function scopeHasNoSubscriptionOrPayment($query)
+    {
+        return $query->whereDoesntHave('deals')
+            ->whereDoesntHave('payments');
+    }
+
     public function getWpProfileUrlAttribute(): ?string
     {
         $wpPostId = (int) ($this->wp_post_id ?? 0);
