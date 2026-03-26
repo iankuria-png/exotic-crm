@@ -15,11 +15,13 @@ use App\Models\Platform;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\ClientRetentionInsightService;
+use App\Services\DealPaymentService;
 use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
-use App\Services\PaymentMatchingService;
 use App\Services\CredentialDeliveryService;
 use App\Services\ClientSyncService;
+use App\Services\PaymentLinkService;
+use App\Services\PaymentMatchingService;
 use App\Services\SupportBoardService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
@@ -38,7 +40,9 @@ class ClientController extends Controller
         private readonly LeadAssignmentService $leadAssignmentService,
         private readonly AuditService $auditService,
         private readonly CredentialDeliveryService $credentialDeliveryService,
-        private readonly ClientRetentionInsightService $clientRetentionInsightService
+        private readonly ClientRetentionInsightService $clientRetentionInsightService,
+        private readonly DealPaymentService $dealPaymentService,
+        private readonly PaymentLinkService $paymentLinkService
     ) {
     }
 
@@ -309,6 +313,165 @@ class ClientController extends Controller
         ]);
 
         return response()->json($client);
+    }
+
+    public function sendPaymentLink(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'mode' => 'required|in:quick_subscribe,existing_deal',
+            'product_id' => 'required_if:mode,quick_subscribe|nullable|integer|min:1',
+            'product_price_id' => 'required_if:mode,quick_subscribe|nullable|integer|min:1',
+            'deal_id' => 'required_if:mode,existing_deal|nullable|integer|min:1',
+            'payment_link_provider' => 'nullable|string|max:120',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $client->loadMissing('platform');
+
+        $paymentLinkProvider = $this->dealPaymentService->resolvePaymentLinkProvider(
+            $client,
+            $validated['payment_link_provider'] ?? null
+        );
+
+        if ($validated['mode'] === 'quick_subscribe') {
+            $result = DB::transaction(function () use ($request, $client, $validated, $paymentLinkProvider) {
+                $deal = $this->dealPaymentService->createPendingDealFromCatalog(
+                    $client,
+                    (int) $validated['product_id'],
+                    isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null,
+                    null,
+                    (int) $request->user()->id,
+                    null
+                );
+
+                return $this->dealPaymentService->startLinkPaymentForDeal(
+                    $deal,
+                    $client,
+                    $request,
+                    $paymentLinkProvider,
+                    true
+                );
+            });
+
+            return response()->json(
+                $this->paymentLinkResponsePayload($result['deal'], $result['payment'], $result),
+                202
+            );
+        }
+
+        $deal = Deal::query()
+            ->where('client_id', (int) $client->id)
+            ->whereKey((int) $validated['deal_id'])
+            ->first();
+
+        if (!$deal) {
+            return response()->json([
+                'message' => 'Selected deal does not belong to this client.',
+            ], 422);
+        }
+
+        if (!in_array((string) $deal->status, ['pending', 'awaiting_payment'], true)) {
+            return response()->json([
+                'message' => 'Only pending or awaiting-payment deals can receive payment links.',
+            ], 422);
+        }
+
+        $payment = $deal->payment;
+        if ($deal->status === 'pending' && !$payment) {
+            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider) {
+                return $this->dealPaymentService->startLinkPaymentForDeal(
+                    $deal,
+                    $client,
+                    $request,
+                    $paymentLinkProvider,
+                    true
+                );
+            });
+
+            return response()->json(
+                $this->paymentLinkResponsePayload($result['deal'], $result['payment'], $result),
+                202
+            );
+        }
+
+        if (!$payment) {
+            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider) {
+                return $this->dealPaymentService->startLinkPaymentForDeal(
+                    $deal,
+                    $client,
+                    $request,
+                    $paymentLinkProvider,
+                    true
+                );
+            });
+
+            return response()->json(
+                $this->paymentLinkResponsePayload($result['deal'], $result['payment'], $result),
+                202
+            );
+        }
+
+        $paymentStatus = (string) $payment->status;
+        if (in_array($paymentStatus, Payment::SUCCESSFUL_STATUSES, true)) {
+            return response()->json([
+                'message' => 'Payment already completed for this deal.',
+            ], 422);
+        }
+
+        if (in_array($paymentStatus, Payment::RESENDABLE_LINK_STATUSES, true)) {
+            $sendResult = $this->paymentLinkService->sendLink($payment, [
+                'request' => $request,
+                'channel' => 'sms',
+                'phone' => $payment->phone ?: $client->phone_normalized,
+                'provider' => $paymentLinkProvider,
+                'reason' => (string) ($validated['reason'] ?? 'Resend payment link from client profile'),
+                'notification_purpose' => 'deal_activation_payment_link',
+                'notification_context' => [
+                    'deal_id' => $deal->id,
+                ],
+                'success_message' => 'Payment link sent by SMS. Subscription will activate after payment confirmation.',
+                'disabled_message' => 'Payment link prepared (SMS disabled). Subscription will activate after payment confirmation.',
+            ]);
+
+            if (!($sendResult['success'] ?? false) && empty($sendResult['payment_url'])) {
+                return response()->json([
+                    'message' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
+                ], (int) ($sendResult['http_status'] ?? 500));
+            }
+
+            return response()->json(
+                $this->paymentLinkResponsePayload($deal, $payment, [
+                    'message' => $sendResult['message'] ?? 'Payment link prepared.',
+                    'payment_url' => $sendResult['payment_url'] ?? null,
+                    'sms_result' => $sendResult['notification_result'] ?? null,
+                    'phone' => $sendResult['phone'] ?? ($payment->phone ?: $client->phone_normalized),
+                ]),
+                202
+            );
+        }
+
+        if (in_array($paymentStatus, Payment::REPLACEMENT_REQUIRED_STATUSES, true)) {
+            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider) {
+                return $this->dealPaymentService->startLinkPaymentForDeal(
+                    $deal,
+                    $client,
+                    $request,
+                    $paymentLinkProvider,
+                    true
+                );
+            });
+
+            return response()->json(
+                $this->paymentLinkResponsePayload($result['deal'], $result['payment'], $result),
+                202
+            );
+        }
+
+        return response()->json([
+            'message' => 'This deal cannot receive a new payment link in its current payment state.',
+        ], 422);
     }
 
     /**
@@ -1353,6 +1516,18 @@ class ClientController extends Controller
         if (!$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $client->platform_id)) {
             abort(403, 'You do not have access to this client market.');
         }
+    }
+
+    private function paymentLinkResponsePayload(Deal $deal, Payment $payment, array $result): array
+    {
+        return [
+            'message' => $result['message'] ?? 'Payment link prepared.',
+            'deal' => $deal->fresh(['product', 'platform', 'client', 'payment']),
+            'payment' => $payment->fresh(['platform', 'product', 'client']),
+            'payment_url' => $result['payment_url'] ?? data_get($payment->raw_payload, 'payment_url'),
+            'sms_result' => $result['sms_result'] ?? $result['notification_result'] ?? null,
+            'phone' => $result['phone'] ?? $payment->phone,
+        ];
     }
 
     private function createProvisionedClient(Request $request, array $payload, string $reason): Client

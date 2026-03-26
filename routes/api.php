@@ -198,6 +198,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
         // Conversations
         Route::post('/conversations/clients/{client}/send', [ConversationController::class, 'send']);
+        Route::post('/clients/{client}/payment-link', [ClientController::class, 'sendPaymentLink']);
 
         // Renewals
         Route::get('/renewals', [RenewalController::class, 'overview']);

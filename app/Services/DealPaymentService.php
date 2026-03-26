@@ -266,7 +266,9 @@ class DealPaymentService
                 'disabled_message' => 'Payment link prepared (SMS disabled). Subscription will activate after payment confirmation.',
             ]);
 
-            if (!($sendResult['success'] ?? false)) {
+            $paymentReady = !empty($sendResult['payment_url']);
+
+            if (!($sendResult['success'] ?? false) && !$paymentReady) {
                 $payment->update([
                     'status' => 'failed',
                     'raw_payload' => [
@@ -284,6 +286,7 @@ class DealPaymentService
                     'success' => false,
                     'message' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
                     'payment' => $payment,
+                    'payment_ready' => false,
                     'payment_url' => $sendResult['payment_url'] ?? null,
                     'sms_result' => $sendResult['notification_result'] ?? null,
                     'phone' => $sendResult['phone'] ?? $phone,
@@ -292,6 +295,7 @@ class DealPaymentService
 
             $payment->update([
                 'status' => 'initiated',
+                'failure_reason' => null,
                 'provider_key' => $sendResult['provider'] ?? $paymentLinkProvider,
                 'raw_payload' => [
                     'source' => 'deal_payment_initiation',
@@ -300,13 +304,15 @@ class DealPaymentService
                     'resolved_provider' => $sendResult['provider'] ?? $paymentLinkProvider,
                     'payment_url' => $sendResult['payment_url'] ?? null,
                     'sms_status' => data_get($sendResult, 'notification_result.status'),
+                    'delivery_error' => ($sendResult['success'] ?? false) ? null : ($sendResult['message'] ?? null),
                 ],
             ]);
 
             return [
-                'success' => true,
+                'success' => (bool) ($sendResult['success'] ?? false),
                 'message' => $sendResult['message'] ?? 'Payment link sent by SMS. Subscription will activate after payment confirmation.',
                 'payment' => $payment->fresh(['platform', 'product', 'client']),
+                'payment_ready' => $paymentReady,
                 'payment_url' => $sendResult['payment_url'] ?? null,
                 'sms_result' => $sendResult['notification_result'] ?? null,
                 'phone' => $sendResult['phone'] ?? $phone,
@@ -333,7 +339,8 @@ class DealPaymentService
         Deal $deal,
         Client $client,
         Request $request,
-        ?string $paymentLinkProvider
+        ?string $paymentLinkProvider,
+        bool $allowPreparedLinkFallback = false
     ): array {
         $beforeState = [
             'deal_status' => $deal->status,
@@ -344,7 +351,8 @@ class DealPaymentService
         ];
 
         $initiation = $this->initiatePaymentForDeal($deal, $client, 'link', $request, $paymentLinkProvider);
-        if (!($initiation['success'] ?? false)) {
+        $paymentReady = (bool) ($initiation['payment_ready'] ?? false);
+        if (!($initiation['success'] ?? false) && !($allowPreparedLinkFallback && $paymentReady)) {
             throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
         }
 
