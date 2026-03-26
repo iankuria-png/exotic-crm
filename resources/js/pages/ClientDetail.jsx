@@ -385,6 +385,10 @@ export default function ClientDetail() {
     const [noteForm, setNoteForm] = useState({ note_type: 'internal', content: '', follow_up_at: '' });
     const [showDealModal, setShowDealModal] = useState(false);
     const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
+    const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    const [deletePreview, setDeletePreview] = useState(null);
+    const [deleteConfirmText, setDeleteConfirmText] = useState('');
+    const [deleteReason, setDeleteReason] = useState('Client deleted from CRM');
     const [paymentLinkResult, setPaymentLinkResult] = useState(null);
     const [activationDialog, setActivationDialog] = useState({
         open: false,
@@ -455,6 +459,7 @@ export default function ClientDetail() {
     const currentUser = meData?.user || null;
     const isReadOnly = currentUser?.role === 'marketing';
     const canManageWallet = ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
+    const canDeleteClient = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
 
     const { data: timelineData } = useQuery({
         queryKey: ['client-timeline', id],
@@ -600,6 +605,40 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Payment link could not be prepared.');
+        },
+    });
+
+    const deletePreviewMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/delete-preview`).then((response) => response.data),
+        onSuccess: (payload) => {
+            setDeletePreview(payload);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Delete preview could not be loaded.');
+            setShowDeleteDialog(false);
+            setDeletePreview(null);
+        },
+    });
+
+    const deleteClientMutation = useMutation({
+        mutationFn: ({ confirm, reason }) => api.delete(`/crm/clients/${id}`, {
+            data: {
+                confirm,
+                reason,
+            },
+        }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            toast.success('Client deleted successfully.');
+            setShowDeleteDialog(false);
+            setDeletePreview(null);
+            setDeleteConfirmText('');
+            setDeleteReason('Client deleted from CRM');
+            navigate('/clients');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Client deletion failed.');
         },
     });
 
@@ -1106,6 +1145,25 @@ export default function ClientDetail() {
         setShowPaymentLinkModal(true);
     };
 
+    const openDeleteDialog = () => {
+        setDeleteConfirmText('');
+        setDeleteReason('Client deleted from CRM');
+        setDeletePreview(null);
+        setShowDeleteDialog(true);
+        deletePreviewMutation.mutate();
+    };
+
+    const closeDeleteDialog = () => {
+        if (deletePreviewMutation.isPending || deleteClientMutation.isPending) {
+            return;
+        }
+
+        setShowDeleteDialog(false);
+        setDeletePreview(null);
+        setDeleteConfirmText('');
+        setDeleteReason('Client deleted from CRM');
+    };
+
     const closePaymentLinkModal = () => {
         if (sendPaymentLinkMutation.isPending) {
             return;
@@ -1427,6 +1485,15 @@ export default function ClientDetail() {
                                 className="crm-btn-primary"
                             >
                                 New subscription
+                            </button>
+                        ) : null}
+                        {canDeleteClient ? (
+                            <button
+                                type="button"
+                                onClick={openDeleteDialog}
+                                className="crm-btn-danger"
+                            >
+                                Delete client
                             </button>
                         ) : null}
                     </div>
@@ -3108,6 +3175,25 @@ export default function ClientDetail() {
                 />
             ) : null}
 
+            {canDeleteClient ? (
+                <DeleteClientDialog
+                    open={showDeleteDialog}
+                    client={client}
+                    preview={deletePreview}
+                    confirmText={deleteConfirmText}
+                    reason={deleteReason}
+                    previewPending={deletePreviewMutation.isPending}
+                    deletePending={deleteClientMutation.isPending}
+                    onCancel={closeDeleteDialog}
+                    onConfirmTextChange={setDeleteConfirmText}
+                    onReasonChange={setDeleteReason}
+                    onConfirm={() => deleteClientMutation.mutate({
+                        confirm: deleteConfirmText,
+                        reason: deleteReason.trim() || 'Client deleted from CRM',
+                    })}
+                />
+            ) : null}
+
             {!isReadOnly ? (
                 <CredentialDispatchDrawer
                     open={showCredentialDrawer}
@@ -3121,6 +3207,99 @@ export default function ClientDetail() {
                     }}
                 />
             ) : null}
+        </div>
+    );
+}
+
+function DeleteClientDialog({
+    open,
+    client,
+    preview,
+    confirmText,
+    reason,
+    previewPending,
+    deletePending,
+    onCancel,
+    onConfirmTextChange,
+    onReasonChange,
+    onConfirm,
+}) {
+    const confirmMatches = confirmText.trim() === String(client?.name || '').trim();
+    const confirmDisabled = previewPending
+        || deletePending
+        || !preview
+        || !confirmMatches
+        || !reason.trim();
+
+    return (
+        <ConfirmDialog
+            open={open}
+            title="Delete Client"
+            message="This permanently removes the CRM client record, deletes linked subscriptions, and prevents WordPress re-import for the same profile."
+            confirmLabel={deletePending ? 'Deleting...' : 'Delete client'}
+            tone="danger"
+            onCancel={onCancel}
+            onConfirm={onConfirm}
+            confirmDisabled={confirmDisabled}
+            isPending={deletePending}
+        >
+            {previewPending ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
+                    Loading deletion impact…
+                </div>
+            ) : preview ? (
+                <div className="space-y-3">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                        <ImpactPill label="Subscriptions" value={preview.deals_count} />
+                        <ImpactPill label="Payments" value={preview.payments_count} />
+                        <ImpactPill label="Notes" value={preview.notes_count} />
+                        <ImpactPill label="Leads" value={preview.leads_count} />
+                        <ImpactPill label="Timeline events" value={preview.timeline_events_count} />
+                        <ImpactPill label="WP profile" value={preview.wp_post_id ? `#${preview.wp_post_id}` : 'None'} />
+                    </div>
+
+                    {preview.has_active_deal ? (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            This client currently has an active subscription. Deleting will remove the CRM client record and its linked deal history.
+                        </div>
+                    ) : null}
+
+                    <label className="block">
+                        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                            Reason
+                        </span>
+                        <textarea
+                            value={reason}
+                            onChange={(event) => onReasonChange(event.target.value)}
+                            rows={3}
+                            className="crm-input min-h-[96px] w-full"
+                            placeholder="Why is this client being deleted?"
+                        />
+                    </label>
+
+                    <label className="block">
+                        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                            Type the client name to confirm
+                        </span>
+                        <input
+                            type="text"
+                            value={confirmText}
+                            onChange={(event) => onConfirmTextChange(event.target.value)}
+                            className="crm-input"
+                            placeholder={client?.name || 'Client name'}
+                        />
+                    </label>
+                </div>
+            ) : null}
+        </ConfirmDialog>
+    );
+}
+
+function ImpactPill({ label, value }) {
+    return (
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
         </div>
     );
 }

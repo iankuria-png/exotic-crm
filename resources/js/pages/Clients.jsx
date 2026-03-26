@@ -17,6 +17,24 @@ import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retenti
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
+const SMART_DELETE_DAY_OPTIONS = [30, 60, 90, 180, 365];
+
+function createBulkDeleteDialogState(platformId = '') {
+    return {
+        open: false,
+        mode: 'selected',
+        selectedClients: [],
+        preview: null,
+        confirmText: '',
+        reason: 'Bulk client deletion from clients page',
+        filters: {
+            platform_id: platformId,
+            inactive_days: '90',
+            has_no_chat: true,
+            has_no_subscription_or_payment: true,
+        },
+    };
+}
 
 function percentage(part, total) {
     if (!total) return 0;
@@ -45,6 +63,7 @@ export default function Clients() {
     const toast = useToast();
     const { user } = useAuth();
     const isReadOnly = user?.role === 'marketing';
+    const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [searchParams] = useSearchParams();
 
     const [page, setPage] = useState(1);
@@ -96,6 +115,8 @@ export default function Clients() {
     const [showCsvModal, setShowCsvModal] = useState(false);
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
     const [csvResult, setCsvResult] = useState(null);
+    const [clearSelectionKey, setClearSelectionKey] = useState(0);
+    const [bulkDeleteDialog, setBulkDeleteDialog] = useState(() => createBulkDeleteDialogState(''));
     const [credentialDrawer, setCredentialDrawer] = useState({
         open: false,
         client: null,
@@ -307,11 +328,116 @@ export default function Clients() {
         },
     });
 
+    const buildBulkDeletePreviewPayload = (dialogState) => {
+        if (dialogState.mode === 'selected') {
+            return {
+                client_ids: dialogState.selectedClients.map((client) => Number(client.id)).filter((clientId) => clientId > 0),
+            };
+        }
+
+        const filters = {};
+        if (dialogState.filters.platform_id) {
+            filters.platform_id = Number(dialogState.filters.platform_id);
+        }
+        if (dialogState.filters.inactive_days) {
+            filters.inactive_days = Number(dialogState.filters.inactive_days);
+        }
+        if (dialogState.filters.has_no_chat) {
+            filters.has_no_chat = true;
+        }
+        if (dialogState.filters.has_no_subscription_or_payment) {
+            filters.has_no_subscription_or_payment = true;
+        }
+
+        return { filters };
+    };
+
+    const bulkDeletePreviewMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/clients/bulk-delete/preview', payload).then((response) => response.data),
+        onSuccess: (payload) => {
+            setBulkDeleteDialog((current) => ({
+                ...current,
+                preview: payload,
+            }));
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Delete preview could not be loaded.');
+        },
+    });
+
+    const bulkDeleteMutation = useMutation({
+        mutationFn: ({ clientIds, reason }) => api.post('/crm/clients/bulk-delete', {
+            client_ids: clientIds,
+            confirm: 'DELETE',
+            reason,
+        }).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setClearSelectionKey((current) => current + 1);
+            setBulkDeleteDialog(createBulkDeleteDialogState(platformFilter));
+            const deletedCount = Number(payload?.deleted_count || 0);
+            toast.success(`Deleted ${deletedCount.toLocaleString()} client${deletedCount === 1 ? '' : 's'}.`);
+            setPage(1);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Bulk client deletion failed.');
+        },
+    });
+
+    const closeBulkDeleteDialog = () => {
+        if (bulkDeletePreviewMutation.isPending || bulkDeleteMutation.isPending) {
+            return;
+        }
+
+        setBulkDeleteDialog(createBulkDeleteDialogState(platformFilter));
+    };
+
+    const previewBulkDelete = (dialogState) => {
+        setBulkDeleteDialog((current) => ({
+            ...current,
+            preview: null,
+        }));
+        bulkDeletePreviewMutation.mutate(buildBulkDeletePreviewPayload(dialogState));
+    };
+
+    const openSelectedDeleteDialog = (rowsSelection) => {
+        const nextDialog = {
+            ...createBulkDeleteDialogState(platformFilter),
+            open: true,
+            mode: 'selected',
+            selectedClients: rowsSelection,
+        };
+
+        setBulkDeleteDialog(nextDialog);
+        previewBulkDelete(nextDialog);
+    };
+
+    const openSmartDeleteDialog = () => {
+        setBulkDeleteDialog({
+            ...createBulkDeleteDialogState(platformFilter),
+            open: true,
+            mode: 'smart',
+            reason: 'Smart client deletion from clients page',
+        });
+    };
+
     const handleSearch = (event) => {
         event.preventDefault();
         setSearch(searchInput.trim());
         setPage(1);
     };
+
+    const bulkActions = canDeleteClients ? [
+        {
+            key: 'bulk-delete-clients',
+            label: 'Delete selected',
+            variant: 'danger',
+            onClick: (rowsSelection) => {
+                openSelectedDeleteDialog(rowsSelection);
+            },
+        },
+    ] : [];
 
     const rows = data?.data || [];
     const selectedCsvPlatformName = platformOptions.find((platform) => String(platform.platform_id) === String(csvForm.platform_id))?.platform_name || 'Selected market';
@@ -531,6 +657,15 @@ export default function Clients() {
                     : 'Manage client records and subscription status.'}
                 actions={!isReadOnly ? (
                     <>
+                        {canDeleteClients ? (
+                            <button
+                                type="button"
+                                onClick={openSmartDeleteDialog}
+                                className="crm-btn-danger"
+                            >
+                                Smart delete
+                            </button>
+                        ) : null}
                         <button
                             type="button"
                             onClick={() => setShowCsvModal(true)}
@@ -785,9 +920,52 @@ export default function Clients() {
                 isLoading={isLoading}
                 emptyMessage="No clients found matching your filters."
                 compact
+                selectable={canDeleteClients}
+                bulkActions={bulkActions}
+                clearSelectionKey={clearSelectionKey}
                 perPage={perPage}
                 onPerPageChange={(n) => { setPerPage(n); setPage(1); }}
             />
+
+            {canDeleteClients ? (
+                <BulkDeleteClientsDialog
+                    open={bulkDeleteDialog.open}
+                    mode={bulkDeleteDialog.mode}
+                    platformOptions={platformOptions}
+                    selectedCount={bulkDeleteDialog.selectedClients.length}
+                    filters={bulkDeleteDialog.filters}
+                    preview={bulkDeleteDialog.preview}
+                    confirmText={bulkDeleteDialog.confirmText}
+                    reason={bulkDeleteDialog.reason}
+                    previewPending={bulkDeletePreviewMutation.isPending}
+                    deletePending={bulkDeleteMutation.isPending}
+                    onCancel={closeBulkDeleteDialog}
+                    onFiltersChange={(updater) => {
+                        setBulkDeleteDialog((current) => ({
+                            ...current,
+                            filters: typeof updater === 'function' ? updater(current.filters) : updater,
+                            preview: null,
+                        }));
+                    }}
+                    onConfirmTextChange={(value) => {
+                        setBulkDeleteDialog((current) => ({ ...current, confirmText: value }));
+                    }}
+                    onReasonChange={(value) => {
+                        setBulkDeleteDialog((current) => ({ ...current, reason: value }));
+                    }}
+                    onPreview={() => previewBulkDelete(bulkDeleteDialog)}
+                    onConfirm={() => {
+                        const clientIds = (bulkDeleteDialog.preview?.clients || [])
+                            .map((clientRow) => Number(clientRow.client_id))
+                            .filter((clientId) => clientId > 0);
+
+                        bulkDeleteMutation.mutate({
+                            clientIds,
+                            reason: bulkDeleteDialog.reason.trim() || 'Bulk client deletion from clients page',
+                        });
+                    }}
+                />
+            ) : null}
 
             <ConfirmDialog
                 open={showCsvConfirm}
@@ -1144,6 +1322,226 @@ export default function Clients() {
                     queryClient.invalidateQueries({ queryKey: ['clients'] });
                 }}
             />
+        </div>
+    );
+}
+
+function BulkDeleteClientsDialog({
+    open,
+    mode,
+    platformOptions,
+    selectedCount,
+    filters,
+    preview,
+    confirmText,
+    reason,
+    previewPending,
+    deletePending,
+    onCancel,
+    onFiltersChange,
+    onConfirmTextChange,
+    onReasonChange,
+    onPreview,
+    onConfirm,
+}) {
+    if (!open) {
+        return null;
+    }
+
+    const confirmDisabled = previewPending
+        || deletePending
+        || !preview
+        || Number(preview.total_count || 0) === 0
+        || Boolean(preview.capped)
+        || confirmText.trim() !== 'DELETE'
+        || !reason.trim();
+
+    return (
+        <ConfirmDialog
+            open={open}
+            title={mode === 'smart' ? 'Smart Delete Clients' : 'Delete Selected Clients'}
+            message={mode === 'smart'
+                ? 'Preview a filtered deletion batch first. Deletion is disabled if the preview is capped above 500 matches.'
+                : 'Review the deletion impact for the selected clients before removing them from CRM.'}
+            confirmLabel={deletePending ? 'Deleting...' : 'Delete clients'}
+            tone="danger"
+            onCancel={onCancel}
+            onConfirm={onConfirm}
+            confirmDisabled={confirmDisabled}
+            isPending={deletePending}
+        >
+            <div className="space-y-4">
+                {mode === 'smart' ? (
+                    <div className="grid gap-3 md:grid-cols-2">
+                        <label className="block">
+                            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                Market
+                            </span>
+                            <select
+                                value={filters.platform_id}
+                                onChange={(event) => onFiltersChange((current) => ({
+                                    ...current,
+                                    platform_id: event.target.value,
+                                }))}
+                                className="crm-select w-full"
+                            >
+                                <option value="">All accessible markets</option>
+                                {platformOptions.map((platform) => (
+                                    <option key={platform.platform_id} value={platform.platform_id}>
+                                        {platform.platform_name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                Inactive for
+                            </span>
+                            <select
+                                value={filters.inactive_days}
+                                onChange={(event) => onFiltersChange((current) => ({
+                                    ...current,
+                                    inactive_days: event.target.value,
+                                }))}
+                                className="crm-select w-full"
+                            >
+                                {SMART_DELETE_DAY_OPTIONS.map((days) => (
+                                    <option key={days} value={days}>{days} days or longer</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                            <input
+                                type="checkbox"
+                                checked={filters.has_no_chat}
+                                onChange={(event) => onFiltersChange((current) => ({
+                                    ...current,
+                                    has_no_chat: event.target.checked,
+                                }))}
+                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                            />
+                            <span>No support chat match</span>
+                        </label>
+
+                        <label className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                            <input
+                                type="checkbox"
+                                checked={filters.has_no_subscription_or_payment}
+                                onChange={(event) => onFiltersChange((current) => ({
+                                    ...current,
+                                    has_no_subscription_or_payment: event.target.checked,
+                                }))}
+                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                            />
+                            <span>No subscriptions and no payments</span>
+                        </label>
+                    </div>
+                ) : (
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        {selectedCount.toLocaleString()} selected client{selectedCount === 1 ? '' : 's'} will be previewed for deletion.
+                    </div>
+                )}
+
+                <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Preview</p>
+                        <p className="text-sm text-slate-700">
+                            {preview
+                                ? `${Number(preview.total_count || 0).toLocaleString()} matching client${Number(preview.total_count || 0) === 1 ? '' : 's'}`
+                                : 'Run preview to load the deletion impact.'}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onPreview}
+                        disabled={previewPending}
+                        className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {previewPending ? 'Loading preview...' : 'Preview matches'}
+                    </button>
+                </div>
+
+                {preview?.capped ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        More than 500 clients matched this preview. Narrow the filters before deletion can continue.
+                    </div>
+                ) : null}
+
+                {preview ? (
+                    <div className="space-y-3">
+                        <div className="grid gap-2 sm:grid-cols-4">
+                            <ImpactPill label="Clients" value={Number(preview.total_count || 0).toLocaleString()} />
+                            <ImpactPill label="Active deals" value={(preview.clients || []).filter((clientRow) => clientRow.has_active_deal).length.toLocaleString()} />
+                            <ImpactPill label="Payments" value={(preview.clients || []).reduce((sum, clientRow) => sum + Number(clientRow.payments_count || 0), 0).toLocaleString()} />
+                            <ImpactPill label="Notes" value={(preview.clients || []).reduce((sum, clientRow) => sum + Number(clientRow.notes_count || 0), 0).toLocaleString()} />
+                        </div>
+
+                        <div className="max-h-56 space-y-2 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-3">
+                            {(preview.clients || []).length ? (
+                                preview.clients.map((clientRow) => (
+                                    <div key={clientRow.client_id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <p className="text-sm font-semibold text-slate-900">{clientRow.name || `Client #${clientRow.client_id}`}</p>
+                                                <p className="text-xs text-slate-500">
+                                                    CRM #{clientRow.client_id} • {clientRow.platform_name || 'Unknown market'}
+                                                </p>
+                                            </div>
+                                            {clientRow.has_active_deal ? (
+                                                <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+                                                    Active deal
+                                                </span>
+                                            ) : null}
+                                        </div>
+                                        <p className="mt-2 text-[11px] text-slate-600">
+                                            Deals {clientRow.deals_count} • Payments {clientRow.payments_count} • Notes {clientRow.notes_count} • Leads {clientRow.leads_count}
+                                        </p>
+                                    </div>
+                                ))
+                            ) : (
+                                <p className="text-sm text-slate-500">No clients matched this preview.</p>
+                            )}
+                        </div>
+                    </div>
+                ) : null}
+
+                <label className="block">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Reason
+                    </span>
+                    <textarea
+                        value={reason}
+                        onChange={(event) => onReasonChange(event.target.value)}
+                        rows={3}
+                        className="crm-input min-h-[96px] w-full"
+                        placeholder="Why are these clients being deleted?"
+                    />
+                </label>
+
+                <label className="block">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Type DELETE to confirm
+                    </span>
+                    <input
+                        type="text"
+                        value={confirmText}
+                        onChange={(event) => onConfirmTextChange(event.target.value)}
+                        className="crm-input"
+                        placeholder="DELETE"
+                    />
+                </label>
+            </div>
+        </ConfirmDialog>
+    );
+}
+
+function ImpactPill({ label, value }) {
+    return (
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
         </div>
     );
 }
