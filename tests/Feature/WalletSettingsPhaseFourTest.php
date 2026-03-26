@@ -272,6 +272,64 @@ class WalletSettingsPhaseFourTest extends TestCase
         ])->assertForbidden();
     }
 
+    public function test_admin_can_update_discount_pin_and_market_max_config(): void
+    {
+        $admin = $this->createUser('admin');
+        $kenya = $this->createPlatform('Kenya');
+        $uganda = $this->createPlatform('Uganda');
+        Sanctum::actingAs($admin);
+
+        $pinResponse = $this->patchJson('/api/crm/settings/discounts/pin', [
+            'pin' => '4821',
+            'pin_confirmation' => '4821',
+            'reason' => 'Set discount PIN before sales rollout',
+        ]);
+
+        $pinResponse->assertOk()
+            ->assertJsonPath('system.discount_pin_set', true)
+            ->assertJsonPath('system.discount_pin_hash', '');
+
+        $this->assertNotEmpty($pinResponse->json('system.discount_pin_last_updated_at'));
+
+        $configResponse = $this->patchJson('/api/crm/settings/discounts/config', [
+            'discount_config' => [
+                'max_percentage_by_platform' => [
+                    (string) $kenya->id => 35,
+                    (string) $uganda->id => 20,
+                ],
+            ],
+            'reason' => 'Set market discount guardrails',
+        ]);
+
+        $configResponse->assertOk()
+            ->assertJsonPath("system.discount_config.max_percentage_by_platform.{$kenya->id}", 35)
+            ->assertJsonPath("system.discount_config.max_percentage_by_platform.{$uganda->id}", 20);
+
+        $stored = IntegrationSetting::query()
+            ->where('key', WalletSettingsService::SYSTEM_SETTINGS_KEY)
+            ->firstOrFail();
+
+        $this->assertTrue(Hash::check('4821', (string) data_get($stored->value, 'discount_pin_hash')));
+        $this->assertSame(35.0, (float) data_get($stored->value, "discount_config.max_percentage_by_platform.{$kenya->id}"));
+        $this->assertSame(20.0, (float) data_get($stored->value, "discount_config.max_percentage_by_platform.{$uganda->id}"));
+    }
+
+    public function test_non_admin_cannot_update_discount_config(): void
+    {
+        $subAdmin = $this->createUser('sub_admin');
+        $platform = $this->createPlatform('Kenya');
+        Sanctum::actingAs($subAdmin);
+
+        $this->patchJson('/api/crm/settings/discounts/config', [
+            'discount_config' => [
+                'max_percentage_by_platform' => [
+                    (string) $platform->id => 25,
+                ],
+            ],
+            'reason' => 'Unauthorized attempt',
+        ])->assertForbidden();
+    }
+
     public function test_wallet_provider_ssl_and_email_tests_use_configured_values(): void
     {
         $platform = $this->createPlatform('Tanzania');

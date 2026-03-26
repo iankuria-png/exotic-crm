@@ -647,6 +647,107 @@ class SettingsController extends Controller
         ]);
     }
 
+    public function updateDiscountPin(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can update the discount PIN.'
+        );
+
+        $validated = $request->validate([
+            'pin' => ['required', 'regex:/^\d{4,6}$/'],
+            'pin_confirmation' => 'required|string|same:pin',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $before = $this->walletSettingsService->currentSystemConfig(masked: true);
+        $saved = $this->walletSettingsService->updateDiscountPin(
+            (string) $validated['pin'],
+            (int) $request->user()->id
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId([]) ?? 1,
+            CrmAuditAction::DISCOUNT_PIN_UPDATE,
+            'integration_setting',
+            1,
+            [
+                'discount_pin_set' => (bool) ($before['discount_pin_set'] ?? false),
+                'discount_pin_last_updated_at' => $before['discount_pin_last_updated_at'] ?? null,
+            ],
+            [
+                'discount_pin_set' => (bool) ($saved['discount_pin_set'] ?? false),
+                'discount_pin_last_updated_at' => $saved['discount_pin_last_updated_at'] ?? null,
+            ],
+            $validated['reason'] ?? 'Updated discount PIN'
+        );
+
+        return response()->json([
+            'system' => $saved,
+        ]);
+    }
+
+    public function updateDiscountConfig(Request $request)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can update discount configuration.'
+        );
+
+        $validated = $request->validate([
+            'discount_config' => 'required|array',
+            'discount_config.max_percentage_by_platform' => 'required|array',
+            'discount_config.max_percentage_by_platform.*' => 'nullable|numeric|min:0|max:99',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $maxByPlatform = is_array($validated['discount_config']['max_percentage_by_platform'] ?? null)
+            ? $validated['discount_config']['max_percentage_by_platform']
+            : [];
+
+        foreach (array_keys($maxByPlatform) as $platformId) {
+            if (!is_numeric((string) $platformId) || (int) $platformId <= 0) {
+                throw ValidationException::withMessages([
+                    'discount_config.max_percentage_by_platform' => 'Discount config must be keyed by valid platform ids.',
+                ]);
+            }
+
+            if (!Platform::query()->whereKey((int) $platformId)->exists()) {
+                throw ValidationException::withMessages([
+                    'discount_config.max_percentage_by_platform' => "Unknown platform id [{$platformId}] in discount config.",
+                ]);
+            }
+        }
+
+        $before = $this->walletSettingsService->currentSystemConfig(masked: true);
+        $saved = $this->walletSettingsService->updateDiscountConfig(
+            (array) $validated['discount_config'],
+            (int) $request->user()->id
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId(array_map('intval', array_keys($maxByPlatform))) ?? 1,
+            CrmAuditAction::DISCOUNT_CONFIG_UPDATE,
+            'integration_setting',
+            1,
+            [
+                'discount_config' => $before['discount_config'] ?? ['max_percentage_by_platform' => []],
+            ],
+            [
+                'discount_config' => $saved['discount_config'] ?? ['max_percentage_by_platform' => []],
+            ],
+            $validated['reason'] ?? 'Updated discount configuration'
+        );
+
+        return response()->json([
+            'system' => $saved,
+        ]);
+    }
+
     public function updatePlatformWallet(Request $request, Platform $platform)
     {
         $this->marketAuthorizationService->ensureRole(

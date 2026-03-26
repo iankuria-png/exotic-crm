@@ -90,9 +90,17 @@ class ComputeDailyStatsCommandTest extends TestCase
         $this->createTeamAudit([
             'platform_id' => $platform->id,
             'actor_id' => $agent->id,
+            'action' => 'deal_discount',
+            'entity_type' => 'deal',
+            'entity_id' => 505,
+            'created_at' => $targetDate->copy()->addHours(11)->addMinutes(15),
+        ]);
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
             'action' => 'payment_match_confirm',
             'entity_type' => 'payment',
-            'entity_id' => 505,
+            'entity_id' => 506,
             'created_at' => $targetDate->copy()->addHours(12),
         ]);
         $this->createTeamAudit([
@@ -100,7 +108,7 @@ class ComputeDailyStatsCommandTest extends TestCase
             'actor_id' => $agent->id,
             'action' => 'support_chat_reply',
             'entity_type' => 'client',
-            'entity_id' => 506,
+            'entity_id' => 507,
             'created_at' => $targetDate->copy()->addHours(13),
         ]);
         $this->createTeamAudit([
@@ -127,9 +135,10 @@ class ComputeDailyStatsCommandTest extends TestCase
             'leads_contacted' => 1,
             'chats_replied' => 1,
             'free_trials_given' => 1,
+            'discounts_given' => 1,
             'revenue' => 8000.00,
             'revenue_currency' => 'KES',
-            'total_actions' => 6,
+            'total_actions' => 7,
         ]);
 
         $this->assertDatabaseMissing('agent_daily_stats', [

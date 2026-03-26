@@ -22,6 +22,7 @@ use App\Support\CrmAuditAction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 class DealController extends Controller
 {
@@ -207,6 +208,8 @@ class DealController extends Controller
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
+            'discount_percentage' => 'nullable|numeric|min:1|max:99',
+            'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
             'duration_days' => 'nullable|integer|min:1|max:365',
         ]);
@@ -225,6 +228,16 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
+        if ($discountGuard = $this->discountPermissionResponse(
+            $request,
+            $discountPercentage,
+            $validated['discount_pin'] ?? null,
+            $paymentMethod,
+            (int) $client->platform_id
+        )) {
+            return $discountGuard;
+        }
         if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
@@ -248,6 +261,9 @@ class DealController extends Controller
             'deal_status' => $deal->status,
             'client_profile_status' => $client->profile_status,
             'payment_id' => $deal->payment_id,
+            'amount' => (float) $deal->amount,
+            'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
+            'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
             'is_free_trial' => (bool) $deal->is_free_trial,
             'payment_method' => $paymentMethod,
         ];
@@ -256,6 +272,15 @@ class DealController extends Controller
         try {
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $payment = null;
+            $discountAudit = null;
+
+            if ($paymentMethod !== 'free_trial') {
+                $discountAudit = $this->syncDealDiscount(
+                    $deal,
+                    $discountPercentage,
+                    (int) $request->user()->id
+                );
+            }
 
             if ($paymentMethod === 'manual') {
                 $payment = $this->dealPaymentService->createManualPaymentForDeal(
@@ -266,6 +291,15 @@ class DealController extends Controller
                 );
             } elseif ($paymentMethod === 'link') {
                 $result = $this->dealPaymentService->startLinkPaymentForDeal($deal, $client, $request, $paymentLinkProvider);
+                if ($discountAudit && $discountAudit['applied']) {
+                    $this->recordDiscountAudit(
+                        $request,
+                        $deal,
+                        $discountAudit['before'],
+                        $discountAudit['after'],
+                        $validated['reason'] ?: 'Applied discount during activation'
+                    );
+                }
                 DB::commit();
 
                 /** @var \App\Models\Payment $payment */
@@ -299,6 +333,9 @@ class DealController extends Controller
                     'deal_status' => 'awaiting_payment',
                     'payment_id' => $deal->payment_id,
                     'payment_reference' => $deal->payment_reference,
+                    'amount' => (float) $deal->amount,
+                    'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
+                    'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
                     'payment_link_provider' => $paymentLinkProvider,
                 ];
@@ -326,6 +363,16 @@ class DealController extends Controller
                     ],
                     'created_at' => now(),
                 ]);
+
+                if ($discountAudit && $discountAudit['applied']) {
+                    $this->recordDiscountAudit(
+                        $request,
+                        $deal,
+                        $discountAudit['before'],
+                        $discountAudit['after'],
+                        $validated['reason'] ?: 'Applied discount during activation'
+                    );
+                }
 
                 DB::commit();
 
@@ -382,6 +429,9 @@ class DealController extends Controller
                 'expires_at' => $deal->expires_at->toDateTimeString(),
                 'payment_id' => $deal->payment_id,
                 'payment_reference' => $deal->payment_reference,
+                'amount' => (float) $deal->amount,
+                'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
+                'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                 'payment_method' => $paymentMethod,
                 'payment_link_provider' => $paymentLinkProvider,
                 'is_free_trial' => (bool) $deal->is_free_trial,
@@ -411,6 +461,16 @@ class DealController extends Controller
                         'duration_days' => $durationDays,
                     ],
                     $validated['reason'] ?: 'Free trial activation from CRM flow'
+                );
+            }
+
+            if ($discountAudit && $discountAudit['applied']) {
+                $this->recordDiscountAudit(
+                    $request,
+                    $deal,
+                    $discountAudit['before'],
+                    $discountAudit['after'],
+                    $validated['reason'] ?: 'Applied discount during activation'
                 );
             }
 
@@ -536,6 +596,8 @@ class DealController extends Controller
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
+            'discount_percentage' => 'nullable|numeric|min:1|max:99',
+            'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
         ]);
 
@@ -549,6 +611,16 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
+        if ($discountGuard = $this->discountPermissionResponse(
+            $request,
+            $discountPercentage,
+            $validated['discount_pin'] ?? null,
+            $paymentMethod,
+            (int) $client->platform_id
+        )) {
+            return $discountGuard;
+        }
         if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
@@ -560,6 +632,9 @@ class DealController extends Controller
             'expires_at' => $deal->expires_at?->toDateTimeString(),
             'payment_id' => $deal->payment_id,
             'payment_reference' => $deal->payment_reference,
+            'amount' => (float) $deal->amount,
+            'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
+            'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
             'payment_method' => $paymentMethod,
         ];
 
@@ -568,6 +643,15 @@ class DealController extends Controller
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $wpSync = WpSyncService::forPlatform($client->platform_id);
             $wpSync->extendClient($client->wp_post_id, (int) $validated['additional_days']);
+            $discountAudit = null;
+
+            if ($paymentMethod !== 'free_trial') {
+                $discountAudit = $this->syncDealDiscount(
+                    $deal,
+                    $discountPercentage,
+                    (int) $request->user()->id
+                );
+            }
 
             $payment = null;
             if ($paymentMethod === 'manual') {
@@ -613,6 +697,9 @@ class DealController extends Controller
                     'expires_at' => $newExpiry->toDateTimeString(),
                     'payment_id' => $deal->payment_id,
                     'payment_reference' => $deal->payment_reference,
+                    'amount' => (float) $deal->amount,
+                    'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
+                    'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
                     'payment_link_provider' => $paymentLinkProvider,
                     'extension_payment_id' => $payment?->id,
@@ -648,9 +735,19 @@ class DealController extends Controller
                     'new_expires_at' => $newExpiry->toDateTimeString(),
                     'payment_method' => $paymentMethod,
                     'extension_payment_id' => $payment?->id,
-                ],
-                'created_at' => now(),
-            ]);
+                    ],
+                    'created_at' => now(),
+                ]);
+
+            if ($discountAudit && $discountAudit['applied']) {
+                $this->recordDiscountAudit(
+                    $request,
+                    $deal,
+                    $discountAudit['before'],
+                    $discountAudit['after'],
+                    (string) $validated['reason']
+                );
+            }
 
             DB::commit();
 
@@ -675,6 +772,8 @@ class DealController extends Controller
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
+            'discount_percentage' => 'nullable|numeric|min:1|max:99',
+            'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
         ]);
 
@@ -694,6 +793,16 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
+        if ($discountGuard = $this->discountPermissionResponse(
+            $request,
+            $discountPercentage,
+            $validated['discount_pin'] ?? null,
+            $paymentMethod,
+            (int) $client->platform_id
+        )) {
+            return $discountGuard;
+        }
         if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
@@ -716,6 +825,9 @@ class DealController extends Controller
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $additionalDays = (int) $validated['additional_days'];
             $activatesImmediately = in_array($paymentMethod, ['manual', 'free_trial'], true);
+            $baseAmount = $deal->original_amount !== null
+                ? (float) $deal->original_amount
+                : (float) $deal->amount;
 
             $newDeal = Deal::create([
                 'platform_id' => $deal->platform_id,
@@ -723,7 +835,7 @@ class DealController extends Controller
                 'lead_id' => $deal->lead_id,
                 'product_id' => $deal->product_id,
                 'plan_type' => $deal->plan_type,
-                'amount' => $deal->amount,
+                'amount' => round($baseAmount, 2),
                 'currency' => $deal->currency,
                 'duration' => $deal->duration,
                 'status' => $activatesImmediately ? 'active' : 'awaiting_payment',
@@ -732,8 +844,20 @@ class DealController extends Controller
                 'assigned_to' => $deal->assigned_to,
                 'is_free_trial' => $isFreeTrial,
                 'free_trial_approved_by' => null,
+                'discount_percentage' => null,
+                'original_amount' => null,
+                'discount_approved_by' => null,
                 'payment_reference' => $paymentMethod === 'manual' ? (string) $validated['payment_reference'] : null,
             ]);
+            $discountAudit = null;
+
+            if ($paymentMethod !== 'free_trial') {
+                $discountAudit = $this->syncDealDiscount(
+                    $newDeal,
+                    $discountPercentage,
+                    (int) $request->user()->id
+                );
+            }
 
             $payment = null;
             if ($paymentMethod === 'manual') {
@@ -791,6 +915,9 @@ class DealController extends Controller
                     'new_status' => $newDeal->status,
                     'new_expires_at' => optional($newDeal->expires_at)->toDateTimeString(),
                     'payment_id' => $newDeal->payment_id,
+                    'amount' => (float) $newDeal->amount,
+                    'original_amount' => $newDeal->original_amount !== null ? (float) $newDeal->original_amount : null,
+                    'discount_percentage' => $newDeal->discount_percentage !== null ? (float) $newDeal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
                     'payment_link_provider' => $paymentLinkProvider,
                     'is_free_trial' => (bool) $newDeal->is_free_trial,
@@ -810,6 +937,16 @@ class DealController extends Controller
                         'approval_mode' => 'pin',
                         'duration_days' => $additionalDays,
                     ],
+                    (string) $validated['reason']
+                );
+            }
+
+            if ($discountAudit && $discountAudit['applied']) {
+                $this->recordDiscountAudit(
+                    $request,
+                    $newDeal,
+                    $discountAudit['before'],
+                    $discountAudit['after'],
                     (string) $validated['reason']
                 );
             }
@@ -932,12 +1069,55 @@ class DealController extends Controller
         ], 422);
     }
 
+    private function discountPermissionResponse(
+        Request $request,
+        ?float $discountPercentage,
+        ?string $discountPin,
+        string $paymentMethod,
+        int $platformId
+    ): ?\Illuminate\Http\JsonResponse {
+        if ($discountPercentage === null || $discountPercentage <= 0) {
+            return null;
+        }
+
+        if ($paymentMethod === 'free_trial') {
+            return response()->json([
+                'message' => 'Discounts cannot be applied to free trials.',
+            ], 422);
+        }
+
+        if (!$this->walletSettingsService->discountPinIsConfigured()) {
+            return response()->json([
+                'message' => 'Discount PIN is not configured. Ask an admin to set it in Settings first.',
+            ], 409);
+        }
+
+        if ($discountPin === null || trim($discountPin) === '' || !$this->walletSettingsService->verifyDiscountPin($discountPin)) {
+            return response()->json([
+                'message' => 'Discount PIN is invalid.',
+            ], 422);
+        }
+
+        $maxByPlatform = (array) data_get($this->walletSettingsService->getDiscountConfig(), 'max_percentage_by_platform', []);
+        $maxPercentage = isset($maxByPlatform[(string) $platformId])
+            ? (float) $maxByPlatform[(string) $platformId]
+            : 0.0;
+
+        if ($discountPercentage > $maxPercentage) {
+            return response()->json([
+                'message' => "Discount exceeds the configured market maximum of {$maxPercentage}%.",
+            ], 422);
+        }
+
+        return null;
+    }
+
     private function missingSprint6DealColumnsResponse(): ?\Illuminate\Http\JsonResponse
     {
         static $missingColumns = null;
         if ($missingColumns === null) {
             $missingColumns = [];
-            foreach (['is_free_trial', 'free_trial_approved_by', 'payment_reference'] as $column) {
+            foreach (['is_free_trial', 'free_trial_approved_by', 'payment_reference', 'discount_percentage', 'original_amount', 'discount_approved_by'] as $column) {
                 if (!Schema::hasColumn('deals', $column)) {
                     $missingColumns[] = $column;
                 }
@@ -986,6 +1166,85 @@ class DealController extends Controller
             $request->user(),
             (int) $deal->platform_id,
             'You do not have access to this deal market.'
+        );
+    }
+
+    private function normalizedDiscountPercentage(mixed $value): ?float
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $percentage = round((float) $value, 2);
+
+        return $percentage > 0 ? $percentage : null;
+    }
+
+    private function syncDealDiscount(Deal $deal, ?float $discountPercentage, int $actorId): array
+    {
+        $before = [
+            'amount' => (float) $deal->amount,
+            'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
+            'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
+            'discount_approved_by' => $deal->discount_approved_by ? (int) $deal->discount_approved_by : null,
+        ];
+
+        $baseAmount = $deal->original_amount !== null
+            ? (float) $deal->original_amount
+            : (float) $deal->amount;
+
+        if ($discountPercentage === null || $discountPercentage <= 0) {
+            $deal->update([
+                'amount' => round($baseAmount, 2),
+                'original_amount' => null,
+                'discount_percentage' => null,
+                'discount_approved_by' => null,
+            ]);
+
+            return [
+                'applied' => false,
+                'before' => $before,
+                'after' => [
+                    'amount' => (float) $deal->amount,
+                    'original_amount' => null,
+                    'discount_percentage' => null,
+                    'discount_approved_by' => null,
+                ],
+            ];
+        }
+
+        $discountedAmount = round($baseAmount * (1 - ($discountPercentage / 100)), 2);
+
+        $deal->update([
+            'amount' => $discountedAmount,
+            'original_amount' => round($baseAmount, 2),
+            'discount_percentage' => $discountPercentage,
+            'discount_approved_by' => $actorId,
+        ]);
+
+        return [
+            'applied' => true,
+            'before' => $before,
+            'after' => [
+                'amount' => (float) $deal->amount,
+                'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
+                'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
+                'discount_approved_by' => $deal->discount_approved_by ? (int) $deal->discount_approved_by : null,
+            ],
+        ];
+    }
+
+    private function recordDiscountAudit(Request $request, Deal $deal, array $beforeState, array $afterState, string $reason): void
+    {
+        $this->auditService->fromRequest(
+            $request,
+            (int) $deal->platform_id,
+            CrmAuditAction::DEAL_DISCOUNT,
+            'deal',
+            (int) $deal->id,
+            $beforeState,
+            $afterState,
+            $reason
         );
     }
 

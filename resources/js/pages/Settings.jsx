@@ -480,6 +480,11 @@ function defaultWalletSystemForm() {
         pin_last_updated_at: null,
         free_trial_pin_set: false,
         free_trial_pin_last_updated_at: null,
+        discount_pin_set: false,
+        discount_pin_last_updated_at: null,
+        discount_config: {
+            max_percentage_by_platform: {},
+        },
         reason: 'Updated wallet system settings',
     };
 }
@@ -529,6 +534,11 @@ function buildWalletSystemForm(systemConfig) {
         pin_last_updated_at: systemConfig.pin_last_updated_at || null,
         free_trial_pin_set: Boolean(systemConfig.free_trial_pin_set),
         free_trial_pin_last_updated_at: systemConfig.free_trial_pin_last_updated_at || null,
+        discount_pin_set: Boolean(systemConfig.discount_pin_set),
+        discount_pin_last_updated_at: systemConfig.discount_pin_last_updated_at || null,
+        discount_config: {
+            max_percentage_by_platform: { ...(systemConfig.discount_config?.max_percentage_by_platform || {}) },
+        },
         reason: 'Updated wallet system settings',
     };
 }
@@ -546,6 +556,14 @@ function defaultFreeTrialPinForm() {
         pin: '',
         pin_confirmation: '',
         reason: 'Updated free-trial redemption PIN',
+    };
+}
+
+function defaultDiscountPinForm() {
+    return {
+        pin: '',
+        pin_confirmation: '',
+        reason: 'Updated discount approval PIN',
     };
 }
 
@@ -777,6 +795,7 @@ function IntegrationsWorkspace({
     const [latestPushTestResult, setLatestPushTestResult] = useState(null);
     const [walletSystemForm, setWalletSystemForm] = useState(defaultWalletSystemForm());
     const [walletPinForm, setWalletPinForm] = useState(defaultWalletPinForm());
+    const [discountPinForm, setDiscountPinForm] = useState(defaultDiscountPinForm());
     const [walletPlatformForm, setWalletPlatformForm] = useState(defaultWalletPlatformForm());
     const [walletProvidersForm, setWalletProvidersForm] = useState(buildWalletProvidersForm(null));
     const [walletProviderTestForm, setWalletProviderTestForm] = useState({
@@ -827,6 +846,7 @@ function IntegrationsWorkspace({
     const [packageEditor, setPackageEditor] = useState(null);
     const paymentLinkReadOnly = !canEditPaymentLinks;
     const [freeTrialPinForm, setFreeTrialPinForm] = useState(defaultFreeTrialPinForm());
+    const [discountConfigReason, setDiscountConfigReason] = useState('Updated market discount guardrails');
 
     const { data, isLoading } = useQuery({
         queryKey: ['settings-integrations'],
@@ -1368,6 +1388,41 @@ function IntegrationsWorkspace({
         },
     });
 
+    const updateDiscountPinMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/discounts/pin', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            const system = buildWalletSystemForm(response?.system || null);
+            setWalletSystemForm((current) => ({
+                ...current,
+                discount_pin_set: system.discount_pin_set,
+                discount_pin_last_updated_at: system.discount_pin_last_updated_at,
+            }));
+            setDiscountPinForm(defaultDiscountPinForm());
+            toast.success('Discount PIN updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to update discount PIN.');
+        },
+    });
+
+    const updateDiscountConfigMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/discounts/config', payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            const system = buildWalletSystemForm(response?.system || null);
+            setWalletSystemForm((current) => ({
+                ...current,
+                discount_config: system.discount_config,
+            }));
+            setDiscountConfigReason('Updated market discount guardrails');
+            toast.success('Discount configuration saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to save discount configuration.');
+        },
+    });
+
     const saveWalletPlatformMutation = useMutation({
         mutationFn: ({ platformId, payload }) => api.patch(`/crm/settings/integrations/platforms/${platformId}/wallet`, payload).then((response) => response.data),
         onSuccess: (response) => {
@@ -1579,6 +1634,52 @@ function IntegrationsWorkspace({
             pin: freeTrialPinForm.pin.trim(),
             pin_confirmation: freeTrialPinForm.pin_confirmation.trim(),
             reason: freeTrialPinForm.reason.trim(),
+        });
+    };
+
+    const updateDiscountPlatformMax = (platformId, value) => {
+        const key = String(platformId);
+        setWalletSystemForm((current) => ({
+            ...current,
+            discount_config: {
+                ...current.discount_config,
+                max_percentage_by_platform: {
+                    ...(current.discount_config?.max_percentage_by_platform || {}),
+                    [key]: value,
+                },
+            },
+        }));
+    };
+
+    const saveDiscountPin = () => {
+        updateDiscountPinMutation.mutate({
+            pin: discountPinForm.pin.trim(),
+            pin_confirmation: discountPinForm.pin_confirmation.trim(),
+            reason: discountPinForm.reason.trim(),
+        });
+    };
+
+    const saveDiscountConfig = () => {
+        const maxPercentageByPlatform = {};
+
+        platformRows.forEach((platform) => {
+            const key = String(platform.platform_id);
+            const rawValue = String(walletSystemForm.discount_config?.max_percentage_by_platform?.[key] ?? '').trim();
+            if (rawValue === '') {
+                return;
+            }
+
+            const numericValue = Number(rawValue);
+            if (!Number.isNaN(numericValue)) {
+                maxPercentageByPlatform[key] = numericValue;
+            }
+        });
+
+        updateDiscountConfigMutation.mutate({
+            discount_config: {
+                max_percentage_by_platform: maxPercentageByPlatform,
+            },
+            reason: discountConfigReason.trim(),
         });
     };
 
@@ -3577,6 +3678,142 @@ function IntegrationsWorkspace({
                                 </div>
                             </section>
 
+                            <section className="rounded-lg border border-slate-200 bg-white p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-slate-900">Discount Controls</h4>
+                                        <p className="mt-1 text-xs text-slate-500">Approve subscription discounts with a PIN and set per-market maximum percentages.</p>
+                                    </div>
+                                    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(walletSystemForm.discount_pin_set ? 'success' : 'pending')}`}>
+                                        {walletSystemForm.discount_pin_set ? 'PIN configured' : 'PIN not set'}
+                                    </span>
+                                </div>
+
+                                {!canManageWalletSystem ? (
+                                    <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                        Only admin can rotate the discount PIN or change market discount limits.
+                                    </p>
+                                ) : null}
+
+                                <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                        <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Last rotated</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(walletSystemForm.discount_pin_last_updated_at)}</p>
+                                        </div>
+
+                                        <fieldset disabled={walletSystemReadOnly || updateDiscountPinMutation.isPending} className={`mt-3 ${walletSystemReadOnly ? 'opacity-70' : ''}`}>
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                <input
+                                                    type="password"
+                                                    inputMode="numeric"
+                                                    maxLength={6}
+                                                    value={discountPinForm.pin}
+                                                    onChange={(event) => setDiscountPinForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                                    className="crm-input"
+                                                    placeholder="New discount PIN"
+                                                />
+                                                <input
+                                                    type="password"
+                                                    inputMode="numeric"
+                                                    maxLength={6}
+                                                    value={discountPinForm.pin_confirmation}
+                                                    onChange={(event) => setDiscountPinForm((current) => ({ ...current, pin_confirmation: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                                    className="crm-input"
+                                                    placeholder="Confirm discount PIN"
+                                                />
+                                                <textarea
+                                                    rows={2}
+                                                    value={discountPinForm.reason}
+                                                    onChange={(event) => setDiscountPinForm((current) => ({ ...current, reason: event.target.value }))}
+                                                    className="crm-input md:col-span-2"
+                                                    placeholder="Reason for discount PIN rotation"
+                                                />
+                                            </div>
+                                        </fieldset>
+
+                                        <div className="mt-3 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={saveDiscountPin}
+                                                disabled={
+                                                    walletSystemReadOnly
+                                                    || updateDiscountPinMutation.isPending
+                                                    || discountPinForm.pin.length < 4
+                                                    || discountPinForm.pin_confirmation.length < 4
+                                                    || !discountPinForm.reason.trim()
+                                                }
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {updateDiscountPinMutation.isPending ? 'Saving...' : (walletSystemForm.discount_pin_set ? 'Rotate discount PIN' : 'Set discount PIN')}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <h5 className="text-sm font-semibold text-slate-900">Per-market max discount %</h5>
+                                                <p className="mt-1 text-xs text-slate-500">Leave blank to block discounts in that market.</p>
+                                            </div>
+                                            <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
+                                                Max 99%
+                                            </span>
+                                        </div>
+
+                                        <fieldset disabled={walletSystemReadOnly || updateDiscountConfigMutation.isPending} className={`mt-3 space-y-3 ${walletSystemReadOnly ? 'opacity-70' : ''}`}>
+                                            <div className="space-y-2">
+                                                {platformRows.map((platform) => {
+                                                    const key = String(platform.platform_id);
+                                                    const rawValue = walletSystemForm.discount_config?.max_percentage_by_platform?.[key] ?? '';
+
+                                                    return (
+                                                        <div key={`discount-platform-${platform.platform_id}`} className="grid gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 md:grid-cols-[minmax(0,1fr)_140px] md:items-center">
+                                                            <div>
+                                                                <p className="text-sm font-semibold text-slate-900">{platform.platform_name}</p>
+                                                                <p className="text-xs text-slate-500">{platform.country || 'Market'} • {platform.currency || 'KES'}</p>
+                                                            </div>
+                                                            <label className="flex items-center gap-2">
+                                                                <input
+                                                                    type="number"
+                                                                    min="0"
+                                                                    max="99"
+                                                                    step="0.01"
+                                                                    value={rawValue}
+                                                                    onChange={(event) => updateDiscountPlatformMax(platform.platform_id, event.target.value)}
+                                                                    className="crm-input text-right"
+                                                                    placeholder="e.g. 25"
+                                                                />
+                                                                <span className="text-sm font-medium text-slate-500">%</span>
+                                                            </label>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            <textarea
+                                                rows={2}
+                                                value={discountConfigReason}
+                                                onChange={(event) => setDiscountConfigReason(event.target.value)}
+                                                className="crm-input"
+                                                placeholder="Reason for discount policy change"
+                                            />
+                                        </fieldset>
+
+                                        <div className="mt-3 flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={saveDiscountConfig}
+                                                disabled={walletSystemReadOnly || updateDiscountConfigMutation.isPending || !discountConfigReason.trim()}
+                                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {updateDiscountConfigMutation.isPending ? 'Saving...' : 'Save discount limits'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
                             <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                     <div>
@@ -4048,6 +4285,11 @@ function IntegrationsWorkspace({
                                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Operator PIN</p>
                                         <p className="mt-1 text-lg font-semibold text-slate-900">{walletSystemForm.pin_set ? 'Configured' : 'Missing'}</p>
                                         <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(walletSystemForm.pin_last_updated_at)}</p>
+                                    </div>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Discount PIN</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{walletSystemForm.discount_pin_set ? 'Configured' : 'Missing'}</p>
+                                        <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(walletSystemForm.discount_pin_last_updated_at)}</p>
                                     </div>
                                 </div>
                             </section>

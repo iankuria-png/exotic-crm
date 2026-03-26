@@ -35,6 +35,8 @@ class WalletSettingsService
         $maskedConfig['pin_set'] = !empty($config['pin_hash']);
         $maskedConfig['free_trial_pin_hash'] = '';
         $maskedConfig['free_trial_pin_set'] = !empty($config['free_trial_pin_hash']);
+        $maskedConfig['discount_pin_hash'] = '';
+        $maskedConfig['discount_pin_set'] = !empty($config['discount_pin_hash']);
 
         return $maskedConfig;
     }
@@ -121,6 +123,63 @@ class WalletSettingsService
         $hash = (string) ($this->resolveSystemConfig()['free_trial_pin_hash'] ?? '');
 
         return $hash !== '' && Hash::check(trim($pin), $hash);
+    }
+
+    public function updateDiscountPin(string $pin, ?int $updatedBy = null): array
+    {
+        $pin = trim($pin);
+        if (!preg_match('/^\d{4,6}$/', $pin)) {
+            throw new InvalidArgumentException('Discount PIN must be 4 to 6 digits.');
+        }
+
+        $current = $this->resolveSystemConfig();
+        $current['discount_pin_hash'] = Hash::make($pin);
+        $current['discount_pin_last_updated_at'] = now()->toIso8601String();
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => self::SYSTEM_SETTINGS_KEY],
+            [
+                'value' => $this->systemConfigForStorage($current),
+                'updated_by' => $updatedBy,
+            ]
+        );
+
+        return $this->currentSystemConfig(masked: true);
+    }
+
+    public function discountPinIsConfigured(): bool
+    {
+        return !empty($this->resolveSystemConfig()['discount_pin_hash'] ?? '');
+    }
+
+    public function verifyDiscountPin(string $pin): bool
+    {
+        $hash = (string) ($this->resolveSystemConfig()['discount_pin_hash'] ?? '');
+
+        return $hash !== '' && Hash::check(trim($pin), $hash);
+    }
+
+    public function updateDiscountConfig(array $config, ?int $updatedBy = null): array
+    {
+        $current = $this->resolveSystemConfig();
+        $current['discount_config'] = $this->normalizeDiscountConfig($config);
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => self::SYSTEM_SETTINGS_KEY],
+            [
+                'value' => $this->systemConfigForStorage($current),
+                'updated_by' => $updatedBy,
+            ]
+        );
+
+        return $this->currentSystemConfig(masked: true);
+    }
+
+    public function getDiscountConfig(): array
+    {
+        return $this->normalizeDiscountConfig(
+            (array) ($this->resolveSystemConfig()['discount_config'] ?? [])
+        );
     }
 
     public function currentPlatformConfig(Platform $platform, bool $masked = true): array
@@ -438,6 +497,11 @@ class WalletSettingsService
             'pin_last_updated_at' => null,
             'free_trial_pin_hash' => '',
             'free_trial_pin_last_updated_at' => null,
+            'discount_pin_hash' => '',
+            'discount_pin_last_updated_at' => null,
+            'discount_config' => [
+                'max_percentage_by_platform' => [],
+            ],
             'smtp' => [
                 'enabled' => false,
                 'host' => '',
@@ -659,6 +723,17 @@ class WalletSettingsService
                 ? (string) $incoming['free_trial_pin_last_updated_at']
                 : null;
         }
+        if (array_key_exists('discount_pin_hash', $incoming) && trim((string) $incoming['discount_pin_hash']) !== '') {
+            $merged['discount_pin_hash'] = (string) $incoming['discount_pin_hash'];
+        }
+        if (array_key_exists('discount_pin_last_updated_at', $incoming)) {
+            $merged['discount_pin_last_updated_at'] = $incoming['discount_pin_last_updated_at']
+                ? (string) $incoming['discount_pin_last_updated_at']
+                : null;
+        }
+        if (array_key_exists('discount_config', $incoming) && is_array($incoming['discount_config'])) {
+            $merged['discount_config'] = $this->normalizeDiscountConfig($incoming['discount_config']);
+        }
 
         return $merged;
     }
@@ -816,6 +891,11 @@ class WalletSettingsService
         $stored['pin_last_updated_at'] = $config['pin_last_updated_at'] ?? null;
         $stored['free_trial_pin_hash'] = (string) ($config['free_trial_pin_hash'] ?? '');
         $stored['free_trial_pin_last_updated_at'] = $config['free_trial_pin_last_updated_at'] ?? null;
+        $stored['discount_pin_hash'] = (string) ($config['discount_pin_hash'] ?? '');
+        $stored['discount_pin_last_updated_at'] = $config['discount_pin_last_updated_at'] ?? null;
+        $stored['discount_config'] = $this->normalizeDiscountConfig(
+            (array) ($config['discount_config'] ?? [])
+        );
         $stored['smtp'] = [
             'enabled' => (bool) ($config['smtp']['enabled'] ?? false),
             'host' => (string) ($config['smtp']['host'] ?? ''),
@@ -839,6 +919,11 @@ class WalletSettingsService
         $config['pin_last_updated_at'] = $stored['pin_last_updated_at'] ?? null;
         $config['free_trial_pin_hash'] = (string) ($stored['free_trial_pin_hash'] ?? '');
         $config['free_trial_pin_last_updated_at'] = $stored['free_trial_pin_last_updated_at'] ?? null;
+        $config['discount_pin_hash'] = (string) ($stored['discount_pin_hash'] ?? '');
+        $config['discount_pin_last_updated_at'] = $stored['discount_pin_last_updated_at'] ?? null;
+        $config['discount_config'] = $this->normalizeDiscountConfig(
+            is_array($stored['discount_config'] ?? null) ? $stored['discount_config'] : []
+        );
         $smtp = is_array($stored['smtp'] ?? null) ? $stored['smtp'] : [];
         $config['smtp'] = [
             'enabled' => (bool) ($smtp['enabled'] ?? false),
@@ -854,6 +939,36 @@ class WalletSettingsService
         ];
 
         return $config;
+    }
+
+    private function normalizeDiscountConfig(array $config): array
+    {
+        $normalized = [
+            'max_percentage_by_platform' => [],
+        ];
+
+        $rawMaxes = is_array($config['max_percentage_by_platform'] ?? null)
+            ? $config['max_percentage_by_platform']
+            : [];
+
+        foreach ($rawMaxes as $platformId => $value) {
+            if (!is_numeric((string) $platformId)) {
+                continue;
+            }
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $normalized['max_percentage_by_platform'][(string) ((int) $platformId)] = round(
+                max(0, min(99, (float) $value)),
+                2
+            );
+        }
+
+        ksort($normalized['max_percentage_by_platform']);
+
+        return $normalized;
     }
 
     private function maskPlatformCredentials(array $credentials): array

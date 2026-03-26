@@ -138,6 +138,7 @@ trait InteractsWithTeamActivityFixtures
             'revenue' => '0.00',
             'revenue_currency' => $platform->currency_code,
             'free_trials_given' => 0,
+            'discounts_given' => 0,
             'avg_lead_response_secs' => null,
             'total_actions' => 0,
         ], $overrides));

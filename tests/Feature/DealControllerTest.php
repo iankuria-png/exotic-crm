@@ -228,6 +228,147 @@ class DealControllerTest extends TestCase
         ]);
     }
 
+    public function test_deal_manual_activation_applies_discount_with_valid_pin(): void
+    {
+        $platform = $this->createProvisioningPlatform();
+        $product = $this->createProductForPlatform($platform, 'vip', 3200);
+        $client = $this->createClientForPlatform($platform, 9303);
+        $user = $this->createAuthorizedUser('admin');
+        $deal = $this->createPendingDeal($platform, $product, $client, $user, [
+            'plan_type' => 'vip',
+            'amount' => 3200,
+        ]);
+
+        app(WalletSettingsService::class)->updateDiscountPin('4821', $user->id);
+        app(WalletSettingsService::class)->updateDiscountConfig([
+            'max_percentage_by_platform' => [
+                (string) $platform->id => 25,
+            ],
+        ], $user->id);
+        $this->fakeProvisioningApis($platform, $client);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'reason' => 'Activate with approved retention discount',
+            'payment_method' => 'manual',
+            'payment_reference' => 'MPESA-9303',
+            'discount_percentage' => 20,
+            'discount_pin' => '4821',
+            'duration_days' => 30,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'active');
+
+        $deal->refresh();
+        $payment = $deal->payment()->firstOrFail();
+
+        $this->assertSame('active', $deal->status);
+        $this->assertSame(2560.0, (float) $deal->amount);
+        $this->assertSame(3200.0, (float) $deal->original_amount);
+        $this->assertSame(20.0, (float) $deal->discount_percentage);
+        $this->assertSame($user->id, (int) $deal->discount_approved_by);
+        $this->assertSame(2560.0, (float) $payment->amount);
+        $this->assertDatabaseHas('audit_log', [
+            'action' => 'deal_discount',
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'actor_id' => $user->id,
+        ]);
+    }
+
+    public function test_deal_activation_rejects_discount_above_market_max(): void
+    {
+        $platform = $this->createProvisioningPlatform();
+        $product = $this->createProductForPlatform($platform, 'premium', 2400);
+        $client = $this->createClientForPlatform($platform, 9304);
+        $user = $this->createAuthorizedUser('admin');
+        $deal = $this->createPendingDeal($platform, $product, $client, $user, [
+            'plan_type' => 'premium',
+            'amount' => 2400,
+        ]);
+
+        app(WalletSettingsService::class)->updateDiscountPin('4821', $user->id);
+        app(WalletSettingsService::class)->updateDiscountConfig([
+            'max_percentage_by_platform' => [
+                (string) $platform->id => 10,
+            ],
+        ], $user->id);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'reason' => 'Attempt unsupported discount',
+            'payment_method' => 'manual',
+            'payment_reference' => 'MPESA-9304',
+            'discount_percentage' => 15,
+            'discount_pin' => '4821',
+        ])->assertStatus(422)
+            ->assertJsonPath('message', 'Discount exceeds the configured market maximum of 10%.');
+
+        $deal->refresh();
+
+        $this->assertSame('pending', $deal->status);
+        $this->assertSame(2400.0, (float) $deal->amount);
+        $this->assertNull($deal->payment_id);
+    }
+
+    public function test_deal_renew_uses_original_amount_as_discount_base(): void
+    {
+        $platform = $this->createLinkPlatform();
+        $product = $this->createProductForPlatform($platform, 'vip', 3200);
+        $client = $this->createClientForPlatform($platform, 9305);
+        $user = $this->createAuthorizedUser('admin');
+        $deal = $this->createPendingDeal($platform, $product, $client, $user, [
+            'plan_type' => 'vip',
+            'amount' => 2400,
+            'original_amount' => 3200,
+            'discount_percentage' => 25,
+            'discount_approved_by' => $user->id,
+            'status' => 'expired',
+            'activated_at' => now()->subDays(60),
+            'expires_at' => now()->subDay(),
+        ]);
+
+        app(WalletSettingsService::class)->updateDiscountPin('4821', $user->id);
+        app(WalletSettingsService::class)->updateDiscountConfig([
+            'max_percentage_by_platform' => [
+                (string) $platform->id => 15,
+            ],
+        ], $user->id);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/deals/{$deal->id}/renew", [
+            'reason' => 'Renew with a fresh approved discount',
+            'payment_method' => 'link',
+            'additional_days' => 30,
+            'payment_link_provider' => 'paystack_checkout',
+            'discount_percentage' => 10,
+            'discount_pin' => '4821',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('deal.status', 'awaiting_payment');
+
+        $newDeal = Deal::query()
+            ->where('client_id', $client->id)
+            ->where('id', '!=', $deal->id)
+            ->latest('id')
+            ->firstOrFail();
+        $payment = $newDeal->payment()->firstOrFail();
+        $deal->refresh();
+
+        $this->assertSame('expired', $deal->status);
+        $this->assertSame('awaiting_payment', $newDeal->status);
+        $this->assertSame(2880.0, (float) $newDeal->amount);
+        $this->assertSame(3200.0, (float) $newDeal->original_amount);
+        $this->assertSame(10.0, (float) $newDeal->discount_percentage);
+        $this->assertSame($user->id, (int) $newDeal->discount_approved_by);
+        $this->assertSame(2880.0, (float) $payment->amount);
+    }
+
     private function configureMpesaProxy(Platform $platform, int $userId, string $baseUrl, string $organizationCode): void
     {
         app(WalletSettingsService::class)->saveSystemConfig([

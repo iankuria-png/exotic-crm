@@ -51,6 +51,7 @@ class TeamActivityService
         'sms_sent',
         'credentials_sent',
         'free_trials_given',
+        'discounts_given',
         'total_actions',
     ];
 
@@ -66,6 +67,7 @@ class TeamActivityService
         'sms_sent',
         'credentials_sent',
         'free_trials_given',
+        'discounts_given',
         'total_actions',
     ];
 
@@ -81,6 +83,7 @@ class TeamActivityService
         'sms_sent' => [self::GOAL_ROLE_SCOPE_SALES],
         'credentials_sent' => [self::GOAL_ROLE_SCOPE_SALES],
         'free_trials_given' => [self::GOAL_ROLE_SCOPE_SALES],
+        'discounts_given' => [self::GOAL_ROLE_SCOPE_SALES],
         'total_actions' => [
             self::GOAL_ROLE_SCOPE_SALES,
             self::GOAL_ROLE_SCOPE_MARKETING,
@@ -691,6 +694,7 @@ class TeamActivityService
                 'revenue' => $revenueRow['revenue'],
                 'revenue_currency' => $revenueRow['revenue_currency'] ?: (string) ($platformCurrencies[(int) $platformId] ?? ''),
                 'free_trials_given' => (int) $metricRow['free_trials_given'],
+                'discounts_given' => (int) $metricRow['discounts_given'],
                 'avg_lead_response_secs' => $metricRow['avg_lead_response_secs'],
                 'total_actions' => (int) $metricRow['total_actions'],
             ];
@@ -717,6 +721,7 @@ class TeamActivityService
                 'revenue',
                 'revenue_currency',
                 'free_trials_given',
+                'discounts_given',
                 'avg_lead_response_secs',
                 'total_actions',
             ]
@@ -925,6 +930,10 @@ class TeamActivityService
 
             case 'deal_free_trial':
                 $entry['free_trials_given']++;
+                break;
+
+            case 'deal_discount':
+                $entry['discounts_given']++;
                 break;
 
             case 'payment_match_confirm':
@@ -1329,6 +1338,7 @@ class TeamActivityService
                 ? 'Renewed subscription'
                 : 'Started renewal',
             'deal_free_trial' => 'Approved free trial',
+            'deal_discount' => 'Applied discount',
             'payment_match_confirm' => 'Matched payment manually',
             'payment_match_auto' => 'Matched payment automatically',
             'payment_create_subscription' => 'Created subscription from payment',
@@ -1643,6 +1653,7 @@ class TeamActivityService
             'sms_sent',
             'credentials_sent',
             'free_trials_given',
+            'discounts_given',
             'total_actions',
             'active_seconds',
         ];
@@ -1681,6 +1692,7 @@ class TeamActivityService
             'sms_sent' => 0,
             'credentials_sent' => 0,
             'free_trials_given' => 0,
+            'discounts_given' => 0,
             'avg_lead_response_secs' => null,
             'total_actions' => 0,
             '_lead_response_total' => 0,
@@ -1737,6 +1749,7 @@ class TeamActivityService
             + ($row['sms_sent'] ?? 0)
             + ($row['credentials_sent'] ?? 0)
             + ($row['free_trials_given'] ?? 0)
+            + ($row['discounts_given'] ?? 0)
         );
     }
 
@@ -1803,6 +1816,7 @@ class TeamActivityService
             'sms_sent' => 'SMS Sent',
             'credentials_sent' => 'Credentials Sent',
             'free_trials_given' => 'Free Trials Given',
+            'discounts_given' => 'Discounts Given',
             'total_actions' => 'Total Actions',
             default => ucwords(str_replace('_', ' ', $metric)),
         };

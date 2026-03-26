@@ -28,6 +28,7 @@ class AgentDailyStat extends Model
         'revenue',
         'revenue_currency',
         'free_trials_given',
+        'discounts_given',
         'avg_lead_response_secs',
         'total_actions',
     ];
@@ -46,6 +47,7 @@ class AgentDailyStat extends Model
         'credentials_sent' => 'integer',
         'revenue' => 'decimal:2',
         'free_trials_given' => 'integer',
+        'discounts_given' => 'integer',
         'avg_lead_response_secs' => 'integer',
         'total_actions' => 'integer',
     ];

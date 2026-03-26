@@ -28,6 +28,8 @@ class Payment extends Model
 
     public const SUCCESSFUL_STATUSES = ['completed'];
     public const ACTIVE_SUBSCRIPTION_STATUSES = ['completed', 'activated'];
+    public const RESENDABLE_LINK_STATUSES = ['initiated'];
+    public const REPLACEMENT_REQUIRED_STATUSES = ['failed'];
 
     protected $fillable = [
         'user_id',

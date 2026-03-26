@@ -26,12 +26,15 @@ class Deal extends Model
         'product_id', 'plan_type', 'amount', 'currency',
         'duration', 'status', 'activated_at', 'expires_at',
         'assigned_to', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
+        'discount_percentage', 'original_amount', 'discount_approved_by',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
         'origin',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'discount_percentage' => 'decimal:2',
+        'original_amount' => 'decimal:2',
         'activated_at' => 'datetime',
         'expires_at' => 'datetime',
         'is_free_trial' => 'boolean',

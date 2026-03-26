@@ -28,6 +28,7 @@ final class CrmAuditAction
     public const DEAL_EXTEND = 'deal_extend';
     public const DEAL_RENEW = 'deal_renew';
     public const DEAL_FREE_TRIAL = 'deal_free_trial';
+    public const DEAL_DISCOUNT = 'deal_discount';
     public const CONVERSATION_SMS_SENT = 'conversation_sms_sent';
     public const CONVERSATION_SMS_FAILED = 'conversation_sms_failed';
     public const RENEWAL_SMS_SENT = 'renewal_sms_sent';
@@ -55,6 +56,8 @@ final class CrmAuditAction
     public const CLIENT_WALLET_ADJUSTMENT = 'client_wallet_adjustment';
     public const WALLET_PIN_UPDATE = 'wallet_pin_update';
     public const FREE_TRIAL_PIN_UPDATE = 'free_trial_pin_update';
+    public const DISCOUNT_PIN_UPDATE = 'discount_pin_update';
+    public const DISCOUNT_CONFIG_UPDATE = 'discount_config_update';
     public const LEAD_RECONCILE = 'lead_reconcile';
     public const LEAD_CONVERT_TO_CLIENT = 'lead_convert_to_client';
     public const LEAD_SB_IMPORT_PREVIEW = 'lead_sb_import_preview';
