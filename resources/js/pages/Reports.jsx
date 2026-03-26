@@ -115,8 +115,11 @@ function BarList({ rows, colorClass = 'bg-teal-600', minimumPercent = 6 }) {
     return (
         <div className="space-y-3">
             {rows.map((row) => (
-                <div key={row.label} className="grid grid-cols-[minmax(120px,1fr)_minmax(160px,2fr)_minmax(90px,auto)] items-center gap-3">
-                    <p className="truncate text-sm font-medium text-slate-700">{row.label}</p>
+                <div key={row.label} className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                        <p className="min-w-0 truncate text-sm font-medium text-slate-700">{row.label}</p>
+                        <p className="shrink-0 whitespace-nowrap text-right text-sm font-semibold text-slate-800">{row.formattedValue}</p>
+                    </div>
                     <div className="h-3 overflow-hidden rounded-full bg-slate-100">
                         <div
                             className={`h-full rounded-full ${colorClass}`}
@@ -127,7 +130,6 @@ function BarList({ rows, colorClass = 'bg-teal-600', minimumPercent = 6 }) {
                             }}
                         />
                     </div>
-                    <p className="text-right text-sm font-semibold text-slate-800">{row.formattedValue}</p>
                 </div>
             ))}
         </div>
