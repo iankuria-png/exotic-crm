@@ -4,6 +4,8 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
+use App\Models\Client;
 use App\Models\Product;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -12,10 +14,15 @@ use App\Models\Activation;
 use App\Models\SmsLog;
 use App\Models\WordpressPost;
 use App\Services\DynamicDatabaseService;
+use App\Services\BillingModeService;
+use App\Services\HostedCheckoutService;
 use App\Services\LegacyStkService;
+use App\Services\PaymentLinkService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentAttemptService;
+use App\Services\WalletCheckoutService;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
@@ -25,7 +32,11 @@ class PaymentController extends Controller
 {
     public function __construct(
         private readonly PaymentCompletionService $paymentCompletionService,
-        private readonly LegacyStkService $legacyStkService
+        private readonly LegacyStkService $legacyStkService,
+        private readonly PaymentLinkService $paymentLinkService,
+        private readonly HostedCheckoutService $hostedCheckoutService,
+        private readonly BillingModeService $billingModeService,
+        private readonly WalletCheckoutService $walletCheckoutService
     ) {
     }
 
@@ -2274,114 +2285,272 @@ class PaymentController extends Controller
 
 
         
-    public function initiateCardPayment(Request $request)
+    public function selfCheckout(Request $request)
     {
-        Log::info('Initiate Payment Request Payload', $request->all());
-
+        $payment = null;
         $validated = $request->validate([
-            'product_id' => 'required|integer',
-            'product_name' => 'required|string|max:255',
-            'price' => 'required|numeric|min:0.01',
-            'currency' => 'required|string|size:3',
+            'product_id' => 'required|integer|exists:products,id',
+            'platform_id' => 'nullable|integer|exists:platforms,id',
             'user_id' => 'required|integer',
-            'platform_id' => 'sometimes|integer',
+            'email' => 'nullable|email|max:255',
             'first_name' => 'required|string|max:100',
             'last_name' => 'required|string|max:100',
-            'phone' => 'required|string|max:20',
-            'duration' => 'required|string|max:50'
+            'phone' => 'required|string|max:30',
+            'duration' => 'required|string|max:50',
         ]);
 
         try {
-            $client = new \GuzzleHttp\Client([
-                'timeout' => 30,
-                'connect_timeout' => 10,
-                'verify' => false, // Important for Render.com
-            ]);
+            $product = Product::query()
+                ->with(['activePrices', 'platform'])
+                ->findOrFail((int) $validated['product_id']);
 
-            // Use the correct Django API URL
-            $djangoUrl = 'https://paymentservice-nwg5.onrender.com/api/payments/card/initiate/';
-            
-            Log::info('Calling Django API', ['url' => $djangoUrl, 'payload' => $validated]);
-
-            $response = $client->post($djangoUrl, [
-                'json' => $validated,
-                'headers' => [
-                    'Accept' => 'application/json',
-                    'Content-Type' => 'application/json',
-                ]
-            ]);
-
-            $responseBody = $response->getBody()->getContents();
-            $data = json_decode($responseBody, true);
-
-            Log::info('Django API Response', ['response' => $data]);
-
-            // Check if Django API returned success
-            if (!isset($data['status']) || $data['status'] !== true) {
-                Log::error('Django API returned error', [
-                    'status_code' => $response->getStatusCode(),
-                    'response' => $data
-                ]);
-                
-                return response()->json([
-                    'status' => false,
-                    'message' => 'Payment gateway error',
-                    'error' => $data['error'] ?? 'Invalid response from payment gateway'
-                ], 500);
+            if (!(bool) $product->is_active || (bool) $product->is_archived) {
+                throw new \InvalidArgumentException('The selected package is not currently available.');
             }
 
-            // Store payment record in Laravel
-            $payment = Payment::create([
-                'user_id' => $validated['user_id'],
-                'product_id' => $validated['product_id'],
-                'platform_id' => $validated['platform_id'] ?? null,
-                'amount' => $validated['price'],
-                'currency' => $validated['currency'],
-                'duration' => $validated['duration'],
-                'status' => 'pending',
-                'transaction_uuid' => $data['payment_data']['transaction_uuid'] ?? null,
-                'reference_number' => $data['payment_data']['reference_number'] ?? null,
-                'payment_data' => $data['payment_data'] ?? null,
+            $platformId = (int) ($validated['platform_id'] ?? $product->platform_id ?? 0);
+            if ($platformId <= 0) {
+                throw new \InvalidArgumentException('A platform id is required for hosted checkout.');
+            }
+
+            $platform = Platform::query()->findOrFail($platformId);
+
+            if ((int) $product->platform_id !== 0 && (int) $product->platform_id !== (int) $platform->id) {
+                throw new \InvalidArgumentException('The selected package does not belong to this platform.');
+            }
+
+            $pricing = $this->walletCheckoutService->resolveSubscriptionPricing($product, (string) $validated['duration']);
+            $resolvedProvider = $this->paymentLinkService->resolveProviderConfig($platform);
+
+            if (!is_array($resolvedProvider)) {
+                throw new \InvalidArgumentException('No hosted checkout provider is configured for this market.');
+            }
+
+            $providerKey = trim((string) ($resolvedProvider['key'] ?? ''));
+            $providerMode = trim((string) ($resolvedProvider['config']['mode'] ?? ''));
+            $environment = trim((string) ($resolvedProvider['config']['environment'] ?? ''));
+
+            if ($providerMode !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
+                throw new \InvalidArgumentException('This market is not configured for hosted checkout.');
+            }
+
+            if (!in_array($providerKey, ['paystack', 'pesapal'], true)) {
+                throw new \InvalidArgumentException('The active provider does not support hosted card checkout.');
+            }
+
+            $context = $this->billingModeService->providerContext(
+                $platform,
+                $providerKey,
+                requireEnabled: false,
+                environmentOverride: $environment !== '' ? $environment : null
+            );
+
+            $normalizedPhone = preg_replace('/\D+/', '', (string) $validated['phone']);
+            if ($normalizedPhone === '') {
+                $normalizedPhone = trim((string) $validated['phone']);
+            }
+
+            if (
+                strtoupper((string) ($pricing['currency'] ?? $platform->currency_code ?? '')) === 'KES'
+                && strlen($normalizedPhone) === 9
+                && str_starts_with($normalizedPhone, '7')
+            ) {
+                $normalizedPhone = '254' . $normalizedPhone;
+            }
+
+            $client = $this->resolveSubscriptionCheckoutClient(
+                (int) $platform->id,
+                (int) $validated['user_id'],
+                $normalizedPhone
+            );
+
+            $transactionUuid = (string) Str::uuid();
+            $referenceNumber = $this->subscriptionReference(
+                (int) $platform->id,
+                (int) $validated['user_id'],
+                (int) $product->id,
+                (string) $pricing['duration_key'],
+                $transactionUuid
+            );
+
+            $payment = Payment::query()->create([
+                'user_id' => (int) $validated['user_id'],
+                'escort_post_id' => $client?->wp_post_id,
+                'platform_id' => (int) $platform->id,
+                'product_id' => (int) $product->id,
+                'client_id' => $client?->id,
+                'phone' => $normalizedPhone,
+                'amount' => $pricing['amount'],
+                'currency' => $pricing['currency'],
+                'transaction_uuid' => $transactionUuid,
+                'transaction_reference' => $referenceNumber,
+                'reference_number' => $referenceNumber,
+                'status' => 'initiated',
+                'purpose' => 'subscription',
+                'source' => 'self_checkout',
+                'provider_key' => $providerKey,
+                'provider_environment' => $context['environment'] ?? null,
+                'duration' => $pricing['legacy_duration'],
+                'raw_payload' => [
+                    'method' => 'hosted_checkout',
+                    'billing_surface' => 'self_service_subscription',
+                ],
+                'payment_data' => [
+                    'duration_key' => $pricing['duration_key'],
+                    'duration_days' => $pricing['duration_days'],
+                    'duration_label' => $pricing['duration_label'],
+                    'provider' => $providerKey,
+                    'provider_mode' => $providerMode,
+                    'checkout_channel' => 'self_service',
+                    'customer' => [
+                        'first_name' => trim((string) $validated['first_name']),
+                        'last_name' => trim((string) $validated['last_name']),
+                        'email' => trim((string) ($validated['email'] ?? '')),
+                        'phone' => $normalizedPhone,
+                    ],
+                    'product' => [
+                        'name' => (string) ($product->display_name ?: $product->name),
+                        'currency' => (string) $pricing['currency'],
+                    ],
+                ],
             ]);
 
-            Log::info('Payment record created in Laravel', ['payment_id' => $payment->id]);
+            $payment->loadMissing(['client', 'platform', 'product']);
+
+            $action = match ($providerKey) {
+                'paystack' => $this->hostedCheckoutService->initializePaystack($payment, $context, [
+                    'callback_url' => $this->billingModeService->buildAbsoluteUrl(
+                        $platform,
+                        '/billing/complete',
+                        ['payment' => $payment->transaction_uuid],
+                        $context['environment'] ?? null
+                    ),
+                    'metadata' => [
+                        'channel' => 'self_checkout',
+                        'provider_config_key' => $providerKey,
+                    ],
+                ]),
+                'pesapal' => $this->hostedCheckoutService->initializePesapal($payment, $context, [
+                    'callback_url' => $this->billingModeService->buildAbsoluteUrl(
+                        $platform,
+                        '/billing/complete',
+                        ['payment' => $payment->transaction_uuid],
+                        $context['environment'] ?? null
+                    ),
+                    'description' => 'Subscription payment',
+                ]),
+                default => throw new \InvalidArgumentException('Unsupported hosted checkout provider.'),
+            };
+
+            $storedAction = $action;
+            unset($storedAction['provider_payload']);
+
+            $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+
+            $payment->forceFill([
+                'status' => 'pending',
+                'transaction_reference' => trim((string) ($action['provider_reference'] ?? '')) !== ''
+                    ? trim((string) $action['provider_reference'])
+                    : $payment->transaction_reference,
+                'raw_payload' => array_merge($payment->raw_payload ?? [], [
+                    $providerKey => $action['provider_payload'] ?? null,
+                ]),
+                'payment_data' => array_merge($paymentData, [
+                    'resume' => $storedAction,
+                    'checkout_url' => $action['url'] ?? null,
+                ]),
+            ])->save();
+
+            unset($action['provider_payload']);
 
             return response()->json([
                 'status' => true,
+                'message' => 'Hosted checkout initialized successfully.',
+                'provider' => $providerKey,
                 'payment_id' => $payment->id,
-                'payment_data' => $data['payment_data'],
-                'test_mode' => true // Since you're using test credentials
-            ]);
+                'transaction_uuid' => $payment->transaction_uuid,
+                'reference_number' => $payment->reference_number,
+                'checkout_url' => $action['url'] ?? null,
+                'action' => $action,
+            ], 201);
+        } catch (ValidationException $exception) {
+            throw $exception;
+        } catch (\InvalidArgumentException $exception) {
+            if ($payment instanceof Payment) {
+                $payment->forceFill([
+                    'status' => 'failed',
+                    'failure_reason' => mb_substr($exception->getMessage(), 0, 190),
+                ])->save();
+            }
 
-        } catch (\GuzzleHttp\Exception\RequestException $e) {
-            $response = $e->getResponse();
-            $errorBody = $response ? $response->getBody()->getContents() : 'No response body';
-            
-            Log::error('Django API Connection Failed', [
-                'error_message' => $e->getMessage(),
-                'status_code' => $response ? $response->getStatusCode() : 'No response',
-                'response_body' => $errorBody,
-                'url' => $djangoUrl ?? 'Not set'
+            return response()->json([
+                'status' => false,
+                'message' => $exception->getMessage(),
+                'error_code' => 'self_checkout_invalid_request',
+            ], 422);
+        } catch (\Throwable $exception) {
+            if ($payment instanceof Payment) {
+                $payment->forceFill([
+                    'status' => 'failed',
+                    'failure_reason' => mb_substr($exception->getMessage(), 0, 190),
+                ])->save();
+            }
+
+            Log::error('Self checkout initialization failed', [
+                'product_id' => $validated['product_id'] ?? null,
+                'platform_id' => $validated['platform_id'] ?? null,
+                'user_id' => $validated['user_id'] ?? null,
+                'error' => $exception->getMessage(),
             ]);
 
             return response()->json([
                 'status' => false,
-                'message' => 'Cannot connect to payment gateway',
-                'error' => json_decode($errorBody, true)['error'] ?? $e->getMessage()
-            ], 503);
-
-        } catch (\Exception $e) {
-            Log::error('Payment initiation failed', [
-                'error_message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
-            return response()->json([
-                'status' => false,
-                'message' => 'Failed to initiate payment',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
-            ], 500);
+                'message' => 'Could not initialize hosted checkout.',
+                'error' => config('app.debug') ? $exception->getMessage() : 'Hosted checkout initialization failed',
+            ], 502);
         }
+    }
+
+    public function initiateCardPayment(Request $request)
+    {
+        return $this->selfCheckout($request);
+    }
+
+    private function resolveSubscriptionCheckoutClient(int $platformId, int $userId, ?string $phone = null): ?Client
+    {
+        $client = Client::query()
+            ->where('platform_id', $platformId)
+            ->where('wp_user_id', $userId)
+            ->latest('id')
+            ->first();
+
+        if ($client) {
+            return $client;
+        }
+
+        $normalizedPhone = trim((string) $phone);
+        if ($normalizedPhone === '') {
+            return null;
+        }
+
+        return Client::query()
+            ->where('platform_id', $platformId)
+            ->where('phone_normalized', $normalizedPhone)
+            ->latest('id')
+            ->first();
+    }
+
+    private function subscriptionReference(int $platformId, int $userId, int $productId, string $durationKey, string $transactionUuid): string
+    {
+        $hash = strtoupper(substr(hash('sha256', implode('|', [
+            $platformId,
+            $userId,
+            $productId,
+            $durationKey,
+            $transactionUuid,
+        ])), 0, 18));
+
+        return 'SUB-' . $hash;
     }
 
 

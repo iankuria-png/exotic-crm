@@ -338,6 +338,7 @@ Route::delete('/products/{id}', [ProductController::class, 'destroy']);
 // Payment routes (public)
 Route::post('/initiate-stk-payment', [PaymentController::class, 'initiate']);
 Route::post('/initiate-payment', [PaymentController::class, 'initiatePayment']);
+Route::post('/self-checkout', [PaymentController::class, 'selfCheckout']);
 Route::post('/initiate-card-payment', [PaymentController::class, 'initiateCardPayment']);
 Route::post('/cybersource/initiate-payment', [PaymentController::class, 'initiateCardPayment']);
 Route::middleware('wallet.auth:read')->group(function () {

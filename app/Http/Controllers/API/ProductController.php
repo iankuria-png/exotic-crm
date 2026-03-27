@@ -87,16 +87,35 @@ class ProductController extends Controller
         }
     }
 
-    public function index()
+    public function index(Request $request)
     {
         try {
-            $products = Product::where('is_active', true)->get();
+            $validated = $request->validate([
+                'platform_id' => 'nullable|integer|exists:platforms,id',
+            ]);
+
+            $query = Product::query()
+                ->where('is_active', true)
+                ->where('is_archived', false)
+                ->with('activePrices');
+
+            if (!empty($validated['platform_id'])) {
+                $query->where('platform_id', (int) $validated['platform_id']);
+            }
+
+            $products = $query
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->get();
             
             LogHelper::record(
-                request()->user(),
+                $request->user(),
                 'products_listed',
-                request(),
-                ['count' => $products->count()]
+                $request,
+                [
+                    'count' => $products->count(),
+                    'platform_id' => $validated['platform_id'] ?? null,
+                ]
             );
 
             return response()->json([

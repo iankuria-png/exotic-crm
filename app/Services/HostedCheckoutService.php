@@ -17,7 +17,7 @@ class HostedCheckoutService
     {
         $secretKey = (string) data_get($context, 'provider_credentials.secret_key', '');
         $publicKey = (string) data_get($context, 'provider_credentials.public_key', '');
-        $email = $payment->client?->email
+        $email = $this->customerEmail($payment)
             ?: ('wallet+' . (int) $payment->client_id . '@' . ($payment->platform?->domain ?: 'example.test'));
         $callbackUrl = $this->callbackUrl($payment, $context, $options);
 
@@ -60,6 +60,9 @@ class HostedCheckoutService
         $providerCredentials = $context['provider_credentials'];
         $callbackUrl = $this->callbackUrl($payment, $context, $options);
         $description = trim((string) ($options['description'] ?? ''));
+        $customerFirstName = trim((string) data_get($payment->payment_data, 'customer.first_name', ''));
+        $customerLastName = trim((string) data_get($payment->payment_data, 'customer.last_name', ''));
+        $customerPhone = trim((string) data_get($payment->payment_data, 'customer.phone', ''));
         if ($description === '') {
             $description = $payment->purpose === 'wallet_topup' ? 'Wallet top-up' : 'Payment';
         }
@@ -74,11 +77,11 @@ class HostedCheckoutService
                 'callback_url' => $callbackUrl,
                 'notification_id' => (string) ($providerCredentials['ipn_id'] ?? ''),
                 'billing_address' => [
-                    'email_address' => $payment->client?->email ?: 'wallet@example.test',
-                    'phone_number' => $payment->phone,
+                    'email_address' => $this->customerEmail($payment) ?: 'wallet@example.test',
+                    'phone_number' => $customerPhone !== '' ? $customerPhone : $payment->phone,
                     'country_code' => strtoupper(substr((string) ($payment->platform?->country ?: 'KE'), 0, 2)),
-                    'first_name' => $payment->client?->name ?: 'Wallet',
-                    'last_name' => 'Customer',
+                    'first_name' => $customerFirstName !== '' ? $customerFirstName : ($payment->client?->name ?: 'Wallet'),
+                    'last_name' => $customerLastName !== '' ? $customerLastName : 'Customer',
                 ],
             ]);
 
@@ -158,6 +161,16 @@ class HostedCheckoutService
             ['payment' => $payment->transaction_uuid],
             (string) ($context['environment'] ?? null)
         );
+    }
+
+    private function customerEmail(Payment $payment): string
+    {
+        $email = trim((string) data_get($payment->payment_data, 'customer.email', ''));
+        if ($email !== '') {
+            return $email;
+        }
+
+        return trim((string) ($payment->client?->email ?? ''));
     }
 
     private function fetchPesapalAccessToken(array $context): string
