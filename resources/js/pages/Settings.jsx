@@ -410,6 +410,9 @@ function defaultPaymentLinkProviderForm() {
                 url: '',
                 base_url: '',
                 path: '/pay',
+                self_checkout_fx_enabled: false,
+                self_checkout_fx_currency: 'KES',
+                self_checkout_fx_rate: '',
             },
         ],
         reason: 'Updated payment link provider routing',
@@ -434,6 +437,9 @@ function buildPaymentLinkProviderForm(platform) {
             url: provider?.url || '',
             base_url: provider?.base_url || '',
             path: provider?.path || '/pay',
+            self_checkout_fx_enabled: provider?.self_checkout_fx_enabled === true,
+            self_checkout_fx_currency: provider?.self_checkout_fx_currency || 'KES',
+            self_checkout_fx_rate: provider?.self_checkout_fx_rate != null ? String(provider.self_checkout_fx_rate) : '',
         }));
 
     if (providerEntries.length === 0) {
@@ -2093,6 +2099,9 @@ function IntegrationsWorkspace({
                     url: '',
                     base_url: '',
                     path: '/pay',
+                    self_checkout_fx_enabled: false,
+                    self_checkout_fx_currency: 'KES',
+                    self_checkout_fx_rate: '',
                 },
             ],
         }));
@@ -2138,6 +2147,9 @@ function IntegrationsWorkspace({
                 url: provider.url.trim(),
                 base_url: provider.base_url.trim(),
                 path: provider.path.trim(),
+                self_checkout_fx_enabled: Boolean(provider.self_checkout_fx_enabled),
+                self_checkout_fx_currency: String(provider.self_checkout_fx_currency || '').trim().toUpperCase(),
+                self_checkout_fx_rate: String(provider.self_checkout_fx_rate || '').trim(),
             }))
             .filter((provider) => provider.key);
 
@@ -2169,6 +2181,20 @@ function IntegrationsWorkspace({
             return;
         }
 
+        const invalidProxyFxProvider = normalizedProviders.find((provider) => (
+            provider.mode === 'proxy_hosted_checkout'
+            && provider.self_checkout_fx_enabled
+            && (
+                !provider.self_checkout_fx_currency
+                || !provider.self_checkout_fx_rate
+                || Number.parseFloat(provider.self_checkout_fx_rate) <= 0
+            )
+        ));
+        if (invalidProxyFxProvider) {
+            toast.error(`${invalidProxyFxProvider.label || invalidProxyFxProvider.key} needs a target charge currency and exchange rate for the self-checkout FX test.`);
+            return;
+        }
+
         const enabledProviders = normalizedProviders.filter((provider) => provider.enabled);
         if (!enabledProviders.length) {
             toast.error('Enable at least one payment link provider before saving.');
@@ -2190,6 +2216,15 @@ function IntegrationsWorkspace({
                     : null,
                 environment: provider.mode === 'proxy_hosted_checkout'
                     ? provider.environment
+                    : null,
+                self_checkout_fx_enabled: provider.mode === 'proxy_hosted_checkout'
+                    ? provider.self_checkout_fx_enabled
+                    : false,
+                self_checkout_fx_currency: provider.mode === 'proxy_hosted_checkout' && provider.self_checkout_fx_enabled
+                    ? (provider.self_checkout_fx_currency || null)
+                    : null,
+                self_checkout_fx_rate: provider.mode === 'proxy_hosted_checkout' && provider.self_checkout_fx_enabled
+                    ? Number.parseFloat(provider.self_checkout_fx_rate)
                     : null,
                 url: provider.mode === 'static_url' ? (provider.url || null) : null,
                 base_url: provider.mode === 'static_url' ? (provider.base_url || null) : null,
@@ -5594,8 +5629,37 @@ function IntegrationsWorkspace({
                                                                 <option key={environment} value={environment}>
                                                                     {environment}
                                                                 </option>
-                                                            ))}
+                                                                ))}
                                                         </select>
+                                                        <label className="md:col-span-2 flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(provider.self_checkout_fx_enabled)}
+                                                                onChange={(event) => updatePaymentLinkProvider(index, 'self_checkout_fx_enabled', event.target.checked)}
+                                                                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                            />
+                                                            Enable self-checkout FX override test
+                                                        </label>
+                                                        {provider.self_checkout_fx_enabled ? (
+                                                            <>
+                                                                <input
+                                                                    value={provider.self_checkout_fx_currency || 'KES'}
+                                                                    onChange={(event) => updatePaymentLinkProvider(index, 'self_checkout_fx_currency', event.target.value.toUpperCase())}
+                                                                    className="crm-input"
+                                                                    placeholder="Charge currency (e.g. KES)"
+                                                                    maxLength={3}
+                                                                />
+                                                                <input
+                                                                    value={provider.self_checkout_fx_rate || ''}
+                                                                    onChange={(event) => updatePaymentLinkProvider(index, 'self_checkout_fx_rate', event.target.value)}
+                                                                    className="crm-input"
+                                                                    placeholder={`Charge units per 1 ${selectedPlatform?.currency || selectedPlatform?.currency_code || 'local'} (e.g. 11.25)`}
+                                                                />
+                                                                <p className="md:col-span-2 text-xs text-amber-700">
+                                                                    Temporary self-checkout test only. Public pricing remains in the market currency, but CRM will charge the selected checkout currency using this fixed rate.
+                                                                </p>
+                                                            </>
+                                                        ) : null}
                                                         {(() => {
                                                             const readiness = paymentLinkReadinessState(provider, selectedPlatform, walletSystemConfig);
 

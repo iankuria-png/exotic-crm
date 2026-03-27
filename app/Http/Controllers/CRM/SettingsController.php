@@ -1766,6 +1766,9 @@ class SettingsController extends Controller
             'payment_link_providers.providers.*.path' => 'nullable|string|max:255',
             'payment_link_providers.providers.*.wallet_provider_key' => ['nullable', Rule::in(['paystack', 'pesapal'])],
             'payment_link_providers.providers.*.environment' => ['nullable', Rule::in(['sandbox', 'production'])],
+            'payment_link_providers.providers.*.self_checkout_fx_enabled' => 'nullable|boolean',
+            'payment_link_providers.providers.*.self_checkout_fx_currency' => 'nullable|string|size:3',
+            'payment_link_providers.providers.*.self_checkout_fx_rate' => 'nullable|numeric|min:0.000001|max:1000000',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -3073,6 +3076,14 @@ class SettingsController extends Controller
             $path = trim((string) ($provider['path'] ?? ''));
             $walletProviderKey = strtolower(trim((string) ($provider['wallet_provider_key'] ?? '')));
             $environment = strtolower(trim((string) ($provider['environment'] ?? '')));
+            $selfCheckoutFxEnabled = array_key_exists('self_checkout_fx_enabled', $provider)
+                ? (bool) $provider['self_checkout_fx_enabled']
+                : false;
+            $selfCheckoutFxCurrency = strtoupper(trim((string) ($provider['self_checkout_fx_currency'] ?? '')));
+            $selfCheckoutFxRateRaw = $provider['self_checkout_fx_rate'] ?? null;
+            $selfCheckoutFxRate = is_numeric($selfCheckoutFxRateRaw)
+                ? round((float) $selfCheckoutFxRateRaw, 6)
+                : null;
 
             if (!in_array($mode, ['static_url', 'proxy_hosted_checkout'], true)) {
                 $errors["payment_link_providers.providers.{$providerKey}.mode"] = 'Provider mode must be static_url or proxy_hosted_checkout.';
@@ -3095,12 +3106,32 @@ class SettingsController extends Controller
                     continue;
                 }
 
+                if ($selfCheckoutFxEnabled) {
+                    if ($selfCheckoutFxCurrency === '') {
+                        $errors["payment_link_providers.providers.{$providerKey}.self_checkout_fx_currency"] = 'Self-checkout FX override requires a target charge currency.';
+                    }
+
+                    if ($selfCheckoutFxRate === null || $selfCheckoutFxRate <= 0) {
+                        $errors["payment_link_providers.providers.{$providerKey}.self_checkout_fx_rate"] = 'Self-checkout FX override requires an exchange rate greater than zero.';
+                    }
+
+                    if (
+                        isset($errors["payment_link_providers.providers.{$providerKey}.self_checkout_fx_currency"])
+                        || isset($errors["payment_link_providers.providers.{$providerKey}.self_checkout_fx_rate"])
+                    ) {
+                        continue;
+                    }
+                }
+
                 $normalizedProviders[$providerKey] = [
                     'label' => mb_substr($label, 0, 120),
                     'mode' => $mode,
                     'enabled' => $enabled,
                     'wallet_provider_key' => $walletProviderKey,
                     'environment' => $environment,
+                    'self_checkout_fx_enabled' => $selfCheckoutFxEnabled,
+                    'self_checkout_fx_currency' => $selfCheckoutFxEnabled ? $selfCheckoutFxCurrency : null,
+                    'self_checkout_fx_rate' => $selfCheckoutFxEnabled ? $selfCheckoutFxRate : null,
                 ];
             } else {
                 if ($url === '' && $baseUrl === '') {

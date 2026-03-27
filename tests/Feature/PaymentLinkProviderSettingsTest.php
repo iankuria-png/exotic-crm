@@ -65,6 +65,9 @@ class PaymentLinkProviderSettingsTest extends TestCase
                         'enabled' => true,
                         'wallet_provider_key' => 'paystack',
                         'environment' => 'sandbox',
+                        'self_checkout_fx_enabled' => true,
+                        'self_checkout_fx_currency' => 'KES',
+                        'self_checkout_fx_rate' => 11.25,
                     ],
                 ],
             ],
@@ -76,7 +79,16 @@ class PaymentLinkProviderSettingsTest extends TestCase
             ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.mode', 'proxy_hosted_checkout')
             ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.enabled', true)
             ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.wallet_provider_key', 'paystack')
-            ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.environment', 'sandbox');
+            ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.environment', 'sandbox')
+            ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.self_checkout_fx_enabled', true)
+            ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.self_checkout_fx_currency', 'KES')
+            ->assertJsonPath('platform.payment_link_providers.providers.paystack_checkout.self_checkout_fx_rate', 11.25);
+
+        $platform->refresh();
+
+        $this->assertTrue((bool) data_get($platform->payment_link_providers, 'providers.paystack_checkout.self_checkout_fx_enabled'));
+        $this->assertSame('KES', data_get($platform->payment_link_providers, 'providers.paystack_checkout.self_checkout_fx_currency'));
+        $this->assertSame(11.25, data_get($platform->payment_link_providers, 'providers.paystack_checkout.self_checkout_fx_rate'));
     }
 
     public function test_proxy_payment_link_provider_requires_wallet_provider_and_environment(): void
@@ -104,6 +116,37 @@ class PaymentLinkProviderSettingsTest extends TestCase
             ->assertJsonValidationErrors([
                 'payment_link_providers.providers.proxy_checkout.wallet_provider_key',
                 'payment_link_providers.providers.proxy_checkout.environment',
+            ]);
+    }
+
+    public function test_proxy_payment_link_provider_requires_currency_and_rate_when_fx_override_is_enabled(): void
+    {
+        $platform = Platform::factory()->create();
+        $admin = $this->createAdmin();
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}/payment-link-providers", [
+            'payment_link_providers' => [
+                'active_provider' => 'proxy_checkout',
+                'providers' => [
+                    'proxy_checkout' => [
+                        'label' => 'Proxy Checkout',
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'paystack',
+                        'environment' => 'production',
+                        'self_checkout_fx_enabled' => true,
+                    ],
+                ],
+            ],
+            'reason' => 'Try incomplete FX override config',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors([
+                'payment_link_providers.providers.proxy_checkout.self_checkout_fx_currency',
+                'payment_link_providers.providers.proxy_checkout.self_checkout_fx_rate',
             ]);
     }
 

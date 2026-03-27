@@ -37,6 +37,9 @@ class SelfCheckoutApiTest extends TestCase
                         'enabled' => true,
                         'wallet_provider_key' => 'paystack',
                         'environment' => 'production',
+                        'self_checkout_fx_enabled' => true,
+                        'self_checkout_fx_currency' => 'KES',
+                        'self_checkout_fx_rate' => 11.25,
                     ],
                 ],
             ],
@@ -111,11 +114,21 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('primary', data_get($payment->payment_data, 'provider_config_key'));
         $this->assertSame('paystack', data_get($payment->payment_data, 'provider'));
         $this->assertSame('https://checkout.paystack.test/redirect', data_get($payment->payment_data, 'checkout_url'));
+        $this->assertSame('1400.00', data_get($payment->payment_data, 'quoted_pricing.amount'));
+        $this->assertSame('GHS', data_get($payment->payment_data, 'quoted_pricing.currency'));
+        $this->assertSame('15750.00', data_get($payment->payment_data, 'charge_pricing.amount'));
+        $this->assertSame('KES', data_get($payment->payment_data, 'charge_pricing.currency'));
+        $this->assertTrue((bool) data_get($payment->payment_data, 'fx_override.enabled'));
+        $this->assertTrue((bool) data_get($payment->payment_data, 'fx_override.applied'));
+        $this->assertSame(11.25, data_get($payment->payment_data, 'fx_override.rate'));
+        $this->assertSame('KES', data_get($payment->payment_data, 'fx_override.target_currency'));
+        $this->assertSame(15750.0, (float) $payment->amount);
+        $this->assertSame('KES', $payment->currency);
 
         Http::assertSent(function ($request) use ($payment) {
             return $request->url() === 'https://api.paystack.co/transaction/initialize'
-                && $request['currency'] === 'GHS'
-                && $request['amount'] === 140000
+                && $request['currency'] === 'KES'
+                && $request['amount'] === 1575000
                 && $request['reference'] === $payment->reference_number;
         });
     }

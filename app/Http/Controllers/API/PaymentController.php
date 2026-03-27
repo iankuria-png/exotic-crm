@@ -2330,6 +2330,7 @@ class PaymentController extends Controller
             $providerKey = trim((string) ($resolvedProvider['config']['wallet_provider_key'] ?? $providerConfigKey));
             $providerMode = trim((string) ($resolvedProvider['config']['mode'] ?? ''));
             $environment = trim((string) ($resolvedProvider['config']['environment'] ?? ''));
+            $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider);
 
             if ($providerMode !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
                 throw new \InvalidArgumentException('This market is not configured for hosted checkout.');
@@ -2381,8 +2382,8 @@ class PaymentController extends Controller
                 'product_id' => (int) $product->id,
                 'client_id' => $client?->id,
                 'phone' => $normalizedPhone,
-                'amount' => $pricing['amount'],
-                'currency' => $pricing['currency'],
+                'amount' => $chargePricing['amount'],
+                'currency' => $chargePricing['currency'],
                 'transaction_uuid' => $transactionUuid,
                 'transaction_reference' => $referenceNumber,
                 'reference_number' => $referenceNumber,
@@ -2404,6 +2405,15 @@ class PaymentController extends Controller
                     'provider_config_key' => $providerConfigKey,
                     'provider_mode' => $providerMode,
                     'checkout_channel' => 'self_service',
+                    'quoted_pricing' => [
+                        'amount' => $chargePricing['quoted_amount'],
+                        'currency' => $chargePricing['quoted_currency'],
+                    ],
+                    'charge_pricing' => [
+                        'amount' => $chargePricing['amount'],
+                        'currency' => $chargePricing['currency'],
+                    ],
+                    'fx_override' => $chargePricing['fx_override'],
                     'customer' => [
                         'first_name' => trim((string) $validated['first_name']),
                         'last_name' => trim((string) $validated['last_name']),
@@ -2474,6 +2484,13 @@ class PaymentController extends Controller
                 'transaction_uuid' => $payment->transaction_uuid,
                 'reference_number' => $payment->reference_number,
                 'checkout_url' => $action['url'] ?? null,
+                'pricing' => [
+                    'display_amount' => $chargePricing['quoted_amount'],
+                    'display_currency' => $chargePricing['quoted_currency'],
+                    'charge_amount' => $chargePricing['amount'],
+                    'charge_currency' => $chargePricing['currency'],
+                    'fx_override' => $chargePricing['fx_override'],
+                ],
                 'action' => $action,
             ], 201);
         } catch (ValidationException $exception) {
@@ -2517,6 +2534,48 @@ class PaymentController extends Controller
     public function initiateCardPayment(Request $request)
     {
         return $this->selfCheckout($request);
+    }
+
+    private function applySelfCheckoutFxOverride(array $pricing, array $resolvedProvider): array
+    {
+        $quotedAmount = round((float) ($pricing['amount'] ?? 0), 2);
+        $quotedCurrency = strtoupper((string) ($pricing['currency'] ?? ''));
+        $providerConfig = is_array($resolvedProvider['config'] ?? null) ? $resolvedProvider['config'] : [];
+        $fxEnabled = (bool) ($providerConfig['self_checkout_fx_enabled'] ?? false);
+        $targetCurrency = strtoupper(trim((string) ($providerConfig['self_checkout_fx_currency'] ?? '')));
+        $fxRate = is_numeric($providerConfig['self_checkout_fx_rate'] ?? null)
+            ? round((float) $providerConfig['self_checkout_fx_rate'], 6)
+            : null;
+        $chargeAmount = $quotedAmount;
+        $chargeCurrency = $quotedCurrency;
+        $fxApplied = false;
+
+        if (
+            $fxEnabled
+            && $quotedAmount > 0
+            && $quotedCurrency !== ''
+            && $targetCurrency !== ''
+            && $targetCurrency !== $quotedCurrency
+            && $fxRate !== null
+            && $fxRate > 0
+        ) {
+            $chargeAmount = round($quotedAmount * $fxRate, 2);
+            $chargeCurrency = $targetCurrency;
+            $fxApplied = true;
+        }
+
+        return array_merge($pricing, [
+            'quoted_amount' => number_format($quotedAmount, 2, '.', ''),
+            'quoted_currency' => $quotedCurrency,
+            'amount' => number_format($chargeAmount, 2, '.', ''),
+            'currency' => $chargeCurrency,
+            'fx_override' => [
+                'enabled' => $fxEnabled,
+                'applied' => $fxApplied,
+                'rate' => $fxRate,
+                'target_currency' => $targetCurrency !== '' ? $targetCurrency : null,
+            ],
+        ]);
     }
 
     private function resolveSubscriptionCheckoutClient(int $platformId, int $userId, ?string $phone = null): ?Client
