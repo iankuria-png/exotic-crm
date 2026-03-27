@@ -2901,6 +2901,7 @@ class SettingsController extends Controller
         $packageRows = $this->platformPackageRows($platform);
         $packageSetup = $this->platformPackageSetup($platform, $packageRows);
         $hasWpCredentials = $this->platformHasWpCredentials($platform);
+        $hasWpDatabaseCredentials = $this->platformHasWpDatabaseCredentials($platform);
         $lastStatus = (string) ($platform->sync_last_status ?? 'unknown');
         $supportBoardSyncRun = $supportBoardSyncRun ?: $this->supportBoardSyncRunService->latestRunForPlatform((int) $platform->id);
 
@@ -2933,6 +2934,14 @@ class SettingsController extends Controller
                 'api_user' => $platform->wp_api_user,
                 'last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
                 'last_error' => $platform->sync_last_error,
+            ],
+            'wp_provisioning' => [
+                'credentials_ready' => $hasWpDatabaseCredentials,
+                'db_host' => $platform->db_host,
+                'db_name' => $platform->db_name,
+                'db_user' => $platform->db_user,
+                'db_prefix' => $platform->db_prefix,
+                'db_pass_configured' => !empty($platform->db_pass),
             ],
             'sync' => [
                 'last_synced_at' => optional($platform->sync_last_synced_at)->toDateTimeString(),
@@ -2967,6 +2976,10 @@ class SettingsController extends Controller
             unset($payload['wp_api_password']);
         }
 
+        if ($isPatch && array_key_exists('db_pass', $payload) && empty($payload['db_pass'])) {
+            unset($payload['db_pass']);
+        }
+
         if ($isPatch && array_key_exists('support_board_token', $payload) && empty($payload['support_board_token'])) {
             unset($payload['support_board_token']);
         }
@@ -2976,6 +2989,7 @@ class SettingsController extends Controller
             $payload['phone_prefix'] = $payload['phone_prefix'] ?? '254';
             $payload['timezone'] = $payload['timezone'] ?? 'Africa/Nairobi';
             $payload['currency_code'] = $payload['currency_code'] ?? 'KES';
+            $payload['db_prefix'] = $payload['db_prefix'] ?? 'wp_';
         }
 
         return $payload;
@@ -3139,6 +3153,14 @@ class SettingsController extends Controller
         return !empty($platform->wp_api_url)
             && !empty($platform->wp_api_user)
             && !empty($platform->wp_api_password);
+    }
+
+    private function platformHasWpDatabaseCredentials(Platform $platform): bool
+    {
+        return !empty($platform->db_host)
+            && !empty($platform->db_name)
+            && !empty($platform->db_user)
+            && !empty($platform->db_pass);
     }
 
     private function decodeMarketIds($value): array

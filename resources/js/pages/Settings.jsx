@@ -63,6 +63,12 @@ function buildPlatformEditor(platform) {
         wp_api_url: platform.wp_sync?.api_url || '',
         wp_api_user: platform.wp_sync?.api_user || '',
         wp_api_password: '',
+        db_host: platform.wp_provisioning?.db_host || '',
+        db_name: platform.wp_provisioning?.db_name || '',
+        db_user: platform.wp_provisioning?.db_user || '',
+        db_pass: '',
+        db_prefix: platform.wp_provisioning?.db_prefix || 'wp_',
+        db_pass_configured: Boolean(platform.wp_provisioning?.db_pass_configured),
         currency_code: platform.currency || 'KES',
         timezone: platform.timezone || 'Africa/Nairobi',
         phone_prefix: platform.phone_prefix || '254',
@@ -83,6 +89,11 @@ function defaultPlatformForm() {
         wp_api_url: '',
         wp_api_user: '',
         wp_api_password: '',
+        db_host: '',
+        db_name: '',
+        db_user: '',
+        db_pass: '',
+        db_prefix: 'wp_',
         currency_code: 'KES',
         timezone: 'Africa/Nairobi',
         phone_prefix: '254',
@@ -4746,6 +4757,43 @@ function IntegrationsWorkspace({
                                             placeholder="WordPress API password (leave blank to keep)"
                                             type="password"
                                         />
+                                        <input
+                                            value={editor.db_host}
+                                            onChange={(event) => setEditor((current) => ({ ...current, db_host: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="WordPress DB host"
+                                        />
+                                        <input
+                                            value={editor.db_name}
+                                            onChange={(event) => setEditor((current) => ({ ...current, db_name: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="WordPress DB name"
+                                        />
+                                        <input
+                                            value={editor.db_user}
+                                            onChange={(event) => setEditor((current) => ({ ...current, db_user: event.target.value }))}
+                                            className="crm-input"
+                                            placeholder="WordPress DB user"
+                                        />
+                                        <div className="space-y-1">
+                                            <input
+                                                value={editor.db_pass}
+                                                onChange={(event) => setEditor((current) => ({ ...current, db_pass: event.target.value }))}
+                                                className="crm-input"
+                                                placeholder={editor.db_pass_configured ? '••••••••' : 'WordPress DB password'}
+                                                type="password"
+                                            />
+                                            <p className="text-xs text-slate-500">Leave blank to keep the current WordPress DB password.</p>
+                                        </div>
+                                        <input
+                                            value={editor.db_prefix}
+                                            onChange={(event) => setEditor((current) => ({ ...current, db_prefix: event.target.value }))}
+                                            className="crm-input md:col-span-2"
+                                            placeholder="WordPress table prefix (for example wp_)"
+                                        />
+                                        <p className="md:col-span-2 rounded-md border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
+                                            CRM “Provision in WordPress” uses the database connection from the market site’s `wp-config.php`: `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `$table_prefix`.
+                                        </p>
                                         <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
                                             <input
                                                 type="checkbox"
@@ -4767,7 +4815,11 @@ function IntegrationsWorkspace({
                                         <button
                                             type="button"
                                             onClick={() => {
-                                                const { support_board_token_configured, ...editorPayload } = editor;
+                                                const {
+                                                    support_board_token_configured,
+                                                    db_pass_configured,
+                                                    ...editorPayload
+                                                } = editor;
                                                 const payload = {
                                                     ...editorPayload,
                                                     reason: 'Integration profile update from settings workspace',
@@ -4775,6 +4827,10 @@ function IntegrationsWorkspace({
 
                                                 if (!payload.wp_api_password?.trim()) {
                                                     delete payload.wp_api_password;
+                                                }
+
+                                                if (!payload.db_pass?.trim()) {
+                                                    delete payload.db_pass;
                                                 }
 
                                                 updatePlatformMutation.mutate({
@@ -6026,7 +6082,7 @@ function IntegrationsWorkspace({
                         <header className="crm-panel-header">
                             <div>
                                 <h3 className="crm-panel-title">Add Market Integration</h3>
-                                <p className="crm-panel-subtitle">Create a new market profile with WordPress sync credentials.</p>
+                                <p className="crm-panel-subtitle">Create a new market profile with WordPress sync API and provisioning database credentials.</p>
                             </div>
                         </header>
                         <div className="grid gap-3 p-4 md:grid-cols-2">
@@ -6040,12 +6096,20 @@ function IntegrationsWorkspace({
                             <input value={createForm.support_chat_url} onChange={(event) => setCreateForm((current) => ({ ...current, support_chat_url: event.target.value }))} className="crm-input md:col-span-2" placeholder="Support board URL" />
                             <input value={createForm.wp_api_user} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_user: event.target.value }))} className="crm-input" placeholder="WordPress API user" />
                             <input value={createForm.wp_api_password} onChange={(event) => setCreateForm((current) => ({ ...current, wp_api_password: event.target.value }))} className="crm-input" type="password" placeholder="WordPress API password" />
+                            <input value={createForm.db_host} onChange={(event) => setCreateForm((current) => ({ ...current, db_host: event.target.value }))} className="crm-input" placeholder="WordPress DB host" />
+                            <input value={createForm.db_name} onChange={(event) => setCreateForm((current) => ({ ...current, db_name: event.target.value }))} className="crm-input" placeholder="WordPress DB name" />
+                            <input value={createForm.db_user} onChange={(event) => setCreateForm((current) => ({ ...current, db_user: event.target.value }))} className="crm-input" placeholder="WordPress DB user" />
+                            <input value={createForm.db_pass} onChange={(event) => setCreateForm((current) => ({ ...current, db_pass: event.target.value }))} className="crm-input" type="password" placeholder="WordPress DB password" />
+                            <input value={createForm.db_prefix} onChange={(event) => setCreateForm((current) => ({ ...current, db_prefix: event.target.value }))} className="crm-input md:col-span-2" placeholder="WordPress table prefix (for example wp_)" />
                             <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
                                 <input type="checkbox" checked={createForm.is_active} onChange={(event) => setCreateForm((current) => ({ ...current, is_active: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
                                 Market is active
                             </label>
                             <p className="md:col-span-2 rounded-md border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-700">
                                 Onboarding flow: create market, configure package pricing, activate market, then run initial full sync.
+                            </p>
+                            <p className="md:col-span-2 rounded-md border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
+                                For CRM provisioning, copy the DB values from the market site’s `wp-config.php`: `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `$table_prefix`.
                             </p>
                         </div>
                         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">

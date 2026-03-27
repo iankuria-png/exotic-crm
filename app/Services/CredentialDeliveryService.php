@@ -570,7 +570,7 @@ class CredentialDeliveryService
 
     private function connectWordPress(Platform $platform): string
     {
-        if (empty($platform->db_host) || empty($platform->db_name) || empty($platform->db_user)) {
+        if (empty($platform->db_host) || empty($platform->db_name) || empty($platform->db_user) || empty($platform->db_pass)) {
             throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
         }
 

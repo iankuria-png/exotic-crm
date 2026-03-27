@@ -250,6 +250,7 @@ class LeadConversionService
     {
         return !empty($platform->db_host)
             && !empty($platform->db_name)
-            && !empty($platform->db_user);
+            && !empty($platform->db_user)
+            && !empty($platform->db_pass);
     }
 }

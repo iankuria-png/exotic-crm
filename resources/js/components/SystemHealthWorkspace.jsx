@@ -1191,10 +1191,14 @@ export default function SystemHealthWorkspace({
                                         </span>
                                     </div>
 
-                                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                                    <div className="mt-4 grid gap-3 sm:grid-cols-4">
                                         <div className="rounded-md border border-slate-200 bg-white p-3">
-                                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">WP connection</p>
+                                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">WP sync API</p>
                                             <p className="mt-2 text-sm font-semibold text-slate-900">{platform.wp_sync?.credentials_ready ? 'Configured' : 'Needs credentials'}</p>
+                                        </div>
+                                        <div className="rounded-md border border-slate-200 bg-white p-3">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">WP provisioning DB</p>
+                                            <p className="mt-2 text-sm font-semibold text-slate-900">{platform.wp_provisioning?.credentials_ready ? 'Configured' : 'Needs credentials'}</p>
                                         </div>
                                         <div className="rounded-md border border-slate-200 bg-white p-3">
                                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Last sync</p>

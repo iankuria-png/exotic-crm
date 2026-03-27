@@ -135,6 +135,11 @@ export default function Setup() {
         wp_api_url: '',
         wp_api_user: '',
         wp_api_password: '',
+        db_host: '',
+        db_name: '',
+        db_user: '',
+        db_pass: '',
+        db_prefix: 'wp_',
         currency_code: 'KES',
         timezone: 'Africa/Nairobi',
         phone_prefix: '254',
@@ -745,14 +750,37 @@ export default function Setup() {
                                     <label className="mb-1 block text-sm font-medium text-slate-700">WordPress application password</label>
                                     <input value={marketForm.wp_api_password} onChange={(event) => setMarketForm((current) => ({ ...current, wp_api_password: event.target.value }))} className="crm-input" placeholder="xxxx xxxx xxxx xxxx" />
                                 </div>
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">WordPress DB host</label>
+                                    <input value={marketForm.db_host} onChange={(event) => setMarketForm((current) => ({ ...current, db_host: event.target.value }))} className="crm-input" placeholder="localhost" />
+                                </div>
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">WordPress DB name</label>
+                                    <input value={marketForm.db_name} onChange={(event) => setMarketForm((current) => ({ ...current, db_name: event.target.value }))} className="crm-input" placeholder="cpanel_dbname" />
+                                </div>
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">WordPress DB user</label>
+                                    <input value={marketForm.db_user} onChange={(event) => setMarketForm((current) => ({ ...current, db_user: event.target.value }))} className="crm-input" placeholder="cpanel_dbuser" />
+                                </div>
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">WordPress DB password</label>
+                                    <input value={marketForm.db_pass} onChange={(event) => setMarketForm((current) => ({ ...current, db_pass: event.target.value }))} className="crm-input" type="password" placeholder="WordPress DB password" />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">WordPress table prefix</label>
+                                    <input value={marketForm.db_prefix} onChange={(event) => setMarketForm((current) => ({ ...current, db_prefix: event.target.value }))} className="crm-input" placeholder="wp_" />
+                                </div>
                                 <div className="md:col-span-2">
                                     <label className="mb-1 block text-sm font-medium text-slate-700">Support chat URL</label>
                                     <input value={marketForm.support_chat_url} onChange={(event) => setMarketForm((current) => ({ ...current, support_chat_url: event.target.value }))} className="crm-input" placeholder="https://wa.me/..." />
                                 </div>
+                                <div className="md:col-span-2 rounded-md border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
+                                    For CRM “Provision in WordPress”, copy the DB values from the market site’s `wp-config.php`: `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `$table_prefix`.
+                                </div>
                             </div>
 
                             {marketState.result?.platform ? (
-                                <div className="grid gap-3 md:grid-cols-3">
+                                <div className="grid gap-3 md:grid-cols-4">
                                     <div className="rounded-lg border border-slate-200 bg-white p-3">
                                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Market</p>
                                         <p className="mt-2 text-sm font-semibold text-slate-900">{marketState.result.platform.platform_name}</p>
@@ -766,6 +794,10 @@ export default function Setup() {
                                             </span>
                                         </div>
                                         <p className="mt-2 text-xs text-slate-500">Credentials ready: {marketState.result.platform.wp_sync?.credentials_ready ? 'Yes' : 'No'}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">WP provisioning DB</p>
+                                        <p className="mt-2 text-xs text-slate-500">Credentials ready: {marketState.result.platform.wp_provisioning?.credentials_ready ? 'Yes' : 'No'}</p>
                                     </div>
                                     <div className="rounded-lg border border-slate-200 bg-white p-3">
                                         <div className="flex items-center justify-between gap-2">
