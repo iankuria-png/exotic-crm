@@ -2326,7 +2326,8 @@ class PaymentController extends Controller
                 throw new \InvalidArgumentException('No hosted checkout provider is configured for this market.');
             }
 
-            $providerKey = trim((string) ($resolvedProvider['key'] ?? ''));
+            $providerConfigKey = trim((string) ($resolvedProvider['key'] ?? ''));
+            $providerKey = trim((string) ($resolvedProvider['config']['wallet_provider_key'] ?? $providerConfigKey));
             $providerMode = trim((string) ($resolvedProvider['config']['mode'] ?? ''));
             $environment = trim((string) ($resolvedProvider['config']['environment'] ?? ''));
 
@@ -2400,6 +2401,7 @@ class PaymentController extends Controller
                     'duration_days' => $pricing['duration_days'],
                     'duration_label' => $pricing['duration_label'],
                     'provider' => $providerKey,
+                    'provider_config_key' => $providerConfigKey,
                     'provider_mode' => $providerMode,
                     'checkout_channel' => 'self_service',
                     'customer' => [
@@ -2427,7 +2429,7 @@ class PaymentController extends Controller
                     ),
                     'metadata' => [
                         'channel' => 'self_checkout',
-                        'provider_config_key' => $providerKey,
+                        'provider_config_key' => $providerConfigKey,
                     ],
                 ]),
                 'pesapal' => $this->hostedCheckoutService->initializePesapal($payment, $context, [
@@ -2467,6 +2469,7 @@ class PaymentController extends Controller
                 'status' => true,
                 'message' => 'Hosted checkout initialized successfully.',
                 'provider' => $providerKey,
+                'provider_config_key' => $providerConfigKey,
                 'payment_id' => $payment->id,
                 'transaction_uuid' => $payment->transaction_uuid,
                 'reference_number' => $payment->reference_number,
