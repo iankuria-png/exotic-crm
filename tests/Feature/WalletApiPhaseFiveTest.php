@@ -289,12 +289,32 @@ class WalletApiPhaseFiveTest extends TestCase
             'topup-' . Str::uuid()
         );
 
-        $response = $this->withHeaders($headers)->postJson('/api/billing/initiate', $payload);
+        $response = $this->withHeaders(array_merge($headers, [
+            'Origin' => 'https://www.exoticnairobi.com',
+            'Referer' => 'https://www.exoticnairobi.com/escort/jane/',
+            'User-Agent' => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1',
+        ]))->postJson('/api/billing/initiate', $payload);
         $response->assertCreated()
             ->assertJsonPath('provider', 'paystack')
             ->assertJsonPath('action.type', 'redirect')
             ->assertJsonPath('action.url', 'https://checkout.paystack.test/redirect')
             ->assertJsonPath('payment.purpose', 'wallet_topup');
+
+        $paymentId = (int) $response->json('payment.id');
+        $attempt = PaymentAttempt::query()
+            ->where('payment_id', $paymentId)
+            ->where('attempt_type', 'hosted_checkout_init')
+            ->firstOrFail();
+        $this->assertSame('success', $attempt->status);
+        $this->assertSame('paystack', $attempt->provider);
+        $this->assertSame('browser', data_get($attempt->request_meta, 'context_type'));
+        $this->assertSame('hosted_checkout', data_get($attempt->request_meta, 'channel'));
+        $this->assertSame('wallet_topup', data_get($attempt->request_meta, 'billing_surface'));
+        $this->assertSame('paystack', data_get($attempt->request_meta, 'requested_provider'));
+        $this->assertSame($platform->id, data_get($attempt->request_meta, 'platform_id'));
+        $this->assertSame($client->id, data_get($attempt->request_meta, 'client_id'));
+        $this->assertSame('https://www.exoticnairobi.com', data_get($attempt->request_meta, 'origin_url'));
+        $this->assertSame('https://checkout.paystack.test/redirect', data_get($attempt->response_meta, 'checkout_url'));
 
         $cybersourcePayload = [
             'wp_user_id' => $client->wp_user_id,

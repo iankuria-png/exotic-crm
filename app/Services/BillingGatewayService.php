@@ -100,8 +100,10 @@ class BillingGatewayService
         $payment->loadMissing(['client', 'platform']);
 
         $action = match ($provider) {
-            'paystack' => $this->initiatePaystack($payment, $context),
-            'pesapal' => $this->initiatePesapal($payment, $context),
+            'paystack' => $this->initiatePaystack($payment, $context, $request),
+            'pesapal' => $this->initiatePesapal($payment, $context, [
+                'description' => 'Wallet top-up',
+            ], $request),
             'mpesa_stk' => $this->initiateMpesaStk($payment, $context, $options, $request),
             default => throw new InvalidArgumentException('Unsupported wallet billing provider.'),
         };
@@ -405,12 +407,26 @@ class BillingGatewayService
         ];
     }
 
-    private function initiatePaystack(Payment $payment, array $context): array
+    private function initiatePaystack(Payment $payment, array $context, ?Request $request = null): array
     {
+        $requestMeta = $this->hostedCheckoutRequestMeta($payment, $request);
+        $attemptStartedAt = microtime(true);
+
         try {
             $action = $this->hostedCheckoutService->initializePaystack($payment, $context);
         } catch (RuntimeException $exception) {
             $this->failPayment($payment, $exception->getMessage());
+            $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
+                'provider' => 'paystack',
+                'error_code' => 'hosted_checkout_init_failed',
+                'error_message' => $exception->getMessage(),
+                'http_status' => 422,
+                'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+                'request_meta' => $requestMeta,
+                'response_meta' => [
+                    'billing_surface' => 'wallet_topup',
+                ],
+            ]);
             throw $exception;
         }
 
@@ -427,19 +443,42 @@ class BillingGatewayService
             ]),
         ])->save();
 
+        $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
+            'provider' => 'paystack',
+            'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+            'request_meta' => $requestMeta,
+            'response_meta' => [
+                'billing_surface' => 'wallet_topup',
+                'provider_reference' => $action['provider_reference'] ?? null,
+                'checkout_url' => $action['url'] ?? null,
+            ],
+        ]);
+
         unset($action['provider_payload']);
 
         return $action;
     }
 
-    private function initiatePesapal(Payment $payment, array $context): array
+    private function initiatePesapal(Payment $payment, array $context, array $options = [], ?Request $request = null): array
     {
+        $requestMeta = $this->hostedCheckoutRequestMeta($payment, $request);
+        $attemptStartedAt = microtime(true);
+
         try {
-            $action = $this->hostedCheckoutService->initializePesapal($payment, $context, [
-                'description' => 'Wallet top-up',
-            ]);
+            $action = $this->hostedCheckoutService->initializePesapal($payment, $context, $options);
         } catch (RuntimeException $exception) {
             $this->failPayment($payment, $exception->getMessage());
+            $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
+                'provider' => 'pesapal',
+                'error_code' => 'hosted_checkout_init_failed',
+                'error_message' => $exception->getMessage(),
+                'http_status' => 422,
+                'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+                'request_meta' => $requestMeta,
+                'response_meta' => [
+                    'billing_surface' => 'wallet_topup',
+                ],
+            ]);
             throw $exception;
         }
 
@@ -457,9 +496,36 @@ class BillingGatewayService
             ]),
         ])->save();
 
+        $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
+            'provider' => 'pesapal',
+            'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+            'request_meta' => $requestMeta,
+            'response_meta' => [
+                'billing_surface' => 'wallet_topup',
+                'provider_reference' => $action['provider_reference'] ?? null,
+                'checkout_url' => $action['url'] ?? null,
+            ],
+        ]);
+
         unset($action['provider_payload']);
 
         return $action;
+    }
+
+    private function hostedCheckoutRequestMeta(Payment $payment, ?Request $request = null): array
+    {
+        $extra = [
+            'channel' => 'hosted_checkout',
+            'billing_surface' => 'wallet_topup',
+            'requested_provider' => (string) $payment->provider_key,
+            'platform_id' => (int) $payment->platform_id,
+            'client_id' => (int) $payment->client_id,
+            'payment_purpose' => (string) $payment->purpose,
+        ];
+
+        return $request instanceof Request
+            ? $this->paymentAttemptService->requestMetaFromRequest($request, $extra)
+            : $extra;
     }
 
     private function initiateMpesaStk(Payment $payment, array $context, array $options = [], ?Request $request = null): array

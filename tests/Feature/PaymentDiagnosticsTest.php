@@ -303,6 +303,50 @@ class PaymentDiagnosticsTest extends TestCase
             ->assertJsonPath('attempts.0.attempt_type', 'hosted_checkout_init');
     }
 
+    public function test_hosted_wallet_topup_initiation_attempt_populates_diagnostics_browser_meta(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack', 'wallet_topup');
+
+        $attempt = PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'hosted_checkout_init',
+            'provider' => 'paystack',
+            'status' => 'success',
+            'latency_ms' => 520,
+            'request_meta' => [
+                'context_type' => 'browser',
+                'origin_url' => 'https://www.exoticghana.com',
+                'referrer' => 'https://www.exoticghana.com/escort/test-pm/?wallet=1',
+                'user_agent_family' => 'Chrome',
+                'device_type' => 'desktop',
+                'ip_hash' => 'hash-browser-wallet-1',
+                'channel' => 'hosted_checkout',
+                'billing_surface' => 'wallet_topup',
+            ],
+            'response_meta' => [
+                'checkout_url' => 'https://checkout.paystack.test/wallet',
+                'provider_reference' => 'HOSTED-WALLET-REF-001',
+            ],
+        ]);
+        $attempt->forceFill([
+            'created_at' => now()->subMinutes(2),
+            'updated_at' => now()->subMinutes(2),
+        ])->saveQuietly();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('payment.purpose', 'wallet_topup')
+            ->assertJsonPath('performance.attempt_count', 1)
+            ->assertJsonPath('performance.avg_latency_ms', 520)
+            ->assertJsonPath('browser_meta.context_type', 'browser')
+            ->assertJsonPath('browser_meta.origin_url', 'https://www.exoticghana.com')
+            ->assertJsonPath('browser_meta.referrer', 'https://www.exoticghana.com/escort/test-pm/?wallet=1')
+            ->assertJsonPath('attempts.0.attempt_type', 'hosted_checkout_init');
+    }
+
     public function test_mpesa_reversal_populates_failure_diagnostics(): void
     {
         ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('mpesa_stk');
@@ -338,7 +382,7 @@ class PaymentDiagnosticsTest extends TestCase
             ->assertJsonPath('failure.error_code', 'reversed');
     }
 
-    private function seedProxyPayment(string $provider): array
+    private function seedProxyPayment(string $provider, string $purpose = 'subscription'): array
     {
         config([
             'app.url' => 'https://crm.example.test',
@@ -391,7 +435,7 @@ class PaymentDiagnosticsTest extends TestCase
             'phone' => $client->phone_normalized,
             'amount' => 1500,
             'currency' => 'KES',
-            'purpose' => 'subscription',
+            'purpose' => $purpose,
             'status' => 'initiated',
             'provider_key' => $provider,
             'provider_environment' => 'sandbox',
