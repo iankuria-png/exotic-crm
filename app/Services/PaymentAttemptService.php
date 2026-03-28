@@ -39,16 +39,34 @@ class PaymentAttemptService
 
     public function requestMetaFromRequest(Request $request, array $extra = []): array
     {
-        $userAgent = (string) ($request->userAgent() ?? '');
+        $requestId = trim((string) ($request->header('X-Request-Id') ?? ''));
+        $nativeUserAgent = (string) ($request->userAgent() ?? '');
+        $forwardedUserAgent = trim((string) ($request->header('X-Exotic-User-Agent') ?? ''));
         $origin = trim((string) ($request->header('Origin') ?? ''));
         $referrer = trim((string) ($request->header('Referer') ?? ''));
+        $forwardedOrigin = trim((string) ($request->header('X-Exotic-Origin') ?? ''));
+        $forwardedReferrer = trim((string) ($request->header('X-Exotic-Referer') ?? ''));
+
+        if ($origin === '' && $forwardedOrigin !== '') {
+            $origin = $forwardedOrigin;
+        }
+
+        if ($referrer === '' && $forwardedReferrer !== '') {
+            $referrer = $forwardedReferrer;
+        }
+
+        $userAgent = $nativeUserAgent;
+        if (($userAgent === '' || $this->looksServerSideRequest($userAgent)) && $forwardedUserAgent !== '') {
+            $userAgent = $forwardedUserAgent;
+        }
+
         $hasBrowserHeaders = $origin !== '' || $referrer !== '';
         $contextType = $hasBrowserHeaders
             ? 'browser'
             : ($this->looksServerSideRequest($userAgent) ? 'server' : 'unknown');
 
         $meta = [
-            'request_id' => (string) ($request->header('X-Request-Id') ?? ''),
+            'request_id' => $requestId,
             'context_type' => $contextType,
             'origin_url' => $hasBrowserHeaders ? $origin : null,
             'referrer' => $hasBrowserHeaders ? $referrer : null,

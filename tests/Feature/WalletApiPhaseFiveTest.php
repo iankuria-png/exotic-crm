@@ -290,9 +290,11 @@ class WalletApiPhaseFiveTest extends TestCase
         );
 
         $response = $this->withHeaders(array_merge($headers, [
-            'Origin' => 'https://www.exoticnairobi.com',
-            'Referer' => 'https://www.exoticnairobi.com/escort/jane/',
-            'User-Agent' => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1',
+            'User-Agent' => 'WordPress/6.8; https://www.exoticnairobi.com',
+            'X-Request-Id' => 'wp-wallet-topup-req-001',
+            'X-Exotic-Origin' => 'https://www.exoticnairobi.com',
+            'X-Exotic-Referer' => 'https://www.exoticnairobi.com/escort/jane/',
+            'X-Exotic-User-Agent' => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1',
         ]))->postJson('/api/billing/initiate', $payload);
         $response->assertCreated()
             ->assertJsonPath('provider', 'paystack')
@@ -311,9 +313,13 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertSame('hosted_checkout', data_get($attempt->request_meta, 'channel'));
         $this->assertSame('wallet_topup', data_get($attempt->request_meta, 'billing_surface'));
         $this->assertSame('paystack', data_get($attempt->request_meta, 'requested_provider'));
+        $this->assertSame('wp-wallet-topup-req-001', data_get($attempt->request_meta, 'request_id'));
         $this->assertSame($platform->id, data_get($attempt->request_meta, 'platform_id'));
         $this->assertSame($client->id, data_get($attempt->request_meta, 'client_id'));
         $this->assertSame('https://www.exoticnairobi.com', data_get($attempt->request_meta, 'origin_url'));
+        $this->assertSame('https://www.exoticnairobi.com/escort/jane/', data_get($attempt->request_meta, 'referrer'));
+        $this->assertSame('Safari', data_get($attempt->request_meta, 'user_agent_family'));
+        $this->assertSame('mobile', data_get($attempt->request_meta, 'device_type'));
         $this->assertSame('https://checkout.paystack.test/redirect', data_get($attempt->response_meta, 'checkout_url'));
 
         $cybersourcePayload = [

@@ -104,6 +104,7 @@ class SelfCheckoutApiTest extends TestCase
             'Origin' => 'https://www.exoticghana.com',
             'Referer' => 'https://www.exoticghana.com/escort/test-pm/',
             'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Chrome/136.0.0.0 Safari/537.36',
+            'X-Request-Id' => 'wp-self-checkout-req-001',
         ]);
 
         $response->assertCreated()
@@ -135,6 +136,7 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('success', $attempt->status);
         $this->assertSame('paystack', $attempt->provider);
         $this->assertSame('browser', data_get($attempt->request_meta, 'context_type'));
+        $this->assertSame('wp-self-checkout-req-001', data_get($attempt->request_meta, 'request_id'));
         $this->assertSame('https://www.exoticghana.com', data_get($attempt->request_meta, 'origin_url'));
         $this->assertSame('https://www.exoticghana.com/escort/test-pm/', data_get($attempt->request_meta, 'referrer'));
         $this->assertSame('hosted_checkout', data_get($attempt->request_meta, 'channel'));
