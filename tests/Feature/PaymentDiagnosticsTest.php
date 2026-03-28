@@ -258,6 +258,51 @@ class PaymentDiagnosticsTest extends TestCase
             ->assertJsonPath('browser_meta.device_type', 'mobile');
     }
 
+    public function test_hosted_checkout_initiation_attempt_populates_diagnostics_browser_meta(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');
+
+        $attempt = PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'hosted_checkout_init',
+            'provider' => 'paystack',
+            'status' => 'success',
+            'latency_ms' => 490,
+            'request_meta' => [
+                'context_type' => 'browser',
+                'origin_url' => 'https://www.exoticghana.com',
+                'referrer' => 'https://www.exoticghana.com/escort/test-pm/',
+                'user_agent_family' => 'Chrome',
+                'device_type' => 'desktop',
+                'ip_hash' => 'hash-browser-hosted-1',
+                'channel' => 'hosted_checkout',
+                'billing_surface' => 'self_service_subscription',
+            ],
+            'response_meta' => [
+                'checkout_url' => 'https://checkout.paystack.test/redirect',
+                'provider_reference' => 'HOSTED-REF-001',
+            ],
+        ]);
+        $attempt->forceFill([
+            'created_at' => now()->subMinutes(2),
+            'updated_at' => now()->subMinutes(2),
+        ])->saveQuietly();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('performance.attempt_count', 1)
+            ->assertJsonPath('performance.avg_latency_ms', 490)
+            ->assertJsonPath('browser_meta.context_type', 'browser')
+            ->assertJsonPath('browser_meta.origin_url', 'https://www.exoticghana.com')
+            ->assertJsonPath('browser_meta.referrer', 'https://www.exoticghana.com/escort/test-pm/')
+            ->assertJsonPath('browser_meta.user_agent_family', 'Chrome')
+            ->assertJsonPath('browser_meta.device_type', 'desktop')
+            ->assertJsonPath('attempts.0.attempt_type', 'hosted_checkout_init');
+    }
+
     public function test_mpesa_reversal_populates_failure_diagnostics(): void
     {
         ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('mpesa_stk');

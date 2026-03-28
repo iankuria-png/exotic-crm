@@ -776,7 +776,7 @@ class PaymentQueueController extends Controller
         $manualCloseMeta = $rawPayload['manual_close'] ?? null;
         $linkProxy = $this->buildLinkProxyDiagnostics($payment, $attempts, $auditEntries);
 
-        $initiationTypes = ['stk_initiate', 'send_payment_link', 'retry_stk'];
+        $initiationTypes = ['stk_initiate', 'send_payment_link', 'retry_stk', 'hosted_checkout_init'];
         $requestMeta = $attempts
             ->filter(fn($attempt) => in_array($attempt->attempt_type, $initiationTypes, true))
             ->map(fn($attempt) => is_array($attempt->request_meta) ? $attempt->request_meta : null)

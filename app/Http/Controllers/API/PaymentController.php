@@ -36,7 +36,8 @@ class PaymentController extends Controller
         private readonly PaymentLinkService $paymentLinkService,
         private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly BillingModeService $billingModeService,
-        private readonly WalletCheckoutService $walletCheckoutService
+        private readonly WalletCheckoutService $walletCheckoutService,
+        private readonly PaymentAttemptService $paymentAttemptService
     ) {
     }
 
@@ -2288,6 +2289,10 @@ class PaymentController extends Controller
     public function selfCheckout(Request $request)
     {
         $payment = null;
+        $attemptStartedAt = null;
+        $attemptRequestMeta = [];
+        $attemptProvider = null;
+        $attemptResponseMeta = [];
         $validated = $request->validate([
             'product_id' => 'required|integer|exists:products,id',
             'platform_id' => 'nullable|integer|exists:platforms,id',
@@ -2331,6 +2336,7 @@ class PaymentController extends Controller
             $providerMode = trim((string) ($resolvedProvider['config']['mode'] ?? ''));
             $environment = trim((string) ($resolvedProvider['config']['environment'] ?? ''));
             $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider);
+            $attemptProvider = $providerKey !== '' ? $providerKey : $providerConfigKey;
 
             if ($providerMode !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
                 throw new \InvalidArgumentException('This market is not configured for hosted checkout.');
@@ -2339,6 +2345,17 @@ class PaymentController extends Controller
             if (!in_array($providerKey, ['paystack', 'pesapal'], true)) {
                 throw new \InvalidArgumentException('The active provider does not support hosted card checkout.');
             }
+
+            $attemptRequestMeta = $this->paymentAttemptService->requestMetaFromRequest($request, [
+                'channel' => 'hosted_checkout',
+                'billing_surface' => 'self_service_subscription',
+                'requested_provider' => $attemptProvider,
+                'provider_config_key' => $providerConfigKey,
+                'duration' => (string) ($pricing['duration_key'] ?? $validated['duration']),
+                'product_id' => (int) $product->id,
+                'platform_id' => (int) $platform->id,
+            ]);
+            $attemptStartedAt = microtime(true);
 
             $context = $this->billingModeService->providerContext(
                 $platform,
@@ -2454,6 +2471,20 @@ class PaymentController extends Controller
                 default => throw new \InvalidArgumentException('Unsupported hosted checkout provider.'),
             };
 
+            $attemptResponseMeta = [
+                'billing_surface' => 'self_service_subscription',
+                'provider_config_key' => $providerConfigKey,
+                'provider_mode' => $providerMode,
+                'provider_reference' => $action['provider_reference'] ?? null,
+                'checkout_url' => $action['url'] ?? null,
+                'pricing' => [
+                    'display_amount' => $chargePricing['quoted_amount'],
+                    'display_currency' => $chargePricing['quoted_currency'],
+                    'charge_amount' => $chargePricing['amount'],
+                    'charge_currency' => $chargePricing['currency'],
+                ],
+            ];
+
             $storedAction = $action;
             unset($storedAction['provider_payload']);
 
@@ -2472,6 +2503,15 @@ class PaymentController extends Controller
                     'checkout_url' => $action['url'] ?? null,
                 ]),
             ])->save();
+
+            $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
+                'provider' => $attemptProvider,
+                'latency_ms' => $attemptStartedAt !== null
+                    ? (int) round((microtime(true) - $attemptStartedAt) * 1000)
+                    : null,
+                'request_meta' => $attemptRequestMeta,
+                'response_meta' => $attemptResponseMeta,
+            ]);
 
             unset($action['provider_payload']);
 
@@ -2501,6 +2541,20 @@ class PaymentController extends Controller
                     'status' => 'failed',
                     'failure_reason' => mb_substr($exception->getMessage(), 0, 190),
                 ])->save();
+
+                if ($attemptRequestMeta !== []) {
+                    $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
+                        'provider' => $attemptProvider,
+                        'error_code' => 'hosted_checkout_init_failed',
+                        'error_message' => $exception->getMessage(),
+                        'http_status' => 422,
+                        'latency_ms' => $attemptStartedAt !== null
+                            ? (int) round((microtime(true) - $attemptStartedAt) * 1000)
+                            : null,
+                        'request_meta' => $attemptRequestMeta,
+                        'response_meta' => $attemptResponseMeta,
+                    ]);
+                }
             }
 
             return response()->json([
@@ -2514,6 +2568,20 @@ class PaymentController extends Controller
                     'status' => 'failed',
                     'failure_reason' => mb_substr($exception->getMessage(), 0, 190),
                 ])->save();
+
+                if ($attemptRequestMeta !== []) {
+                    $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
+                        'provider' => $attemptProvider,
+                        'error_code' => 'hosted_checkout_init_failed',
+                        'error_message' => $exception->getMessage(),
+                        'http_status' => 502,
+                        'latency_ms' => $attemptStartedAt !== null
+                            ? (int) round((microtime(true) - $attemptStartedAt) * 1000)
+                            : null,
+                        'request_meta' => $attemptRequestMeta,
+                        'response_meta' => $attemptResponseMeta,
+                    ]);
+                }
             }
 
             Log::error('Self checkout initialization failed', [

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Payment;
+use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
@@ -99,6 +100,10 @@ class SelfCheckoutApiTest extends TestCase
             'phone' => $client->phone_normalized,
             'email' => $client->email,
             'duration' => 'monthly',
+        ], [
+            'Origin' => 'https://www.exoticghana.com',
+            'Referer' => 'https://www.exoticghana.com/escort/test-pm/',
+            'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Chrome/136.0.0.0 Safari/537.36',
         ]);
 
         $response->assertCreated()
@@ -124,6 +129,21 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('KES', data_get($payment->payment_data, 'fx_override.target_currency'));
         $this->assertSame(15750.0, (float) $payment->amount);
         $this->assertSame('KES', $payment->currency);
+
+        $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->firstOrFail();
+        $this->assertSame('hosted_checkout_init', $attempt->attempt_type);
+        $this->assertSame('success', $attempt->status);
+        $this->assertSame('paystack', $attempt->provider);
+        $this->assertSame('browser', data_get($attempt->request_meta, 'context_type'));
+        $this->assertSame('https://www.exoticghana.com', data_get($attempt->request_meta, 'origin_url'));
+        $this->assertSame('https://www.exoticghana.com/escort/test-pm/', data_get($attempt->request_meta, 'referrer'));
+        $this->assertSame('hosted_checkout', data_get($attempt->request_meta, 'channel'));
+        $this->assertSame('self_service_subscription', data_get($attempt->request_meta, 'billing_surface'));
+        $this->assertSame($product->id, data_get($attempt->request_meta, 'product_id'));
+        $this->assertSame($platform->id, data_get($attempt->request_meta, 'platform_id'));
+        $this->assertSame('1_month', data_get($attempt->request_meta, 'duration'));
+        $this->assertSame('https://checkout.paystack.test/redirect', data_get($attempt->response_meta, 'checkout_url'));
+        $this->assertSame('SUB-REFERENCE-001', data_get($attempt->response_meta, 'provider_reference'));
 
         Http::assertSent(function ($request) use ($payment) {
             return $request->url() === 'https://api.paystack.co/transaction/initialize'
