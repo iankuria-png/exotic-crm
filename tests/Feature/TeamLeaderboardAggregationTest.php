@@ -174,4 +174,82 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Carbon::setTestNow();
     }
+
+    public function test_admin_leaderboard_includes_manager_rows_and_honors_role_filters(): void
+    {
+        $adminViewer = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $peerAdmin = $this->createTeamUser('admin', [], ['email' => 'peer-admin@example.test']);
+        $subAdmin = $this->createTeamUser('sub_admin', [$platform->id], ['email' => 'peer-subadmin@example.test']);
+        $sales = $this->createTeamUser('sales', [$platform->id], ['email' => 'peer-sales@example.test']);
+        $marketing = $this->createTeamUser('marketing', [$platform->id], ['email' => 'peer-marketing@example.test']);
+
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $peerAdmin->id,
+            'action' => 'client_create',
+            'entity_type' => 'client',
+            'entity_id' => 901,
+            'created_at' => now()->subMinutes(40),
+        ]);
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $subAdmin->id,
+            'action' => 'payment_match_auto',
+            'entity_type' => 'payment',
+            'entity_id' => 902,
+            'created_at' => now()->subMinutes(30),
+        ]);
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $sales->id,
+            'action' => 'deal_activate',
+            'entity_type' => 'deal',
+            'entity_id' => 903,
+            'after_state' => ['deal_status' => 'active'],
+            'created_at' => now()->subMinutes(20),
+        ]);
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $marketing->id,
+            'action' => 'support_chat_reply',
+            'entity_type' => 'client',
+            'entity_id' => 904,
+            'created_at' => now()->subMinutes(10),
+        ]);
+
+        Sanctum::actingAs($adminViewer);
+
+        $response = $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonPath('role_filter', 'all');
+
+        $allIds = collect($response->json('data'))->pluck('user_id')->sort()->values()->all();
+        $this->assertSame([$peerAdmin->id, $subAdmin->id, $sales->id, $marketing->id], $allIds);
+
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=admin')
+            ->assertOk()
+            ->assertJsonPath('role_filter', 'admin')
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.user_id', $peerAdmin->id);
+
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=sub_admin')
+            ->assertOk()
+            ->assertJsonPath('role_filter', 'sub_admin')
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.user_id', $subAdmin->id);
+
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=sales')
+            ->assertOk()
+            ->assertJsonPath('role_filter', 'sales')
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.user_id', $sales->id);
+
+        $this->getJson('/api/crm/team/leaderboard?period=today&platform_id=' . $platform->id . '&role_filter=marketing')
+            ->assertOk()
+            ->assertJsonPath('role_filter', 'marketing')
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.user_id', $marketing->id);
+    }
 }

@@ -186,4 +186,28 @@ class TeamGoalsTest extends TestCase
             'platform_id' => $platform->id,
         ])->assertStatus(422);
     }
+
+    public function test_goal_assignable_agents_remain_sales_and_marketing_only(): void
+    {
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform();
+        $this->createTeamUser('admin', [], ['email' => 'assignable-admin@example.test']);
+        $this->createTeamUser('sub_admin', [$platform->id], ['email' => 'assignable-subadmin@example.test']);
+        $salesUser = $this->createTeamUser('sales', [$platform->id], ['email' => 'assignable-sales@example.test']);
+        $marketingUser = $this->createTeamUser('marketing', [$platform->id], ['email' => 'assignable-marketing@example.test']);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/goals?period=weekly&platform_id=' . $platform->id);
+
+        $response->assertOk();
+
+        $assignableIds = collect($response->json('assignable_agents'))
+            ->pluck('user_id')
+            ->sort()
+            ->values()
+            ->all();
+
+        $this->assertSame([$salesUser->id, $marketingUser->id], $assignableIds);
+    }
 }

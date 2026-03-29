@@ -16,6 +16,7 @@ const TEAM_PERIOD_STORAGE_KEY = 'exoticcrm.team.period';
 const DEFAULT_PERIOD = 'week';
 const DEFAULT_GOAL_PERIOD = 'weekly';
 const DEFAULT_GOAL_ROLE_SCOPE = 'sales';
+const DEFAULT_LEADERBOARD_ROLE_FILTER = 'all';
 const PERIOD_OPTIONS = [
     { value: 'today', label: 'Today' },
     { value: 'week', label: 'This Week' },
@@ -30,6 +31,16 @@ const GOAL_ROLE_SCOPE_OPTIONS = [
     { value: 'marketing', label: 'Marketing only' },
     { value: 'all', label: 'Everyone' },
 ];
+const LEADERBOARD_ROLE_FILTER_OPTIONS = [
+    { value: 'all', label: 'All roles' },
+    { value: 'admin', label: 'Admin' },
+    { value: 'sub_admin', label: 'Sub-admin' },
+    { value: 'sales', label: 'Sales' },
+    { value: 'marketing', label: 'Marketing' },
+];
+const SUB_ADMIN_LEADERBOARD_ROLE_FILTER_OPTIONS = LEADERBOARD_ROLE_FILTER_OPTIONS.filter(
+    (option) => ['all', 'sales', 'marketing'].includes(option.value),
+);
 
 function asNumber(value) {
     const parsed = Number(value);
@@ -46,6 +57,10 @@ function normalizeGoalPeriod(value) {
 
 function normalizeGoalRoleScope(value) {
     return GOAL_ROLE_SCOPE_OPTIONS.some((option) => option.value === value) ? value : DEFAULT_GOAL_ROLE_SCOPE;
+}
+
+function normalizeLeaderboardRoleFilter(value, options = LEADERBOARD_ROLE_FILTER_OPTIONS) {
+    return options.some((option) => option.value === value) ? value : DEFAULT_LEADERBOARD_ROLE_FILTER;
 }
 
 function normalizePlatformFilter(value) {
@@ -100,6 +115,10 @@ function periodLabel(period) {
 
 function goalPeriodLabel(period) {
     return GOAL_PERIOD_OPTIONS.find((option) => option.value === period)?.label || 'Weekly';
+}
+
+function leaderboardRoleFilterLabel(filter, options = LEADERBOARD_ROLE_FILTER_OPTIONS) {
+    return options.find((option) => option.value === filter)?.label || 'All roles';
 }
 
 function comparisonLabel(period) {
@@ -493,6 +512,7 @@ export default function Team() {
     const toast = useToast();
     const queryClient = useQueryClient();
     const isManager = user?.role === 'admin' || user?.role === 'sub_admin';
+    const isAdmin = user?.role === 'admin';
     const [period, setPeriod] = useState(() => {
         if (typeof window === 'undefined') {
             return DEFAULT_PERIOD;
@@ -502,6 +522,7 @@ export default function Team() {
     });
     const [platformFilter, setPlatformFilter] = useState('');
     const [activeTab, setActiveTab] = useState(() => (isManager ? 'presence' : 'my-stats'));
+    const [leaderboardRoleFilter, setLeaderboardRoleFilter] = useState(DEFAULT_LEADERBOARD_ROLE_FILTER);
     const [goalPeriod, setGoalPeriod] = useState(DEFAULT_GOAL_PERIOD);
     const [goalRoleScope, setGoalRoleScope] = useState(DEFAULT_GOAL_ROLE_SCOPE);
     const [goalMetric, setGoalMetric] = useState('subs_activated');
@@ -526,6 +547,15 @@ export default function Team() {
             setActiveTab('my-stats');
         }
     }, [isManager]);
+
+    const availableLeaderboardRoleFilters = useMemo(
+        () => (isAdmin ? LEADERBOARD_ROLE_FILTER_OPTIONS : SUB_ADMIN_LEADERBOARD_ROLE_FILTER_OPTIONS),
+        [isAdmin],
+    );
+
+    useEffect(() => {
+        setLeaderboardRoleFilter((currentValue) => normalizeLeaderboardRoleFilter(currentValue, availableLeaderboardRoleFilters));
+    }, [availableLeaderboardRoleFilters]);
 
     useEffect(() => {
         if (activeTab === 'agent-detail' && !selectedAgent) {
@@ -582,11 +612,12 @@ export default function Team() {
 
     const leaderboardQuery = useQuery({
         enabled: isManager && activeTab === 'leaderboard',
-        queryKey: ['team', 'leaderboard', period, platformFilter || 'all'],
+        queryKey: ['team', 'leaderboard', period, platformFilter || 'all', leaderboardRoleFilter],
         queryFn: () =>
             api.get('/crm/team/leaderboard', {
                 params: {
                     period,
+                    role_filter: leaderboardRoleFilter,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                 },
             }).then((response) => response.data),
@@ -770,6 +801,10 @@ export default function Team() {
 
         return `${getCountryFlag(platform.country)} ${platform.platform_name}`;
     }, [platformFilter, platformOptions]);
+    const selectedLeaderboardRoleLabel = useMemo(
+        () => leaderboardRoleFilterLabel(leaderboardRoleFilter, availableLeaderboardRoleFilters),
+        [availableLeaderboardRoleFilters, leaderboardRoleFilter],
+    );
 
     const presenceRows = presenceQuery.data?.data || [];
     const leaderboardRows = leaderboardQuery.data?.data || [];
@@ -799,7 +834,7 @@ export default function Team() {
         {
             label: 'Total Actions Today',
             value: formatCount(presenceQuery.data?.summary?.total_actions_today),
-            meta: 'Live action count across visible agents',
+            meta: 'Live action count across visible team members',
             tone: 'warning',
         },
         {
@@ -1022,7 +1057,7 @@ export default function Team() {
         ];
 
         if (selectedAgent) {
-            items.push({ key: 'agent-detail', label: 'Agent Detail' });
+            items.push({ key: 'agent-detail', label: 'Member Detail' });
         }
 
         return items;
@@ -1040,7 +1075,7 @@ export default function Team() {
             return;
         }
 
-        const filename = `team-leaderboard-${period}-${platformFilter || 'all'}.csv`;
+        const filename = `team-leaderboard-${period}-${platformFilter || 'all'}-${leaderboardRoleFilter}.csv`;
         downloadCsv(filename, createLeaderboardRowsCsv(leaderboardRows));
     };
 
@@ -1112,7 +1147,7 @@ export default function Team() {
             <PageHeader
                 title="Team"
                 subtitle={isManager
-                    ? 'Live presence, performance, and coaching signals across your sales team.'
+                    ? 'Live presence, performance, and coaching signals across your team.'
                     : 'Track your progress, goals, and recent activity.'}
                 actions={pageActions}
             />
@@ -1175,7 +1210,7 @@ export default function Team() {
                 <>
                     <SectionFrame
                         title="Online now"
-                        subtitle={`Agents with a visible CRM session in ${selectedPlatformLabel}.`}
+                        subtitle={`Team members with a visible CRM session in ${selectedPlatformLabel}.`}
                     >
                         {presenceQuery.isLoading && !presenceQuery.data ? (
                             <TeamSkeletonCards count={3} />
@@ -1187,7 +1222,7 @@ export default function Team() {
                         ) : onlineAgents.length === 0 ? (
                             <TeamEmptyState
                                 title="No one is online right now"
-                                message="Active sessions will appear here when agents have the CRM open in a visible window."
+                                message="Active sessions will appear here when team members have the CRM open in a visible window."
                             />
                         ) : (
                             <div className="grid gap-3 lg:grid-cols-2">
@@ -1232,7 +1267,7 @@ export default function Team() {
 
                     <SectionFrame
                         title="Recently seen"
-                        subtitle="Offline or stale sessions across your currently visible team."
+                        subtitle="Offline or stale sessions across your currently visible team members."
                     >
                         {presenceQuery.isError ? (
                             <TeamErrorState
@@ -1272,12 +1307,23 @@ export default function Team() {
             {activeTab === 'leaderboard' ? (
                 <SectionFrame
                     title={`Leaderboard • ${periodLabel(period)}`}
-                    subtitle={`Performance ranking for ${selectedPlatformLabel}.`}
-                    action={leaderboardRows.length ? (
-                        <button type="button" onClick={handleExportLeaderboard} className="crm-btn-secondary px-3 py-2 text-xs">
-                            Export CSV
-                        </button>
-                    ) : null}
+                    subtitle={`Performance ranking for ${selectedPlatformLabel} • ${selectedLeaderboardRoleLabel}.`}
+                    action={(
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                            <FilterSelect
+                                label="Role"
+                                value={leaderboardRoleFilter}
+                                onChange={(event) => setLeaderboardRoleFilter(normalizeLeaderboardRoleFilter(event.target.value, availableLeaderboardRoleFilters))}
+                                options={availableLeaderboardRoleFilters}
+                                className="min-w-[10rem]"
+                            />
+                            {leaderboardRows.length ? (
+                                <button type="button" onClick={handleExportLeaderboard} className="crm-btn-secondary px-3 py-2 text-xs">
+                                    Export CSV
+                                </button>
+                            ) : null}
+                        </div>
+                    )}
                 >
                     {leaderboardQuery.isLoading && !leaderboardQuery.data ? (
                         <div className="space-y-3">
@@ -1296,7 +1342,7 @@ export default function Team() {
                             data={leaderboardRows}
                             rowIdKey="user_id"
                             onRowClick={handleSelectAgent}
-                            emptyMessage="No tracked activity for this period. Try switching to Today or clearing the market filter."
+                            emptyMessage={`No tracked activity for ${selectedLeaderboardRoleLabel.toLowerCase()} in this period. Try switching to Today or clearing the market filter.`}
                         />
                     )}
                 </SectionFrame>
@@ -1713,7 +1759,7 @@ export default function Team() {
             {activeTab === 'agent-detail' ? (
                 <>
                     <SectionFrame
-                        title={selectedAgent ? `${selectedAgent.name} • Agent Detail` : 'Agent Detail'}
+                        title={selectedAgent ? `${selectedAgent.name} • Member Detail` : 'Member Detail'}
                         subtitle={selectedAgent
                             ? `${formatRole(selectedAgent.role)} • ${periodLabel(period)} • ${selectedPlatformLabel}`
                             : 'Choose someone from Presence or Leaderboard to inspect their detailed activity.'}
@@ -1734,7 +1780,7 @@ export default function Team() {
                     >
                         {!selectedAgent ? (
                             <TeamEmptyState
-                                title="Select an agent"
+                                title="Select a team member"
                                 message="Choose someone from Presence or Leaderboard to inspect their detailed activity."
                             />
                         ) : agentStatsQuery.isLoading && !agentStatsQuery.data ? (

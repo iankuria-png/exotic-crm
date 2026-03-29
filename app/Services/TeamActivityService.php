@@ -29,6 +29,23 @@ class TeamActivityService
         MarketAuthorizationService::ROLE_MARKETING,
     ];
 
+    public const ROLE_FILTER_ALL = 'all';
+
+    public const ROLE_FILTERS = [
+        self::ROLE_FILTER_ALL,
+        MarketAuthorizationService::ROLE_ADMIN,
+        MarketAuthorizationService::ROLE_SUB_ADMIN,
+        MarketAuthorizationService::ROLE_SALES,
+        MarketAuthorizationService::ROLE_MARKETING,
+    ];
+
+    private const ADMIN_VISIBLE_TEAM_ROLES = [
+        MarketAuthorizationService::ROLE_ADMIN,
+        MarketAuthorizationService::ROLE_SUB_ADMIN,
+        MarketAuthorizationService::ROLE_SALES,
+        MarketAuthorizationService::ROLE_MARKETING,
+    ];
+
     public const GOAL_ROLE_SCOPE_SALES = MarketAuthorizationService::ROLE_SALES;
     public const GOAL_ROLE_SCOPE_MARKETING = MarketAuthorizationService::ROLE_MARKETING;
     public const GOAL_ROLE_SCOPE_ALL = 'all';
@@ -189,7 +206,7 @@ class TeamActivityService
     {
         $this->assertPlatformAccessible($viewer, $platformId);
 
-        $agents = $this->visibleAgentsForViewer($viewer, $platformId);
+        $agents = $this->visibleTeamMembersForViewer($viewer, $platformId);
 
         if ($agents->isEmpty()) {
             return [
@@ -268,18 +285,20 @@ class TeamActivityService
         ];
     }
 
-    public function getLeaderboard(string $period, ?int $platformId, User $viewer): array
+    public function getLeaderboard(string $period, ?int $platformId, User $viewer, string $roleFilter = self::ROLE_FILTER_ALL): array
     {
         $this->assertManager($viewer);
         $this->assertPlatformAccessible($viewer, $platformId);
 
-        $agents = $this->visibleAgentsForViewer($viewer);
+        $roleFilter = $this->normalizeLeaderboardRoleFilter($roleFilter);
+        $agents = $this->visibleTeamMembersForViewer($viewer, $platformId, $roleFilter);
         $agentIds = $agents->pluck('id')->all();
 
         if (empty($agentIds)) {
             return [
                 'period' => $this->normalizeNamedPeriod($period),
                 'platform_id' => $platformId,
+                'role_filter' => $roleFilter,
                 'data' => [],
             ];
         }
@@ -340,6 +359,7 @@ class TeamActivityService
         return [
             'period' => $this->normalizeNamedPeriod($period),
             'platform_id' => $platformId,
+            'role_filter' => $roleFilter,
             'data' => $rows->all(),
         ];
     }
@@ -352,7 +372,7 @@ class TeamActivityService
         ?User $viewer = null
     ): array {
         if ($viewer) {
-            $this->assertAgentVisibleToViewer($viewer, $agent);
+            $this->assertTeamMemberVisibleToViewer($viewer, $agent);
             $this->assertPlatformAccessible($viewer, $platformId);
         }
 
@@ -444,7 +464,7 @@ class TeamActivityService
         ?User $viewer = null
     ): array {
         if ($viewer) {
-            $this->assertAgentVisibleToViewer($viewer, $agent);
+            $this->assertTeamMemberVisibleToViewer($viewer, $agent);
             $this->assertPlatformAccessible($viewer, $platformId);
         }
 
@@ -1131,6 +1151,45 @@ class TeamActivityService
             ->values();
     }
 
+    private function visibleTeamMembersForViewer(
+        User $viewer,
+        ?int $platformId = null,
+        string $roleFilter = self::ROLE_FILTER_ALL
+    ): Collection {
+        $visibleRoles = $this->visibleTeamRolesForViewer($viewer, $roleFilter);
+        if (empty($visibleRoles)) {
+            return collect();
+        }
+
+        $teamMembers = User::query()
+            ->where('status', 'active')
+            ->whereIn('role', $visibleRoles)
+            ->with('platforms:id')
+            ->orderBy('name')
+            ->get();
+
+        if ($viewer->role === MarketAuthorizationService::ROLE_ADMIN) {
+            return $teamMembers
+                ->filter(fn (User $teamMember) => $platformId === null || $this->userHasPlatform($teamMember, $platformId))
+                ->values();
+        }
+
+        $viewerPlatforms = $this->accessiblePlatformIdsForUser($viewer);
+        if (!is_array($viewerPlatforms) || empty($viewerPlatforms)) {
+            return collect();
+        }
+
+        return $teamMembers
+            ->filter(function (User $teamMember) use ($platformId, $viewerPlatforms) {
+                if ($platformId !== null) {
+                    return in_array($platformId, $viewerPlatforms, true) && $this->userHasPlatform($teamMember, $platformId);
+                }
+
+                return $this->userHasPlatformOverlap($viewerPlatforms, $teamMember);
+            })
+            ->values();
+    }
+
     private function userHasPlatform(User $candidate, int $platformId): bool
     {
         $candidatePlatforms = $this->accessiblePlatformIdsForUser($candidate);
@@ -1200,6 +1259,25 @@ class TeamActivityService
     private function assertManager(User $viewer): void
     {
         $this->marketAuthorizationService->ensureManager($viewer);
+    }
+
+    private function assertTeamMemberVisibleToViewer(User $viewer, User $teamMember): void
+    {
+        $this->assertManager($viewer);
+
+        $visibleRoles = $this->visibleTeamRolesForViewer($viewer);
+        if (!in_array($teamMember->role, $visibleRoles, true) || !$teamMember->isActive()) {
+            abort(404, 'Agent not found.');
+        }
+
+        if ($viewer->role === MarketAuthorizationService::ROLE_ADMIN) {
+            return;
+        }
+
+        $viewerPlatforms = $this->accessiblePlatformIdsForUser($viewer);
+        if (!is_array($viewerPlatforms) || empty($viewerPlatforms) || !$this->userHasPlatformOverlap($viewerPlatforms, $teamMember)) {
+            abort(403, 'You do not have access to this agent.');
+        }
     }
 
     private function assertAgentVisibleToViewer(User $viewer, User $agent): void
@@ -1822,6 +1900,20 @@ class TeamActivityService
         };
     }
 
+    private function visibleTeamRolesForViewer(User $viewer, string $roleFilter = self::ROLE_FILTER_ALL): array
+    {
+        $allowedRoles = $viewer->role === MarketAuthorizationService::ROLE_ADMIN
+            ? self::ADMIN_VISIBLE_TEAM_ROLES
+            : self::AGENT_ROLES;
+
+        $roleFilter = $this->normalizeLeaderboardRoleFilter($roleFilter);
+        if ($roleFilter === self::ROLE_FILTER_ALL) {
+            return $allowedRoles;
+        }
+
+        return in_array($roleFilter, $allowedRoles, true) ? [$roleFilter] : [];
+    }
+
     private function goalRoleScopeLabel(string $roleScope): string
     {
         return match ($roleScope) {
@@ -1847,6 +1939,15 @@ class TeamActivityService
             self::PERIOD_TODAY, self::PERIOD_WEEK, self::PERIOD_MONTH => $period,
             default => self::PERIOD_WEEK,
         };
+    }
+
+    private function normalizeLeaderboardRoleFilter(string $roleFilter): string
+    {
+        $roleFilter = strtolower(trim($roleFilter));
+
+        return in_array($roleFilter, self::ROLE_FILTERS, true)
+            ? $roleFilter
+            : self::ROLE_FILTER_ALL;
     }
 
     private function normalizeGoalPeriod(string $period): string

@@ -162,4 +162,40 @@ class TeamActivityHistoryTest extends TestCase
 
         Carbon::setTestNow();
     }
+
+    public function test_admin_can_open_stats_and_activity_for_manager_accounts(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-26 12:00:00'));
+
+        $adminViewer = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform(['name' => 'Kenya']);
+        $peerAdmin = $this->createTeamUser('admin', [], ['email' => 'stats-admin@example.test']);
+        $subAdmin = $this->createTeamUser('sub_admin', [$platform->id], ['email' => 'activity-subadmin@example.test']);
+
+        $this->createTeamDailyStat($peerAdmin, $platform, now()->startOfWeek(), [
+            'payments_matched' => 2,
+            'total_actions' => 2,
+        ]);
+        $auditLog = $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $subAdmin->id,
+            'action' => 'support_chat_reply',
+            'entity_type' => 'client',
+            'entity_id' => 501,
+            'created_at' => now()->subHour(),
+        ]);
+
+        Sanctum::actingAs($adminViewer);
+
+        $this->getJson('/api/crm/team/' . $peerAdmin->id . '/stats?from=2026-03-23&to=2026-03-26&platform_id=' . $platform->id)
+            ->assertOk()
+            ->assertJsonPath('agent.id', $peerAdmin->id)
+            ->assertJsonPath('summary.payments_matched', 2);
+
+        $this->getJson('/api/crm/team/' . $subAdmin->id . '/activity?from=2026-03-26&to=2026-03-26&platform_id=' . $platform->id)
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $auditLog->id);
+
+        Carbon::setTestNow();
+    }
 }

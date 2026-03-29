@@ -12,15 +12,18 @@ class TeamPresenceAuthorizationTest extends TestCase
     use InteractsWithTeamActivityFixtures;
     use RefreshDatabase;
 
-    public function test_admin_presence_lists_online_agents_but_not_manager_accounts(): void
+    public function test_admin_presence_lists_team_members_including_manager_accounts(): void
     {
         $platform = $this->createTeamPlatform();
         $admin = $this->createTeamUser('admin');
+        $peerAdmin = $this->createTeamUser('admin', [], ['email' => 'peer-admin@example.test']);
         $sales = $this->createTeamUser('sales', [$platform->id], ['email' => 'sales@example.test']);
         $marketing = $this->createTeamUser('marketing', [$platform->id], ['email' => 'marketing@example.test']);
         $subAdmin = $this->createTeamUser('sub_admin', [$platform->id], ['email' => 'subadmin@example.test']);
 
-        $this->createTeamSession($sales, '55555555-5555-5555-5555-555555555555');
+        $this->createTeamSession($admin, '44444444-4444-4444-4444-444444444444');
+        $this->createTeamSession($peerAdmin, '55555555-5555-5555-5555-555555555555');
+        $this->createTeamSession($sales, '88888888-8888-8888-8888-888888888888');
         $this->createTeamSession($marketing, '66666666-6666-6666-6666-666666666666');
         $this->createTeamSession($subAdmin, '77777777-7777-7777-7777-777777777777');
 
@@ -29,11 +32,11 @@ class TeamPresenceAuthorizationTest extends TestCase
         $response = $this->getJson('/api/crm/team/presence');
 
         $response->assertOk();
-        $this->assertSame(2, count($response->json('data')));
-        $this->assertSame(2, (int) $response->json('summary.online_now'));
+        $this->assertSame(5, count($response->json('data')));
+        $this->assertSame(5, (int) $response->json('summary.online_now'));
 
-        $roles = collect($response->json('data'))->pluck('role')->all();
-        $this->assertSame(['marketing', 'sales'], collect($roles)->sort()->values()->all());
+        $roles = collect($response->json('data'))->pluck('role')->sort()->values()->all();
+        $this->assertSame(['admin', 'admin', 'marketing', 'sales', 'sub_admin'], $roles);
     }
 
     public function test_sub_admin_presence_is_limited_to_agents_with_overlapping_market_access(): void

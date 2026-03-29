@@ -51,13 +51,15 @@ class TeamController extends Controller
         $validated = $request->validate([
             'period' => 'nullable|in:today,week,month',
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'role_filter' => 'nullable|in:all,admin,sub_admin,sales,marketing',
         ]);
 
         return response()->json(
             $this->teamActivityService->getLeaderboard(
                 (string) ($validated['period'] ?? TeamActivityService::PERIOD_WEEK),
                 isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
-                $request->user()
+                $request->user(),
+                (string) ($validated['role_filter'] ?? TeamActivityService::ROLE_FILTER_ALL)
             )
         );
     }
