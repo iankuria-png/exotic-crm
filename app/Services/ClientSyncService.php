@@ -149,29 +149,37 @@ class ClientSyncService
         $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
         $escortExpire = $this->resolveEscortExpiry($wpClient, $premiumExpire, $featuredExpire);
 
+        $syncData = [
+            'wp_user_id'      => $wpClient['wp_user_id'] ?? null,
+            'client_type'     => 'escort',
+            'name'            => $name ?: null,
+            'phone_normalized'=> $phone ?: null,
+            'email'           => $email ?: null,
+            'city'            => $city ?: null,
+            'profile_status'  => $wpClient['post_status'] ?? 'private',
+            'premium'         => (bool) ($wpClient['premium'] ?? false),
+            'premium_expire'  => $premiumExpire,
+            'featured'        => (bool) ($wpClient['featured'] ?? false),
+            'featured_expire' => $featuredExpire,
+            'escort_expire'   => $escortExpire,
+            'verified'        => (bool) ($wpClient['verified'] ?? false),
+            'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
+            'main_image_url'  => $imageUrl ?: null,
+            'last_synced_at'  => now(),
+        ];
+
+        // Only write signup_source if WP provides one (prevents clobbering crm_provisioned/crm_manual)
+        $wpSignupSource = $wpClient['signup_source'] ?? null;
+        if ($wpSignupSource !== null) {
+            $syncData['signup_source'] = $wpSignupSource;
+        }
+
         $client = Client::updateOrCreate(
             [
                 'platform_id' => $this->platform->id,
                 'wp_post_id'  => $wpPostId,
             ],
-            [
-                'wp_user_id'      => $wpClient['wp_user_id'] ?? null,
-                'client_type'     => 'escort',
-                'name'            => $name ?: null,
-                'phone_normalized'=> $phone ?: null,
-                'email'           => $email ?: null,
-                'city'            => $city ?: null,
-                'profile_status'  => $wpClient['post_status'] ?? 'private',
-                'premium'         => (bool) ($wpClient['premium'] ?? false),
-                'premium_expire'  => $premiumExpire,
-                'featured'        => (bool) ($wpClient['featured'] ?? false),
-                'featured_expire' => $featuredExpire,
-                'escort_expire'   => $escortExpire,
-                'verified'        => (bool) ($wpClient['verified'] ?? false),
-                'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
-                'main_image_url'  => $imageUrl ?: null,
-                'last_synced_at'  => now(),
-            ]
+            $syncData
         );
 
         return $client->wasRecentlyCreated ? 'created' : 'updated';

@@ -26,6 +26,7 @@ class Client extends Model
         'wp_post_id',
         'wp_user_id',
         'client_type',
+        'signup_source',
         'name',
         'phone_normalized',
         'email',

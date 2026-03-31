@@ -284,6 +284,30 @@ class SupportBoardService
         return (bool) $response;
     }
 
+    /**
+     * Create a new Support Board user account.
+     */
+    public function createUser(string $name, string $email, string $phone, ?int $wpUserId = null): ?int
+    {
+        $extra = $wpUserId ? json_encode(['wp-id' => [$wpUserId, 'WordPress ID']]) : '';
+
+        $response = $this->request('add-user', array_filter([
+            'first_name' => $name,
+            'last_name' => '',
+            'email' => $email ?: '',
+            'password' => '',
+            'user_type' => 'user',
+            'phone' => $phone,
+            'extra' => $extra ?: null,
+        ], fn ($v) => $v !== null));
+
+        if (is_array($response) && !empty($response['id'])) {
+            return (int) $response['id'];
+        }
+
+        return is_numeric($response) ? (int) $response : null;
+    }
+
     public function getConversation(int $conversationId): array
     {
         if ($conversationId <= 0) {

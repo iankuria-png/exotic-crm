@@ -291,6 +291,8 @@ class WpDirectProvisioningService
             hash('sha256', $name . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20))
         );
 
+        $this->upsertPostMeta($postId, 'signup_source', 'crm_provisioned');
+
         if ($postStatus !== 'publish') {
             $this->upsertPostMeta($postId, 'notactive', '1');
         }

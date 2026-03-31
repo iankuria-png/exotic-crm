@@ -56,6 +56,7 @@ export default function Clients() {
     const allowedVerifiedFilters = new Set(['1', '0']);
     const allowedHasChatFilters = new Set(['1', '0']);
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
+    const allowedSignupSources = new Set(['fast_signup', 'full_registration', 'crm_manual', 'crm_provisioned']);
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
     const allowedBehaviorTags = new Set(RETENTION_BEHAVIOR_TAGS);
     const navigate = useNavigate();
@@ -102,6 +103,10 @@ export default function Clients() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
+    const [signupSourceFilter, setSignupSourceFilter] = useState(() => {
+        const requested = (searchParams.get('signup_source') || '').trim();
+        return allowedSignupSources.has(requested) ? requested : '';
+    });
     const [retentionBandFilter, setRetentionBandFilter] = useState(() => {
         const requested = (searchParams.get('retention_band') || '').trim();
         return allowedRetentionBands.has(requested) ? requested : '';
@@ -142,7 +147,7 @@ export default function Clients() {
     });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, hasChatFilter, onlineFilter, platformFilter, retentionBandFilter, behaviorTagFilter],
+        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, hasChatFilter, onlineFilter, platformFilter, signupSourceFilter, retentionBandFilter, behaviorTagFilter],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
@@ -155,6 +160,7 @@ export default function Clients() {
                     ...(hasChatFilter !== '' && { has_chat: hasChatFilter }),
                     ...(onlineFilter && { online_within: Number(onlineFilter) }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
+                    ...(signupSourceFilter && { signup_source: signupSourceFilter }),
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
                 },
@@ -494,6 +500,7 @@ export default function Clients() {
             setPlanFilter('');
             setVerifiedFilter('');
             setOnlineFilter('');
+            setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
             setPage(1);
@@ -512,12 +519,14 @@ export default function Clients() {
             setStatusFilter('');
             setPlanFilter('');
             setVerifiedFilter('1');
+            setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
         } else if (metricKey === 'retention_watch') {
             setStatusFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
+            setSignupSourceFilter('');
             setRetentionBandFilter('watch');
             setBehaviorTagFilter('');
         }
@@ -600,6 +609,27 @@ export default function Clients() {
                     ) : null}
                 </div>
             ),
+        },
+        {
+            key: 'signup_source',
+            label: 'Source',
+            render: (row) => {
+                const sourceMap = {
+                    fast_signup: { label: 'Fast', classes: 'bg-blue-50 text-blue-700 ring-blue-200' },
+                    full_registration: { label: 'Full', classes: 'bg-slate-50 text-slate-600 ring-slate-200' },
+                    crm_manual: { label: 'Manual', classes: 'bg-purple-50 text-purple-700 ring-purple-200' },
+                    crm_provisioned: { label: 'Provisioned', classes: 'bg-green-50 text-green-700 ring-green-200' },
+                };
+                const source = sourceMap[row.signup_source];
+                if (!source) {
+                    return <span className="text-xs text-slate-400">&mdash;</span>;
+                }
+                return (
+                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${source.classes}`}>
+                        {source.label}
+                    </span>
+                );
+            },
         },
         {
             key: 'retention',
@@ -814,6 +844,19 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="Source"
+                        value={signupSourceFilter}
+                        onChange={(event) => { setSignupSourceFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All sources' },
+                            { value: 'fast_signup', label: 'Fast Signup' },
+                            { value: 'full_registration', label: 'Full Registration' },
+                            { value: 'crm_manual', label: 'CRM Manual' },
+                            { value: 'crm_provisioned', label: 'CRM Provisioned' },
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Retention Band"
                         value={retentionBandFilter}
                         onChange={(event) => { setRetentionBandFilter(event.target.value); setPage(1); }}
@@ -833,7 +876,7 @@ export default function Clients() {
                         ]}
                     />
 
-                    {(search || statusFilter || planFilter || verifiedFilter !== '' || hasChatFilter !== '' || onlineFilter || platformFilter || retentionBandFilter || behaviorTagFilter) ? (
+                    {(search || statusFilter || planFilter || verifiedFilter !== '' || hasChatFilter !== '' || onlineFilter || platformFilter || signupSourceFilter || retentionBandFilter || behaviorTagFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -845,6 +888,7 @@ export default function Clients() {
                                 setHasChatFilter('');
                                 setOnlineFilter('');
                                 setPlatformFilter('');
+                                setSignupSourceFilter('');
                                 setRetentionBandFilter('');
                                 setBehaviorTagFilter('');
                                 setPage(1);

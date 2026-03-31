@@ -97,6 +97,10 @@ class ClientController extends Controller
             }
         }
 
+        if ($request->filled('signup_source')) {
+            $query->where('signup_source', $request->signup_source);
+        }
+
         if ($request->filled('verified')) {
             $query->where('verified', $request->boolean('verified'));
         }
@@ -1723,6 +1727,7 @@ class ClientController extends Controller
                 'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
                 'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
                 'assigned_to' => $assignedTo,
+                'signup_source' => 'crm_provisioned',
                 'premium' => false,
                 'featured' => false,
                 'verified' => false,
@@ -1835,6 +1840,7 @@ class ClientController extends Controller
             'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
             'profile_status' => $profileStatus,
             'assigned_to' => $assignedTo,
+            'signup_source' => 'crm_manual',
             'premium' => false,
             'featured' => false,
             'verified' => false,
