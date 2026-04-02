@@ -23,6 +23,14 @@ class WpSyncService
         $isRemoteEndpoint = $this->isRemoteEndpoint($this->baseUrl);
         $this->defaultTimeout = $isRemoteEndpoint ? 60 : 30;
         $this->mediaUploadTimeout = $isRemoteEndpoint ? 120 : 60;
+
+        if ($isRemoteEndpoint && !app()->environment('production', 'testing') && !config('app.allow_remote_sync_from_local', false)) {
+            $this->baseUrl = 'https://blocked-remote-sync.local';
+            Log::warning('WpSyncService blocked remote sync from non-production environment', [
+                'platform_id' => (int) $platform->id,
+                'url' => $platform->wp_api_url,
+            ]);
+        }
     }
 
     public static function forPlatform(int $platformId): self
@@ -131,6 +139,14 @@ class WpSyncService
     public function pushWalletConfig(int $postId, array $payload): array
     {
         return $this->post("/clients/{$postId}/wallet-config", $payload);
+    }
+
+    /**
+     * Push wallet credentials to WordPress for one platform/site.
+     */
+    public function pushWalletCredentials(array $payload): array
+    {
+        return $this->post('/wallet-credentials', $payload);
     }
 
     /**
@@ -276,7 +292,11 @@ class WpSyncService
             return true;
         }
 
-        return str_ends_with($normalized, '.local');
+        if (str_ends_with($normalized, '.test') || str_ends_with($normalized, '.local') || str_ends_with($normalized, '.localhost')) {
+            return true;
+        }
+
+        return false;
     }
 
     private function decodeResponse($response, string $method, string $path): array

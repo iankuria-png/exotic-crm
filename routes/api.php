@@ -277,9 +277,11 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::patch('/settings/integrations/platforms/{platform}/packages', [SettingsController::class, 'updatePlatformPackages'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/platforms/{platform}/payment-link-providers', [SettingsController::class, 'updatePaymentLinkProviders'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/platforms/{platform}/wallet', [SettingsController::class, 'updatePlatformWallet'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/wallet/sync', [SettingsController::class, 'syncPlatformWalletConfig'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/integrations/platforms/{platform}/wallet/providers', [SettingsController::class, 'updatePlatformWalletProviders'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/wallet/providers/test', [SettingsController::class, 'testPlatformWalletProvider'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/wallet/wp-credentials/rotate', [SettingsController::class, 'rotatePlatformWalletWpCredentials'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/wallet/wp-credentials/push', [SettingsController::class, 'pushPlatformWalletWpCredentials'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/test-connection', [SettingsController::class, 'testPlatformConnection'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/support-board/sync', [SettingsController::class, 'runPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
