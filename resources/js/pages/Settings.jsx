@@ -615,7 +615,6 @@ function buildWalletPlatformForm(platform) {
         ...fallback,
         enabled: Boolean(wallet.enabled),
         mode_override: wallet.mode_override || 'inherit',
-        effective_mode: wallet.effective_mode || 'disabled',
         currency_code: wallet.currency_code || fallback.currency_code,
         max_single_topup: wallet.max_single_topup || fallback.max_single_topup,
         max_wallet_balance: wallet.max_wallet_balance || fallback.max_wallet_balance,
@@ -840,8 +839,7 @@ function IntegrationsWorkspace({
     });
     const [walletCredentialRotationForm, setWalletCredentialRotationForm] = useState({
         environment: 'sandbox',
-        credential: 'both',
-        push_to_wp: true,
+        credential: 'bearer',
         reason: 'Rotate wallet WP credential',
     });
     const [latestWalletProviderTest, setLatestWalletProviderTest] = useState(null);
@@ -1364,15 +1362,7 @@ function IntegrationsWorkspace({
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
             setWalletSystemForm(buildWalletSystemForm(response?.system || null));
-            
-            const syncResults = response?.wallet_config_sync || {};
-            const failedPlatforms = Object.entries(syncResults).filter(([_, res]) => res.status === 'failed');
-            
-            if (failedPlatforms.length > 0) {
-                toast.error(`Wallet settings saved, but sync failed for ${failedPlatforms.length} markets.`);
-            } else {
-                toast.success('Wallet system settings saved and synced.');
-            }
+            toast.success('Wallet system settings saved.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to save wallet system settings.');
@@ -1458,14 +1448,7 @@ function IntegrationsWorkspace({
                 setWalletPlatformForm(buildWalletPlatformForm(response.platform));
                 setWalletProvidersForm(buildWalletProvidersForm(response.platform));
             }
-
-            if (response?.wallet_config_sync?.status === 'synced') {
-                toast.success('Platform wallet settings saved and synced to WordPress.');
-            } else if (response?.wallet_config_sync?.status === 'failed') {
-                toast.error(`Platform wallet settings saved but sync to WordPress failed: ${response.wallet_config_sync.error}`);
-            } else {
-                toast.success('Platform wallet settings saved.');
-            }
+            toast.success('Platform wallet settings saved.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to save platform wallet settings.');
@@ -1479,14 +1462,7 @@ function IntegrationsWorkspace({
             if (response?.platform) {
                 setWalletProvidersForm(buildWalletProvidersForm(response.platform));
             }
-
-            if (response?.wallet_config_sync?.status === 'synced') {
-                toast.success('Wallet provider credentials saved and synced to WordPress.');
-            } else if (response?.wallet_config_sync?.status === 'failed') {
-                toast.error(`Wallet provider credentials saved but sync to WordPress failed: ${response.wallet_config_sync.error}`);
-            } else {
-                toast.success('Wallet provider credentials saved.');
-            }
+            toast.success('Wallet provider credentials saved.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to save wallet provider credentials.');
@@ -1502,46 +1478,10 @@ function IntegrationsWorkspace({
                 credential: response?.credential,
                 revealed: response?.revealed || {},
             });
-
-            if (response?.credentials_sync?.status === 'synced') {
-                toast.success(`Credentials rotated and pushed to WordPress (${response.environment}).`);
-            } else if (response?.credentials_sync?.status === 'failed') {
-                toast.error(`Credentials rotated but push to WordPress failed: ${response.credentials_sync.error}`);
-            } else {
-                toast.success('Wallet WP credential rotated. Copy the revealed value now.');
-            }
+            toast.success('Wallet WP credential rotated. Copy the revealed value now.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to rotate wallet credential.');
-        },
-    });
-
-    const pushWalletCredentialMutation = useMutation({
-        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/wallet/wp-credentials/push`, payload).then((response) => response.data),
-        onSuccess: (response) => {
-            if (response?.credentials_sync?.status === 'synced') {
-                toast.success('Credentials pushed to WordPress successfully.');
-            } else {
-                toast.error(`Push failed: ${response?.credentials_sync?.error || 'Unknown error'}`);
-            }
-        },
-        onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Failed to push wallet credentials.');
-        },
-    });
-
-    const syncPlatformConfigMutation = useMutation({
-        mutationFn: (platformId) => api.post(`/crm/settings/integrations/platforms/${platformId}/wallet/sync`).then((response) => response.data),
-        onSuccess: (response) => {
-            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
-            if (response?.wallet_config_sync?.status === 'synced') {
-                toast.success('Wallet configuration synced to WordPress.');
-            } else {
-                toast.error(`Sync failed: ${response?.wallet_config_sync?.error || 'Unknown error'}`);
-            }
-        },
-        onError: (error) => {
-            toast.error(error?.response?.data?.message || 'Failed to sync wallet configuration.');
         },
     });
 
@@ -4283,33 +4223,22 @@ function IntegrationsWorkspace({
                                                     <option value="hmac">HMAC only</option>
                                                     <option value="both">Bearer + HMAC</option>
                                                 </select>
-                                                <div className="flex items-center gap-3">
-                                                    <label className="flex items-center gap-2 text-xs text-slate-700">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={Boolean(walletCredentialRotationForm.push_to_wp)}
-                                                            onChange={(event) => setWalletCredentialRotationForm((current) => ({ ...current, push_to_wp: event.target.checked }))}
-                                                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                        />
-                                                        Push to WP
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => rotateWalletCredentialMutation.mutate({
-                                                            platformId: selectedPlatform.platform_id,
-                                                            payload: {
-                                                                environment: walletCredentialRotationForm.environment,
-                                                                credential: walletCredentialRotationForm.credential,
-                                                                push_to_wp: walletCredentialRotationForm.push_to_wp,
-                                                                reason: walletCredentialRotationForm.reason.trim(),
-                                                            },
-                                                        })}
-                                                        disabled={!walletCredentialRotationForm.reason.trim()}
-                                                        className="crm-btn-secondary flex-1 disabled:cursor-not-allowed disabled:opacity-60"
-                                                    >
-                                                        {rotateWalletCredentialMutation.isPending ? 'Rotating...' : 'Rotate credentials'}
-                                                    </button>
-                                                </div>                                                <textarea
+                                                <button
+                                                    type="button"
+                                                    onClick={() => rotateWalletCredentialMutation.mutate({
+                                                        platformId: selectedPlatform.platform_id,
+                                                        payload: {
+                                                            environment: walletCredentialRotationForm.environment,
+                                                            credential: walletCredentialRotationForm.credential,
+                                                            reason: walletCredentialRotationForm.reason.trim(),
+                                                        },
+                                                    })}
+                                                    disabled={!walletCredentialRotationForm.reason.trim()}
+                                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {rotateWalletCredentialMutation.isPending ? 'Rotating...' : 'Rotate credentials'}
+                                                </button>
+                                                <textarea
                                                     rows={2}
                                                     value={walletCredentialRotationForm.reason}
                                                     onChange={(event) => setWalletCredentialRotationForm((current) => ({ ...current, reason: event.target.value }))}
@@ -4370,21 +4299,6 @@ function IntegrationsWorkspace({
                                                             <code className="mt-2 block break-all rounded bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100">{value}</code>
                                                         </div>
                                                     ))}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => pushWalletCredentialMutation.mutate({
-                                                            platformId: selectedPlatform.platform_id,
-                                                            payload: {
-                                                                environment: walletCredentialReveal.environment,
-                                                                bearer_key: walletCredentialReveal.revealed.bearer_key || '',
-                                                                hmac_secret: walletCredentialReveal.revealed.hmac_secret || '',
-                                                            },
-                                                        })}
-                                                        disabled={pushWalletCredentialMutation.isPending}
-                                                        className="crm-btn-primary w-full text-xs"
-                                                    >
-                                                        {pushWalletCredentialMutation.isPending ? 'Pushing...' : 'Push credentials to WordPress'}
-                                                    </button>
                                                 </div>
                                             </div>
                                         ) : null}
@@ -4402,53 +4316,12 @@ function IntegrationsWorkspace({
                                         <p className="mt-1 text-lg font-semibold text-slate-900">{(walletSystemConfig?.mode || 'disabled').replaceAll('_', ' ')}</p>
                                     </div>
                                     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Market mode</p>
-                                        <p className="mt-1 text-lg font-semibold text-slate-900">{(walletPlatformForm?.effective_mode || 'disabled').replaceAll('_', ' ')}</p>
-                                    </div>
-                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 sm:col-span-2">
-                                        <div className="flex items-center justify-between">
-                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">WP Sync Status</p>
-                                            <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset ${statusChip(selectedPlatform?.wp_sync?.status)}`}>
-                                                {selectedPlatform?.wp_sync?.status || 'unknown'}
-                                            </span>
-                                        </div>
-                                        <p className="mt-1 text-xs text-slate-600">
-                                            Last checked: {selectedPlatform?.wp_sync?.last_checked_at ? formatDateTime(selectedPlatform.wp_sync.last_checked_at) : 'Never'}
-                                        </p>
-                                        {selectedPlatform?.wp_sync?.last_error && (
-                                            <p className="mt-1.5 rounded border border-red-100 bg-red-50 p-1.5 text-[10px] leading-relaxed text-red-700">
-                                                {selectedPlatform.wp_sync.last_error}
-                                            </p>
-                                        )}
-                                    </div>
-                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Markets enabled</p>
                                         <p className="mt-1 text-lg font-semibold text-slate-900">{walletEnabledMarkets}</p>
                                     </div>
                                     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Markets live</p>
                                         <p className="mt-1 text-lg font-semibold text-slate-900">{walletActiveMarkets}</p>
-                                    </div>
-                                    <div className="flex flex-col gap-2 sm:col-span-2">
-                                        <button
-                                            type="button"
-                                            onClick={() => runPlatformSyncMutation.mutate({
-                                                platformId: selectedPlatform.platform_id,
-                                                payload: { scope: 'all', mode: 'full', reason: 'Full wallet re-sync' },
-                                            })}
-                                            disabled={runPlatformSyncMutation.isPending}
-                                            className="crm-btn-secondary w-full text-xs"
-                                        >
-                                            {runPlatformSyncMutation.isPending ? 'Syncing...' : 'Run Full Platform Sync (Leads + Clients)'}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => syncPlatformConfigMutation.mutate(selectedPlatform.platform_id)}
-                                            disabled={syncPlatformConfigMutation.isPending}
-                                            className="crm-btn-primary w-full text-xs"
-                                        >
-                                            {syncPlatformConfigMutation.isPending ? 'Pushed...' : 'Re-sync Wallet Config to WordPress'}
-                                        </button>
                                     </div>
                                     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Selected providers</p>

@@ -16,7 +16,6 @@ use App\Models\SupportBoardSyncRun;
 use App\Models\Template;
 use App\Models\User;
 use App\Services\AuditService;
-use App\Services\BillingModeService;
 use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
@@ -52,8 +51,7 @@ class SettingsController extends Controller
         private readonly SupportBoardLeadImportService $supportBoardLeadImportService,
         private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly WalletSyncService $walletSyncService,
-        private readonly BillingModeService $billingModeService
+        private readonly WalletSyncService $walletSyncService
     ) {
     }
 
@@ -788,17 +786,9 @@ class SettingsController extends Controller
         ]);
 
         $beforeState = $this->platformAuditState($platform);
-        $beforeContext = $this->billingModeService->walletContext($platform);
-
         $platformWallet = $this->walletSettingsService->savePlatformConfig($platform, $validated);
         $platform->refresh();
         $syncResult = $this->walletSyncService->syncPlatformConfig($platform);
-
-        $afterContext = $this->billingModeService->walletContext($platform);
-
-        if ($beforeContext['mode'] !== $afterContext['mode']) {
-            \App\Jobs\SyncPlatformWalletClientsJob::dispatch($platform);
-        }
 
         $this->auditService->fromRequest(
             $request,
@@ -814,26 +804,6 @@ class SettingsController extends Controller
         return response()->json([
             'platform' => $this->serializePlatformIntegration($platform),
             'wallet' => $platformWallet,
-            'wallet_config_sync' => $syncResult,
-        ]);
-    }
-
-    public function syncPlatformWalletConfig(Request $request, Platform $platform)
-    {
-        $this->marketAuthorizationService->ensureRole(
-            $request->user(),
-            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
-            'Only admin or sub-admin users can sync wallet configuration.'
-        );
-        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
-            $request->user(),
-            (int) $platform->id,
-            'You do not have access to this market.'
-        );
-
-        $syncResult = $this->walletSyncService->syncPlatformConfig($platform);
-
-        return response()->json([
             'wallet_config_sync' => $syncResult,
         ]);
     }
@@ -914,11 +884,8 @@ class SettingsController extends Controller
         $validated = $request->validate([
             'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
             'credential' => ['required', Rule::in(['bearer', 'hmac', 'both'])],
-            'push_to_wp' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ]);
-
-        $pushToWp = (bool) ($validated['push_to_wp'] ?? false);
 
         $result = $this->walletSettingsService->rotateWpCredentials(
             $platform,
@@ -926,15 +893,6 @@ class SettingsController extends Controller
             $validated['credential'],
             (int) $request->user()->id
         );
-
-        $credentialsSync = null;
-        if ($pushToWp && !empty($result['revealed'])) {
-            $credentialsSync = $this->walletSyncService->pushPlatformWalletWpCredentials(
-                $platform,
-                $validated['environment'],
-                $result['revealed']
-            );
-        }
 
         $this->auditService->fromRequest(
             $request,
@@ -947,49 +905,12 @@ class SettingsController extends Controller
                 'wallet_wp_credential_rotation' => [
                     'environment' => $validated['environment'],
                     'credential' => $validated['credential'],
-                    'pushed_to_wp' => $pushToWp,
-                    'push_status' => $credentialsSync['status'] ?? null,
                 ],
             ],
             $validated['reason'] ?? 'Rotated wallet WP credentials'
         );
 
-        return response()->json(array_merge($result, [
-            'credentials_sync' => $credentialsSync,
-        ]));
-    }
-
-    public function pushPlatformWalletWpCredentials(Request $request, Platform $platform)
-    {
-        $this->marketAuthorizationService->ensureRole(
-            $request->user(),
-            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
-            'Only admin or sub-admin users can push wallet WP credentials.'
-        );
-        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
-            $request->user(),
-            (int) $platform->id,
-            'You do not have access to this market.'
-        );
-
-        $validated = $request->validate([
-            'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
-            'bearer_key' => 'required|string',
-            'hmac_secret' => 'required|string',
-        ]);
-
-        $syncResult = $this->walletSyncService->pushPlatformWalletWpCredentials(
-            $platform,
-            $validated['environment'],
-            [
-                'bearer_key' => $validated['bearer_key'],
-                'hmac_secret' => $validated['hmac_secret'],
-            ]
-        );
-
-        return response()->json([
-            'credentials_sync' => $syncResult,
-        ]);
+        return response()->json($result);
     }
 
     public function testPlatformWalletProvider(Request $request, Platform $platform)
