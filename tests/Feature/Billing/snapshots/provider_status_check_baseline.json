@@ -1,0 +1,13 @@
+{
+    "provider": "paystack",
+    "provider_environment": "sandbox",
+    "provider_reference": "TXN-6701VV",
+    "status": "completed",
+    "message": "Approved",
+    "checked_at": "2026-04-03 23:30:19",
+    "data": {
+        "status": "success",
+        "gateway_response": "Approved",
+        "reference": "CRM-BASELINE-REF-002"
+    }
+}

@@ -12,9 +12,17 @@ test.describe('billing browser smoke coverage', () => {
 
         await loginAndOpen(page, request, 'admin', '/settings?integrationArea=wallet');
 
+        const walletSurface = page.locator('section.crm-surface').filter({
+            has: page.getByRole('heading', { name: 'Wallet Configuration' }),
+        });
+
         await expect(page).toHaveURL(/\/settings\?integrationArea=wallet$/);
         await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Wallet Configuration' })).toBeVisible();
+        await expect(walletSurface.getByText('Global wallet settings are read-only for this role.')).toHaveCount(0);
+        await expect(walletSurface.locator('fieldset').first()).not.toHaveAttribute('disabled', '');
+        await expect(walletSurface.locator('select').first()).toBeVisible();
+        await expect(page.getByPlaceholder('KES')).toBeVisible();
     });
 
     test('admin can reach payments queue shell', async ({ page, request }) => {
@@ -32,9 +40,18 @@ test.describe('billing browser smoke coverage', () => {
 
         await loginAndOpen(page, request, 'sub_admin', '/settings?integrationArea=wallet');
 
+        const walletSurface = page.locator('section.crm-surface').filter({
+            has: page.getByRole('heading', { name: 'Wallet Configuration' }),
+        });
+
         await expect(page).toHaveURL(/\/settings\?integrationArea=wallet$/);
         await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Wallet Configuration' })).toBeVisible();
+        await expect(
+            walletSurface.getByText('Global wallet settings are read-only for this role. Only admin can change wallet mode, billing domains, and SMTP.'),
+        ).toBeVisible();
+        await expect(walletSurface.locator('fieldset').first()).toHaveAttribute('disabled', '');
+        await expect(page.getByPlaceholder('KES')).toBeVisible();
     });
 
     test('sub_admin can reach payments queue shell', async ({ page, request }) => {

@@ -1,0 +1,26 @@
+{
+    "mode": "disabled",
+    "synced_at": "2026-04-03T12:00:00Z",
+    "config": {
+        "market": {
+            "platform_id": 1,
+            "currency": "KES"
+        },
+        "topup_presets": [
+            "500.00",
+            "1000.00",
+            "2000.00",
+            "5000.00"
+        ],
+        "providers": [],
+        "show_refresh_button": true,
+        "allow_combined_topup_subscribe": true,
+        "recent_transactions_limit": 10,
+        "wallet_refresh_rate_limit_seconds": 15,
+        "wallet_refresh_timeout_seconds": 15,
+        "topup_poll_interval_seconds": 10,
+        "sandbox_badge": false,
+        "business_name": "Exotic Ads Test",
+        "description": "Ad credit top-up"
+    }
+}

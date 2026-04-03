@@ -1,0 +1,78 @@
+{
+    "client": {
+        "profile_url": "https:\/\/baseline-market.example.test\/?p=5511"
+    },
+    "balance": "1800.00",
+    "currency": "KES",
+    "mode": "sandbox",
+    "refreshed_at": "2026-04-03T23:30:19+00:00",
+    "wallet_last_synced_at": null,
+    "last_topup": {
+        "id": 1,
+        "type": "credit",
+        "amount": "1200.00",
+        "currency": "KES",
+        "balance_after": "1800.00",
+        "description": "Wallet top-up via PAYSTACK",
+        "reference_type": "wallet_topup",
+        "reference_id": 1,
+        "payment_id": null,
+        "deal_id": null,
+        "created_at": "2026-04-03T23:30:19+00:00",
+        "metadata": null
+    },
+    "transactions": [
+        {
+            "id": 1,
+            "type": "credit",
+            "amount": "1200.00",
+            "currency": "KES",
+            "balance_after": "1800.00",
+            "description": "Wallet top-up via PAYSTACK",
+            "reference_type": "wallet_topup",
+            "reference_id": 1,
+            "payment_id": null,
+            "deal_id": null,
+            "created_at": "2026-04-03T23:30:19+00:00",
+            "metadata": null
+        }
+    ],
+    "config": {
+        "market": {
+            "platform_id": 1,
+            "currency": "KES"
+        },
+        "topup_presets": [
+            "500.00",
+            "1000.00",
+            "2500.00"
+        ],
+        "providers": {
+            "pesapal": {
+                "enabled": true,
+                "min_amount": "100.00",
+                "max_amount": "150000.00"
+            },
+            "paystack": {
+                "enabled": true,
+                "min_amount": "100.00",
+                "max_amount": "500000.00"
+            },
+            "mpesa_stk": {
+                "enabled": true,
+                "min_amount": "100.00",
+                "max_amount": "150000.00",
+                "transport": "direct_provider"
+            }
+        },
+        "show_refresh_button": true,
+        "allow_combined_topup_subscribe": true,
+        "recent_transactions_limit": 10,
+        "wallet_refresh_rate_limit_seconds": 20,
+        "wallet_refresh_timeout_seconds": 15,
+        "topup_poll_interval_seconds": 8,
+        "sandbox_badge": true,
+        "business_name": "Exotic Sandbox Billing",
+        "description": "Sandbox wallet top-up"
+    }
+}

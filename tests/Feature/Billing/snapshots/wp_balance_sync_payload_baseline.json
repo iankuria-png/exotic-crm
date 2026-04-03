@@ -1,0 +1,20 @@
+{
+    "balance": "5000.00",
+    "currency": "KES",
+    "mode": "disabled",
+    "refreshed_at": "2026-04-03T11:55:00Z",
+    "wallet_last_synced_at": "2026-04-03T12:00:00Z",
+    "last_topup": {
+        "amount": 2000,
+        "date": "2026-04-01T09:30:00Z",
+        "provider": "paystack"
+    },
+    "transactions": [
+        {
+            "id": 123,
+            "amount": 2000,
+            "type": "credit",
+            "date": "2026-04-01T09:30:00Z"
+        }
+    ]
+}

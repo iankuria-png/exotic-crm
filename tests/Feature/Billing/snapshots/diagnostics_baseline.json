@@ -1,0 +1,291 @@
+{
+    "payment": {
+        "product_id": 1,
+        "phone": "254700000222",
+        "amount": 1500,
+        "currency": "KES",
+        "transaction_uuid": "2e24899c-c1af-3a40-8079-6c0d36d6e50d",
+        "transaction_reference": "TXN-8941BY",
+        "status": "pending",
+        "duration": "biweekly",
+        "start_date": "2026-04-03T23:30:18.000000Z",
+        "end_date": "2026-05-03T23:30:18.000000Z",
+        "raw_payload": [],
+        "created_at": "2026-04-03T23:30:18.000000Z",
+        "updated_at": "2026-04-03T23:30:18.000000Z",
+        "escort_post_id": null,
+        "deal_id": null,
+        "match_confidence": null,
+        "confirmed_by": null,
+        "confirmed_at": null,
+        "source": "gateway",
+        "import_batch_id": null,
+        "import_legacy_hash": null,
+        "reconciliation_confidence": "low",
+        "reconciliation_state": "open",
+        "completed_at": "2026-04-03T23:30:18.000000Z",
+        "failure_reason": null,
+        "reference_number": "CRM-BASELINE-REF-001",
+        "payment_data": {
+            "link_proxy": {
+                "token_hash": "e77c7d9344c15473b8180c7a15f00ba1de9c7765f8c3c9dacfc209e5381c12c9",
+                "token_expires_at": "2026-04-04T23:30:18+00:00",
+                "provider_key": "paystack",
+                "provider_config_key": "paystack_checkout",
+                "mode": "proxy_hosted_checkout",
+                "environment": "sandbox",
+                "redirect_url": "https:\/\/checkout.paystack.test\/redirect",
+                "provider_reference": "PSTK-BASELINE-001",
+                "initialized_at": "2026-04-03T10:01:00Z",
+                "opened_at": "2026-04-03T10:00:00Z",
+                "open_count": 1,
+                "sent_at": "2026-04-03T23:30:18+00:00"
+            }
+        },
+        "purpose": "subscription",
+        "wallet_transaction_id": null,
+        "provider_key": "paystack",
+        "provider_environment": "sandbox",
+        "platform": {
+            "id": 1,
+            "product_id": null,
+            "name": "Baseline Market",
+            "domain": "baseline-market.example.test",
+            "country": "Kenya",
+            "is_active": true,
+            "db_host": "127.0.0.1",
+            "db_name": "wp_marketogti",
+            "db_user": "root",
+            "db_prefix": "wp_",
+            "created_at": "2026-04-03T23:30:18.000000Z",
+            "updated_at": "2026-04-03T23:30:18.000000Z",
+            "wp_api_url": "https:\/\/baseline-market.example.test\/wp-json\/exotic-crm-sync\/v1",
+            "wp_api_user": "crm-user",
+            "phone_prefix": "254",
+            "timezone": "Africa\/Nairobi",
+            "currency_code": "KES",
+            "sync_last_checked_at": null,
+            "sync_last_synced_at": null,
+            "sync_last_scope": null,
+            "sync_last_status": "unknown",
+            "sync_last_error": null,
+            "sync_last_result": null,
+            "payment_link_providers": {
+                "active_provider": "paystack_checkout",
+                "providers": {
+                    "paystack_checkout": {
+                        "label": "PAYSTACK Checkout",
+                        "mode": "proxy_hosted_checkout",
+                        "enabled": true,
+                        "wallet_provider_key": "paystack",
+                        "environment": "sandbox"
+                    }
+                }
+            },
+            "support_chat_url": null,
+            "wallet_settings": null,
+            "support_board_api_url": "https:\/\/cloud.board.support\/script\/include\/api.php",
+            "support_board_sender_id": null
+        },
+        "product": {
+            "id": 1,
+            "name": "Premium 433",
+            "monthly_price": 3936.99,
+            "biweekly_price": 2102.81,
+            "currency": "KES",
+            "is_active": true,
+            "created_at": "2026-04-03T23:30:18.000000Z",
+            "updated_at": "2026-04-03T23:30:18.000000Z",
+            "weekly_price": 1386.57,
+            "platform_id": 1,
+            "display_name": "Premium 433",
+            "slug": "premium-433",
+            "tier": "custom",
+            "is_archived": false,
+            "sort_order": 0
+        },
+        "client": {
+            "id": 1,
+            "platform_id": 1,
+            "wp_post_id": 5511,
+            "wp_user_id": 7711,
+            "client_type": "escort",
+            "name": "Baseline Client",
+            "phone_normalized": "254700000222",
+            "email": "baseline-client@example.test",
+            "city": "Feliciaside",
+            "profile_status": "publish",
+            "premium": false,
+            "premium_expire": null,
+            "featured": false,
+            "featured_expire": null,
+            "escort_expire": null,
+            "verified": false,
+            "main_image_url": "https:\/\/via.placeholder.com\/640x800.png\/005555?text=earum",
+            "assigned_to": null,
+            "last_synced_at": "2026-04-03T23:30:18.000000Z",
+            "created_at": "2026-04-03T23:30:18.000000Z",
+            "updated_at": "2026-04-03T23:30:18.000000Z",
+            "last_online_at": null,
+            "duplicate_of": null,
+            "wallet_balance": "0.00",
+            "wallet_currency": "KES",
+            "wallet_last_synced_at": null,
+            "sb_user_id": null,
+            "sb_matched_by": null,
+            "signup_source": null,
+            "wp_modified_at": null,
+            "wp_profile_url": "https:\/\/baseline-market.example.test\/?p=5511",
+            "plan_label": "Basic",
+            "platform": {
+                "id": 1,
+                "product_id": null,
+                "name": "Baseline Market",
+                "domain": "baseline-market.example.test",
+                "country": "Kenya",
+                "is_active": true,
+                "db_host": "127.0.0.1",
+                "db_name": "wp_marketogti",
+                "db_user": "root",
+                "db_prefix": "wp_",
+                "created_at": "2026-04-03T23:30:18.000000Z",
+                "updated_at": "2026-04-03T23:30:18.000000Z",
+                "wp_api_url": "https:\/\/baseline-market.example.test\/wp-json\/exotic-crm-sync\/v1",
+                "wp_api_user": "crm-user",
+                "phone_prefix": "254",
+                "timezone": "Africa\/Nairobi",
+                "currency_code": "KES",
+                "sync_last_checked_at": null,
+                "sync_last_synced_at": null,
+                "sync_last_scope": null,
+                "sync_last_status": "unknown",
+                "sync_last_error": null,
+                "sync_last_result": null,
+                "payment_link_providers": {
+                    "active_provider": "paystack_checkout",
+                    "providers": {
+                        "paystack_checkout": {
+                            "label": "PAYSTACK Checkout",
+                            "mode": "proxy_hosted_checkout",
+                            "enabled": true,
+                            "wallet_provider_key": "paystack",
+                            "environment": "sandbox"
+                        }
+                    }
+                },
+                "support_chat_url": null,
+                "wallet_settings": null,
+                "support_board_api_url": "https:\/\/cloud.board.support\/script\/include\/api.php",
+                "support_board_sender_id": null
+            }
+        },
+        "deal": null
+    },
+    "failure": {
+        "status": "pending",
+        "stage": "provider_checkout_pending",
+        "reason": null,
+        "error_code": null,
+        "http_status": null,
+        "manual_close": null
+    },
+    "performance": {
+        "attempt_count": 1,
+        "avg_latency_ms": 7,
+        "p95_latency_ms": 7,
+        "last_latency_ms": 7
+    },
+    "browser_meta": {
+        "context_type": null,
+        "origin_url": null,
+        "referrer": null,
+        "user_agent_family": null,
+        "device_type": null,
+        "ip_hash": null,
+        "request_id": null
+    },
+    "recommendations": [
+        {
+            "key": "wait_callback",
+            "label": "Wait for callback",
+            "description": "Payment is still fresh; monitor callback status first.",
+            "recommended": true
+        },
+        {
+            "key": "send_link",
+            "label": "Send payment link",
+            "description": "Share a direct payment URL if customer missed the STK prompt.",
+            "recommended": false
+        }
+    ],
+    "link_proxy": {
+        "mode": "proxy_hosted_checkout",
+        "provider_key": "paystack",
+        "provider_config_key": "paystack_checkout",
+        "environment": "sandbox",
+        "token_status": "active",
+        "token_expires_at": "2026-04-04 23:30:18",
+        "rotation_count": 0,
+        "sent_at": "2026-04-03 23:30:18",
+        "opened_at": "2026-04-03 10:00:00",
+        "open_count": 1,
+        "initialized_at": "2026-04-03 10:01:00",
+        "redirect_url": "https:\/\/checkout.paystack.test\/redirect",
+        "provider_reference": "PSTK-BASELINE-001",
+        "callback_at": "2026-04-03 23:30:18",
+        "session_status": "checkout_initialized",
+        "last_provider_check": null
+    },
+    "attempts": [
+        {
+            "id": 1,
+            "attempt_type": "send_payment_link",
+            "provider": "paystack_checkout",
+            "status": "disabled",
+            "error_code": null,
+            "error_message": null,
+            "http_status": null,
+            "latency_ms": 7,
+            "request_meta": {
+                "channel": "sms",
+                "requested_provider": "paystack_checkout",
+                "phone": "254700000222"
+            },
+            "response_meta": {
+                "sms_status": "disabled",
+                "provider_response": "SMS dispatch disabled (SMS_ENABLED=false)",
+                "payment_url": "https:\/\/billing-sandbox.example.test\/api\/payments\/link\/eVnASrIqVRPxKycz2iQxqb6A6ZXqRVQ2vFlZ7f9BBZ4Rqph0N1un4HYbl6aO7wBD"
+            },
+            "actor": {
+                "id": 1,
+                "name": "Sales Baseline",
+                "email": "Mwmoxx7C@example.test"
+            },
+            "created_at": "2026-04-03 23:30:18"
+        }
+    ],
+    "audit_trail": [
+        {
+            "id": 1,
+            "action": "payment_send_link",
+            "reason": "Baseline snapshot",
+            "before_state": {
+                "channel": "sms",
+                "phone": "254700000222",
+                "provider": "paystack_checkout"
+            },
+            "after_state": {
+                "sms_success": true,
+                "sms_status": "disabled",
+                "provider": "paystack_checkout",
+                "mode": "proxy_hosted_checkout"
+            },
+            "actor": {
+                "id": 1,
+                "name": "Sales Baseline"
+            },
+            "created_at": "2026-04-03 23:30:18"
+        }
+    ],
+    "timeline": []
+}
