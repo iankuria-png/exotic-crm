@@ -83,6 +83,11 @@ class WalletSettingsPhaseFourTest extends TestCase
     {
         $admin = $this->createUser('admin');
         $platform = $this->createPlatform('Ghana');
+        config([
+            'services.billing.enabled' => true,
+            'services.billing.features.workspace' => true,
+            'services.billing.features.diagnostics_v2' => true,
+        ]);
 
         app(WalletSettingsService::class)->saveSystemConfig([
             'mode' => 'sandbox',
@@ -180,6 +185,9 @@ class WalletSettingsPhaseFourTest extends TestCase
         $response = $this->getJson('/api/crm/settings/integrations');
 
         $response->assertOk()
+            ->assertJsonPath('billing.enabled', true)
+            ->assertJsonPath('billing.features.workspace', true)
+            ->assertJsonPath('billing.features.diagnostics_v2', true)
             ->assertJsonPath('wallet.system.mode', 'sandbox')
             ->assertJsonPath('wallet.system.smtp.password', '')
             ->assertJsonPath('wallet.system.smtp.password_configured', true)

@@ -146,6 +146,10 @@ class SettingsController extends Controller
                     'note' => 'SendGrid email dispatch is deferred until post Sprint 3 stabilization.',
                 ],
             ],
+            'billing' => [
+                'enabled' => (bool) config('services.billing.enabled', false),
+                'features' => (array) config('services.billing.features', []),
+            ],
             'wallet' => [
                 'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
                 'provider_keys' => WalletSettingsService::PROVIDERS,
