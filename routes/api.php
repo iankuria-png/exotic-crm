@@ -159,6 +159,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/clients/{client}/wallet/adjustment', [ClientWalletController::class, 'adjustment'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/credentials/reset', [ClientController::class, 'resetCredentials'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/login-as-client', [ClientController::class, 'loginAsClient'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch'])->middleware('role:admin,sub_admin,sales');

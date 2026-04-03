@@ -143,6 +143,45 @@ class CredentialDeliveryService
         ];
     }
 
+    public function createClientSessionLink(Client $client, array $payload): array
+    {
+        $client->loadMissing('platform');
+        $platform = $client->platform;
+
+        if (!$platform) {
+            throw new \InvalidArgumentException('Client platform is required to generate a client session link.');
+        }
+
+        if (!$this->canGenerateSessionLink($client, $platform)) {
+            throw new \InvalidArgumentException(self::LOGIN_AS_CLIENT_DISABLED_MESSAGE);
+        }
+
+        $target = trim((string) ($payload['target'] ?? 'edit_profile'));
+        if ($target === '') {
+            $target = 'edit_profile';
+        }
+
+        $result = (new WpSyncService($platform))->createClientSessionLink(
+            (int) ($client->wp_post_id ?? 0),
+            [
+                'target' => $target,
+                'issued_by' => trim((string) ($payload['issued_by'] ?? 'crm')),
+                'reason' => trim((string) ($payload['reason'] ?? 'Client session link from CRM')),
+            ]
+        );
+
+        $url = trim((string) ($result['url'] ?? ''));
+        if ($url === '') {
+            throw new \RuntimeException('WordPress did not return a usable client session link.');
+        }
+
+        return [
+            'url' => $url,
+            'expires_at' => $result['expires_at'] ?? null,
+            'target' => (string) ($result['target'] ?? $target),
+        ];
+    }
+
     private function normalizePayload(Client $client, array $payload): array
     {
         $method = (string) ($payload['method'] ?? 'setup_link');

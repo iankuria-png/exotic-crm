@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { useToast } from './ToastProvider';
@@ -52,6 +52,15 @@ function toneClassForFeedback(tone) {
     return 'border-slate-200 bg-slate-50 text-slate-700';
 }
 
+async function copyTextValue(value) {
+    if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+    }
+
+    throw new Error('Clipboard access is unavailable.');
+}
+
 export default function CredentialDispatchDrawer({
     open,
     onClose,
@@ -62,6 +71,7 @@ export default function CredentialDispatchDrawer({
 }) {
     const queryClient = useQueryClient();
     const toast = useToast();
+    const loginWindowRef = useRef(null);
     const [form, setForm] = useState({
         method: 'setup_link',
         channel: 'both',
@@ -72,6 +82,7 @@ export default function CredentialDispatchDrawer({
         reason: defaultReason,
     });
     const [dispatchFeedback, setDispatchFeedback] = useState(null);
+    const [credentialReveal, setCredentialReveal] = useState(null);
 
     useEffect(() => {
         if (!open || !client) {
@@ -79,6 +90,7 @@ export default function CredentialDispatchDrawer({
         }
 
         setDispatchFeedback(null);
+        setCredentialReveal(null);
         setForm({
             method: 'setup_link',
             channel: 'both',
@@ -90,8 +102,26 @@ export default function CredentialDispatchDrawer({
         });
     }, [open, client, defaultReason]);
 
-    const supportsTemporaryPassword = Number(client?.wp_user_id || 0) > 0;
     const phonePrefix = client?.platform?.phone_prefix || '254';
+
+    const accessContextQuery = useQuery({
+        queryKey: ['client-credential-access-context', client?.id],
+        queryFn: () => api.get(`/crm/clients/${client.id}/access-context`).then((response) => response.data),
+        enabled: Boolean(open && client?.id),
+    });
+
+    const accessContext = accessContextQuery.data || null;
+    const accessMessages = accessContext?.messages || {};
+    const supportsTemporaryPassword = Boolean(accessContext?.can_reset_password);
+    const canGenerateSessionLink = Boolean(accessContext?.can_generate_session_link);
+    const profileUrl = accessContext?.profile_url || client?.wp_profile_url || null;
+    const loginUrl = accessContext?.login_url || null;
+    const setupUrl = accessContext?.setup_url || null;
+    const wpUsername = accessContext?.wp_username || null;
+    const hasAccessLinks = Boolean(profileUrl || loginUrl || setupUrl);
+    const accessContextError = accessContextQuery.error?.response?.data?.message
+        || accessContextQuery.error?.message
+        || null;
 
     useEffect(() => {
         if (!supportsTemporaryPassword && form.method === 'temporary_password') {
@@ -151,6 +181,73 @@ export default function CredentialDispatchDrawer({
         },
     });
 
+    const resetCredentialsMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/clients/${client.id}/credentials/reset`, payload).then((response) => response.data),
+        onSuccess: (result) => {
+            const nextAccessContext = result?.access_context || null;
+
+            queryClient.invalidateQueries({ queryKey: ['client-credential-access-context', client?.id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', client?.id] });
+            queryClient.invalidateQueries({ queryKey: ['client', client?.id] });
+
+            setForm((current) => ({
+                ...current,
+                temporary_password: '',
+            }));
+            setCredentialReveal({
+                wp_username: nextAccessContext?.wp_username || null,
+                password: result?.revealed?.password || '',
+                login_url: nextAccessContext?.login_url || null,
+                profile_url: nextAccessContext?.profile_url || null,
+            });
+
+            toast.success('Credentials reset. Copy the temporary password now.');
+
+            if (typeof onSuccess === 'function') {
+                onSuccess(result);
+            }
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Credential reset failed.');
+        },
+    });
+
+    const loginAsClientMutation = useMutation({
+        mutationFn: (payload) => api.post(`/crm/clients/${client.id}/login-as-client`, payload).then((response) => response.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', client?.id] });
+            queryClient.invalidateQueries({ queryKey: ['client', client?.id] });
+
+            const popup = loginWindowRef.current;
+            if (popup && !popup.closed) {
+                try {
+                    popup.opener = null;
+                } catch {
+                    // Ignore cross-window restrictions.
+                }
+                popup.location.href = result.url;
+                popup.focus();
+            } else {
+                window.open(result.url, '_blank', 'noopener,noreferrer');
+            }
+            loginWindowRef.current = null;
+
+            toast.success('Client session opened in a new tab.');
+
+            if (typeof onSuccess === 'function') {
+                onSuccess(result);
+            }
+        },
+        onError: (error) => {
+            const popup = loginWindowRef.current;
+            if (popup && !popup.closed) {
+                popup.close();
+            }
+            loginWindowRef.current = null;
+            toast.error(error?.response?.data?.message || 'Unable to open client session.');
+        },
+    });
+
     const requiresEmailNow = useMemo(
         () => form.timing === 'send_now' && (form.channel === 'email' || form.channel === 'both'),
         [form.channel, form.timing],
@@ -167,6 +264,7 @@ export default function CredentialDispatchDrawer({
         && (!requiresEmailNow || form.recipient_email.trim().length > 0)
         && (!requiresPhoneNow || normalizePhone(form.recipient_phone, phonePrefix).length > 0)
         && (form.method !== 'temporary_password' || supportsTemporaryPassword)
+        && (form.method !== 'setup_link' || hasAccessLinks)
         && !sendMutation.isPending;
 
     if (!open || !client) {
@@ -174,7 +272,31 @@ export default function CredentialDispatchDrawer({
     }
 
     const historyRows = dispatchHistoryQuery.data?.data || [];
-    const profileUrl = client?.wp_profile_url || null;
+    const handleCopy = async (label, value) => {
+        if (!value) {
+            return;
+        }
+
+        try {
+            await copyTextValue(value);
+            toast.success(`${label} copied.`);
+        } catch {
+            toast.error(`Unable to copy ${label.toLowerCase()}.`);
+        }
+    };
+
+    const handleLoginAsClient = () => {
+        loginWindowRef.current = window.open('', '_blank');
+        if (loginWindowRef.current && !loginWindowRef.current.closed) {
+            loginWindowRef.current.document.write('<p style="font-family: sans-serif; padding: 16px;">Opening client session...</p>');
+        }
+
+        loginAsClientMutation.mutate({
+            target: 'edit_profile',
+            reason: form.reason.trim() || defaultReason,
+            source: defaultSource,
+        });
+    };
 
     return (
         <div className="fixed inset-0 z-[70] bg-slate-900/45" onClick={onClose}>
@@ -185,8 +307,8 @@ export default function CredentialDispatchDrawer({
                 <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
                     <div className="flex items-start justify-between gap-3">
                         <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Client credentials</p>
-                            <h3 className="mt-1 text-lg font-semibold text-slate-900">Dispatch access details</h3>
+                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Client access</p>
+                            <h3 className="mt-1 text-lg font-semibold text-slate-900">Manage client access</h3>
                             <p className="mt-1 text-xs text-slate-500">
                                 {client.name || `Client #${client.id}`} • CRM #{client.id}
                             </p>
@@ -207,7 +329,12 @@ export default function CredentialDispatchDrawer({
                     </div>
 
                     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.09em] text-slate-500">Quick links</p>
+                        <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold uppercase tracking-[0.09em] text-slate-500">Quick actions</p>
+                            {accessContextQuery.isFetching ? (
+                                <span className="text-[11px] text-slate-400">Refreshing...</span>
+                            ) : null}
+                        </div>
                         <div className="mt-2 flex flex-wrap gap-2">
                             {profileUrl ? (
                                 <a
@@ -219,8 +346,147 @@ export default function CredentialDispatchDrawer({
                                     Open profile
                                 </a>
                             ) : null}
+                            <button
+                                type="button"
+                                onClick={handleLoginAsClient}
+                                disabled={accessContextQuery.isLoading || !canGenerateSessionLink || loginAsClientMutation.isPending}
+                                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {loginAsClientMutation.isPending ? 'Opening client session...' : 'Log in as client'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => resetCredentialsMutation.mutate({
+                                    temporary_password: form.temporary_password.trim() || null,
+                                    reason: form.reason.trim() || defaultReason,
+                                    source: defaultSource,
+                                })}
+                                disabled={accessContextQuery.isLoading || !supportsTemporaryPassword || resetCredentialsMutation.isPending}
+                                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {resetCredentialsMutation.isPending ? 'Resetting credentials...' : 'Reset & copy credentials'}
+                            </button>
                         </div>
+                        {!profileUrl && accessMessages.access_links ? (
+                            <p className="mt-2 text-[11px] text-amber-700">{accessMessages.access_links}</p>
+                        ) : null}
+                        {accessMessages.login_as_client ? (
+                            <p className="mt-1 text-[11px] text-amber-700">{accessMessages.login_as_client}</p>
+                        ) : null}
+                        {accessMessages.reset_password ? (
+                            <p className="mt-1 text-[11px] text-amber-700">{accessMessages.reset_password}</p>
+                        ) : null}
+                        {accessContextError ? (
+                            <p className="mt-2 text-[11px] text-rose-700">{accessContextError}</p>
+                        ) : null}
                     </div>
+
+                    <section className="rounded-md border border-slate-200 bg-white px-3 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.09em] text-slate-500">Access details</p>
+                        <dl className="mt-3 space-y-2 text-sm">
+                            <div className="flex items-start justify-between gap-3">
+                                <dt className="text-slate-500">WordPress username</dt>
+                                <dd className="text-right font-medium text-slate-900">{wpUsername || 'Unavailable'}</dd>
+                            </div>
+                            <div className="flex items-start justify-between gap-3">
+                                <dt className="text-slate-500">Login URL</dt>
+                                <dd className="text-right">
+                                    {loginUrl ? (
+                                        <a href={loginUrl} target="_blank" rel="noreferrer" className="font-medium text-teal-700 underline decoration-teal-200 underline-offset-2">
+                                            Open login page
+                                        </a>
+                                    ) : (
+                                        <span className="font-medium text-slate-400">Unavailable</span>
+                                    )}
+                                </dd>
+                            </div>
+                            <div className="flex items-start justify-between gap-3">
+                                <dt className="text-slate-500">Setup link</dt>
+                                <dd className="text-right">
+                                    {setupUrl ? (
+                                        <a href={setupUrl} target="_blank" rel="noreferrer" className="font-medium text-teal-700 underline decoration-teal-200 underline-offset-2">
+                                            Open setup page
+                                        </a>
+                                    ) : (
+                                        <span className="font-medium text-slate-400">Unavailable</span>
+                                    )}
+                                </dd>
+                            </div>
+                        </dl>
+                    </section>
+
+                    {supportsTemporaryPassword ? (
+                        <section>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">Temporary password (optional)</label>
+                            <input
+                                type="text"
+                                value={form.temporary_password}
+                                onChange={(event) => setForm((current) => ({ ...current, temporary_password: event.target.value }))}
+                                className="crm-input"
+                                placeholder="Auto-generated if blank"
+                            />
+                            <p className="mt-1 text-[11px] text-slate-500">
+                                Used for reset-and-copy and temporary-password dispatch. Plaintext is never stored after the immediate response.
+                            </p>
+                        </section>
+                    ) : null}
+
+                    {credentialReveal ? (
+                        <section className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <p className="text-xs font-semibold uppercase tracking-[0.09em] text-emerald-800">Fresh credentials</p>
+                                <span className="text-[11px] text-emerald-700">Copy now</span>
+                            </div>
+                            <p className="mt-2 text-[11px] text-emerald-800">
+                                The temporary password is only revealed in this success state. Close and reopen the drawer to clear it.
+                            </p>
+                            <div className="mt-3 space-y-2">
+                                {credentialReveal.wp_username ? (
+                                    <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-200 bg-white/70 px-3 py-2">
+                                        <div className="min-w-0">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Username</p>
+                                            <p className="truncate text-sm font-medium text-slate-900">{credentialReveal.wp_username}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleCopy('Username', credentialReveal.wp_username)}
+                                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100"
+                                        >
+                                            Copy
+                                        </button>
+                                    </div>
+                                ) : null}
+                                <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-200 bg-white/70 px-3 py-2">
+                                    <div className="min-w-0">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Temporary password</p>
+                                        <p className="truncate text-sm font-medium text-slate-900">{credentialReveal.password}</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleCopy('Temporary password', credentialReveal.password)}
+                                        className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100"
+                                    >
+                                        Copy
+                                    </button>
+                                </div>
+                                {credentialReveal.login_url ? (
+                                    <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-200 bg-white/70 px-3 py-2">
+                                        <div className="min-w-0">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Login URL</p>
+                                            <p className="truncate text-sm font-medium text-slate-900">{credentialReveal.login_url}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleCopy('Login URL', credentialReveal.login_url)}
+                                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100"
+                                        >
+                                            Copy
+                                        </button>
+                                    </div>
+                                ) : null}
+                            </div>
+                        </section>
+                    ) : null}
 
                     <section>
                         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.09em] text-slate-500">Method</p>
@@ -244,7 +510,12 @@ export default function CredentialDispatchDrawer({
                         </div>
                         {!supportsTemporaryPassword ? (
                             <p className="mt-1 text-[11px] text-amber-700">
-                                Temporary password requires a linked WordPress user ID. Use setup link for this client.
+                                Temporary password requires a linked WordPress user ID and market database credentials.
+                            </p>
+                        ) : null}
+                        {form.method === 'setup_link' && !hasAccessLinks ? (
+                            <p className="mt-1 text-[11px] text-amber-700">
+                                Setup-link dispatch needs at least one WordPress login, setup, or profile link for this market.
                             </p>
                         ) : null}
                     </section>
@@ -321,20 +592,6 @@ export default function CredentialDispatchDrawer({
                             ) : null}
                         </div>
                     </section>
-
-                    {form.method === 'temporary_password' ? (
-                        <section>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">Temporary password (optional)</label>
-                            <input
-                                type="text"
-                                value={form.temporary_password}
-                                onChange={(event) => setForm((current) => ({ ...current, temporary_password: event.target.value }))}
-                                className="crm-input"
-                                placeholder="Auto-generated if blank"
-                            />
-                            <p className="mt-1 text-[11px] text-slate-500">Password value is never stored in audit logs or dispatch records.</p>
-                        </section>
-                    ) : null}
 
                     <section>
                         <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>

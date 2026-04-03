@@ -11,6 +11,8 @@ const eventTones = {
     status_changed: 'bg-teal-100 text-teal-700',
     support_chat_reply: 'bg-sky-100 text-sky-700',
     support_board_profile_sync: 'bg-violet-100 text-violet-700',
+    client_credentials_reset: 'bg-amber-100 text-amber-700',
+    client_login_as_client_link_generated: 'bg-indigo-100 text-indigo-700',
 };
 
 function formatEventDescription(event) {
@@ -38,6 +40,10 @@ function formatEventDescription(event) {
             return 'Chat reply sent via Support Board';
         case 'support_board_profile_sync':
             return `Support Board profile sync applied${content.direction ? ` (${String(content.direction).replace(/_/g, ' ')})` : ''}`;
+        case 'client_credentials_reset':
+            return `Client credentials reset${content.wp_username ? ` for ${content.wp_username}` : ''}`;
+        case 'client_login_as_client_link_generated':
+            return `Client session link generated${content.target ? ` (${String(content.target).replace(/_/g, ' ')})` : ''}`;
         default:
             return event.event_type?.replace(/_/g, ' ') || 'Event';
     }

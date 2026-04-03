@@ -102,6 +102,18 @@ class WpSyncService
     }
 
     /**
+     * Generate a short-lived client session link for WordPress impersonation.
+     */
+    public function createClientSessionLink(int $postId, array $payload = []): array
+    {
+        return $this->post("/clients/{$postId}/session-link", array_filter([
+            'target' => $payload['target'] ?? null,
+            'issued_by' => $payload['issued_by'] ?? null,
+            'reason' => $payload['reason'] ?? null,
+        ], fn ($value) => $value !== null && $value !== ''));
+    }
+
+    /**
      * Activate a client profile
      */
     public function activateClient(int $postId, string $productType, int $durationDays, ?int $crmDealId = null): array

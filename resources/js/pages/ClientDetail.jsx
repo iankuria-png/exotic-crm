@@ -1090,7 +1090,7 @@ export default function ClientDetail() {
         : (isUntrackedForeverPlan ? 'Forever' : '—');
 
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
-    const canDispatchCredentials = Number(client.wp_post_id || 0) > 0;
+    const canOpenClientAccess = Boolean(client?.id);
     const mediaItems = mediaData?.data || [];
     const healthDuplicates = healthData?.duplicates || [];
     const walletSummary = walletData?.wallet || null;
@@ -1468,11 +1468,11 @@ export default function ClientDetail() {
                                 <button
                                     type="button"
                                     onClick={() => setShowCredentialDrawer(true)}
-                                    disabled={!canDispatchCredentials}
+                                    disabled={!canOpenClientAccess}
                                     className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                                    title={!canDispatchCredentials ? 'Credential send is available for WP-linked client profiles.' : undefined}
+                                    title={!canOpenClientAccess ? 'Client access tools are unavailable until this client loads.' : undefined}
                                 >
-                                    Send credentials
+                                    Client access
                                 </button>
                                 <button
                                     type="button"
@@ -3204,7 +3204,7 @@ export default function ClientDetail() {
                     open={showCredentialDrawer}
                     client={client}
                     defaultSource="client_detail"
-                    defaultReason="Credential dispatch from client detail"
+                    defaultReason="Client access from client detail"
                     onClose={() => setShowCredentialDrawer(false)}
                     onSuccess={() => {
                         queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });

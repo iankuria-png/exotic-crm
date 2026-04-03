@@ -1564,6 +1564,90 @@ class ClientController extends Controller
         ]);
     }
 
+    public function loginAsClient(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'target' => 'nullable|in:edit_profile,change_password,profile,home',
+            'reason' => 'required|string|max:500',
+            'source' => 'nullable|string|max:100',
+        ]);
+
+        try {
+            $result = $this->credentialDeliveryService->createClientSessionLink($client, [
+                'target' => $validated['target'] ?? 'edit_profile',
+                'reason' => $validated['reason'],
+                'issued_by' => trim((string) ($request->user()?->email ?: $request->user()?->name ?: ('user#' . (int) $request->user()?->id))),
+            ]);
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (RequestException $exception) {
+            Log::error('Client session link request failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'status' => $exception->response?->status(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Client session link could not be generated. Please retry.',
+            ], 502);
+        } catch (\Throwable $exception) {
+            Log::error('Client session link generation failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Client session link could not be generated. Please retry.',
+            ], 500);
+        }
+
+        $expiresAt = $result['expires_at'] ?? null;
+        $target = (string) ($result['target'] ?? ($validated['target'] ?? 'edit_profile'));
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'client_login_as_client_link_generated',
+            'actor_id' => (int) $request->user()->id,
+            'content' => [
+                'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                'target' => $target,
+                'expires_at' => $expiresAt,
+                'session_link_generated' => true,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_LOGIN_AS_CLIENT_LINK,
+            'client',
+            (int) $client->id,
+            null,
+            [
+                'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                'target' => $target,
+                'expires_at' => $expiresAt,
+                'session_link_generated' => true,
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'url' => $result['url'],
+            'expires_at' => $expiresAt,
+            'target' => $target,
+        ]);
+    }
+
     public function sendCredentials(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);

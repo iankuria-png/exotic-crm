@@ -10,6 +10,7 @@ use App\Models\TimelineEvent;
 use App\Models\User;
 use App\Services\CredentialDeliveryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Mockery\MockInterface;
 use Tests\TestCase;
@@ -143,6 +144,108 @@ class ClientAccessTest extends TestCase
         $this->postJson("/api/crm/clients/{$client->id}/credentials/reset", [
             'reason' => 'Out of market sales should be blocked',
         ])->assertForbidden();
+    }
+
+    public function test_admin_sub_admin_and_sales_can_generate_client_session_links_without_persisting_token(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://kenya.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 8517,
+            'wp_user_id' => 9001,
+        ]);
+
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+
+        Http::fake([
+            $baseUrl . '/clients/8517/session-link' => Http::response([
+                'url' => 'https://kenya.example.test/?crm_client_session=super-secret-token',
+                'expires_at' => '2026-04-03T08:45:00+00:00',
+                'target' => 'edit_profile',
+            ], 200),
+        ]);
+
+        foreach (['admin', 'sub_admin', 'sales'] as $role) {
+            Sanctum::actingAs($this->createUser($role, $role === 'admin' ? [] : [$platform->id]));
+
+            $response = $this->postJson("/api/crm/clients/{$client->id}/login-as-client", [
+                'target' => 'edit_profile',
+                'reason' => "Generate client session for {$role}",
+            ]);
+
+            $response->assertOk()
+                ->assertJsonPath('url', 'https://kenya.example.test/?crm_client_session=super-secret-token')
+                ->assertJsonPath('expires_at', '2026-04-03T08:45:00+00:00')
+                ->assertJsonPath('target', 'edit_profile');
+        }
+
+        Http::assertSentCount(3);
+
+        $auditLogs = AuditLog::query()
+            ->where('action', 'client_login_as_client_link')
+            ->orderBy('id')
+            ->get();
+
+        $timelineEvents = TimelineEvent::query()
+            ->where('event_type', 'client_login_as_client_link_generated')
+            ->orderBy('id')
+            ->get();
+
+        $this->assertCount(3, $auditLogs);
+        $this->assertCount(3, $timelineEvents);
+
+        foreach ($auditLogs as $auditLog) {
+            $payload = json_encode($auditLog->after_state);
+            $this->assertStringNotContainsString('crm_client_session', $payload);
+            $this->assertStringNotContainsString('super-secret-token', $payload);
+            $this->assertSame('edit_profile', data_get($auditLog->after_state, 'target'));
+        }
+
+        foreach ($timelineEvents as $timelineEvent) {
+            $payload = json_encode($timelineEvent->content);
+            $this->assertStringNotContainsString('crm_client_session', $payload);
+            $this->assertStringNotContainsString('super-secret-token', $payload);
+            $this->assertSame('edit_profile', data_get($timelineEvent->content, 'target'));
+        }
+    }
+
+    public function test_marketing_out_of_market_and_unlinked_clients_cannot_generate_client_session_links(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://uganda.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $otherPlatform = Platform::factory()->create();
+        $linkedClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7001,
+        ]);
+        $manualClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 0,
+            'wp_user_id' => 0,
+        ]);
+
+        Sanctum::actingAs($this->createUser('marketing', [$platform->id]));
+        $this->postJson("/api/crm/clients/{$linkedClient->id}/login-as-client", [
+            'reason' => 'Marketing should not generate client sessions',
+        ])->assertForbidden();
+
+        Sanctum::actingAs($this->createUser('sales', [$otherPlatform->id]));
+        $this->postJson("/api/crm/clients/{$linkedClient->id}/login-as-client", [
+            'reason' => 'Out of market sales should be blocked',
+        ])->assertForbidden();
+
+        Sanctum::actingAs($this->createUser('sales', [$platform->id]));
+        $this->postJson("/api/crm/clients/{$manualClient->id}/login-as-client", [
+            'reason' => 'Manual clients should show disabled session generation',
+        ])->assertStatus(422)
+            ->assertJsonPath('message', CredentialDeliveryService::LOGIN_AS_CLIENT_DISABLED_MESSAGE);
     }
 
     public function test_setup_link_dispatch_route_still_supports_manual_queueing(): void
