@@ -688,7 +688,15 @@ class CredentialDeliveryService
         }
 
         $connectionName = 'wp_credentials_' . (int) $platform->id;
-        DynamicDatabaseService::switchConnection($connectionName, $platform->getConnectionConfig());
+        $connectionConfig = $platform->getConnectionConfig();
+        $host = strtolower(trim((string) ($connectionConfig['host'] ?? '')));
+        $defaultSocket = (string) config('database.connections.mysql.unix_socket', '');
+
+        if ($defaultSocket !== '' && in_array($host, ['localhost', '127.0.0.1', '::1'], true)) {
+            $connectionConfig['unix_socket'] = $defaultSocket;
+        }
+
+        DynamicDatabaseService::switchConnection($connectionName, $connectionConfig);
 
         return $connectionName;
     }
