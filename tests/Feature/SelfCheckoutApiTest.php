@@ -155,6 +155,88 @@ class SelfCheckoutApiTest extends TestCase
         });
     }
 
+    public function test_self_checkout_currently_rejects_non_card_proxy_wallet_provider_aliases(): void
+    {
+        config([
+            'app.url' => 'https://crm.example.test',
+        ]);
+
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'domain' => 'kenya.example.test',
+            'phone_prefix' => '254',
+            'currency_code' => 'KES',
+            'payment_link_providers' => [
+                'active_provider' => 'primary',
+                'providers' => [
+                    'primary' => [
+                        'label' => 'Primary',
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'mpesa_stk',
+                        'environment' => 'production',
+                    ],
+                ],
+            ],
+        ]);
+
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 5501,
+            'wp_user_id' => 9901,
+            'name' => 'Kenya Client',
+            'phone_normalized' => '254700000111',
+            'email' => 'kenya-client@example.test',
+            'profile_status' => 'draft',
+        ]);
+
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Premium',
+            'display_name' => 'Premium',
+            'currency' => 'KES',
+            'monthly_price' => 2400,
+            'biweekly_price' => 1200,
+            'weekly_price' => 600,
+        ]);
+
+        ProductPrice::factory()->create([
+            'product_id' => $product->id,
+            'duration_key' => '1_month',
+            'duration_label' => '1 Month',
+            'duration_days' => 30,
+            'price' => 2400,
+            'currency' => 'KES',
+            'is_active' => true,
+            'sort_order' => 10,
+        ]);
+
+        $this->seedWalletBillingContext($platform);
+
+        $response = $this->postJson('/api/self-checkout', [
+            'product_id' => $product->id,
+            'platform_id' => $platform->id,
+            'user_id' => $client->wp_user_id,
+            'first_name' => 'Test',
+            'last_name' => 'User',
+            'phone' => $client->phone_normalized,
+            'email' => $client->email,
+            'duration' => 'monthly',
+        ], [
+            'Origin' => 'https://www.exotickenya.com',
+            'Referer' => 'https://www.exotickenya.com/escort/test-pm/',
+            'User-Agent' => 'Mozilla/5.0 Chrome/136.0.0.0 Safari/537.36',
+            'X-Request-Id' => 'wp-self-checkout-req-unsupported-001',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('message', 'The active provider does not support hosted card checkout.');
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('payment_attempts', 0);
+    }
+
     private function seedWalletBillingContext(Platform $platform): void
     {
         $walletSettings = app(WalletSettingsService::class);

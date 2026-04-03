@@ -1220,6 +1220,24 @@ CSV;
             ]);
     }
 
+    public function test_settings_integrations_is_scoped_to_assigned_markets(): void
+    {
+        $platformA = $this->createPlatform('Kenya');
+        $platformB = $this->createPlatform('Uganda');
+        $salesUser = $this->createUser('sales', [$platformA->id]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/settings/integrations');
+
+        $response->assertOk()
+            ->assertJsonCount(1, 'platforms')
+            ->assertJsonPath('platforms.0.platform_id', $platformA->id)
+            ->assertJsonMissing([
+                'platform_id' => $platformB->id,
+            ]);
+    }
+
     public function test_sales_user_can_preview_and_commit_scrape_results_with_quality_metrics(): void
     {
         $platform = $this->createPlatform('Kenya');

@@ -3,9 +3,16 @@
     "type": "module",
     "scripts": {
         "dev": "vite",
-        "build": "vite build"
+        "build": "vite build",
+        "test:browser": "playwright test",
+        "test:browser:headed": "playwright test --headed",
+        "test:browser:install": "playwright install chromium",
+        "test:browser:list": "playwright test --list",
+        "test:browser:report": "playwright show-report tests/browser/artifacts/report",
+        "test:browser:ui": "playwright test --ui"
     },
     "devDependencies": {
+        "@playwright/test": "^1.54.2",
         "@tailwindcss/vite": "^4.0.0",
         "@vitejs/plugin-react": "^4.0.0",
         "laravel-vite-plugin": "^1.0.0",

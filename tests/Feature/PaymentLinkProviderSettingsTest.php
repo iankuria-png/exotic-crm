@@ -46,6 +46,13 @@ class PaymentLinkProviderSettingsTest extends TestCase
 
         $this->assertSame('static_url', data_get($platform->payment_link_providers, 'providers.site_pay_page.mode'));
         $this->assertTrue((bool) data_get($platform->payment_link_providers, 'providers.site_pay_page.enabled'));
+        $this->assertDatabaseHas('audit_log', [
+            'platform_id' => $platform->id,
+            'entity_type' => 'platform',
+            'entity_id' => $platform->id,
+            'action' => 'integration_platform_update',
+            'reason' => 'Switch payment links to the website pay page',
+        ]);
     }
 
     public function test_admin_can_save_proxy_payment_link_provider_configuration(): void
@@ -117,6 +124,37 @@ class PaymentLinkProviderSettingsTest extends TestCase
                 'payment_link_providers.providers.proxy_checkout.wallet_provider_key',
                 'payment_link_providers.providers.proxy_checkout.environment',
             ]);
+    }
+
+    public function test_proxy_payment_link_provider_currently_rejects_mpesa_stk_wallet_provider_keys(): void
+    {
+        $platform = Platform::factory()->create();
+        $admin = $this->createAdmin();
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}/payment-link-providers", [
+            'payment_link_providers' => [
+                'active_provider' => 'mpesa_proxy',
+                'providers' => [
+                    'mpesa_proxy' => [
+                        'label' => 'M-Pesa Proxy',
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'mpesa_stk',
+                        'environment' => 'sandbox',
+                    ],
+                ],
+            ],
+            'reason' => 'Attempt to route proxy links through M-Pesa',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors([
+                'payment_link_providers.providers.mpesa_proxy.wallet_provider_key',
+            ]);
+
+        $this->assertNull($platform->fresh()->payment_link_providers);
     }
 
     public function test_proxy_payment_link_provider_requires_currency_and_rate_when_fx_override_is_enabled(): void
