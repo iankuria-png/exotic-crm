@@ -50,6 +50,88 @@ function formatDateTime(value) {
     return date.toLocaleString();
 }
 
+function walletSyncStatusText(value) {
+    return String(value || 'unknown').replaceAll('_', ' ');
+}
+
+function describeWalletSyncResult(result, label) {
+    if (!result || typeof result !== 'object') {
+        return null;
+    }
+
+    const status = String(result.status || 'unknown');
+    if (status === 'synced') {
+        const action = result.credential_action ? ` (${walletSyncStatusText(result.credential_action)})` : '';
+        return `${label} synced${action}.`;
+    }
+
+    if (status === 'skipped') {
+        const reason = result.reason ? ` (${walletSyncStatusText(result.reason)})` : '';
+        return `${label} skipped${reason}.`;
+    }
+
+    const detail = String(result.error || result.reason || 'unknown error');
+    return `${label} failed: ${detail}.`;
+}
+
+function summarizeWalletSyncResponse(response) {
+    const walletSync = response?.wallet_sync;
+
+    if (walletSync && typeof walletSync === 'object' && ('config' in walletSync || 'credentials' in walletSync)) {
+        const message = [
+            describeWalletSyncResult(walletSync.config, 'Wallet config'),
+            describeWalletSyncResult(walletSync.credentials, 'Active wallet auth'),
+        ].filter(Boolean).join(' ');
+        const tone = walletSync.config?.status === 'failed' || walletSync.credentials?.status === 'failed'
+            ? 'warning'
+            : 'success';
+
+        return message ? { tone, message } : null;
+    }
+
+    if (walletSync && typeof walletSync === 'object') {
+        const entries = Object.values(walletSync).filter((entry) => entry && typeof entry === 'object');
+        if (entries.length) {
+            const counters = {
+                config: { synced: 0, skipped: 0, failed: 0 },
+                credentials: { synced: 0, skipped: 0, failed: 0 },
+            };
+
+            entries.forEach((entry) => {
+                ['config', 'credentials'].forEach((key) => {
+                    const status = String(entry?.[key]?.status || '');
+                    if (status && counters[key][status] !== undefined) {
+                        counters[key][status] += 1;
+                    }
+                });
+            });
+
+            const message = [
+                `Wallet config: ${counters.config.synced} synced, ${counters.config.skipped} skipped, ${counters.config.failed} failed.`,
+                `Active wallet auth: ${counters.credentials.synced} synced, ${counters.credentials.skipped} skipped, ${counters.credentials.failed} failed.`,
+            ].join(' ');
+            const tone = counters.config.failed > 0 || counters.credentials.failed > 0 ? 'warning' : 'success';
+
+            return { tone, message };
+        }
+    }
+
+    const singleMessage = [
+        describeWalletSyncResult(response?.wallet_config_sync, 'Wallet config'),
+        describeWalletSyncResult(response?.wallet_credentials_sync, 'Active wallet auth'),
+    ].filter(Boolean).join(' ');
+
+    if (!singleMessage) {
+        return null;
+    }
+
+    const tone = response?.wallet_config_sync?.status === 'failed' || response?.wallet_credentials_sync?.status === 'failed'
+        ? 'warning'
+        : 'success';
+
+    return { tone, message: singleMessage };
+}
+
 function buildPlatformEditor(platform) {
     if (!platform) {
         return null;
@@ -1362,6 +1444,12 @@ function IntegrationsWorkspace({
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
             setWalletSystemForm(buildWalletSystemForm(response?.system || null));
+            const syncSummary = summarizeWalletSyncResponse(response);
+            if (syncSummary) {
+                toast[syncSummary.tone](syncSummary.message, { title: 'Wallet system settings saved' });
+                return;
+            }
+
             toast.success('Wallet system settings saved.');
         },
         onError: (error) => {
@@ -1448,6 +1536,12 @@ function IntegrationsWorkspace({
                 setWalletPlatformForm(buildWalletPlatformForm(response.platform));
                 setWalletProvidersForm(buildWalletProvidersForm(response.platform));
             }
+            const syncSummary = summarizeWalletSyncResponse(response);
+            if (syncSummary) {
+                toast[syncSummary.tone](syncSummary.message, { title: 'Platform wallet settings saved' });
+                return;
+            }
+
             toast.success('Platform wallet settings saved.');
         },
         onError: (error) => {
@@ -1462,6 +1556,12 @@ function IntegrationsWorkspace({
             if (response?.platform) {
                 setWalletProvidersForm(buildWalletProvidersForm(response.platform));
             }
+            const syncSummary = summarizeWalletSyncResponse(response);
+            if (syncSummary) {
+                toast[syncSummary.tone](syncSummary.message, { title: 'Wallet provider credentials saved' });
+                return;
+            }
+
             toast.success('Wallet provider credentials saved.');
         },
         onError: (error) => {
@@ -1473,15 +1573,47 @@ function IntegrationsWorkspace({
         mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/wallet/wp-credentials/rotate`, payload).then((response) => response.data),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
-            setWalletCredentialReveal({
-                environment: response?.environment,
-                credential: response?.credential,
-                revealed: response?.revealed || {},
-            });
-            toast.success('Wallet WP credential rotated. Copy the revealed value now.');
+            const revealed = response?.revealed && typeof response.revealed === 'object' ? response.revealed : {};
+            if (Object.keys(revealed).length > 0) {
+                setWalletCredentialReveal({
+                    environment: response?.environment,
+                    credential: response?.credential,
+                    revealed,
+                });
+            } else {
+                setWalletCredentialReveal(null);
+            }
+            const syncSummary = summarizeWalletSyncResponse(response);
+            if (syncSummary) {
+                toast[syncSummary.tone](syncSummary.message, { title: 'Wallet credentials rotated' });
+                return;
+            }
+
+            toast.success('Wallet credentials rotated.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Failed to rotate wallet credential.');
+        },
+    });
+
+    const pushWalletCredentialsMutation = useMutation({
+        mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/wallet/wp-credentials/push`, payload).then((response) => response.data),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
+            if (response?.platform) {
+                setWalletProvidersForm(buildWalletProvidersForm(response.platform));
+            }
+
+            const syncSummary = summarizeWalletSyncResponse(response);
+            if (syncSummary) {
+                toast[syncSummary.tone](syncSummary.message, { title: 'Active wallet auth push finished' });
+                return;
+            }
+
+            toast.success('Active wallet auth pushed to WordPress.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to push wallet credentials to WordPress.');
         },
     });
 
@@ -2439,6 +2571,7 @@ function IntegrationsWorkspace({
     const walletActiveMarkets = platformRows.filter((platform) => (platform.wallet?.effective_mode || 'disabled') !== 'disabled').length;
     const selectedWalletConfig = selectedPlatform?.wallet || null;
     const selectedWalletEffectiveMode = selectedWalletConfig?.effective_mode || 'disabled';
+    const activeWalletEnvironment = selectedWalletEffectiveMode === 'production' ? 'production' : 'sandbox';
     const selectedWalletProvidersEnabled = Object.values(walletPlatformForm.providers || {}).filter((provider) => provider?.enabled).length;
     const selectedWalletWpCredentials = walletProvidersForm.wp_to_crm || {};
     const walletGuideDomain = walletSystemForm.billing_domains?.[walletGuideEnvironment]?.trim() || '';
@@ -2474,6 +2607,7 @@ function IntegrationsWorkspace({
     ].join('\n');
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
+    const canPushActiveWalletCredentials = selectedHasCredentials && selectedWalletEffectiveMode !== 'disabled';
     const selectedSupportBoardConfigured = Boolean(
         selectedPlatform?.support_board_api_url
         && selectedPlatform?.support_board_token_configured
@@ -4201,7 +4335,13 @@ function IntegrationsWorkspace({
 
                                     <section className="rounded-lg border border-slate-200 bg-white p-3">
                                         <h4 className="text-sm font-semibold text-slate-900">WP to CRM Credentials</h4>
-                                        <p className="mt-1 text-xs text-slate-500">Rotate bearer and HMAC secrets for the WordPress plugin. Revealed values are shown once and must be copied immediately.</p>
+                                        <p className="mt-1 text-xs text-slate-500">Active-environment wallet auth is pushed to WordPress automatically. Rotating an inactive environment stores the secret for later without changing the live site.</p>
+                                        <p className="mt-2 text-xs text-slate-600">
+                                            Active WordPress auth environment:
+                                            <span className="ml-1 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">
+                                                {selectedWalletEffectiveMode === 'disabled' ? 'wallet disabled' : activeWalletEnvironment}
+                                            </span>
+                                        </p>
 
                                         <fieldset disabled={walletPlatformReadOnly || rotateWalletCredentialMutation.isPending} className={walletPlatformReadOnly ? 'opacity-70' : ''}>
                                             <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -4246,6 +4386,33 @@ function IntegrationsWorkspace({
                                                     placeholder="Reason for credential rotation"
                                                 />
                                             </div>
+                                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => pushWalletCredentialsMutation.mutate({
+                                                        platformId: selectedPlatform.platform_id,
+                                                        payload: {
+                                                            reason: `Push active wallet auth for ${selectedPlatform.platform_name}`,
+                                                        },
+                                                    })}
+                                                    disabled={!canPushActiveWalletCredentials || pushWalletCredentialsMutation.isPending}
+                                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    {pushWalletCredentialsMutation.isPending ? 'Pushing...' : 'Push active auth to WordPress'}
+                                                </button>
+                                                {!canPushActiveWalletCredentials ? (
+                                                    <p className="text-xs text-amber-700">
+                                                        {selectedWalletEffectiveMode === 'disabled'
+                                                            ? 'Enable the wallet for this market before pushing active auth.'
+                                                            : 'Add WordPress sync credentials before pushing active auth.'}
+                                                    </p>
+                                                ) : null}
+                                                {walletCredentialRotationForm.environment !== activeWalletEnvironment && selectedWalletEffectiveMode !== 'disabled' ? (
+                                                    <p className="text-xs text-slate-500">
+                                                        Rotating {walletCredentialRotationForm.environment} will not touch the live WordPress auth until this market switches to that environment.
+                                                    </p>
+                                                ) : null}
+                                            </div>
                                         </fieldset>
 
                                         <div className="mt-3 grid gap-3 xl:grid-cols-2">
@@ -4283,6 +4450,9 @@ function IntegrationsWorkspace({
                                                         Clear
                                                     </button>
                                                 </div>
+                                                <p className="mt-2 text-xs text-teal-800">
+                                                    Revealed once for audit and recovery. If this environment is active, WordPress was updated automatically when the push succeeded.
+                                                </p>
                                                 <div className="mt-3 space-y-2">
                                                     {Object.entries(walletCredentialReveal.revealed || {}).map(([key, value]) => (
                                                         <div key={`wallet-reveal-${key}`} className="rounded-md border border-teal-200 bg-white p-2">

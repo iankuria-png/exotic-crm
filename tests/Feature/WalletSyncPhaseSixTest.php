@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use App\Models\WalletTransaction;
 use App\Services\WalletService;
@@ -11,6 +12,7 @@ use App\Services\WalletSyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
@@ -198,5 +200,83 @@ class WalletSyncPhaseSixTest extends TestCase
                     && $context['client_id'] === $client->id
                     && $context['wp_post_id'] === (int) $client->wp_post_id;
             });
+    }
+
+    public function test_push_active_wp_credentials_generates_missing_credentials_and_persists_after_successful_push(): void
+    {
+        app(WalletSettingsService::class)->saveSystemConfig([
+            'mode' => 'sandbox',
+        ]);
+
+        $platform = Platform::factory()->create([
+            'wallet_settings' => [
+                'enabled' => true,
+            ],
+        ]);
+
+        Http::fake([
+            'https://*.test/wp-json/exotic-crm-sync/v1/wallet-credentials' => Http::response([
+                'success' => true,
+            ], 200),
+        ]);
+
+        $result = app(WalletSyncService::class)->pushActiveWpCredentials($platform);
+
+        $this->assertSame('synced', $result['status']);
+        $this->assertSame('generated_and_pushed', $result['credential_action']);
+
+        $stored = IntegrationSetting::query()
+            ->where('key', 'wallet_platform_credentials_' . $platform->id)
+            ->firstOrFail();
+
+        $this->assertNotEmpty(data_get($stored->value, 'wp_to_crm.sandbox.bearer_key_hash'));
+        $this->assertNotEmpty(data_get($stored->value, 'wp_to_crm.sandbox.bearer_key_encrypted'));
+        $this->assertNotEmpty(data_get($stored->value, 'wp_to_crm.sandbox.hmac_secret_encrypted'));
+
+        Http::assertSent(function (Request $request) use ($platform) {
+            return $request->url() === rtrim($platform->wp_api_url, '/') . '/wallet-credentials'
+                && $request['platform_id'] === $platform->id
+                && !empty($request['bearer_key'])
+                && !empty($request['hmac_secret']);
+        });
+    }
+
+    public function test_rotate_active_wp_credentials_does_not_persist_when_wordpress_push_fails(): void
+    {
+        app(WalletSettingsService::class)->saveSystemConfig([
+            'mode' => 'sandbox',
+        ]);
+
+        $platform = Platform::factory()->create([
+            'wallet_settings' => [
+                'enabled' => true,
+            ],
+        ]);
+
+        $seed = app(WalletSettingsService::class)->rotateWpCredentials($platform, 'sandbox', 'both');
+        $storedBefore = IntegrationSetting::query()
+            ->where('key', 'wallet_platform_credentials_' . $platform->id)
+            ->firstOrFail();
+        $previousHash = (string) data_get($storedBefore->value, 'wp_to_crm.sandbox.bearer_key_hash');
+
+        Http::fake([
+            'https://*.test/wp-json/exotic-crm-sync/v1/wallet-credentials' => Http::response([
+                'message' => 'Push failed',
+            ], 500),
+        ]);
+
+        $result = app(WalletSyncService::class)->rotateWpCredentials($platform, 'sandbox', 'both');
+
+        $this->assertSame('failed', data_get($result, 'wp_credentials_sync.status'));
+        $this->assertSame('rotation_not_persisted', data_get($result, 'wp_credentials_sync.credential_action'));
+        $this->assertNull(data_get($result, 'revealed'));
+
+        $storedAfter = IntegrationSetting::query()
+            ->where('key', 'wallet_platform_credentials_' . $platform->id)
+            ->firstOrFail();
+        $currentHash = (string) data_get($storedAfter->value, 'wp_to_crm.sandbox.bearer_key_hash');
+
+        $this->assertSame($previousHash, $currentHash);
+        $this->assertTrue(Hash::check((string) $seed['revealed']['bearer_key'], $currentHash));
     }
 }

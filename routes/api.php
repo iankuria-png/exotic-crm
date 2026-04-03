@@ -280,6 +280,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::patch('/settings/integrations/platforms/{platform}/wallet/providers', [SettingsController::class, 'updatePlatformWalletProviders'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/wallet/providers/test', [SettingsController::class, 'testPlatformWalletProvider'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/wallet/wp-credentials/rotate', [SettingsController::class, 'rotatePlatformWalletWpCredentials'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/wallet/wp-credentials/push', [SettingsController::class, 'pushPlatformWalletWpCredentials'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/test-connection', [SettingsController::class, 'testPlatformConnection'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/support-board/sync', [SettingsController::class, 'runPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');

@@ -244,6 +244,22 @@ class WalletSettingsService
         string $credential,
         ?int $updatedBy = null
     ): array {
+        $rotation = $this->previewWpCredentialRotation($platform, $environment, $credential);
+        $platformWallet = $this->persistPlatformCredentialsSnapshot($platform, $rotation['credentials'], $updatedBy);
+
+        return [
+            'environment' => $rotation['environment'],
+            'credential' => $rotation['credential'],
+            'revealed' => $rotation['revealed'],
+            'platform_wallet' => $platformWallet,
+        ];
+    }
+
+    public function previewWpCredentialRotation(
+        Platform $platform,
+        string $environment,
+        string $credential
+    ): array {
         $environment = $this->normalizeEnvironment($environment);
         $credential = strtolower(trim($credential));
         if (!in_array($credential, ['bearer', 'hmac', 'both'], true)) {
@@ -256,6 +272,7 @@ class WalletSettingsService
         if (in_array($credential, ['bearer', 'both'], true)) {
             $plainBearer = 'ew_' . Str::random(48);
             $current['wp_to_crm'][$environment]['bearer_key_hash'] = Hash::make($plainBearer);
+            $current['wp_to_crm'][$environment]['bearer_key_encrypted'] = Crypt::encryptString($plainBearer);
             $current['wp_to_crm'][$environment]['bearer_last_rotated_at'] = now()->toIso8601String();
             $revealed['bearer_key'] = $plainBearer;
         }
@@ -267,20 +284,28 @@ class WalletSettingsService
             $revealed['hmac_secret'] = $plainHmac;
         }
 
-        IntegrationSetting::query()->updateOrCreate(
-            ['key' => $this->platformCredentialsKey((int) $platform->id)],
-            [
-                'value' => $current,
-                'updated_by' => $updatedBy,
-            ]
-        );
-
         return [
             'environment' => $environment,
             'credential' => $credential,
             'revealed' => $revealed,
-            'platform_wallet' => $this->currentPlatformConfig($platform, masked: true),
+            'credentials' => $current,
         ];
+    }
+
+    public function persistPlatformCredentialsSnapshot(
+        Platform $platform,
+        array $credentials,
+        ?int $updatedBy = null
+    ): array {
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => $this->platformCredentialsKey((int) $platform->id)],
+            [
+                'value' => $this->mergePlatformCredentials($this->defaultPlatformCredentials(), $credentials),
+                'updated_by' => $updatedBy,
+            ]
+        );
+
+        return $this->currentPlatformConfig($platform->fresh() ?? $platform, masked: true);
     }
 
     public function testProvider(Platform $platform, string $provider, string $environment): array
@@ -452,6 +477,34 @@ class WalletSettingsService
         return $this->decryptOrEmpty((string) data_get($credentials, "wp_to_crm.{$environment}.hmac_secret_encrypted", ''));
     }
 
+    public function wpToCrmCredentialPair(Platform $platform, string $environment): array
+    {
+        $environment = $this->normalizeEnvironment($environment);
+        $credentials = $this->resolvePlatformCredentials($platform);
+
+        return [
+            'bearer_key' => $this->decryptOrEmpty((string) data_get($credentials, "wp_to_crm.{$environment}.bearer_key_encrypted", '')),
+            'hmac_secret' => $this->decryptOrEmpty((string) data_get($credentials, "wp_to_crm.{$environment}.hmac_secret_encrypted", '')),
+        ];
+    }
+
+    public function wpCredentialSyncPayload(
+        Platform $platform,
+        string $environment,
+        ?array $credentials = null
+    ): array {
+        $environment = $this->normalizeEnvironment($environment);
+        $credentials = is_array($credentials) ? $credentials : $this->wpToCrmCredentialPair($platform, $environment);
+
+        return [
+            'crm_api_base_url' => $this->crmBaseUrl(),
+            'wallet_api_base_url' => $this->crmBaseUrl(),
+            'platform_id' => (int) $platform->id,
+            'bearer_key' => (string) ($credentials['bearer_key'] ?? ''),
+            'hmac_secret' => (string) ($credentials['hmac_secret'] ?? ''),
+        ];
+    }
+
     private function resolveSystemConfig(): array
     {
         $default = $this->defaultSystemConfig();
@@ -575,12 +628,14 @@ class WalletSettingsService
             'wp_to_crm' => [
                 'sandbox' => [
                     'bearer_key_hash' => '',
+                    'bearer_key_encrypted' => '',
                     'bearer_last_rotated_at' => null,
                     'hmac_secret_encrypted' => '',
                     'hmac_last_rotated_at' => null,
                 ],
                 'production' => [
                     'bearer_key_hash' => '',
+                    'bearer_key_encrypted' => '',
                     'bearer_last_rotated_at' => null,
                     'hmac_secret_encrypted' => '',
                     'hmac_last_rotated_at' => null,
@@ -823,7 +878,7 @@ class WalletSettingsService
         foreach (self::ENVIRONMENTS as $environment) {
             $wpToCrm = data_get($incoming, "wp_to_crm.{$environment}");
             if (is_array($wpToCrm)) {
-                foreach (['bearer_key_hash', 'bearer_last_rotated_at', 'hmac_secret_encrypted', 'hmac_last_rotated_at'] as $key) {
+                foreach (['bearer_key_hash', 'bearer_key_encrypted', 'bearer_last_rotated_at', 'hmac_secret_encrypted', 'hmac_last_rotated_at'] as $key) {
                     if (array_key_exists($key, $wpToCrm)) {
                         $merged['wp_to_crm'][$environment][$key] = $wpToCrm[$key];
                     }
@@ -1037,6 +1092,20 @@ class WalletSettingsService
         }
 
         return $runtime;
+    }
+
+    private function crmBaseUrl(): string
+    {
+        $url = rtrim((string) config('app.url', ''), '/');
+        if ($url === '') {
+            $url = rtrim((string) url('/'), '/');
+        }
+
+        if ($url === '') {
+            throw new InvalidArgumentException('APP_URL must be configured before syncing wallet credentials to WordPress.');
+        }
+
+        return $url;
     }
 
     private function effectiveMode(string $systemMode, array $platformConfig): string

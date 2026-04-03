@@ -544,7 +544,7 @@ class SettingsController extends Controller
 
         $before = $this->walletSettingsService->currentSystemConfig(masked: true);
         $saved = $this->walletSettingsService->saveSystemConfig($validated, (int) $request->user()->id);
-        $syncResults = $this->walletSyncService->syncAllPlatformConfigs();
+        $syncResults = $this->walletSyncService->syncAllPlatformStates((int) $request->user()->id);
 
         $this->auditService->fromRequest(
             $request,
@@ -559,7 +559,9 @@ class SettingsController extends Controller
 
         return response()->json([
             'system' => $saved,
-            'wallet_config_sync' => $syncResults,
+            'wallet_sync' => $syncResults,
+            'wallet_config_sync' => collect($syncResults)->map(fn (array $result) => $result['config'] ?? null)->all(),
+            'wallet_credentials_sync' => collect($syncResults)->map(fn (array $result) => $result['credentials'] ?? null)->all(),
         ]);
     }
 
@@ -788,7 +790,7 @@ class SettingsController extends Controller
         $beforeState = $this->platformAuditState($platform);
         $platformWallet = $this->walletSettingsService->savePlatformConfig($platform, $validated);
         $platform->refresh();
-        $syncResult = $this->walletSyncService->syncPlatformConfig($platform);
+        $syncResult = $this->walletSyncService->syncPlatformState($platform, null, (int) $request->user()->id);
 
         $this->auditService->fromRequest(
             $request,
@@ -804,7 +806,9 @@ class SettingsController extends Controller
         return response()->json([
             'platform' => $this->serializePlatformIntegration($platform),
             'wallet' => $platformWallet,
-            'wallet_config_sync' => $syncResult,
+            'wallet_sync' => $syncResult,
+            'wallet_config_sync' => $syncResult['config'] ?? null,
+            'wallet_credentials_sync' => $syncResult['credentials'] ?? null,
         ]);
     }
 
@@ -848,7 +852,7 @@ class SettingsController extends Controller
 
         $beforeState = $this->platformAuditState($platform);
         $platformWallet = $this->walletSettingsService->savePlatformProviderCredentials($platform, $validated, (int) $request->user()->id);
-        $syncResult = $this->walletSyncService->syncPlatformConfig($platform);
+        $syncResult = $this->walletSyncService->syncPlatformState($platform, null, (int) $request->user()->id);
 
         $this->auditService->fromRequest(
             $request,
@@ -864,7 +868,9 @@ class SettingsController extends Controller
         return response()->json([
             'platform' => $this->serializePlatformIntegration($platform->fresh()),
             'wallet' => $platformWallet,
-            'wallet_config_sync' => $syncResult,
+            'wallet_sync' => $syncResult,
+            'wallet_config_sync' => $syncResult['config'] ?? null,
+            'wallet_credentials_sync' => $syncResult['credentials'] ?? null,
         ]);
     }
 
@@ -887,7 +893,7 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        $result = $this->walletSettingsService->rotateWpCredentials(
+        $result = $this->walletSyncService->rotateWpCredentials(
             $platform,
             $validated['environment'],
             $validated['credential'],
@@ -911,6 +917,51 @@ class SettingsController extends Controller
         );
 
         return response()->json($result);
+    }
+
+    public function pushPlatformWalletWpCredentials(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can push wallet WP credentials.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $syncResult = $this->walletSyncService->pushActiveWpCredentials(
+            $platform,
+            (int) $request->user()->id
+        );
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $platform->id,
+            CrmAuditAction::INTEGRATION_PLATFORM_UPDATE,
+            'platform',
+            (int) $platform->id,
+            null,
+            [
+                'wallet_wp_credentials_push' => [
+                    'status' => $syncResult['status'] ?? 'unknown',
+                    'environment' => $syncResult['environment'] ?? null,
+                    'reason' => $syncResult['reason'] ?? null,
+                ],
+            ],
+            $validated['reason'] ?? 'Pushed active wallet WP credentials'
+        );
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform->fresh() ?? $platform),
+            'wallet_credentials_sync' => $syncResult,
+        ]);
     }
 
     public function testPlatformWalletProvider(Request $request, Platform $platform)

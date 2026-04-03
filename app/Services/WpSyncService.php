@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Platform;
 use Illuminate\Http\UploadedFile;
+use RuntimeException;
 
 class WpSyncService
 {
@@ -134,6 +135,14 @@ class WpSyncService
     }
 
     /**
+     * Push wallet credentials state to WordPress for the wallet AJAX proxy.
+     */
+    public function pushWalletCredentials(array $payload): array
+    {
+        return $this->post('/wallet-credentials', $payload);
+    }
+
+    /**
      * Deactivate a client profile
      */
     public function deactivateClient(int $postId): array
@@ -185,6 +194,8 @@ class WpSyncService
      */
     public function uploadClientMedia(int $postId, UploadedFile $file, bool $setMain = false): array
     {
+        $this->assertRemoteWriteAllowed("/clients/{$postId}/media");
+
         $handle = fopen($file->getRealPath(), 'rb');
         if ($handle === false) {
             throw new \RuntimeException('Unable to read media file for upload.');
@@ -234,6 +245,8 @@ class WpSyncService
 
     private function post(string $path, array $body = []): array
     {
+        $this->assertRemoteWriteAllowed($path);
+
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
         ])->timeout($this->defaultTimeout)->post($this->baseUrl . $path, $body);
@@ -243,6 +256,8 @@ class WpSyncService
 
     private function patch(string $path, array $body = []): array
     {
+        $this->assertRemoteWriteAllowed($path);
+
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
         ])->timeout($this->defaultTimeout)->patch($this->baseUrl . $path, $body);
@@ -252,6 +267,8 @@ class WpSyncService
 
     private function delete(string $path): array
     {
+        $this->assertRemoteWriteAllowed($path);
+
         $response = Http::withHeaders([
             'Authorization' => $this->authHeader,
         ])->timeout($this->defaultTimeout)->delete($this->baseUrl . $path);
@@ -277,6 +294,35 @@ class WpSyncService
         }
 
         return str_ends_with($normalized, '.local');
+    }
+
+    private function assertRemoteWriteAllowed(string $path): void
+    {
+        if (!$this->isRemoteEndpoint($this->baseUrl)) {
+            return;
+        }
+
+        if (app()->environment(['production', 'testing'])) {
+            return;
+        }
+
+        if ((bool) config('wallet.allow_remote_sync_from_non_production', false)) {
+            return;
+        }
+
+        $url = $this->baseUrl . $path;
+        $message = sprintf(
+            'Blocked remote WordPress write to [%s] from [%s] environment.',
+            $url,
+            app()->environment()
+        );
+
+        Log::warning('WpSyncService remote write blocked', [
+            'url' => $url,
+            'environment' => app()->environment(),
+        ]);
+
+        throw new RuntimeException($message);
     }
 
     private function decodeResponse($response, string $method, string $path): array

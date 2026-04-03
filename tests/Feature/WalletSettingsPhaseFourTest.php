@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Mail\WalletSettingsTestMail;
+use App\Models\Client;
 use App\Models\IntegrationSetting;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -81,6 +82,11 @@ class WalletSettingsPhaseFourTest extends TestCase
     public function test_sub_admin_can_update_platform_wallet_settings_and_credentials_for_owned_market(): void
     {
         $platform = $this->createPlatform('Kenya');
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 9012,
+            'wp_user_id' => 7012,
+        ]);
         $user = $this->createUser('sub_admin', [$platform->id]);
 
         app(WalletSettingsService::class)->saveSystemConfig([
@@ -114,6 +120,14 @@ class WalletSettingsPhaseFourTest extends TestCase
         ], $user->id);
 
         Sanctum::actingAs($user);
+        Http::fake([
+            'https://example.test/wp-json/exotic-crm-sync/v1/clients/' . $client->wp_post_id . '/wallet-config' => Http::response([
+                'success' => true,
+            ], 200),
+            'https://example.test/wp-json/exotic-crm-sync/v1/wallet-credentials' => Http::response([
+                'success' => true,
+            ], 200),
+        ]);
 
         $walletResponse = $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}/wallet", [
             'enabled' => true,
@@ -137,7 +151,10 @@ class WalletSettingsPhaseFourTest extends TestCase
             ->assertJsonPath('wallet.enabled', true)
             ->assertJsonPath('wallet.effective_mode', 'sandbox')
             ->assertJsonPath('wallet.providers.mpesa_stk.enabled', true)
-            ->assertJsonPath('wallet.topup_presets.2', '2500.00');
+            ->assertJsonPath('wallet.topup_presets.2', '2500.00')
+            ->assertJsonPath('wallet_config_sync.status', 'synced')
+            ->assertJsonPath('wallet_credentials_sync.status', 'synced')
+            ->assertJsonPath('wallet_credentials_sync.credential_action', 'generated_and_pushed');
 
         $credentialsResponse = $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}/wallet/providers", [
             'pesapal' => [
@@ -169,7 +186,9 @@ class WalletSettingsPhaseFourTest extends TestCase
             ->assertJsonPath('wallet.credentials.pesapal.sandbox.consumer_secret_configured', true)
             ->assertJsonPath('wallet.credentials.paystack.sandbox.secret_key_configured', true)
             ->assertJsonPath('wallet.credentials.mpesa_stk.sandbox.transport', 'django_proxy')
-            ->assertJsonPath('wallet.credentials.mpesa_stk.sandbox.payment_service_base_url', 'https://payments.example.test');
+            ->assertJsonPath('wallet.credentials.mpesa_stk.sandbox.payment_service_base_url', 'https://payments.example.test')
+            ->assertJsonPath('wallet_credentials_sync.status', 'synced')
+            ->assertJsonPath('wallet_credentials_sync.credential_action', 'pushed_existing');
 
         $stored = IntegrationSetting::query()
             ->where('key', 'wallet_platform_credentials_' . $platform->id)

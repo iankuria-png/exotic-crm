@@ -12,7 +12,8 @@ class WalletSyncService
     public function __construct(
         private readonly BillingModeService $billingModeService,
         private readonly WalletPayloadService $walletPayloadService,
-        private readonly WalletService $walletService
+        private readonly WalletService $walletService,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -131,6 +132,17 @@ class WalletSyncService
         }
     }
 
+    public function syncPlatformState(
+        Platform $platform,
+        ?Client $anchorClient = null,
+        ?int $updatedBy = null
+    ): array {
+        return [
+            'config' => $this->syncPlatformConfig($platform, $anchorClient),
+            'credentials' => $this->pushActiveWpCredentials($platform, $updatedBy),
+        ];
+    }
+
     public function syncAllPlatformConfigs(): array
     {
         return Platform::query()
@@ -140,6 +152,179 @@ class WalletSyncService
                 (int) $platform->id => $this->syncPlatformConfig($platform),
             ])
             ->all();
+    }
+
+    public function syncAllPlatformStates(?int $updatedBy = null): array
+    {
+        return Platform::query()
+            ->orderBy('id')
+            ->get()
+            ->mapWithKeys(fn (Platform $platform) => [
+                (int) $platform->id => $this->syncPlatformState($platform, null, $updatedBy),
+            ])
+            ->all();
+    }
+
+    public function pushActiveWpCredentials(Platform $platform, ?int $updatedBy = null): array
+    {
+        $platform = $platform->fresh() ?? $platform;
+        if (!$this->platformHasWpSync($platform)) {
+            return [
+                'status' => 'skipped',
+                'reason' => 'wp_sync_not_configured',
+            ];
+        }
+
+        $context = $this->billingModeService->walletContext($platform);
+        $mode = (string) ($context['mode'] ?? 'disabled');
+        if ($mode === 'disabled') {
+            return [
+                'status' => 'skipped',
+                'reason' => 'wallet_disabled',
+            ];
+        }
+
+        $environment = (string) ($context['environment'] ?? 'sandbox');
+        $credentialPair = $this->walletSettingsService->wpToCrmCredentialPair($platform, $environment);
+        $rotation = null;
+        $credentialAction = 'pushed_existing';
+
+        if (($credentialPair['bearer_key'] ?? '') === '' || ($credentialPair['hmac_secret'] ?? '') === '') {
+            $rotation = $this->walletSettingsService->previewWpCredentialRotation($platform, $environment, 'both');
+            $credentialPair = [
+                'bearer_key' => (string) ($rotation['revealed']['bearer_key'] ?? ''),
+                'hmac_secret' => (string) ($rotation['revealed']['hmac_secret'] ?? ''),
+            ];
+            $credentialAction = 'generated_and_pushed';
+        }
+
+        if (($credentialPair['bearer_key'] ?? '') === '' || ($credentialPair['hmac_secret'] ?? '') === '') {
+            return [
+                'status' => 'failed',
+                'reason' => 'wp_credentials_missing',
+                'environment' => $environment,
+                'credential_action' => $credentialAction,
+            ];
+        }
+
+        $payload = $this->walletSettingsService->wpCredentialSyncPayload($platform, $environment, $credentialPair);
+
+        try {
+            $response = WpSyncService::forPlatform((int) $platform->id)
+                ->pushWalletCredentials($payload);
+
+            $platformWallet = null;
+            if ($rotation !== null) {
+                $platformWallet = $this->walletSettingsService->persistPlatformCredentialsSnapshot(
+                    $platform,
+                    $rotation['credentials'],
+                    $updatedBy
+                );
+            }
+
+            return [
+                'status' => 'synced',
+                'environment' => $environment,
+                'credential_action' => $credentialAction,
+                'response' => $response,
+                'platform_wallet' => $platformWallet,
+            ];
+        } catch (Throwable $exception) {
+            Log::warning('Wallet credential sync to WordPress failed', [
+                'platform_id' => (int) $platform->id,
+                'environment' => $environment,
+                'credential_action' => $credentialAction,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return [
+                'status' => 'failed',
+                'environment' => $environment,
+                'credential_action' => $credentialAction,
+                'error' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    public function rotateWpCredentials(
+        Platform $platform,
+        string $environment,
+        string $credential,
+        ?int $updatedBy = null
+    ): array {
+        $platform = $platform->fresh() ?? $platform;
+        $rotation = $this->walletSettingsService->previewWpCredentialRotation($platform, $environment, $credential);
+        $context = $this->billingModeService->walletContext($platform);
+        $activeEnvironment = (string) ($context['environment'] ?? 'sandbox');
+        $mode = (string) ($context['mode'] ?? 'disabled');
+
+        if ($mode !== 'disabled' && $rotation['environment'] === $activeEnvironment) {
+            $currentPair = $this->walletSettingsService->wpToCrmCredentialPair($platform, $rotation['environment']);
+            $payload = $this->walletSettingsService->wpCredentialSyncPayload($platform, $rotation['environment'], [
+                'bearer_key' => (string) ($rotation['revealed']['bearer_key'] ?? ($currentPair['bearer_key'] ?? '')),
+                'hmac_secret' => (string) ($rotation['revealed']['hmac_secret'] ?? ($currentPair['hmac_secret'] ?? '')),
+            ]);
+
+            try {
+                $response = WpSyncService::forPlatform((int) $platform->id)
+                    ->pushWalletCredentials($payload);
+
+                $platformWallet = $this->walletSettingsService->persistPlatformCredentialsSnapshot(
+                    $platform,
+                    $rotation['credentials'],
+                    $updatedBy
+                );
+
+                return [
+                    'environment' => $rotation['environment'],
+                    'credential' => $rotation['credential'],
+                    'revealed' => $rotation['revealed'],
+                    'platform_wallet' => $platformWallet,
+                    'wp_credentials_sync' => [
+                        'status' => 'synced',
+                        'environment' => $rotation['environment'],
+                        'credential_action' => 'rotated_and_pushed',
+                        'response' => $response,
+                    ],
+                ];
+            } catch (Throwable $exception) {
+                Log::warning('Wallet credential rotation push to WordPress failed', [
+                    'platform_id' => (int) $platform->id,
+                    'environment' => $rotation['environment'],
+                    'error' => $exception->getMessage(),
+                ]);
+
+                return [
+                    'environment' => $rotation['environment'],
+                    'credential' => $rotation['credential'],
+                    'platform_wallet' => $this->walletSettingsService->currentPlatformConfig($platform, masked: true),
+                    'wp_credentials_sync' => [
+                        'status' => 'failed',
+                        'environment' => $rotation['environment'],
+                        'credential_action' => 'rotation_not_persisted',
+                        'error' => $exception->getMessage(),
+                    ],
+                ];
+            }
+        }
+
+        $platformWallet = $this->walletSettingsService->persistPlatformCredentialsSnapshot(
+            $platform,
+            $rotation['credentials'],
+            $updatedBy
+        );
+
+        return [
+            'environment' => $rotation['environment'],
+            'credential' => $rotation['credential'],
+            'revealed' => $rotation['revealed'],
+            'platform_wallet' => $platformWallet,
+            'wp_credentials_sync' => [
+                'status' => 'skipped',
+                'reason' => $mode === 'disabled' ? 'wallet_disabled' : 'environment_not_active',
+                'environment' => $rotation['environment'],
+            ],
+        ];
     }
 
     private function resolveAnchorClient(Platform $platform, ?Client $anchorClient = null): ?Client
