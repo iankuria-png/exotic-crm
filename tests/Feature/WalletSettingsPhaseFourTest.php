@@ -79,6 +79,129 @@ class WalletSettingsPhaseFourTest extends TestCase
         $this->assertNotSame('super-secret-password', data_get($stored->value, 'smtp.password_encrypted'));
     }
 
+    public function test_settings_integrations_includes_current_wallet_and_payment_link_payloads_for_workspace_rendering(): void
+    {
+        $admin = $this->createUser('admin');
+        $platform = $this->createPlatform('Ghana');
+
+        app(WalletSettingsService::class)->saveSystemConfig([
+            'mode' => 'sandbox',
+            'default_currency' => 'GHS',
+            'billing_domains' => [
+                'sandbox' => 'https://sandbox-billing.example.test',
+                'production' => 'https://billing.example.test',
+            ],
+            'billing_branding' => [
+                'sandbox' => [
+                    'business_name' => 'Exotic Test Billing',
+                    'description' => 'Sandbox top-up flow',
+                ],
+                'production' => [
+                    'business_name' => 'Exotic Billing',
+                    'description' => 'Live top-up flow',
+                ],
+            ],
+            'smtp' => [
+                'enabled' => true,
+                'host' => 'smtp.example.test',
+                'port' => 587,
+                'username' => 'wallet-user',
+                'password' => 'super-secret-password',
+                'encryption' => 'tls',
+                'from_address' => 'wallet@example.test',
+                'from_name' => 'Wallet Bot',
+            ],
+            'reason' => 'Seed wallet workspace payload baseline',
+        ], $admin->id);
+
+        app(WalletSettingsService::class)->savePlatformConfig($platform, [
+            'enabled' => true,
+            'mode_override' => 'sandbox',
+            'currency_code' => 'GHS',
+            'max_single_topup' => '75000.00',
+            'max_wallet_balance' => '250000.00',
+            'topup_presets' => ['500.00', '1000.00', '2500.00'],
+            'allow_combined_topup_subscribe' => true,
+            'show_refresh_button' => true,
+            'recent_transactions_limit' => 12,
+            'providers' => [
+                'pesapal' => ['enabled' => false, 'min_amount' => '100.00', 'max_amount' => '150000.00'],
+                'paystack' => ['enabled' => true, 'min_amount' => '100.00', 'max_amount' => '500000.00'],
+                'mpesa_stk' => ['enabled' => true, 'min_amount' => '100.00', 'max_amount' => '120000.00'],
+            ],
+        ]);
+
+        app(WalletSettingsService::class)->savePlatformProviderCredentials($platform, [
+            'paystack' => [
+                'sandbox' => [
+                    'public_key' => 'pk_test_wallet',
+                    'secret_key' => 'sk_test_wallet',
+                ],
+            ],
+            'mpesa_stk' => [
+                'sandbox' => [
+                    'transport' => 'django_proxy',
+                    'payment_service_base_url' => 'https://payments.example.test',
+                    'organization_code' => '76',
+                    'callback_base_url' => 'https://callbacks.example.test',
+                ],
+            ],
+        ], $admin->id);
+
+        app(WalletSettingsService::class)->rotateWpCredentials($platform, 'sandbox', 'both', $admin->id);
+
+        $platform->forceFill([
+            'payment_link_providers' => [
+                'active_provider' => 'paystack_checkout',
+                'providers' => [
+                    'paystack_checkout' => [
+                        'label' => 'Paystack Checkout',
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'paystack',
+                        'environment' => 'sandbox',
+                        'self_checkout_fx_enabled' => true,
+                        'self_checkout_fx_currency' => 'KES',
+                        'self_checkout_fx_rate' => 11.25,
+                    ],
+                    'site_pay_page' => [
+                        'label' => 'Website Pay Page',
+                        'mode' => 'static_url',
+                        'enabled' => true,
+                        'base_url' => 'https://ghana.example.test',
+                        'path' => '/billing/pay',
+                    ],
+                ],
+            ],
+        ])->save();
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/settings/integrations');
+
+        $response->assertOk()
+            ->assertJsonPath('wallet.system.mode', 'sandbox')
+            ->assertJsonPath('wallet.system.smtp.password', '')
+            ->assertJsonPath('wallet.system.smtp.password_configured', true)
+            ->assertJsonPath('wallet.provider_keys', WalletSettingsService::PROVIDERS)
+            ->assertJsonPath('services.wallet_system.status', 'connected')
+            ->assertJsonPath('services.wallet_system.mode', 'sandbox')
+            ->assertJsonPath('services.wallet_system.enabled_markets', 1)
+            ->assertJsonPath('platforms.0.platform_id', $platform->id)
+            ->assertJsonPath('platforms.0.wallet.enabled', true)
+            ->assertJsonPath('platforms.0.wallet.effective_mode', 'sandbox')
+            ->assertJsonPath('platforms.0.wallet.providers.paystack.enabled', true)
+            ->assertJsonPath('platforms.0.wallet.providers.mpesa_stk.enabled', true)
+            ->assertJsonPath('platforms.0.wallet.credentials.paystack.sandbox.secret_key_configured', true)
+            ->assertJsonPath('platforms.0.wallet.credentials.wp_to_crm.sandbox.bearer_key_configured', true)
+            ->assertJsonPath('platforms.0.wallet.credentials.wp_to_crm.sandbox.hmac_configured', true)
+            ->assertJsonPath('platforms.0.payment_link_providers.active_provider', 'paystack_checkout')
+            ->assertJsonPath('platforms.0.payment_link_providers.providers.paystack_checkout.mode', 'proxy_hosted_checkout')
+            ->assertJsonPath('platforms.0.payment_link_providers.providers.paystack_checkout.wallet_provider_key', 'paystack')
+            ->assertJsonPath('platforms.0.payment_link_providers.providers.site_pay_page.mode', 'static_url')
+            ->assertJsonPath('platforms.0.payment_link_providers.providers.site_pay_page.path', '/billing/pay');
+    }
+
     public function test_sub_admin_can_update_platform_wallet_settings_and_credentials_for_owned_market(): void
     {
         $platform = $this->createPlatform('Kenya');

@@ -7,6 +7,9 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import IntegrationsAreaNav from '../components/settings/IntegrationsAreaNav';
+import IntegrationsMetricsRow from '../components/settings/IntegrationsMetricsRow';
+import IntegrationsOverviewPanel from '../components/settings/IntegrationsOverviewPanel';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import { useAuth } from '../hooks/useAuth';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
@@ -2665,84 +2668,25 @@ function IntegrationsWorkspace({
 
     return (
         <div className="space-y-4">
-            <section className="grid gap-4 md:grid-cols-5">
-                <MetricCard
-                    label="Connected Services"
-                    value={connectedServices.toLocaleString()}
-                    meta="runtime integration health"
-                    tone="success"
-                />
-                <MetricCard
-                    label="Markets Configured"
-                    value={platformRows.length.toLocaleString()}
-                    meta="platform runtime profiles"
-                    tone="accent"
-                />
-                <MetricCard
-                    label="WP Sync Ready"
-                    value={wpReadyMarkets.toLocaleString()}
-                    meta="markets with credentials"
-                    tone="default"
-                />
-                <MetricCard
-                    label="Sync Errors"
-                    value={syncErrors.toLocaleString()}
-                    meta="markets requiring intervention"
-                    tone={syncErrors > 0 ? 'danger' : 'success'}
-                />
-                <MetricCard
-                    label="Packages Ready"
-                    value={packageReadyMarkets.toLocaleString()}
-                    meta="markets ready to go live"
-                    tone={packageReadyMarkets < platformRows.length ? 'warning' : 'success'}
-                />
-            </section>
+            <IntegrationsMetricsRow
+                connectedServices={connectedServices}
+                marketCount={platformRows.length}
+                packageReadyMarkets={packageReadyMarkets}
+                syncErrors={syncErrors}
+                wpReadyMarkets={wpReadyMarkets}
+            />
 
-            <section className="crm-surface p-2">
-                <div className="flex flex-wrap gap-2">
-                    {integrationAreas.map((area) => (
-                        <button
-                            key={area.id}
-                            type="button"
-                            onClick={() => setIntegrationArea(area.id)}
-                            aria-pressed={integrationArea === area.id}
-                            className={`min-h-11 rounded-lg px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 ${
-                                integrationArea === area.id
-                                    ? 'bg-white text-slate-900 ring-1 ring-slate-200 shadow-sm'
-                                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
-                            }`}
-                        >
-                            <p className="text-sm font-semibold">{area.label}</p>
-                            <p className="text-[11px] text-slate-500">{area.hint}</p>
-                        </button>
-                    ))}
-                </div>
-            </section>
+            <IntegrationsAreaNav
+                integrationArea={integrationArea}
+                integrationAreas={integrationAreas}
+                onSelect={setIntegrationArea}
+            />
 
             {integrationArea === 'overview' ? (
-                <section className="crm-surface overflow-hidden">
-                    <header className="crm-panel-header">
-                        <div>
-                            <h3 className="crm-panel-title">Service Integrations</h3>
-                            <p className="crm-panel-subtitle">Live status for SMS, payment, and deferred email channels.</p>
-                        </div>
-                    </header>
-                    <div className="divide-y divide-slate-100">
-                        {isLoading ? (
-                            <p className="p-4 text-sm text-slate-500">Loading service health...</p>
-                        ) : serviceRows.map((service) => (
-                            <div key={service.key} className="flex flex-wrap items-center justify-between gap-3 p-4">
-                                <div>
-                                    <p className="text-sm font-semibold text-slate-900">{service.label}</p>
-                                    <p className="text-xs text-slate-500">{service.detail}</p>
-                                </div>
-                                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(service.status)}`}>
-                                    {service.status.replaceAll('_', ' ')}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                </section>
+                <IntegrationsOverviewPanel
+                    isLoading={isLoading}
+                    serviceRows={serviceRows}
+                />
             ) : null}
 
             {integrationArea === 'sms' ? (
