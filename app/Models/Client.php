@@ -48,6 +48,7 @@ class Client extends Model
         'duplicate_of',
         'last_online_at',
         'last_synced_at',
+        'wp_modified_at',
     ];
 
     protected $casts = [
@@ -62,6 +63,7 @@ class Client extends Model
         'last_online_at' => 'integer',
         'wallet_last_synced_at' => 'datetime',
         'last_synced_at' => 'datetime',
+        'wp_modified_at' => 'datetime',
     ];
 
     protected $appends = [

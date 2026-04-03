@@ -5,10 +5,13 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\ClientSyncExclusion;
 use App\Models\Platform;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
 class ClientSyncService
 {
+    private const DELTA_OVERLAP_MINUTES = 5;
+
     private WpSyncService $wpSync;
     private Platform $platform;
 
@@ -67,14 +70,9 @@ class ClientSyncService
     /**
      * Delta sync: only import profiles modified after the last sync
      */
-    public function deltaSync(): array
+    public function deltaSync(int $perPage = 100): array
     {
-        $lastSync = Client::where('platform_id', $this->platform->id)
-            ->max('last_synced_at');
-
-        $modifiedAfter = $lastSync
-            ? \Carbon\Carbon::parse($lastSync)->toIso8601String()
-            : null;
+        $modifiedAfter = $this->resolveDeltaModifiedAfter();
 
         $page = 1;
         $created = 0;
@@ -83,7 +81,7 @@ class ClientSyncService
         $total = 0;
 
         do {
-            $response = $this->wpSync->getClients($page, 100, $modifiedAfter);
+            $response = $this->wpSync->getClients($page, $perPage, $modifiedAfter);
             $clients = $response['data'] ?? [];
             $totalPages = $response['pages'] ?? 1;
 
@@ -166,6 +164,7 @@ class ClientSyncService
             'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
             'main_image_url'  => $imageUrl ?: null,
             'last_synced_at'  => now(),
+            'wp_modified_at'  => $this->normalizeWpModifiedAt($wpClient['modified_at'] ?? null),
         ];
 
         // Only write signup_source if WP provides one (prevents clobbering crm_provisioned/crm_manual)
@@ -240,5 +239,34 @@ class ClientSyncService
         }
 
         return max($fallbacks);
+    }
+
+    private function resolveDeltaModifiedAfter(): ?string
+    {
+        $lastWpModifiedAt = Client::query()
+            ->where('platform_id', $this->platform->id)
+            ->whereNotNull('wp_modified_at')
+            ->max('wp_modified_at');
+
+        if (!$lastWpModifiedAt) {
+            return null;
+        }
+
+        return Carbon::parse((string) $lastWpModifiedAt, 'UTC')
+            ->subMinutes(self::DELTA_OVERLAP_MINUTES)
+            ->toIso8601String();
+    }
+
+    private function normalizeWpModifiedAt($value): ?Carbon
+    {
+        if ($value === null || $value === '' || $value === false) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value, 'UTC')->utc();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }
