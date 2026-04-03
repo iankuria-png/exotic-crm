@@ -1409,6 +1409,7 @@ class TeamActivityService
     {
         return match ((string) $log->action) {
             'client_create' => 'Created client profile',
+            'client_credential_reset' => 'Reset client credentials',
             'deal_activate' => (($log->after_state['deal_status'] ?? null) === 'active')
                 ? 'Activated subscription'
                 : 'Started subscription activation',
@@ -1428,6 +1429,7 @@ class TeamActivityService
             'lead_convert_to_client' => 'Converted lead to client',
             'support_chat_reply' => 'Replied in support chat',
             'client_credential_send' => 'Sent credentials',
+            'client_login_as_client_link' => 'Generated client session link',
             default => ucwords(str_replace('_', ' ', (string) $log->action)),
         };
     }

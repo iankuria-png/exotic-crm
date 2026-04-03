@@ -152,6 +152,22 @@ class TeamLeaderboardAggregationTest extends TestCase
             'entity_id' => 400,
             'created_at' => now()->subMinutes(10),
         ]);
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => 'client_credential_reset',
+            'entity_type' => 'client',
+            'entity_id' => 401,
+            'created_at' => now()->subMinutes(9),
+        ]);
+        $this->createTeamAudit([
+            'platform_id' => $platform->id,
+            'actor_id' => $agent->id,
+            'action' => 'client_login_as_client_link',
+            'entity_type' => 'client',
+            'entity_id' => 402,
+            'created_at' => now()->subMinutes(8),
+        ]);
 
         $this->createTeamSession($agent, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', [
             'started_at' => now()->subHours(2),

@@ -17,6 +17,10 @@ class CredentialDeliveryService
 {
     private const DEFAULT_SUPPORT_CHAT_URL = 'https://chat.cloud.board.support/1369683147';
 
+    public const RESET_PASSWORD_DISABLED_MESSAGE = 'A linked WordPress user and market database credentials are required to reset credentials.';
+    public const LOGIN_AS_CLIENT_DISABLED_MESSAGE = 'A linked WordPress profile and market API credentials are required to generate a client session link.';
+    public const ACCESS_LINKS_DISABLED_MESSAGE = 'No WordPress login or profile URL is configured for this market.';
+
     public function __construct(
         private readonly NotificationService $notificationService
     ) {
@@ -77,6 +81,66 @@ class CredentialDeliveryService
         $normalized = $this->normalizePayload($client, array_merge($payload, $overrides));
 
         return $this->deliverNow($client, $dispatch, $normalized, $actorId);
+    }
+
+    public function accessContext(Client $client): array
+    {
+        $client->loadMissing('platform');
+        $platform = $client->platform;
+
+        if (!$platform) {
+            throw new \InvalidArgumentException('Client platform is required to resolve access context.');
+        }
+
+        $messageBundle = $this->buildMessageBundle($client, $platform, 'setup_link', null);
+
+        $canResetPassword = $this->canResetPassword($client, $platform);
+        $canGenerateSessionLink = $this->canGenerateSessionLink($client, $platform);
+        $hasAccessLinks = filled($messageBundle['login_url'] ?? null)
+            || filled($messageBundle['setup_url'] ?? null)
+            || filled($messageBundle['profile_url'] ?? null);
+
+        return [
+            'wp_username' => $messageBundle['wp_username'] ?? null,
+            'login_url' => $messageBundle['login_url'] ?? null,
+            'setup_url' => $messageBundle['setup_url'] ?? null,
+            'profile_url' => $messageBundle['profile_url'] ?? null,
+            'can_reset_password' => $canResetPassword,
+            'can_generate_session_link' => $canGenerateSessionLink,
+            'messages' => [
+                'reset_password' => $canResetPassword ? null : self::RESET_PASSWORD_DISABLED_MESSAGE,
+                'login_as_client' => $canGenerateSessionLink ? null : self::LOGIN_AS_CLIENT_DISABLED_MESSAGE,
+                'access_links' => $hasAccessLinks ? null : self::ACCESS_LINKS_DISABLED_MESSAGE,
+            ],
+        ];
+    }
+
+    public function resetCredentials(Client $client, array $payload): array
+    {
+        $client->loadMissing('platform');
+        $platform = $client->platform;
+
+        if (!$platform) {
+            throw new \InvalidArgumentException('Client platform is required to reset credentials.');
+        }
+
+        if (!$this->canResetPassword($client, $platform)) {
+            throw new \InvalidArgumentException(self::RESET_PASSWORD_DISABLED_MESSAGE);
+        }
+
+        $temporaryPassword = trim((string) ($payload['temporary_password'] ?? ''));
+        if ($temporaryPassword === '') {
+            $temporaryPassword = $this->generateTemporaryPassword();
+        }
+
+        $this->setWordPressPassword($platform, (int) ($client->wp_user_id ?? 0), $temporaryPassword);
+
+        return [
+            'access_context' => $this->accessContext($client),
+            'revealed' => [
+                'password' => $temporaryPassword,
+            ],
+        ];
     }
 
     private function normalizePayload(Client $client, array $payload): array
@@ -395,6 +459,16 @@ class CredentialDeliveryService
         ];
     }
 
+    private function canResetPassword(Client $client, Platform $platform): bool
+    {
+        return (int) ($client->wp_user_id ?? 0) > 0 && $this->hasWordPressDatabaseCredentials($platform);
+    }
+
+    private function canGenerateSessionLink(Client $client, Platform $platform): bool
+    {
+        return (int) ($client->wp_post_id ?? 0) > 0 && $this->hasWordPressApiCredentials($platform);
+    }
+
     private function resolveTemplate(int $platformId, string $category, string $channel): ?Template
     {
         // Platform-specific template first
@@ -570,7 +644,7 @@ class CredentialDeliveryService
 
     private function connectWordPress(Platform $platform): string
     {
-        if (empty($platform->db_host) || empty($platform->db_name) || empty($platform->db_user) || empty($platform->db_pass)) {
+        if (!$this->hasWordPressDatabaseCredentials($platform)) {
             throw new \InvalidArgumentException('WordPress database credentials are incomplete for this market.');
         }
 
@@ -578,6 +652,21 @@ class CredentialDeliveryService
         DynamicDatabaseService::switchConnection($connectionName, $platform->getConnectionConfig());
 
         return $connectionName;
+    }
+
+    private function hasWordPressDatabaseCredentials(Platform $platform): bool
+    {
+        return filled($platform->db_host)
+            && filled($platform->db_name)
+            && filled($platform->db_user)
+            && filled($platform->db_pass);
+    }
+
+    private function hasWordPressApiCredentials(Platform $platform): bool
+    {
+        return filled($platform->wp_api_url)
+            && filled($platform->wp_api_user)
+            && filled($platform->wp_api_password);
     }
 
     private function resolvePlatformBaseUrl(Platform $platform, ?string $profileUrl = null): ?string

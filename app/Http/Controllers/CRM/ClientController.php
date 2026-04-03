@@ -1467,6 +1467,103 @@ class ClientController extends Controller
         return response()->json($dispatches);
     }
 
+    public function credentialAccessContext(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        try {
+            $context = $this->credentialDeliveryService->accessContext($client);
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Credential access context lookup failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Credential access context could not be loaded.',
+            ], 500);
+        }
+
+        return response()->json($context);
+    }
+
+    public function resetCredentials(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'temporary_password' => 'nullable|string|min:8|max:100',
+            'reason' => 'required|string|max:500',
+            'source' => 'nullable|string|max:100',
+        ]);
+
+        try {
+            $result = $this->credentialDeliveryService->resetCredentials($client, $validated);
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Credential reset failed', [
+                'client_id' => (int) $client->id,
+                'platform_id' => (int) $client->platform_id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Credential reset failed. Please retry.',
+            ], 500);
+        }
+
+        $accessContext = (array) ($result['access_context'] ?? []);
+        $password = (string) data_get($result, 'revealed.password', '');
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'client_credentials_reset',
+            'actor_id' => (int) $request->user()->id,
+            'content' => [
+                'wp_user_id' => (int) ($client->wp_user_id ?? 0),
+                'wp_username' => $accessContext['wp_username'] ?? null,
+                'login_url' => $accessContext['login_url'] ?? null,
+                'profile_url' => $accessContext['profile_url'] ?? null,
+                'password_revealed' => $password !== '',
+                'password_length' => $password !== '' ? strlen($password) : null,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_CREDENTIAL_RESET,
+            'client',
+            (int) $client->id,
+            null,
+            [
+                'wp_user_id' => (int) ($client->wp_user_id ?? 0),
+                'wp_username' => $accessContext['wp_username'] ?? null,
+                'password_revealed' => $password !== '',
+                'password_length' => $password !== '' ? strlen($password) : null,
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'access_context' => $accessContext,
+            'revealed' => [
+                'password' => $password,
+            ],
+        ]);
+    }
+
     public function sendCredentials(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);

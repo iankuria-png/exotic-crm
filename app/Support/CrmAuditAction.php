@@ -50,8 +50,10 @@ final class CrmAuditAction
     public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
     public const CLIENT_SUPPORT_BOARD_PROFILE_SYNC = 'client_support_board_profile_sync';
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
+    public const CLIENT_CREDENTIAL_RESET = 'client_credential_reset';
     public const CLIENT_CREDENTIAL_SEND = 'client_credential_send';
     public const CLIENT_CREDENTIAL_RETRY = 'client_credential_retry';
+    public const CLIENT_LOGIN_AS_CLIENT_LINK = 'client_login_as_client_link';
     public const CLIENT_DELETE = 'client_delete';
     public const CLIENT_BULK_DELETE = 'client_bulk_delete';
     public const CLIENT_WALLET_TOPUP = 'client_wallet_topup';
