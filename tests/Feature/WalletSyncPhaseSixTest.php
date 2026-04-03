@@ -202,6 +202,46 @@ class WalletSyncPhaseSixTest extends TestCase
             });
     }
 
+    public function test_wallet_sync_service_prefers_market_wallet_currency_over_stale_client_currency(): void
+    {
+        app(WalletSettingsService::class)->saveSystemConfig([
+            'mode' => 'production',
+        ]);
+
+        $platform = Platform::factory()->create([
+            'currency_code' => 'KES',
+            'wallet_settings' => [
+                'enabled' => true,
+                'currency_code' => 'GHS',
+            ],
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 9010,
+            'wp_user_id' => 7010,
+            'wallet_balance' => 0,
+            'wallet_currency' => 'KES',
+        ]);
+
+        Http::fake([
+            'https://*.test/wp-json/exotic-crm-sync/v1/clients/9010/wallet-balance' => Http::response([
+                'success' => true,
+            ], 200),
+        ]);
+
+        $result = app(WalletSyncService::class)->syncClientBalance($client);
+
+        $this->assertSame('synced', $result['status']);
+        $this->assertSame('GHS', $result['payload']['currency']);
+        $this->assertSame('production', $result['payload']['mode']);
+
+        Http::assertSent(function (Request $request) use ($platform) {
+            return $request->url() === rtrim($platform->wp_api_url, '/') . '/clients/9010/wallet-balance'
+                && $request['currency'] === 'GHS'
+                && $request['mode'] === 'production';
+        });
+    }
+
     public function test_push_active_wp_credentials_generates_missing_credentials_and_persists_after_successful_push(): void
     {
         app(WalletSettingsService::class)->saveSystemConfig([

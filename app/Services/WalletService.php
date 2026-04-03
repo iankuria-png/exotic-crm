@@ -17,10 +17,11 @@ class WalletService
         $freshClient = $client->fresh(['platform']) ?? $client->loadMissing('platform');
         $transactions = $this->recentTransactions($freshClient, $limit);
         $lastTopup = $this->lastTopup($freshClient);
+        $currencyCode = $this->resolveWalletCurrency($freshClient);
 
         return [
             'balance' => number_format((float) ($freshClient->wallet_balance ?? 0), 2, '.', ''),
-            'currency' => (string) ($freshClient->wallet_currency ?: ($freshClient->platform?->currency_code ?: 'KES')),
+            'currency' => $currencyCode,
             'last_topup' => $lastTopup ? $this->serializeTransaction($lastTopup) : null,
             'transactions' => $transactions->map(fn (WalletTransaction $transaction) => $this->serializeTransaction($transaction))->values()->all(),
             'refreshed_at' => now()->toIso8601String(),
@@ -127,10 +128,10 @@ class WalletService
                 ? $currentBalance - $normalizedAmount
                 : $currentBalance + $normalizedAmount;
 
-            $currencyCode = strtoupper((string) ($options['currency_code']
-                ?? $lockedClient->wallet_currency
-                ?? $lockedClient->platform?->currency_code
-                ?? 'KES'));
+            $currencyCode = $this->resolveWalletCurrency(
+                $lockedClient,
+                isset($options['currency_code']) ? (string) $options['currency_code'] : null
+            );
 
             $lockedClient->forceFill([
                 'wallet_balance' => number_format($nextBalance, 2, '.', ''),
@@ -175,5 +176,31 @@ class WalletService
                 'replayed' => false,
             ];
         }, 3);
+    }
+
+    private function resolveWalletCurrency(Client $client, ?string $override = null): string
+    {
+        $overrideCurrency = strtoupper(trim((string) $override));
+        if ($overrideCurrency !== '') {
+            return $overrideCurrency;
+        }
+
+        $walletSettings = is_array($client->platform?->wallet_settings) ? $client->platform->wallet_settings : [];
+        $walletConfigCurrency = strtoupper(trim((string) ($walletSettings['currency_code'] ?? '')));
+        if ($walletConfigCurrency !== '') {
+            return $walletConfigCurrency;
+        }
+
+        $clientCurrency = strtoupper(trim((string) ($client->wallet_currency ?? '')));
+        if ($clientCurrency !== '') {
+            return $clientCurrency;
+        }
+
+        $platformCurrency = strtoupper(trim((string) ($client->platform?->currency_code ?? '')));
+        if ($platformCurrency !== '') {
+            return $platformCurrency;
+        }
+
+        return 'KES';
     }
 }
