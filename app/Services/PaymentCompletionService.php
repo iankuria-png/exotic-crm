@@ -72,6 +72,8 @@ class PaymentCompletionService
         }
 
         $transactionReference = $this->resolveTransactionReference($payment, $providerPayload, $options);
+        $resolvedProvider = $this->resolveProviderType($payment);
+        $resolvedEnvironment = $this->resolveExecutionEnvironment($payment);
         $payment->forceFill([
             'status' => 'completed',
             'failure_reason' => null,
@@ -85,10 +87,10 @@ class PaymentCompletionService
             'reference_type' => 'wallet_topup',
             'reference_id' => (int) $payment->id,
             'idempotency_key' => 'wallet-topup-credit:' . (int) $payment->id,
-            'description' => sprintf('Wallet top-up via %s', strtoupper((string) $payment->provider_key)),
+            'description' => sprintf('Wallet top-up via %s', strtoupper($resolvedProvider)),
             'metadata' => [
-                'provider' => $payment->provider_key,
-                'provider_environment' => $payment->provider_environment,
+                'provider' => $resolvedProvider,
+                'provider_environment' => $resolvedEnvironment,
                 'transaction_reference' => $transactionReference,
             ],
         ]);
@@ -112,7 +114,7 @@ class PaymentCompletionService
                     $duration,
                     'wallet-auto-subscribe:' . (int) $payment->id,
                     [
-                        'environment' => $payment->provider_environment,
+                        'environment' => $resolvedEnvironment,
                         'origin' => 'wallet_auto_subscribe',
                         'topup_payment_id' => (int) $payment->id,
                     ]
@@ -324,12 +326,7 @@ class PaymentCompletionService
 
     private function resolveExecutionEnvironment(Payment $payment): string
     {
-        $decision = $payment->relationLoaded('routingDecisions')
-            ? $payment->routingDecisions->first()
-            : $payment->routingDecisions()
-                ->where('immutable_until_terminal_state', true)
-                ->latest('id')
-                ->first();
+        $decision = $this->latestPinnedDecision($payment);
 
         if ($decision instanceof BillingRoutingDecision) {
             return strtolower(trim((string) ($decision->environment ?: 'production')));
@@ -348,6 +345,36 @@ class PaymentCompletionService
             'side_effects_skipped' => true,
             'verified_at' => (string) ($existing['verified_at'] ?? now()->toIso8601String()),
         ]);
+    }
+
+    private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
+    {
+        if ($payment->relationLoaded('routingDecisions')) {
+            return $payment->routingDecisions
+                ->sortByDesc(function (BillingRoutingDecision $decision) {
+                    return optional($decision->created_at)->getTimestamp() ?? 0;
+                })
+                ->first();
+        }
+
+        return $payment->routingDecisions()
+            ->where('immutable_until_terminal_state', true)
+            ->latest('id')
+            ->first();
+    }
+
+    private function resolveProviderType(Payment $payment): string
+    {
+        $decision = $this->latestPinnedDecision($payment);
+
+        if ($decision instanceof BillingRoutingDecision) {
+            $provider = strtolower(trim((string) $decision->provider_type_key));
+            if ($provider !== '') {
+                return $provider;
+            }
+        }
+
+        return strtolower(trim((string) $payment->provider_key));
     }
 
     private function walletRecentTransactionsLimit(Payment $payment, int $default = 10): int
