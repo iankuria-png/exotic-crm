@@ -2,10 +2,11 @@ import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
+import { isForbiddenQueryError } from './queryState';
 
 /**
  * WalletRulesTab component displays and manages per-market wallet funding policies.
- * Includes wallet limits, topup presets, auto-renewal rules, and UI preferences.
+ * Includes wallet limits, wallet funding presets, auto-renewal rules, and UI preferences.
  * Phase 3 is read-only; write operations deferred to Phase 4.
  */
 export default function WalletRulesTab({ platforms = [] }) {
@@ -54,7 +55,7 @@ export default function WalletRulesTab({ platforms = [] }) {
                     </h4>
                     <p className="mt-2 text-sm text-slate-600">
                         Select a market below to view and configure its wallet funding policies,
-                        including limits, top-up presets, and auto-renewal settings.
+                        including limits, wallet funding presets, and auto-renewal settings.
                     </p>
                 </section>
 
@@ -88,6 +89,26 @@ export default function WalletRulesTab({ platforms = [] }) {
     }
 
     if (walletRulesQuery.isError) {
+        if (isForbiddenQueryError(walletRulesQuery.error)) {
+            return (
+                <div className="space-y-4 p-5">
+                    <BillingStateNotice
+                        state="forbidden"
+                        eyebrow="Wallet Rules"
+                        title="Wallet funding rules are outside your billing scope"
+                        message="This role cannot inspect the wallet funding policy for the selected market."
+                    />
+                    <button
+                        type="button"
+                        onClick={() => setSelectedMarket(null)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                        Back to Markets
+                    </button>
+                </div>
+            );
+        }
+
         return (
             <div className="space-y-4 p-5">
                 <BillingStateNotice
@@ -158,7 +179,7 @@ export default function WalletRulesTab({ platforms = [] }) {
                     {walletRule.currency_code && (
                         <section className="rounded-xl border border-slate-200 bg-white p-4">
                             <h5 className="text-sm font-semibold text-slate-900">
-                                Currency & Top-up Presets
+                                Currency & Wallet Funding Presets
                             </h5>
                             <div className="mt-3 space-y-3">
                                 <div>
@@ -173,7 +194,7 @@ export default function WalletRulesTab({ platforms = [] }) {
                                 {walletRule.topup_preset_json && (
                                     <div>
                                         <p className="text-xs font-medium text-slate-600">
-                                            Top-up Presets
+                                            Wallet Funding Presets
                                         </p>
                                         <div className="mt-1 flex flex-wrap gap-2">
                                             {Array.isArray(walletRule.topup_preset_json) ? (
@@ -211,9 +232,9 @@ export default function WalletRulesTab({ platforms = [] }) {
                                 Wallet Limits
                             </h5>
                             <dl className="mt-3 space-y-2">
-                                {Object.entries(walletRule.ui_json).map(([key, value], idx) => (
+                                {Object.entries(walletRule.limit_json).map(([key, value], idx) => (
                                     <div
-                                        key={`ui-${walletRule.id}-${idx}`}
+                                        key={`limit-${walletRule.id}-${idx}`}
                                         className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
                                     >
                                         <dt className="text-xs font-medium text-slate-700">
@@ -263,9 +284,9 @@ export default function WalletRulesTab({ platforms = [] }) {
                                 UI Preferences
                             </h5>
                             <dl className="mt-3 space-y-2">
-                                {Object.entries(walletRule.auto_renew_json).map(([key, value], idx) => (
+                                {Object.entries(walletRule.ui_json).map(([key, value], idx) => (
                                     <div
-                                        key={`autorenew-${walletRule.id}-${idx}`}
+                                        key={`ui-${walletRule.id}-${idx}`}
                                         className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
                                     >
                                         <dt className="text-xs font-medium text-slate-700">
@@ -294,7 +315,7 @@ export default function WalletRulesTab({ platforms = [] }) {
                     state="empty"
                     eyebrow={`${selectedMarket?.name} Wallet Rules`}
                     title="No wallet rules configured"
-                    message="Create wallet rules in Phase 4 to set limits, presets, and auto-renewal policies for this market."
+                    message="Create wallet rules in Phase 4 to set wallet funding limits, presets, and auto-renewal policies for this market."
                 />
             )}
 

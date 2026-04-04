@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
+import { isForbiddenQueryError } from './queryState';
 
 /**
  * ProvidersTab component displays the complete catalog of billing providers.
@@ -55,6 +56,19 @@ export default function ProvidersTab({ registryEnabled = true }) {
 
     // Handle error state
     if (providersQuery.isError) {
+        if (isForbiddenQueryError(providersQuery.error)) {
+            return (
+                <div className="space-y-4 p-5">
+                    <BillingStateNotice
+                        state="forbidden"
+                        eyebrow="Providers Catalog"
+                        title="Provider catalog access is restricted"
+                        message="This billing account can open the workspace shell, but it is not allowed to view provider catalog details in this environment."
+                    />
+                </div>
+            );
+        }
+
         return (
             <div className="space-y-4 p-5">
                 <BillingStateNotice

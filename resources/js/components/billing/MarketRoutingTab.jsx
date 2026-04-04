@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
+import { isForbiddenQueryError } from './queryState';
 
 /**
  * MarketRoutingTab component displays and manages market-level provider routing.
@@ -88,6 +89,26 @@ export default function MarketRoutingTab({ platforms = [] }) {
     }
 
     if (routingRulesQuery.isError) {
+        if (isForbiddenQueryError(routingRulesQuery.error)) {
+            return (
+                <div className="space-y-4 p-5">
+                    <BillingStateNotice
+                        state="forbidden"
+                        eyebrow="Market Routing"
+                        title="Routing rules are outside your billing scope"
+                        message="This role cannot inspect market-level routing details for the selected market."
+                    />
+                    <button
+                        type="button"
+                        onClick={() => setSelectedMarket(null)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                        Back to Markets
+                    </button>
+                </div>
+            );
+        }
+
         return (
             <div className="space-y-4 p-5">
                 <BillingStateNotice

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
+import { isForbiddenQueryError } from './queryState';
 
 /**
  * SubscriptionRulesTab component displays and manages market-level subscription rules.
@@ -85,6 +86,26 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
 
     // Error state
     if (subscriptionRulesQuery.isError) {
+        if (isForbiddenQueryError(subscriptionRulesQuery.error)) {
+            return (
+                <div className="space-y-4 p-5">
+                    <BillingStateNotice
+                        state="forbidden"
+                        eyebrow="Subscription Rules"
+                        title="Subscription policy access is restricted"
+                        message="This role cannot inspect subscription activation and wallet-paid renewal policy for the selected market."
+                    />
+                    <button
+                        type="button"
+                        onClick={() => setSelectedMarket(null)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                        Back to Markets
+                    </button>
+                </div>
+            );
+        }
+
         return (
             <div className="space-y-4 p-5">
                 <BillingStateNotice
@@ -178,7 +199,7 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
             {subscriptionRules.renewal_method_json && Object.keys(subscriptionRules.renewal_method_json).length > 0 && (
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
                     <h5 className="text-sm font-semibold text-slate-900">Renewal Methods</h5>
-                    <p className="mt-1 text-xs text-slate-600">Subscription renewal policies</p>
+                    <p className="mt-1 text-xs text-slate-600">Subscription renewal and wallet-paid renewal policies</p>
                     <dl className="mt-3 space-y-2">
                         {Object.entries(subscriptionRules.renewal_method_json).map(([method, config], idx) => (
                             <div

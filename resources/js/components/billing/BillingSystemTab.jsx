@@ -1,5 +1,6 @@
 import React from 'react';
 import BillingStateNotice from './BillingStateNotice';
+import { isForbiddenQueryError } from './queryState';
 
 const environments = ['sandbox', 'production'];
 
@@ -8,6 +9,7 @@ export default function BillingSystemTab({
     source = {},
     isLoading = false,
     isError = false,
+    error = null,
 }) {
     if (isLoading) {
         return (
@@ -22,6 +24,19 @@ export default function BillingSystemTab({
     }
 
     if (isError) {
+        if (isForbiddenQueryError(error)) {
+            return (
+                <div className="space-y-4 p-5">
+                    <BillingStateNotice
+                        state="forbidden"
+                        eyebrow="Billing System"
+                        title="Billing system posture is restricted"
+                        message="This role cannot inspect billing domains, branding, and system-level wallet funding posture in the new Billing workspace."
+                    />
+                </div>
+            );
+        }
+
         return (
             <div className="space-y-4 p-5">
                 <BillingStateNotice

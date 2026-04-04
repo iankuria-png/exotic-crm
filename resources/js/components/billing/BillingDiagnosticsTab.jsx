@@ -1,5 +1,6 @@
 import React from 'react';
 import BillingStateNotice from './BillingStateNotice';
+import { isForbiddenQueryError } from './queryState';
 
 function statusTone(status) {
     if (['connected', 'healthy', 'success'].includes(status)) {
@@ -17,7 +18,7 @@ function statusTone(status) {
     return 'border-rose-200 bg-rose-50 text-rose-800';
 }
 
-export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsEnabled = false, services }) {
+export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsEnabled = false, services, error = null }) {
     const cards = [
         {
             key: 'wallet_system',
@@ -73,6 +74,19 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
     }
 
     if (isError) {
+        if (isForbiddenQueryError(error)) {
+            return (
+                <div className="space-y-4 p-5">
+                    <BillingStateNotice
+                        state="forbidden"
+                        eyebrow="Diagnostics"
+                        title="Billing diagnostics access is restricted"
+                        message="This role can use payment-level diagnostics elsewhere in CRM, but it cannot inspect the Billing diagnostics health surface."
+                    />
+                </div>
+            );
+        }
+
         return (
             <div className="space-y-4 p-5">
                 <BillingStateNotice

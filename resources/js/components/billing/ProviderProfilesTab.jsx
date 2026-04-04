@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
+import { isForbiddenQueryError } from './queryState';
 
 /**
  * ProviderProfilesTab component displays and manages provider profile configurations.
@@ -71,6 +72,19 @@ export default function ProviderProfilesTab({ registryEnabled = true }) {
 
     // Handle error state
     if (profilesQuery.isError) {
+        if (isForbiddenQueryError(profilesQuery.error)) {
+            return (
+                <div className="space-y-4 p-5">
+                    <BillingStateNotice
+                        state="forbidden"
+                        eyebrow="Provider Profiles"
+                        title="Provider profile access is restricted"
+                        message="This role cannot inspect masked provider profile details in the new Billing workspace."
+                    />
+                </div>
+            );
+        }
+
         return (
             <div className="space-y-4 p-5">
                 <BillingStateNotice
@@ -106,7 +120,7 @@ export default function ProviderProfilesTab({ registryEnabled = true }) {
                 </h4>
                 <p className="mt-2 text-sm text-slate-600">
                     Manage multiple provider configurations per payment gateway. Each profile
-                    can target specific markets and contains encrypted credentials.
+                    can target specific markets and exposes masked credential status for review.
                 </p>
             </section>
 

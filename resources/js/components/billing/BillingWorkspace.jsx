@@ -148,6 +148,7 @@ export default function BillingWorkspace() {
                     source={billingSystemQuery.data?.source || {}}
                     isLoading={billingSystemQuery.isLoading}
                     isError={billingSystemQuery.isError}
+                    error={billingSystemQuery.error}
                 />
             ) : null}
 
@@ -157,6 +158,7 @@ export default function BillingWorkspace() {
                     isError={diagnosticsQuery.isError}
                     diagnosticsEnabled={Boolean(features.diagnostics_v2)}
                     services={diagnosticsQuery.data?.services || {}}
+                    error={diagnosticsQuery.error}
                 />
             ) : null}
         </section>
