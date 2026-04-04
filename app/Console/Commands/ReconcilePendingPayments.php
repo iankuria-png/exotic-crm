@@ -4,10 +4,9 @@ namespace App\Console\Commands;
 
 use App\Models\Payment;
 use App\Models\BillingRoutingDecision;
-use App\Services\BillingModeService;
-use App\Services\HostedCheckoutService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentCompletionService;
+use App\Services\ProviderStatusQueryOrchestrator;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -23,10 +22,9 @@ class ReconcilePendingPayments extends Command
     protected $description = 'Verify stale pending Paystack/Pesapal payments and reconcile missed callbacks.';
 
     public function __construct(
-        private readonly BillingModeService $billingModeService,
-        private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly PaymentCompletionService $paymentCompletionService,
-        private readonly PaymentAttemptService $paymentAttemptService
+        private readonly PaymentAttemptService $paymentAttemptService,
+        private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator
     ) {
         parent::__construct();
     }
@@ -139,44 +137,7 @@ class ReconcilePendingPayments extends Command
 
     private function verifyPayment(Payment $payment): array
     {
-        $payment->loadMissing('platform');
-        $provider = $this->resolveProviderTypeKey($payment);
-        $context = $this->billingModeService->providerContext(
-            $payment->platform,
-            $provider,
-            requireEnabled: false,
-            environmentOverride: $this->resolveEnvironment($payment)
-        );
-
-        return match ($provider) {
-            'paystack' => $this->hostedCheckoutService->verifyPaystackTransaction(
-                $payment,
-                $context,
-                (string) $payment->reference_number
-            ),
-            'pesapal' => $this->hostedCheckoutService->verifyPesapalTransaction(
-                $payment,
-                $context,
-                $this->resolvePesapalTrackingId($payment)
-            ),
-            default => throw new \InvalidArgumentException('Unsupported provider for reconciliation.'),
-        };
-    }
-
-    private function resolvePesapalTrackingId(Payment $payment): string
-    {
-        $trackingId = trim((string) (
-            $payment->transaction_reference
-            ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id')
-            ?? data_get($payment->payment_data, 'link_proxy.provider_reference')
-            ?? ''
-        ));
-
-        if ($trackingId === '') {
-            throw new \RuntimeException('Pesapal payment is missing a tracking id for reconciliation.');
-        }
-
-        return $trackingId;
+        return $this->providerStatusQueryOrchestrator->verify($payment);
     }
 
     private function resolveTransactionReference(Payment $payment, array $providerPayload = []): string

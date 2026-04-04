@@ -15,14 +15,13 @@ use App\Models\TimelineEvent;
 use App\Models\AuditLog;
 use App\Services\AuditService;
 use App\Services\BillingGatewayService;
-use App\Services\BillingModeService;
 use App\Services\NotificationService;
 use App\Services\PaymentImportService;
 use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentLinkService;
-use App\Services\HostedCheckoutService;
+use App\Services\ProviderStatusQueryOrchestrator;
 use App\Services\LegacyStkService;
 use App\Models\IntegrationSetting;
 use App\Services\MarketAuthorizationService;
@@ -45,9 +44,8 @@ class PaymentQueueController extends Controller
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly PaymentLinkService $paymentLinkService,
         private readonly PaymentImportService $paymentImportService,
-        private readonly BillingModeService $billingModeService,
         private readonly BillingGatewayService $billingGatewayService,
-        private readonly HostedCheckoutService $hostedCheckoutService,
+        private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator,
         private readonly LegacyStkService $legacyStkService,
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
@@ -1749,11 +1747,6 @@ class PaymentQueueController extends Controller
     private function verifyProviderStatus(Payment $payment): array
     {
         $payment->loadMissing(['platform', 'client', 'product']);
-        $provider = $this->resolvedProviderType($payment);
-
-        if (!in_array($provider, ['paystack', 'pesapal'], true)) {
-            throw new InvalidArgumentException('Live provider checks are available only for Paystack and Pesapal payments.');
-        }
 
         $linkProxy = is_array(data_get($payment->payment_data, 'link_proxy'))
             ? data_get($payment->payment_data, 'link_proxy')
@@ -1765,55 +1758,7 @@ class PaymentQueueController extends Controller
             throw new InvalidArgumentException('Hosted checkout has not been initialized yet for this payment.');
         }
 
-        $context = $this->billingModeService->providerContext(
-            $payment->platform,
-            $provider,
-            requireEnabled: false,
-            environmentOverride: $this->resolvedEnvironment($payment)
-        );
-
-        $result = match ($provider) {
-            'paystack' => $this->hostedCheckoutService->verifyPaystackTransaction(
-                $payment,
-                $context,
-                (string) $payment->reference_number
-            ),
-            'pesapal' => $this->hostedCheckoutService->verifyPesapalTransaction(
-                $payment,
-                $context,
-                $this->resolvePesapalTrackingId($payment)
-            ),
-            default => throw new InvalidArgumentException('Live provider checks are available only for Paystack and Pesapal payments.'),
-        };
-
-        return [
-            'payment_id' => (int) $payment->id,
-            'provider' => $provider,
-            'provider_environment' => $this->resolvedEnvironment($payment),
-            'provider_reference' => $provider === 'pesapal'
-                ? $this->resolvePesapalTrackingId($payment)
-                : ($payment->transaction_reference ?: $payment->reference_number),
-            'status' => (string) ($result['status'] ?? 'failed'),
-            'message' => $result['message'] ?? null,
-            'checked_at' => now()->toDateTimeString(),
-            'data' => is_array($result['data'] ?? null) ? $result['data'] : [],
-        ];
-    }
-
-    private function resolvePesapalTrackingId(Payment $payment): string
-    {
-        $trackingId = trim((string) (
-            $payment->transaction_reference
-            ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id')
-            ?? data_get($payment->payment_data, 'link_proxy.provider_reference')
-            ?? ''
-        ));
-
-        if ($trackingId === '') {
-            throw new InvalidArgumentException('Pesapal status checks require an initialized provider reference.');
-        }
-
-        return $trackingId;
+        return $this->providerStatusQueryOrchestrator->verify($payment);
     }
 
     private function assertSandboxReconcileEligibility(Payment $payment): void
