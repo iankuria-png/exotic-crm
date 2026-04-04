@@ -2,50 +2,34 @@
 
 namespace Tests\Unit\Billing;
 
-use App\Billing\Contracts\BillingProviderAdapter;
-use App\Billing\Providers\ProviderDefinition;
-use App\Billing\Providers\ProviderRegistry;
+use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Providers\ProviderCatalog;
 use App\Billing\Support\BillingRail;
 use App\Billing\Support\BillingSurface;
 use App\Billing\Support\ExecutionMode;
-use App\Billing\Support\ProviderCapability;
-use App\Billing\Support\ProviderCapabilitySet;
-use App\Billing\Support\ProviderOperationType;
-use App\Billing\Support\SettlementSemantics;
-use App\Billing\Support\TransportMode;
 use Tests\TestCase;
 
 class ProviderRegistryTest extends TestCase
 {
-    public function test_provider_registry_resolves_primary_keys_and_aliases_case_insensitively(): void
+    public function test_provider_registry_resolves_catalog_keys_and_aliases_case_insensitively(): void
     {
-        $provider = new class implements BillingProviderAdapter
-        {
-            public function definition(): ProviderDefinition
-            {
-                return new ProviderDefinition(
-                    key: 'kopokopo',
-                    label: 'KopoKopo',
-                    capabilities: new ProviderCapabilitySet(
-                        capabilities: [ProviderCapability::Webhooks, ProviderCapability::StatusQueries],
-                        surfaces: [BillingSurface::WalletFunding, BillingSurface::SelfCheckout],
-                        rails: [BillingRail::MobileMoney],
-                        transportModes: [TransportMode::ServerToServerCollection],
-                        operationTypes: [ProviderOperationType::Initiate, ProviderOperationType::StatusQuery],
-                        settlementSemantics: [SettlementSemantics::Delayed],
-                        executionModes: [ExecutionMode::Direct]
-                    ),
-                    aliases: ['kopo', 'k2']
-                );
-            }
-        };
-
-        $registry = new ProviderRegistry([$provider]);
+        $registry = $this->app->make(BillingProviderRegistryContract::class);
 
         $this->assertTrue($registry->has('KopoKopo'));
-        $this->assertSame($provider, $registry->find('kopo'));
-        $this->assertTrue($registry->find('K2')->definition()->capabilities->supportsRail(BillingRail::MobileMoney));
-        $this->assertTrue($registry->find('kopokopo')->definition()->capabilities->supportsTransportMode(TransportMode::ServerToServerCollection));
-        $this->assertTrue($registry->find('kopokopo')->definition()->capabilities->supportsSettlementSemantics(SettlementSemantics::Delayed));
+        $this->assertSame('kopokopo', $registry->find('kopo')?->definition()->key);
+        $this->assertTrue($registry->find('K2')?->definition()->capabilities->supportsRail(BillingRail::MobileMoney));
+        $this->assertTrue($registry->find('kopokopo')?->definition()->capabilities->supportsSurface(BillingSurface::WalletFunding));
+        $this->assertTrue($registry->find('daraja')?->definition()->capabilities->supportsExecutionMode(ExecutionMode::Proxy));
+    }
+
+    public function test_provider_catalog_declares_legacy_wallet_subset_and_constraints_beyond_surface_flags(): void
+    {
+        $registry = $this->app->make(BillingProviderRegistryContract::class);
+
+        $this->assertSame(['pesapal', 'paystack', 'mpesa_stk'], $registry->legacyWalletProviderKeys());
+        $this->assertTrue($registry->find('nowpayments')?->definition()->supportsCurrency('BTC'));
+        $this->assertFalse($registry->find('nowpayments')?->definition()->capabilities->supportsSurface(BillingSurface::WalletFunding));
+        $this->assertTrue((bool) $registry->find('mpesa_stk')?->definition()->restriction('transitional_transport_alias'));
+        $this->assertCount(count(ProviderCatalog::definitions()), $registry->definitions());
     }
 }

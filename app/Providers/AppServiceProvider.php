@@ -7,6 +7,7 @@ use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryCont
 use App\Billing\Contracts\BillingRouteResolver as BillingRouteResolverContract;
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
 use App\Billing\Diagnostics\BillingDiagnosticsAssembler;
+use App\Billing\Providers\ProviderCatalog;
 use App\Billing\Providers\ProviderRegistry;
 use App\Billing\Providers\ProviderSchemaRegistry;
 use App\Billing\Routing\BillingRouteResolver;
@@ -21,7 +22,9 @@ class AppServiceProvider extends ServiceProvider
     {
         $normalizedBilling = $this->normalizedBillingConfig();
 
-        $this->app->singleton(BillingProviderRegistryContract::class, ProviderRegistry::class);
+        $this->app->singleton(BillingProviderRegistryContract::class, static fn (): ProviderRegistry => new ProviderRegistry(
+            ProviderCatalog::adapters()
+        ));
         $this->app->singleton(ProviderCredentialSchemaRegistryContract::class, ProviderSchemaRegistry::class);
         $this->app->singleton(BillingDiagnosticsAssemblerContract::class, BillingDiagnosticsAssembler::class);
         $this->app->singleton(BillingRouteResolverContract::class, BillingRouteResolver::class);

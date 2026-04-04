@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Mail\WalletSettingsTestMail;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
@@ -18,7 +19,19 @@ class WalletSettingsService
     public const PLATFORM_CREDENTIALS_KEY_PREFIX = 'wallet_platform_credentials_';
     public const MODES = ['disabled', 'sandbox', 'production'];
     public const ENVIRONMENTS = ['sandbox', 'production'];
-    public const PROVIDERS = ['pesapal', 'paystack', 'mpesa_stk'];
+
+    public function __construct(
+        private readonly BillingProviderRegistryContract $providerRegistry
+    ) {
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function providerKeys(): array
+    {
+        return $this->providerRegistry->legacyWalletProviderKeys();
+    }
 
     public function currentSystemConfig(bool $masked = true): array
     {
@@ -844,7 +857,7 @@ class WalletSettingsService
 
         $incomingProviders = $incoming['providers'] ?? [];
         if (is_array($incomingProviders)) {
-            foreach (self::PROVIDERS as $provider) {
+            foreach ($this->providerKeys() as $provider) {
                 $providerInput = $incomingProviders[$provider] ?? null;
                 if (!is_array($providerInput)) {
                     continue;
@@ -1286,7 +1299,7 @@ class WalletSettingsService
     private function normalizeProvider(string $provider): string
     {
         $normalized = strtolower(trim($provider));
-        if (!in_array($normalized, self::PROVIDERS, true)) {
+        if (!in_array($normalized, $this->providerKeys(), true)) {
             throw new InvalidArgumentException('Provider must be pesapal, paystack, or mpesa_stk.');
         }
 

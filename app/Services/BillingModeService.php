@@ -2,13 +2,15 @@
 
 namespace App\Services;
 
+use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Models\Platform;
 use InvalidArgumentException;
 
 class BillingModeService
 {
     public function __construct(
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly BillingProviderRegistryContract $providerRegistry
     ) {
     }
 
@@ -44,9 +46,11 @@ class BillingModeService
     ): array
     {
         $normalizedProvider = strtolower(trim($provider));
-        if (!in_array($normalizedProvider, WalletSettingsService::PROVIDERS, true)) {
+        if (!in_array($normalizedProvider, $this->providerRegistry->legacyWalletProviderKeys(), true)) {
             throw new InvalidArgumentException('Unsupported wallet billing provider.');
         }
+
+        $providerDefinition = $this->providerRegistry->find($normalizedProvider)?->definition();
 
         $context = $requireEnabled
             ? $this->assertWalletAvailable($platform)
@@ -65,6 +69,7 @@ class BillingModeService
         return array_merge($context, [
             'environment' => $environment,
             'provider' => $normalizedProvider,
+            'provider_definition' => $providerDefinition,
             'provider_config' => is_array($providerConfig) ? $providerConfig : [],
             'provider_credentials' => is_array($providerCredentials) ? $providerCredentials : [],
         ]);

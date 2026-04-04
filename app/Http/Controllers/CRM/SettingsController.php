@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
@@ -51,7 +52,8 @@ class SettingsController extends Controller
         private readonly SupportBoardLeadImportService $supportBoardLeadImportService,
         private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly WalletSyncService $walletSyncService
+        private readonly WalletSyncService $walletSyncService,
+        private readonly BillingProviderRegistryContract $billingProviderRegistry
     ) {
     }
 
@@ -150,10 +152,16 @@ class SettingsController extends Controller
                 'enabled' => (bool) config('services.billing.enabled', false),
                 'features' => (array) config('services.billing.features', []),
                 'provider_families' => (array) config('services.billing.provider_family', []),
+                'registry' => [
+                    'providers' => array_values(array_map(
+                        static fn ($definition) => $definition->toArray(),
+                        $this->billingProviderRegistry->definitions()
+                    )),
+                ],
             ],
             'wallet' => [
                 'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
-                'provider_keys' => WalletSettingsService::PROVIDERS,
+                'provider_keys' => $this->walletSettingsService->providerKeys(),
                 'mode_options' => WalletSettingsService::MODES,
                 'environment_options' => WalletSettingsService::ENVIRONMENTS,
             ],
@@ -504,7 +512,7 @@ class SettingsController extends Controller
         return response()->json([
             'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
             'platforms' => $platforms,
-            'provider_keys' => WalletSettingsService::PROVIDERS,
+            'provider_keys' => $this->walletSettingsService->providerKeys(),
             'mode_options' => WalletSettingsService::MODES,
             'environment_options' => WalletSettingsService::ENVIRONMENTS,
         ]);
@@ -983,7 +991,7 @@ class SettingsController extends Controller
         );
 
         $validated = $request->validate([
-            'provider' => ['required', Rule::in(WalletSettingsService::PROVIDERS)],
+            'provider' => ['required', Rule::in($this->walletSettingsService->providerKeys())],
             'environment' => ['required', Rule::in(WalletSettingsService::ENVIRONMENTS)],
             'reason' => 'nullable|string|max:500',
         ]);

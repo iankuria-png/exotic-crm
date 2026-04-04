@@ -28,11 +28,45 @@ final class BillingRouteRequest
             return trim($this->decisionKey);
         }
 
+        return $this->composeLookupKey(
+            $this->marketId,
+            $this->currencyCode,
+            $this->preferredExecutionMode
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function candidateLookupKeys(): array
+    {
+        if ($this->decisionKey !== null && trim($this->decisionKey) !== '') {
+            return [trim($this->decisionKey)];
+        }
+
+        $marketCandidates = [$this->marketId, null];
+        $currencyCandidates = [$this->currencyCode, null];
+        $executionModeCandidates = [$this->preferredExecutionMode, null];
+        $keys = [];
+
+        foreach ($marketCandidates as $marketId) {
+            foreach ($currencyCandidates as $currencyCode) {
+                foreach ($executionModeCandidates as $executionMode) {
+                    $keys[] = $this->composeLookupKey($marketId, $currencyCode, $executionMode);
+                }
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function composeLookupKey(?int $marketId, ?string $currencyCode, ?ExecutionMode $executionMode): string
+    {
         return implode(':', [
             $this->surface->value,
-            $this->marketId ?? 'any',
-            $this->currencyCode ? strtolower($this->currencyCode) : 'any',
-            $this->preferredExecutionMode?->value ?? 'any',
+            $marketId ?? 'any',
+            $currencyCode ? strtolower($currencyCode) : 'any',
+            $executionMode?->value ?? 'any',
         ]);
     }
 }

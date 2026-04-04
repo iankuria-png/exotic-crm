@@ -185,6 +185,7 @@ class WalletSettingsPhaseFourTest extends TestCase
         Sanctum::actingAs($admin);
 
         $response = $this->getJson('/api/crm/settings/integrations');
+        $walletSettingsService = app(WalletSettingsService::class);
 
         $response->assertOk()
             ->assertJsonPath('billing.enabled', true)
@@ -192,10 +193,12 @@ class WalletSettingsPhaseFourTest extends TestCase
             ->assertJsonPath('billing.features.diagnostics_v2', true)
             ->assertJsonPath('billing.provider_families.kopokopo.enabled', true)
             ->assertJsonPath('billing.provider_families.paystack.enabled', false)
+            ->assertJsonPath('billing.registry.providers.0.key', 'pesapal')
+            ->assertJsonPath('billing.registry.providers.3.key', 'daraja')
             ->assertJsonPath('wallet.system.mode', 'sandbox')
             ->assertJsonPath('wallet.system.smtp.password', '')
             ->assertJsonPath('wallet.system.smtp.password_configured', true)
-            ->assertJsonPath('wallet.provider_keys', WalletSettingsService::PROVIDERS)
+            ->assertJsonPath('wallet.provider_keys', $walletSettingsService->providerKeys())
             ->assertJsonPath('services.wallet_system.status', 'connected')
             ->assertJsonPath('services.wallet_system.mode', 'sandbox')
             ->assertJsonPath('services.wallet_system.enabled_markets', 1)

@@ -6,4 +6,5 @@ enum ExecutionMode: string
 {
     case Direct = 'direct';
     case Proxy = 'proxy';
+    case Transitional = 'transitional';
 }

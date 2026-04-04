@@ -4,6 +4,7 @@ namespace App\Billing\Providers;
 
 use App\Billing\Contracts\BillingProviderAdapter;
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Support\BillingSurface;
 
 class ProviderRegistry implements BillingProviderRegistryContract
 {
@@ -28,6 +29,33 @@ class ProviderRegistry implements BillingProviderRegistryContract
     public function all(): array
     {
         return $this->providers;
+    }
+
+    public function definitions(): array
+    {
+        return array_map(
+            static fn (BillingProviderAdapter $provider): ProviderDefinition => $provider->definition(),
+            $this->providers
+        );
+    }
+
+    public function keys(): array
+    {
+        return array_values(array_map(
+            static fn (ProviderDefinition $definition): string => $definition->key,
+            $this->definitions()
+        ));
+    }
+
+    public function legacyWalletProviderKeys(): array
+    {
+        return array_values(array_map(
+            static fn (ProviderDefinition $definition): string => $definition->key,
+            array_filter(
+                $this->definitions(),
+                static fn (ProviderDefinition $definition): bool => (bool) $definition->meta('legacy_wallet_selectable', false)
+            )
+        ));
     }
 
     public function find(string $providerKey): ?BillingProviderAdapter
@@ -55,5 +83,19 @@ class ProviderRegistry implements BillingProviderRegistryContract
     public function register(BillingProviderAdapter $provider): void
     {
         $this->providers[strtolower(trim($provider->definition()->key))] = $provider;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function keysForSurface(BillingSurface $surface): array
+    {
+        return array_values(array_map(
+            static fn (ProviderDefinition $definition): string => $definition->key,
+            array_filter(
+                $this->definitions(),
+                static fn (ProviderDefinition $definition): bool => $definition->capabilities->supportsSurface($surface)
+            )
+        ));
     }
 }

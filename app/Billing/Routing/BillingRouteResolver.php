@@ -21,7 +21,13 @@ class BillingRouteResolver implements BillingRouteResolverContract
 
     public function resolve(BillingRouteRequest $request): ?BillingRouteDecision
     {
-        return $this->decisions[$request->lookupKey()] ?? null;
+        foreach ($request->candidateLookupKeys() as $lookupKey) {
+            if (isset($this->decisions[$lookupKey])) {
+                return $this->decisions[$lookupKey];
+            }
+        }
+
+        return null;
     }
 
     public function register(string $lookupKey, BillingRouteDecision $decision): void
