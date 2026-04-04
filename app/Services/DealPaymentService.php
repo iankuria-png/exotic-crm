@@ -19,7 +19,8 @@ class DealPaymentService
     public function __construct(
         private readonly AuditService $auditService,
         private readonly LegacyStkService $legacyStkService,
-        private readonly PaymentLinkService $paymentLinkService
+        private readonly PaymentLinkService $paymentLinkService,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -410,8 +411,8 @@ class DealPaymentService
     public function resolvePaymentLinkProvider(Client $client, ?string $requestedProvider): ?string
     {
         $client->loadMissing('platform');
-        $config = is_array($client->platform?->payment_link_providers)
-            ? $client->platform->payment_link_providers
+        $config = $client->platform
+            ? ($this->walletSettingsService->currentPaymentLinkProviders($client->platform) ?? [])
             : [];
 
         $providers = collect($config['providers'] ?? [])

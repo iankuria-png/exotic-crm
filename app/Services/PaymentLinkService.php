@@ -18,7 +18,8 @@ class PaymentLinkService
         private readonly NotificationService $notificationService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly AuditService $auditService,
-        private readonly BillingModeService $billingModeService
+        private readonly BillingModeService $billingModeService,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -43,13 +44,15 @@ class PaymentLinkService
 
     public function resolveProviderConfig(?Platform $platform, ?string $requestedProvider = null): ?array
     {
-        if (!$platform || !is_array($platform->payment_link_providers)) {
+        $paymentLinkProviders = $platform ? $this->walletSettingsService->currentPaymentLinkProviders($platform) : null;
+
+        if (!$platform || !is_array($paymentLinkProviders)) {
             return null;
         }
 
-        $configuredProvider = trim((string) ($platform->payment_link_providers['active_provider'] ?? ''));
+        $configuredProvider = trim((string) ($paymentLinkProviders['active_provider'] ?? ''));
         $activeProvider = trim((string) ($requestedProvider ?: $configuredProvider));
-        $providers = $platform->payment_link_providers['providers'] ?? [];
+        $providers = $paymentLinkProviders['providers'] ?? [];
 
         if ($activeProvider === '' || !is_array($providers) || !isset($providers[$activeProvider]) || !is_array($providers[$activeProvider])) {
             return null;

@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingProviderProfile;
+use App\Models\BillingRoutingRule;
 use App\Models\Deal;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
@@ -134,6 +137,42 @@ class DealControllerTest extends TestCase
             'reason' => 'Route payment through Paystack checkout',
             'payment_method' => 'link',
             'payment_link_provider' => 'paystack_checkout',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('deal.id', $deal->id);
+
+        $payment = Deal::query()->findOrFail($deal->id)->payment()->firstOrFail();
+        $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->latest('id')->firstOrFail();
+
+        $this->assertSame('paystack_checkout', $payment->provider_key);
+        $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'payment_link_provider'));
+        $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'resolved_provider'));
+        $this->assertSame('paystack_checkout', $attempt->provider);
+        $this->assertSame('paystack_checkout', data_get($attempt->request_meta, 'requested_provider'));
+    }
+
+    public function test_deal_link_activation_uses_projected_payment_link_provider_when_shadow_read_is_enabled(): void
+    {
+        config(['billing.shadow_read.enabled' => true]);
+
+        $platform = $this->createLinkPlatform();
+        $platform->forceFill([
+            'payment_link_providers' => null,
+        ])->save();
+
+        $this->createProjectedProxyHostedCheckoutForPlatform($platform, 'paystack', 'Projected Paystack Production', 'production');
+
+        $product = $this->createProductForPlatform($platform);
+        $client = $this->createClientForPlatform($platform, 9203);
+        $user = $this->createAuthorizedUser('sales', [$platform->id]);
+        $deal = $this->createPendingDeal($platform, $product, $client, $user);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'reason' => 'Route payment through projected checkout config',
+            'payment_method' => 'link',
         ]);
 
         $response->assertStatus(202)
@@ -431,6 +470,47 @@ class DealControllerTest extends TestCase
                     ],
                 ],
             ],
+        ]);
+    }
+
+    private function createProjectedProxyHostedCheckoutForPlatform(
+        Platform $platform,
+        string $providerTypeKey,
+        string $profileName,
+        string $environment
+    ): void {
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => $providerTypeKey,
+            'profile_name' => $profileName,
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => $environment,
+            'config_json' => [],
+            'secrets_json' => [],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'proxy_hosted_checkout',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'proxy',
+            'priority' => 10,
+            'fallback_group' => 'checkout',
+            'restriction_json' => [],
+        ]);
+
+        BillingRoutingRule::query()->create([
+            'market_id' => $platform->id,
+            'billing_surface' => 'proxy_hosted_checkout',
+            'primary_binding_id' => $binding->id,
+            'fallback_strategy_json' => ['providers' => []],
+            'risk_policy_json' => ['mode' => 'proxy_preferred'],
+            'active' => true,
         ]);
     }
 
