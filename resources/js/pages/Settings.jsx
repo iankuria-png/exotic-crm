@@ -7,6 +7,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import BillingWorkspace from '../components/billing/BillingWorkspace';
 import IntegrationsAreaNav from '../components/settings/IntegrationsAreaNav';
 import IntegrationsMetricsRow from '../components/settings/IntegrationsMetricsRow';
 import IntegrationsOverviewPanel from '../components/settings/IntegrationsOverviewPanel';
@@ -24,6 +25,7 @@ import { useToast } from '../components/ToastProvider';
 
 const baseTabs = [
     { id: 'integrations', label: 'Integrations' },
+    { id: 'billing', label: 'Billing' },
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
@@ -6464,13 +6466,33 @@ export default function Settings() {
     const canManagePushProviders = ['admin', 'sub_admin'].includes(user?.role || '');
     const canManageWalletSystem = (user?.role || '') === 'admin';
     const canManageWalletPlatforms = ['admin', 'sub_admin'].includes(user?.role || '');
+    const canAccessBillingWorkspace = ['admin', 'sub_admin'].includes(user?.role || '');
     const canManageSms = (user?.role || '') === 'admin';
     const canViewUpdates = ['admin', 'sub_admin'].includes(user?.role || '');
     const canDeployUpdates = (user?.role || '') === 'admin';
+    const billingAvailabilityQuery = useQuery({
+        queryKey: ['billing-workspace-availability'],
+        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data?.billing || {}),
+        enabled: !isSales,
+        staleTime: 60_000,
+    });
+    const billingWorkspaceEnabled = Boolean(
+        billingAvailabilityQuery.data?.features?.workspace ?? billingAvailabilityQuery.data?.enabled
+    );
 
     const tabs = useMemo(() => {
-        return baseTabs.filter((tab) => (tab.id === 'roles' ? canViewRoles : true));
-    }, [canViewRoles]);
+        return baseTabs.filter((tab) => {
+            if (tab.id === 'roles') {
+                return canViewRoles;
+            }
+
+            if (tab.id === 'billing') {
+                return canAccessBillingWorkspace && billingWorkspaceEnabled;
+            }
+
+            return true;
+        });
+    }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canViewRoles]);
 
     useEffect(() => {
         if (!tabs.find((tab) => tab.id === activeTab)) {
@@ -6513,6 +6535,7 @@ export default function Settings() {
                 />
             ) : null}
 
+            {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}

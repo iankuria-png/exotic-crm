@@ -87,6 +87,8 @@ class WalletSettingsPhaseFourTest extends TestCase
             'services.billing.enabled' => true,
             'services.billing.features.workspace' => true,
             'services.billing.features.diagnostics_v2' => true,
+            'services.billing.provider_family.kopokopo.enabled' => true,
+            'services.billing.provider_family.paystack.enabled' => false,
         ]);
 
         app(WalletSettingsService::class)->saveSystemConfig([
@@ -188,6 +190,8 @@ class WalletSettingsPhaseFourTest extends TestCase
             ->assertJsonPath('billing.enabled', true)
             ->assertJsonPath('billing.features.workspace', true)
             ->assertJsonPath('billing.features.diagnostics_v2', true)
+            ->assertJsonPath('billing.provider_families.kopokopo.enabled', true)
+            ->assertJsonPath('billing.provider_families.paystack.enabled', false)
             ->assertJsonPath('wallet.system.mode', 'sandbox')
             ->assertJsonPath('wallet.system.smtp.password', '')
             ->assertJsonPath('wallet.system.smtp.password_configured', true)

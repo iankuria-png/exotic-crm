@@ -149,6 +149,7 @@ class SettingsController extends Controller
             'billing' => [
                 'enabled' => (bool) config('services.billing.enabled', false),
                 'features' => (array) config('services.billing.features', []),
+                'provider_families' => (array) config('services.billing.provider_family', []),
             ],
             'wallet' => [
                 'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
