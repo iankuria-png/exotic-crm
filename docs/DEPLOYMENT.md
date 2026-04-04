@@ -129,7 +129,40 @@ Go to **cPanel > Cron Jobs**, use **Common Settings → "Once Per Minute"** or t
 * * * * * cd /home/d9410/crm.exotic-online.com && /opt/cpanel/ea-php82/root/usr/bin/php artisan schedule:run >> /dev/null 2>&1
 ```
 
-**Note:** Do NOT paste cron syntax directly into the terminal — it must go through cPanel Cron Jobs UI or `crontab -e`.
+**Notes:**
+
+- Do NOT paste cron syntax directly into the terminal — it must go through cPanel Cron Jobs UI or `crontab -e`.
+- Keep exactly one scheduler cron on the server.
+- Do **not** add direct `php artisan crm:*` cron entries; all CRM automation must flow through `schedule:run`.
+- Keep exactly one queue worker process path for the app. If you use a direct `queue:work` cron or Supervisor entry, do not add a second competing queue worker cron path elsewhere.
+
+### 10.1 Set up Laravel Pulse server monitoring
+
+Pulse itself is available at `/pulse` once the package is installed and migrated. To populate the **Servers** card, run `pulse:check` under Supervisor on each production app server:
+
+```ini
+[program:exotic-pulse-check]
+command=/opt/cpanel/ea-php82/root/usr/bin/php /home/d9410/crm.exotic-online.com/artisan pulse:check
+directory=/home/d9410/crm.exotic-online.com
+autostart=true
+autorestart=true
+user=d9410
+redirect_stderr=true
+stdout_logfile=/home/d9410/logs/pulse-check.log
+stopasgroup=true
+killasgroup=true
+```
+
+After each deployment, gracefully restart the Pulse daemon so it picks up new code:
+
+```bash
+/opt/cpanel/ea-php82/root/usr/bin/php artisan pulse:restart
+```
+
+**Notes:**
+
+- Pulse is an operations dashboard, not part of the CRM SPA. Open it directly at `/pulse` or via the link in **Settings → System Health**.
+- Keep one `pulse:check` process per server. Do not run multiple competing Pulse daemons on the same app node.
 
 ### 11. Fix deploy script for production
 

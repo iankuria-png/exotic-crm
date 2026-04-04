@@ -326,6 +326,8 @@ export default function SystemHealthWorkspace({
     });
 
     const [copiedQueueCron, setCopiedQueueCron] = useState(false);
+    const pulseUrl = queueStatusQuery.data?.pulse_url || '/pulse';
+    const pulseCheckCommand = queueStatusQuery.data?.pulse_check_command || null;
 
     const handleBackupUpload = async (e) => {
         const file = e.target.files?.[0];
@@ -701,6 +703,35 @@ export default function SystemHealthWorkspace({
                                 <p className="mt-2 text-xs text-slate-500">Queue worker runs automatically via the Laravel scheduler — no separate cron job needed. Fallback: add this command to cPanel cron jobs if the scheduler cron is not set up.</p>
                             </div>
                         ) : null}
+
+                        <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-900">Laravel Pulse</p>
+                                    <p className="mt-1 text-xs text-slate-600">
+                                        Open the dedicated operational dashboard for queues, slow jobs, slow requests, slow queries, outgoing integrations, cache, exceptions, and server resource usage.
+                                    </p>
+                                </div>
+                                <a
+                                    href={pulseUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="crm-btn-secondary px-3 py-2"
+                                >
+                                    Open Pulse
+                                </a>
+                            </div>
+
+                            {pulseCheckCommand ? (
+                                <div className="mt-3">
+                                    <p className="mb-2 text-xs font-semibold text-slate-700">Pulse server monitor command</p>
+                                    <div className="rounded-lg bg-slate-950 p-3">
+                                        <p className="break-all font-mono text-xs text-indigo-200">{pulseCheckCommand}</p>
+                                    </div>
+                                    <p className="mt-2 text-xs text-slate-500">Run this under Supervisor on each production app server so the Pulse Servers card shows CPU, memory, and storage.</p>
+                                </div>
+                            ) : null}
+                        </div>
                     </div>
                 </section>
             ) : null}

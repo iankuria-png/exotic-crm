@@ -164,9 +164,16 @@ class SystemHealthUpdateController extends Controller
         }
 
         $jobBreakdown = DB::table('jobs')
-            ->selectRaw("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.displayName')) as job_class, COUNT(*) as count")
-            ->groupBy('job_class')
-            ->pluck('count', 'job_class');
+            ->get(['payload'])
+            ->map(function ($job): ?string {
+                $payload = json_decode((string) ($job->payload ?? ''), true);
+
+                return is_array($payload) ? ($payload['displayName'] ?? null) : null;
+            })
+            ->filter(fn (?string $jobClass): bool => filled($jobClass))
+            ->countBy()
+            ->sortDesc()
+            ->all();
 
         $latestFailedPayload = $latestFailed ? json_decode($latestFailed->payload, true) : null;
 
@@ -179,8 +186,22 @@ class SystemHealthUpdateController extends Controller
             'latest_failed_exception' => $latestFailed ? Str::limit($latestFailed->exception, 300) : null,
             'latest_failed_job' => $latestFailedPayload ? class_basename($latestFailedPayload['displayName'] ?? '') : null,
             'job_breakdown' => $jobBreakdown,
-            'queue_cron_command' => sprintf(
-                '* * * * * cd %s && %s artisan queue:work database --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
+            'queue_cron_command' => ($queueConnection = (string) config('queue.default', 'sync')) !== 'sync'
+                ? sprintf(
+                    '* * * * * cd %s && %s artisan queue:work %s --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
+                    base_path(),
+                    config('deployment.php_binary', '/usr/local/bin/php'),
+                    $queueConnection
+                )
+                : null,
+            'pulse_url' => url('/' . ltrim((string) config('pulse.path', 'pulse'), '/')),
+            'pulse_check_command' => sprintf(
+                'cd %s && %s artisan pulse:check',
+                base_path(),
+                config('deployment.php_binary', '/usr/local/bin/php')
+            ),
+            'pulse_restart_command' => sprintf(
+                'cd %s && %s artisan pulse:restart',
                 base_path(),
                 config('deployment.php_binary', '/usr/local/bin/php')
             ),

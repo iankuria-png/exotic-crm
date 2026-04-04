@@ -205,6 +205,24 @@ class SystemHealthUpdatesTest extends TestCase
         ]);
     }
 
+    public function test_queue_status_includes_pulse_monitoring_metadata(): void
+    {
+        $user = $this->createUser('sub_admin');
+
+        config([
+            'deployment.php_binary' => '/opt/cpanel/ea-php82/root/usr/bin/php',
+            'pulse.path' => 'pulse',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/settings/system-health/queue-status')
+            ->assertOk()
+            ->assertJsonPath('pulse_url', url('/pulse'))
+            ->assertJsonPath('pulse_check_command', 'cd ' . base_path() . ' && /opt/cpanel/ea-php82/root/usr/bin/php artisan pulse:check')
+            ->assertJsonPath('pulse_restart_command', 'cd ' . base_path() . ' && /opt/cpanel/ea-php82/root/usr/bin/php artisan pulse:restart');
+    }
+
     private function createUser(string $role, array $assignedMarketIds = []): User
     {
         return User::factory()->create([

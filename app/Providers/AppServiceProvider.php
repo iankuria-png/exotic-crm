@@ -7,6 +7,7 @@ use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryCont
 use App\Billing\Contracts\BillingRouteResolver as BillingRouteResolverContract;
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
 use App\Billing\Diagnostics\BillingDiagnosticsAssembler;
+use App\Models\User;
 use App\Billing\Providers\ProviderCatalog;
 use App\Billing\Providers\ProviderRegistry;
 use App\Billing\Providers\ProviderSchemaCatalog;
@@ -16,7 +17,9 @@ use App\Services\Routing\ProviderRoutingDispatcher;
 use App\Services\Routing\HostedCheckoutRoutingExecutor;
 use App\Services\Routing\MpesaStkRoutingExecutor;
 use App\Services\Routing\SubscriptionRoutingExecutor;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Pulse\Facades\Pulse;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -77,7 +80,31 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Gate::define('viewPulse', function (?User $user): bool {
+            if (app()->environment('local')) {
+                return true;
+            }
+
+            return $user instanceof User
+                && $user->isActive()
+                && in_array((string) $user->role, ['admin', 'sub_admin'], true);
+        });
+
+        Pulse::user(function (User $user): array {
+            $email = strtolower(trim((string) ($user->email ?? '')));
+            $role = str_replace('_', ' ', (string) ($user->role ?? 'user'));
+
+            return [
+                'name' => (string) ($user->name ?: 'Unknown user'),
+                'extra' => trim(implode(' • ', array_filter([
+                    ucwords($role),
+                    $email,
+                ]))),
+                'avatar' => $email !== ''
+                    ? 'https://www.gravatar.com/avatar/' . md5($email) . '?d=mp'
+                    : null,
+            ];
+        });
     }
 
     private function normalizedBillingConfig(): array
