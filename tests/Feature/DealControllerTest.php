@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingProviderProfile;
@@ -131,7 +132,7 @@ class DealControllerTest extends TestCase
         $this->assertSame('subscription_link', data_get($decision->snapshot_json, 'execution_family'));
     }
 
-    public function test_deal_link_activation_uses_selected_payment_link_provider(): void
+    public function test_sales_deal_link_activation_ignores_requested_payment_link_provider(): void
     {
         $platform = $this->createLinkPlatform();
         $product = $this->createProductForPlatform($platform);
@@ -152,12 +153,60 @@ class DealControllerTest extends TestCase
 
         $payment = Deal::query()->findOrFail($deal->id)->payment()->firstOrFail();
         $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->latest('id')->firstOrFail();
+        $audit = AuditLog::query()->where('entity_type', 'deal')->where('entity_id', $deal->id)->latest('id')->firstOrFail();
+
+        $this->assertSame('site_pay_page', $payment->provider_key);
+        $this->assertSame('site_pay_page', data_get($payment->raw_payload, 'payment_link_provider'));
+        $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'requested_payment_link_provider'));
+        $this->assertFalse((bool) data_get($payment->raw_payload, 'provider_override_applied'));
+        $this->assertTrue((bool) data_get($payment->raw_payload, 'provider_override_denied'));
+        $this->assertSame('site_pay_page', data_get($payment->raw_payload, 'resolved_provider'));
+        $this->assertSame('site_pay_page', $attempt->provider);
+        $this->assertSame('site_pay_page', data_get($attempt->request_meta, 'requested_provider'));
+        $this->assertSame('paystack_checkout', data_get($audit->after_state, 'requested_payment_link_provider'));
+        $this->assertFalse((bool) data_get($audit->after_state, 'payment_link_provider_override_applied'));
+        $this->assertTrue((bool) data_get($audit->after_state, 'payment_link_provider_override_denied'));
+
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();
+        $this->assertNotNull($decision);
+        $this->assertSame('subscription_link', $decision->billing_surface);
+        $this->assertSame('site_pay_page', $decision->provider_type_key);
+        $this->assertSame('direct', $decision->execution_mode);
+        $this->assertSame('subscription_link', data_get($decision->snapshot_json, 'execution_family'));
+    }
+
+    public function test_admin_deal_link_activation_can_apply_payment_link_provider_override(): void
+    {
+        $platform = $this->createLinkPlatform();
+        $product = $this->createProductForPlatform($platform);
+        $client = $this->createClientForPlatform($platform, 9204);
+        $user = $this->createAuthorizedUser('admin', [$platform->id]);
+        $deal = $this->createPendingDeal($platform, $product, $client, $user);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'reason' => 'Route payment through Paystack checkout',
+            'payment_method' => 'link',
+            'payment_link_provider' => 'paystack_checkout',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('deal.id', $deal->id);
+
+        $payment = Deal::query()->findOrFail($deal->id)->payment()->firstOrFail();
+        $audit = AuditLog::query()->where('entity_type', 'deal')->where('entity_id', $deal->id)->latest('id')->firstOrFail();
 
         $this->assertSame('paystack_checkout', $payment->provider_key);
         $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'payment_link_provider'));
-        $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'resolved_provider'));
-        $this->assertSame('paystack_checkout', $attempt->provider);
-        $this->assertSame('paystack_checkout', data_get($attempt->request_meta, 'requested_provider'));
+        $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'requested_payment_link_provider'));
+        $this->assertTrue((bool) data_get($payment->raw_payload, 'provider_override_applied'));
+        $this->assertFalse((bool) data_get($payment->raw_payload, 'provider_override_denied'));
+        $this->assertSame('admin', data_get($payment->raw_payload, 'provider_override_actor_role'));
+        $this->assertSame('paystack_checkout', data_get($audit->after_state, 'payment_link_provider'));
+        $this->assertSame('paystack_checkout', data_get($audit->after_state, 'requested_payment_link_provider'));
+        $this->assertTrue((bool) data_get($audit->after_state, 'payment_link_provider_override_applied'));
+        $this->assertFalse((bool) data_get($audit->after_state, 'payment_link_provider_override_denied'));
 
         $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();
         $this->assertNotNull($decision);

@@ -346,13 +346,15 @@ class ClientController extends Controller
 
         $client->loadMissing('platform');
 
-        $paymentLinkProvider = $this->dealPaymentService->resolvePaymentLinkProvider(
+        $paymentLinkSelection = $this->dealPaymentService->resolvePaymentLinkProvider(
             $client,
-            $validated['payment_link_provider'] ?? null
+            $validated['payment_link_provider'] ?? null,
+            $request->user()
         );
+        $paymentLinkProvider = $paymentLinkSelection['provider'] ?? null;
 
         if ($validated['mode'] === 'quick_subscribe') {
-            $result = DB::transaction(function () use ($request, $client, $validated, $paymentLinkProvider) {
+            $result = DB::transaction(function () use ($request, $client, $validated, $paymentLinkProvider, $paymentLinkSelection) {
                 $deal = $this->dealPaymentService->createPendingDealFromCatalog(
                     $client,
                     (int) $validated['product_id'],
@@ -367,6 +369,7 @@ class ClientController extends Controller
                     $client,
                     $request,
                     $paymentLinkProvider,
+                    $paymentLinkSelection,
                     true
                 );
             });
@@ -396,12 +399,13 @@ class ClientController extends Controller
 
         $payment = $deal->payment;
         if ($deal->status === 'pending' && !$payment) {
-            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider) {
+            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider, $paymentLinkSelection) {
                 return $this->dealPaymentService->startLinkPaymentForDeal(
                     $deal,
                     $client,
                     $request,
                     $paymentLinkProvider,
+                    $paymentLinkSelection,
                     true
                 );
             });
@@ -413,12 +417,13 @@ class ClientController extends Controller
         }
 
         if (!$payment) {
-            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider) {
+            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider, $paymentLinkSelection) {
                 return $this->dealPaymentService->startLinkPaymentForDeal(
                     $deal,
                     $client,
                     $request,
                     $paymentLinkProvider,
+                    $paymentLinkSelection,
                     true
                 );
             });
@@ -442,6 +447,11 @@ class ClientController extends Controller
                 'channel' => 'sms',
                 'phone' => $payment->phone ?: $client->phone_normalized,
                 'provider' => $paymentLinkProvider,
+                'requested_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                'provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                'provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                'provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
+                'provider_override_actor_role' => $paymentLinkSelection['actor_role'] ?? null,
                 'reason' => (string) ($validated['reason'] ?? 'Resend payment link from client profile'),
                 'notification_purpose' => 'deal_activation_payment_link',
                 'notification_context' => [
@@ -469,12 +479,13 @@ class ClientController extends Controller
         }
 
         if (in_array($paymentStatus, Payment::REPLACEMENT_REQUIRED_STATUSES, true)) {
-            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider) {
+            $result = DB::transaction(function () use ($request, $deal, $client, $paymentLinkProvider, $paymentLinkSelection) {
                 return $this->dealPaymentService->startLinkPaymentForDeal(
                     $deal,
                     $client,
                     $request,
                     $paymentLinkProvider,
+                    $paymentLinkSelection,
                     true
                 );
             });

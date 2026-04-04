@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -187,6 +188,62 @@ class ClientPaymentLinkFlowTest extends TestCase
 
         $this->assertSame('awaiting_payment', $deal->status);
         $this->assertSame('initiated', $payment->status);
+    }
+
+    public function test_sales_quick_subscribe_ignores_requested_payment_link_provider_override(): void
+    {
+        $platform = $this->createPlatform();
+        $platform->forceFill([
+            'payment_link_providers' => [
+                'active_provider' => 'site_pay_page',
+                'providers' => [
+                    'site_pay_page' => [
+                        'label' => 'Website pay page',
+                        'mode' => 'static_url',
+                        'enabled' => true,
+                        'base_url' => 'https://market.example.test',
+                        'path' => '/billing/pay',
+                    ],
+                    'paystack_checkout' => [
+                        'label' => 'Paystack checkout',
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'paystack',
+                        'environment' => 'production',
+                    ],
+                ],
+            ],
+        ])->save();
+
+        $product = $this->createProduct($platform);
+        $price = $this->createPrice($product, 3200);
+        $client = $this->createClient($platform, 9105);
+        $user = $this->createUser($platform);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/payment-link", [
+            'mode' => 'quick_subscribe',
+            'product_id' => $product->id,
+            'product_price_id' => $price->id,
+            'payment_link_provider' => 'paystack_checkout',
+            'reason' => 'Start premium checkout from client profile',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('payment.provider_key', 'site_pay_page');
+
+        $deal = Deal::query()->latest('id')->firstOrFail();
+        $payment = Payment::query()->findOrFail($deal->payment_id);
+        $audit = AuditLog::query()->where('entity_type', 'payment')->where('entity_id', $payment->id)->latest('id')->firstOrFail();
+
+        $this->assertSame('site_pay_page', data_get($payment->raw_payload, 'payment_link_provider'));
+        $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'requested_payment_link_provider'));
+        $this->assertFalse((bool) data_get($payment->raw_payload, 'provider_override_applied'));
+        $this->assertTrue((bool) data_get($payment->raw_payload, 'provider_override_denied'));
+        $this->assertSame('paystack_checkout', data_get($audit->before_state, 'requested_provider'));
+        $this->assertTrue((bool) data_get($audit->after_state, 'provider_override_denied'));
+        $this->assertFalse((bool) data_get($audit->after_state, 'provider_override_applied'));
     }
 
     private function createPlatform(): Platform

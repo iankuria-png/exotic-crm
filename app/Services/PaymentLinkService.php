@@ -207,12 +207,17 @@ class PaymentLinkService
             'channel' => $channel,
             'phone' => $phone,
             'provider' => $providerKey,
+            'requested_provider' => $options['requested_provider'] ?? null,
         ];
         $afterState = [
             'sms_success' => $result['success'] ?? false,
             'sms_status' => $result['status'] ?? null,
             'provider' => $providerKey,
             'mode' => $providerMode,
+            'provider_override_requested' => (bool) ($options['provider_override_requested'] ?? false),
+            'provider_override_applied' => (bool) ($options['provider_override_applied'] ?? false),
+            'provider_override_denied' => (bool) ($options['provider_override_denied'] ?? false),
+            'provider_override_actor_role' => $options['provider_override_actor_role'] ?? null,
         ];
         $reason = (string) ($options['reason'] ?? 'Send payment link from CRM');
 

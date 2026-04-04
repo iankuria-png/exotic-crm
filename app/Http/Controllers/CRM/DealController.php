@@ -241,9 +241,10 @@ class DealController extends Controller
         if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
-        $paymentLinkProvider = $paymentMethod === 'link'
-            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+        $paymentLinkSelection = $paymentMethod === 'link'
+            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null, $request->user())
             : null;
+        $paymentLinkProvider = $paymentLinkSelection['provider'] ?? null;
 
         // Resolve duration days: explicit request param → ProductPrice lookup → legacy enum fallback
         $explicitDays = isset($validated['duration_days']) ? (int) $validated['duration_days'] : 0;
@@ -290,7 +291,7 @@ class DealController extends Controller
                     (int) $request->user()->id
                 );
             } elseif ($paymentMethod === 'link') {
-                $result = $this->dealPaymentService->startLinkPaymentForDeal($deal, $client, $request, $paymentLinkProvider);
+                $result = $this->dealPaymentService->startLinkPaymentForDeal($deal, $client, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
                 if ($discountAudit && $discountAudit['applied']) {
                     $this->recordDiscountAudit(
                         $request,
@@ -313,7 +314,7 @@ class DealController extends Controller
                     'payment' => $payment,
                 ], 202);
             } elseif ($paymentMethod === 'stk') {
-                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -338,6 +339,10 @@ class DealController extends Controller
                     'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
                     'payment_link_provider' => $paymentLinkProvider,
+                    'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                    'payment_link_provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                    'payment_link_provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                    'payment_link_provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
                 ];
 
                 $this->auditService->fromRequest(
@@ -624,9 +629,10 @@ class DealController extends Controller
         if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
-        $paymentLinkProvider = $paymentMethod === 'link'
-            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+        $paymentLinkSelection = $paymentMethod === 'link'
+            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null, $request->user())
             : null;
+        $paymentLinkProvider = $paymentLinkSelection['provider'] ?? null;
 
         $beforeState = [
             'expires_at' => $deal->expires_at?->toDateTimeString(),
@@ -662,7 +668,7 @@ class DealController extends Controller
                     (int) $request->user()->id
                 );
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -702,6 +708,10 @@ class DealController extends Controller
                     'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
                     'payment_link_provider' => $paymentLinkProvider,
+                    'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                    'payment_link_provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                    'payment_link_provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                    'payment_link_provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
                     'extension_payment_id' => $payment?->id,
                 ],
                 (string) $validated['reason']
@@ -806,9 +816,10 @@ class DealController extends Controller
         if ($freeTrialGuard = $this->freeTrialPermissionResponse($request, $paymentMethod, $validated['free_trial_pin'] ?? null)) {
             return $freeTrialGuard;
         }
-        $paymentLinkProvider = $paymentMethod === 'link'
-            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null)
+        $paymentLinkSelection = $paymentMethod === 'link'
+            ? $this->dealPaymentService->resolvePaymentLinkProvider($client, $validated['payment_link_provider'] ?? null, $request->user())
             : null;
+        $paymentLinkProvider = $paymentLinkSelection['provider'] ?? null;
         $isFreeTrial = $paymentMethod === 'free_trial';
 
         $beforeState = [
@@ -872,7 +883,7 @@ class DealController extends Controller
                     'payment_reference' => $payment->transaction_reference,
                 ]);
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->dealPaymentService->initiatePaymentForDeal($newDeal, $client, $paymentMethod, $request, $paymentLinkProvider);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal($newDeal, $client, $paymentMethod, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -920,6 +931,10 @@ class DealController extends Controller
                     'discount_percentage' => $newDeal->discount_percentage !== null ? (float) $newDeal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
                     'payment_link_provider' => $paymentLinkProvider,
+                    'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                    'payment_link_provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                    'payment_link_provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                    'payment_link_provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
                     'is_free_trial' => (bool) $newDeal->is_free_trial,
                 ],
                 (string) $validated['reason']

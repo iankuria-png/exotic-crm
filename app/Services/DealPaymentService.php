@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Billing\BillingPermissions;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\TimelineEvent;
+use App\Models\User;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
@@ -128,7 +130,8 @@ class DealPaymentService
         Client $client,
         string $method,
         Request $request,
-        ?string $paymentLinkProvider = null
+        ?string $paymentLinkProvider = null,
+        array $paymentLinkSelection = []
     ): array {
         $client->loadMissing('platform');
 
@@ -258,6 +261,11 @@ class DealPaymentService
                 'channel' => 'sms',
                 'phone' => $phone,
                 'provider' => $paymentLinkProvider,
+                'requested_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                'provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                'provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                'provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
+                'provider_override_actor_role' => $paymentLinkSelection['actor_role'] ?? null,
                 'reason' => (string) ($request->input('reason') ?: 'Send payment link from deal flow'),
                 'notification_purpose' => 'deal_activation_payment_link',
                 'notification_context' => [
@@ -276,6 +284,11 @@ class DealPaymentService
                         'source' => 'deal_payment_initiation',
                         'method' => 'link',
                         'payment_link_provider' => $paymentLinkProvider,
+                        'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                        'provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                        'provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                        'provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
+                        'provider_override_actor_role' => $paymentLinkSelection['actor_role'] ?? null,
                         'resolved_provider' => $sendResult['provider'] ?? $paymentLinkProvider,
                         'payment_url' => $sendResult['payment_url'] ?? null,
                         'error' => $sendResult['message'] ?? 'Payment link SMS could not be sent.',
@@ -302,6 +315,11 @@ class DealPaymentService
                     'source' => 'deal_payment_initiation',
                     'method' => 'link',
                     'payment_link_provider' => $paymentLinkProvider,
+                    'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                    'provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                    'provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                    'provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
+                    'provider_override_actor_role' => $paymentLinkSelection['actor_role'] ?? null,
                     'resolved_provider' => $sendResult['provider'] ?? $paymentLinkProvider,
                     'payment_url' => $sendResult['payment_url'] ?? null,
                     'sms_status' => data_get($sendResult, 'notification_result.status'),
@@ -341,6 +359,7 @@ class DealPaymentService
         Client $client,
         Request $request,
         ?string $paymentLinkProvider,
+        array $paymentLinkSelection = [],
         bool $allowPreparedLinkFallback = false
     ): array {
         $beforeState = [
@@ -351,7 +370,7 @@ class DealPaymentService
             'payment_method' => 'link',
         ];
 
-        $initiation = $this->initiatePaymentForDeal($deal, $client, 'link', $request, $paymentLinkProvider);
+        $initiation = $this->initiatePaymentForDeal($deal, $client, 'link', $request, $paymentLinkProvider, $paymentLinkSelection);
         $paymentReady = (bool) ($initiation['payment_ready'] ?? false);
         if (!($initiation['success'] ?? false) && !($allowPreparedLinkFallback && $paymentReady)) {
             throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
@@ -381,6 +400,11 @@ class DealPaymentService
                 'payment_reference' => $deal->payment_reference,
                 'payment_method' => 'link',
                 'payment_link_provider' => $paymentLinkProvider,
+                'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
+                'payment_link_provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
+                'payment_link_provider_override_applied' => (bool) ($paymentLinkSelection['override_applied'] ?? false),
+                'payment_link_provider_override_denied' => (bool) ($paymentLinkSelection['override_denied'] ?? false),
+                'payment_link_provider_override_actor_role' => $paymentLinkSelection['actor_role'] ?? null,
             ],
             (string) ($request->input('reason') ?: 'Activation initiated pending payment')
         );
@@ -408,7 +432,7 @@ class DealPaymentService
         ];
     }
 
-    public function resolvePaymentLinkProvider(Client $client, ?string $requestedProvider): ?string
+    public function resolvePaymentLinkProvider(Client $client, ?string $requestedProvider, ?User $actor = null): array
     {
         $client->loadMissing('platform');
         $config = $client->platform
@@ -425,22 +449,48 @@ class DealPaymentService
         }
 
         $requestedProvider = trim((string) $requestedProvider);
-        if ($requestedProvider !== '') {
+        $overrideRequested = $requestedProvider !== '';
+        $overrideAllowed = $overrideRequested && BillingPermissions::canAccessBillingWorkspace($actor);
+        $overrideApplied = false;
+
+        if ($overrideAllowed) {
             if (!$providers->has($requestedProvider)) {
                 throw ValidationException::withMessages([
                     'payment_link_provider' => 'Selected payment-link provider is not enabled for this market.',
                 ]);
             }
 
-            return $requestedProvider;
+            $overrideApplied = true;
+
+            return [
+                'provider' => $requestedProvider,
+                'requested_provider' => $requestedProvider,
+                'override_requested' => true,
+                'override_allowed' => true,
+                'override_applied' => true,
+                'override_denied' => false,
+                'actor_role' => $actor?->role,
+            ];
         }
 
         $activeProvider = trim((string) ($config['active_provider'] ?? ''));
+        $resolvedProvider = null;
+
         if ($activeProvider !== '' && $providers->has($activeProvider)) {
-            return $activeProvider;
+            $resolvedProvider = $activeProvider;
+        } else {
+            $resolvedProvider = (string) $providers->keys()->first();
         }
 
-        return (string) $providers->keys()->first();
+        return [
+            'provider' => $resolvedProvider,
+            'requested_provider' => $overrideRequested ? $requestedProvider : null,
+            'override_requested' => $overrideRequested,
+            'override_allowed' => $overrideAllowed,
+            'override_applied' => $overrideApplied,
+            'override_denied' => $overrideRequested && !$overrideApplied,
+            'actor_role' => $actor?->role,
+        ];
     }
 
     public function resolveScopedProduct(int $productId, int $platformId): Product
