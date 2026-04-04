@@ -12,6 +12,9 @@ use App\Billing\Providers\ProviderRegistry;
 use App\Billing\Providers\ProviderSchemaCatalog;
 use App\Billing\Providers\ProviderSchemaRegistry;
 use App\Billing\Routing\BillingRouteResolver;
+use App\Services\Routing\ProviderRoutingDispatcher;
+use App\Services\Routing\HostedCheckoutRoutingExecutor;
+use App\Services\Routing\MpesaStkRoutingExecutor;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -31,6 +34,26 @@ class AppServiceProvider extends ServiceProvider
         ));
         $this->app->singleton(BillingDiagnosticsAssemblerContract::class, BillingDiagnosticsAssembler::class);
         $this->app->singleton(BillingRouteResolverContract::class, BillingRouteResolver::class);
+
+        // Register provider routing executors
+        $this->app->singleton(ProviderRoutingDispatcher::class, function ($app) {
+            $dispatcher = new ProviderRoutingDispatcher();
+            
+            // Register hosted checkout executor
+            $dispatcher->register(
+                $app->make(HostedCheckoutRoutingExecutor::class),
+                'paystack',
+                'pesapal'
+            );
+            
+            // Register M-Pesa STK executor
+            $dispatcher->register(
+                $app->make(MpesaStkRoutingExecutor::class),
+                'mpesa_stk'
+            );
+            
+            return $dispatcher;
+        });
 
         config()->set('billing', array_replace_recursive(
             (array) config('billing', []),
