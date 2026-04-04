@@ -460,6 +460,7 @@ export default function ClientDetail() {
     const isReadOnly = currentUser?.role === 'marketing';
     const canManageWallet = ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
     const canDeleteClient = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
+    const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
 
     const { data: timelineData } = useQuery({
         queryKey: ['client-timeline', id],
@@ -653,7 +654,7 @@ export default function ClientDetail() {
                 payment_method: paymentMethod,
                 ...(paymentMethod === 'manual' ? { payment_reference: paymentReference } : {}),
                 ...(paymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPin } : {}),
-                ...(paymentMethod === 'link' && paymentLinkProvider ? { payment_link_provider: paymentLinkProvider } : {}),
+                ...(paymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProvider ? { payment_link_provider: paymentLinkProvider } : {}),
                 ...(paymentMethod !== 'free_trial' && discountPercentage > 0
                     ? { discount_percentage: discountPercentage, discount_pin: discountPin }
                     : {}),
@@ -708,7 +709,7 @@ export default function ClientDetail() {
                 payment_method: selectedPaymentMethod,
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
-                ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
+                ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
                 ...(selectedPaymentMethod !== 'free_trial' && discountPercentageValue > 0
                     ? { discount_percentage: discountPercentageValue, discount_pin: discountPinValue }
                     : {}),
@@ -741,7 +742,7 @@ export default function ClientDetail() {
                 payment_method: selectedPaymentMethod,
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
-                ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
+                ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
                 ...(selectedPaymentMethod !== 'free_trial' && discountPercentageValue > 0
                     ? { discount_percentage: discountPercentageValue, discount_pin: discountPinValue }
                     : {}),
@@ -1803,7 +1804,7 @@ export default function ClientDetail() {
                                             <input type="text" value={dealPaymentReference} onChange={(e) => setDealPaymentReference(e.target.value)} className="crm-input" placeholder="e.g. MPESA123ABC" />
                                         </div>
                                     ) : null}
-                                    {dealPaymentMethod === 'link' ? (
+                                    {dealPaymentMethod === 'link' && canOverridePaymentLinkProvider ? (
                                         <div className="space-y-2">
                                             <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
                                             <select
@@ -1821,6 +1822,19 @@ export default function ClientDetail() {
                                             </select>
                                             <p className="text-xs text-slate-500">
                                                 Choose who sends the payment link.
+                                            </p>
+                                        </div>
+                                    ) : null}
+                                    {dealPaymentMethod === 'link' && !canOverridePaymentLinkProvider ? (
+                                        <div className="space-y-2">
+                                            <p className="mb-1 block text-sm font-medium text-slate-700">Link provider</p>
+                                            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                                                {paymentLinkProviderOptions.length
+                                                    ? 'Billing policy will use the market active provider for this payment link.'
+                                                    : 'No enabled payment-link provider is configured for this market yet.'}
+                                            </div>
+                                            <p className="text-xs text-slate-500">
+                                                Operators follow the market billing policy. Admins can override the provider in Billing settings.
                                             </p>
                                         </div>
                                     ) : null}
@@ -2975,7 +2989,7 @@ export default function ClientDetail() {
                                     </div>
                                 ) : null}
 
-                                {activationPaymentMethod === 'link' ? (
+                                {activationPaymentMethod === 'link' && canOverridePaymentLinkProvider ? (
                                     <div className="space-y-2">
                                         <label htmlFor="client-detail-payment-link-provider" className="mb-1 block text-sm font-medium text-slate-700">
                                             Link provider
@@ -2996,6 +3010,20 @@ export default function ClientDetail() {
                                         </select>
                                         <p className="text-xs text-slate-500">
                                             Choose who sends the payment link.
+                                        </p>
+                                    </div>
+                                ) : null}
+
+                                {activationPaymentMethod === 'link' && !canOverridePaymentLinkProvider ? (
+                                    <div className="space-y-2">
+                                        <p className="mb-1 block text-sm font-medium text-slate-700">Link provider</p>
+                                        <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                                            {paymentLinkProviderOptions.length
+                                                ? 'Billing policy will use the market active provider for this activation.'
+                                                : 'No enabled payment-link provider is configured for this market yet.'}
+                                        </div>
+                                        <p className="text-xs text-slate-500">
+                                            Operators follow the market billing policy. Admins can override the provider in Billing settings.
                                         </p>
                                     </div>
                                 ) : null}
@@ -3147,6 +3175,7 @@ export default function ClientDetail() {
                     deals={paymentLinkEligibleDeals}
                     providerOptions={paymentLinkProviderOptions}
                     defaultProvider={defaultPaymentLinkProvider}
+                    canOverridePaymentLinkProvider={canOverridePaymentLinkProvider}
                     result={paymentLinkResult}
                     isPending={sendPaymentLinkMutation.isPending}
                     onClose={closePaymentLinkModal}
@@ -3419,6 +3448,7 @@ function PaymentLinkModal({
     deals,
     providerOptions,
     defaultProvider,
+    canOverridePaymentLinkProvider,
     result,
     isPending,
     onClose,
@@ -3474,7 +3504,7 @@ function PaymentLinkModal({
     const handleQuickSubmit = (event) => {
         event.preventDefault();
 
-        if (!quickForm.product_id || !quickForm.product_price_id || !quickForm.payment_link_provider) {
+        if (!quickForm.product_id || !quickForm.product_price_id) {
             return;
         }
 
@@ -3482,25 +3512,30 @@ function PaymentLinkModal({
             mode: 'quick_subscribe',
             product_id: Number(quickForm.product_id),
             product_price_id: Number(quickForm.product_price_id),
-            payment_link_provider: quickForm.payment_link_provider,
+            ...(canOverridePaymentLinkProvider && quickForm.payment_link_provider ? { payment_link_provider: quickForm.payment_link_provider } : {}),
             reason: 'Create and send payment link from client profile',
         });
     };
 
     const handleExistingDealSend = (dealId) => {
-        if (!existingProvider) {
+        if (canOverridePaymentLinkProvider && !existingProvider) {
             return;
         }
 
         onSendExistingDeal({
             mode: 'existing_deal',
             deal_id: Number(dealId),
-            payment_link_provider: existingProvider,
+            ...(canOverridePaymentLinkProvider && existingProvider ? { payment_link_provider: existingProvider } : {}),
             reason: 'Resend payment link from client profile',
         });
     };
 
-    const canSendQuick = Boolean(quickForm.product_id && quickForm.product_price_id && quickForm.payment_link_provider && !isPending);
+    const canSendQuick = Boolean(
+        quickForm.product_id
+        && quickForm.product_price_id
+        && (!canOverridePaymentLinkProvider || quickForm.payment_link_provider)
+        && !isPending
+    );
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={onClose}>
@@ -3608,22 +3643,33 @@ function PaymentLinkModal({
                                     <p className="text-sm text-amber-600">No active pricing options are available for this package.</p>
                                 ) : null}
 
-                                <div>
-                                    <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
-                                    <select
-                                        value={quickForm.payment_link_provider}
-                                        onChange={(event) => setQuickForm((current) => ({ ...current, payment_link_provider: event.target.value }))}
-                                        className="crm-select w-full"
-                                        disabled={!providerOptions.length}
-                                    >
-                                        <option value="">{providerOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
-                                        {providerOptions.map((provider) => (
-                                            <option key={provider.key} value={provider.key}>
-                                                {provider.optionLabel}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
+                                {canOverridePaymentLinkProvider ? (
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
+                                        <select
+                                            value={quickForm.payment_link_provider}
+                                            onChange={(event) => setQuickForm((current) => ({ ...current, payment_link_provider: event.target.value }))}
+                                            className="crm-select w-full"
+                                            disabled={!providerOptions.length}
+                                        >
+                                            <option value="">{providerOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
+                                            {providerOptions.map((provider) => (
+                                                <option key={provider.key} value={provider.key}>
+                                                    {provider.optionLabel}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <p className="mb-1 block text-sm font-medium text-slate-700">Link provider</p>
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                            {providerOptions.length
+                                                ? 'Billing policy will use the market active provider when this link is sent.'
+                                                : 'No enabled payment-link provider is configured for this market yet.'}
+                                        </div>
+                                    </div>
+                                )}
 
                                 {selectedPrice ? (
                                     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
@@ -3647,22 +3693,33 @@ function PaymentLinkModal({
                                 <h4 className="mt-1 text-base font-semibold text-slate-900">Resend a link for pending checkout</h4>
                             </div>
 
-                            <div className="mb-4">
-                                <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
-                                <select
-                                    value={existingProvider}
-                                    onChange={(event) => setExistingProvider(event.target.value)}
-                                    className="crm-select w-full"
-                                    disabled={!providerOptions.length}
-                                >
-                                    <option value="">{providerOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
-                                    {providerOptions.map((provider) => (
-                                        <option key={provider.key} value={provider.key}>
-                                            {provider.optionLabel}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
+                            {canOverridePaymentLinkProvider ? (
+                                <div className="mb-4">
+                                    <label className="mb-1 block text-sm font-medium text-slate-700">Link provider</label>
+                                    <select
+                                        value={existingProvider}
+                                        onChange={(event) => setExistingProvider(event.target.value)}
+                                        className="crm-select w-full"
+                                        disabled={!providerOptions.length}
+                                    >
+                                        <option value="">{providerOptions.length ? 'Choose link provider' : 'No enabled provider available'}</option>
+                                        {providerOptions.map((provider) => (
+                                            <option key={provider.key} value={provider.key}>
+                                                {provider.optionLabel}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            ) : (
+                                <div className="mb-4 space-y-2">
+                                    <p className="mb-1 block text-sm font-medium text-slate-700">Link provider</p>
+                                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                        {providerOptions.length
+                                            ? 'Billing policy will use the market active provider when this link is resent.'
+                                            : 'No enabled payment-link provider is configured for this market yet.'}
+                                    </div>
+                                </div>
+                            )}
 
                             {deals.length ? (
                                 <div className="space-y-3">
@@ -3680,7 +3737,7 @@ function PaymentLinkModal({
                                                 <button
                                                     type="button"
                                                     onClick={() => handleExistingDealSend(deal.id)}
-                                                    disabled={isPending || !existingProvider}
+                                                    disabled={isPending || (canOverridePaymentLinkProvider && !existingProvider)}
                                                     className="crm-btn-secondary whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     {isPending ? 'Preparing...' : 'Resend Link'}

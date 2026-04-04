@@ -10,6 +10,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { useAuth } from '../hooks/useAuth';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 
@@ -38,6 +39,7 @@ export default function Deals() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
+    const { user } = useAuth();
     const [searchParams] = useSearchParams();
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
@@ -172,6 +174,7 @@ export default function Deals() {
     const paymentRequiresReference = paymentMethod === 'manual';
     const paymentRequiresFreeTrialPin = paymentMethod === 'free_trial';
     const paymentRequiresProvider = paymentMethod === 'link';
+    const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(user?.role || ''));
 
     useEffect(() => {
         if (!dialog.type) {
@@ -190,7 +193,7 @@ export default function Deals() {
                 payment_method: selectedPaymentMethod,
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
-                ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
+                ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
             }).then((response) => response.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
@@ -1139,7 +1142,7 @@ export default function Deals() {
                                         </div>
                                     ) : null}
 
-                                    {paymentMethod === 'link' ? (
+                                    {paymentMethod === 'link' && canOverridePaymentLinkProvider ? (
                                         <div className="space-y-2">
                                             <label htmlFor="deal-payment-link-provider" className="mb-1 block text-sm font-medium text-slate-700">
                                                 Payment Link Provider
@@ -1160,6 +1163,20 @@ export default function Deals() {
                                             </select>
                                             <p className="text-xs text-slate-500">
                                                 Use the selected provider when generating a market payment link for this activation.
+                                            </p>
+                                        </div>
+                                    ) : null}
+
+                                    {paymentMethod === 'link' && !canOverridePaymentLinkProvider ? (
+                                        <div className="space-y-2">
+                                            <p className="mb-1 block text-sm font-medium text-slate-700">Payment Link Provider</p>
+                                            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                                                {paymentLinkProviderOptions.length
+                                                    ? 'Billing policy will use the market active provider for this activation.'
+                                                    : 'No enabled payment-link provider is configured for this market yet.'}
+                                            </div>
+                                            <p className="text-xs text-slate-500">
+                                                Operators follow the market billing policy. Admins can override the provider in Billing settings.
                                             </p>
                                         </div>
                                     ) : null}
@@ -1190,7 +1207,9 @@ export default function Deals() {
                                             {paymentMethod === 'stk'
                                                 ? 'An STK push will be sent to the client phone. Subscription will activate after payment confirmation.'
                                                 : paymentLinkProviderOptions.length
-                                                    ? 'A CRM-managed payment link will be sent to the client phone using the selected provider, and the subscription will activate after payment confirmation.'
+                                                    ? canOverridePaymentLinkProvider
+                                                        ? 'A CRM-managed payment link will be sent to the client phone using the selected provider, and the subscription will activate after payment confirmation.'
+                                                        : 'A CRM-managed payment link will be sent to the client phone using the market active provider, and the subscription will activate after payment confirmation.'
                                                     : 'No enabled payment-link provider is configured for this market yet.'}
                                             <span className="mt-1 block crm-mono text-[11px] text-slate-500">
                                                 Target phone: {selectedClientLoading ? 'Loading...' : (selectedClientPhone || 'Unavailable')}
