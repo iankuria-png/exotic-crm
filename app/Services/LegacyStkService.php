@@ -212,9 +212,15 @@ class LegacyStkService
             return $paymentEnvironment;
         }
 
-        $platformModeOverride = strtolower(trim((string) data_get($platform->wallet_settings, 'mode_override', '')));
-        if (in_array($platformModeOverride, WalletSettingsService::ENVIRONMENTS, true)) {
-            return $platformModeOverride;
+        $runtimeWallet = $this->walletSettingsService->runtimePlatformConfig($platform);
+        $modeOverride = strtolower(trim((string) data_get($runtimeWallet, 'mode_override', '')));
+        if (in_array($modeOverride, WalletSettingsService::ENVIRONMENTS, true)) {
+            return $modeOverride;
+        }
+
+        $effectiveMode = strtolower(trim((string) data_get($runtimeWallet, 'effective_mode', '')));
+        if (in_array($effectiveMode, WalletSettingsService::ENVIRONMENTS, true)) {
+            return $effectiveMode;
         }
 
         $systemMode = strtolower(trim((string) data_get($this->walletSettingsService->currentSystemConfig(masked: false), 'mode', '')));

@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\AuditLog;
+use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingProviderProfile;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
@@ -238,6 +240,100 @@ class LegacyStkRoutingTest extends TestCase
         $this->assertSame('preflight_exception', $attempt->error_code);
         $this->assertNull($attempt->provider);
         $this->assertSame('failed', $payment->fresh()->status);
+    }
+
+    public function test_retry_stk_prefers_projected_runtime_mode_over_legacy_system_mode(): void
+    {
+        config([
+            'billing.shadow_read.enabled' => true,
+            'services.django.base_url' => 'https://legacy-default.example.test/api/payments',
+        ]);
+
+        $platform = $this->createPlatform('Kenya');
+        $product = $this->createProduct($platform);
+        $admin = $this->createUser('admin');
+        $payment = $this->createPayment($platform, $product, [
+            'status' => 'failed',
+            'phone' => '254700111222',
+            'amount' => 3000,
+            'duration' => 'monthly',
+            'provider_environment' => null,
+        ]);
+
+        app(WalletSettingsService::class)->saveSystemConfig([
+            'mode' => 'production',
+            'default_currency' => 'KES',
+        ], $admin->id);
+
+        app(WalletSettingsService::class)->savePlatformProviderCredentials($platform, [
+            'mpesa_stk' => [
+                'sandbox' => [
+                    'transport' => 'django_proxy',
+                    'payment_service_base_url' => 'https://projected-sandbox.example.test/api/payments',
+                    'organization_code' => '76',
+                ],
+            ],
+        ], $admin->id);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'paystack',
+            'profile_name' => 'Projected Wallet Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => 'sandbox',
+            'config_json' => [
+                'public_key' => 'pk_projected_wallet',
+            ],
+            'secrets_json' => [
+                'secret_key' => 'sk_projected_wallet',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 10,
+            'fallback_group' => 'legacy-wallet',
+            'restriction_json' => [
+                'min_amount' => '250.00',
+                'max_amount' => '9000.00',
+            ],
+        ]);
+
+        $runtimeWallet = app(WalletSettingsService::class)->runtimePlatformConfig($platform->fresh());
+        $this->assertSame('sandbox', data_get($runtimeWallet, 'mode_override'));
+        $this->assertSame('disabled', data_get($runtimeWallet, 'effective_mode'));
+
+        Http::fake([
+            'https://projected-sandbox.example.test/api/payments/initiate/' => Http::response([
+                'message' => 'Payment initiated',
+                'payment_id' => 4321,
+            ], 200),
+            'https://legacy-default.example.test/api/payments/initiate/' => Http::response([
+                'message' => 'Should not be used',
+            ], 500),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson("/api/crm/payments/{$payment->id}/retry-stk", [
+            'reason' => 'Retry STK from projected runtime mode',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('payment.status', 'pending');
+
+        Http::assertSent(function ($request) {
+            return $request->url() === 'https://projected-sandbox.example.test/api/payments/initiate/'
+                && data_get($request->data(), 'organization_code') === '76';
+        });
     }
 
     private function configureMpesaProxy(Platform $platform, int $userId, string $baseUrl, string $organizationCode): void
