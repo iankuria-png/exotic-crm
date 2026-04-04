@@ -86,6 +86,50 @@ test.describe('billing browser smoke coverage', () => {
         await expect.poll(() => integrationsRequests).toBeGreaterThan(requestsBeforeDiagnostics);
     });
 
+    test('admin sees providers tab forbidden state while registry rollout is disabled', async ({ page, request }) => {
+        test.skip(!roleCredentialsAvailable('admin'), missingRoleMessage('admin'));
+
+        const authPayload = await loginViaApi(request, 'admin');
+        await seedAuthState(page, authPayload);
+        await stubBillingWorkspace(page, {
+            features: {
+                registry: false,
+                workspace: true,
+            },
+        });
+
+        await page.goto('/settings', { waitUntil: 'domcontentloaded' });
+        await page.getByRole('button', { name: 'Billing' }).click();
+        await page.getByRole('button', { name: 'Providers' }).click();
+
+        await expect(page.getByRole('heading', { name: 'Provider registry is still locked' })).toBeVisible();
+        await expect(page.getByText(/new provider-family registry stays read-only/i)).toBeVisible();
+    });
+
+    test('admin sees wallet auto-renew fallback on the legacy path while the feature is disabled', async ({ page, request }) => {
+        test.skip(!roleCredentialsAvailable('admin'), missingRoleMessage('admin'));
+
+        const authPayload = await loginViaApi(request, 'admin');
+        await seedAuthState(page, authPayload);
+        await stubBillingWorkspace(page, {
+            features: {
+                wallet_auto_renew: false,
+                workspace: true,
+            },
+            wallet: {
+                system: {
+                    mode: 'sandbox',
+                },
+            },
+        });
+
+        await page.goto('/settings', { waitUntil: 'domcontentloaded' });
+        await page.getByRole('button', { name: 'Billing' }).click();
+
+        await expect(page.getByRole('heading', { name: 'Wallet auto-renew fallback remains on the legacy path' })).toBeVisible();
+        await expect(page.getByText(/still governed by the legacy runtime/i)).toBeVisible();
+    });
+
     test('sub_admin can reach settings wallet workspace', async ({ page, request }) => {
         test.skip(!roleCredentialsAvailable('sub_admin'), missingRoleMessage('sub_admin'));
 

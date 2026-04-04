@@ -95,12 +95,14 @@ Runnable smoke coverage:
 - `admin` can reach `Payments`
 - `admin` can open the `Billing` workspace shell
 - `admin` can lazy-load the `Billing > Diagnostics` shell
+- `admin` sees the `Providers` forbidden state while the registry rollout is disabled
+- `admin` sees wallet auto-renew fallback remain on the legacy path while the feature is disabled
 - `sub_admin` can reach `Settings > Wallet`
 - `sub_admin` can reach `Payments`
 - `sales` is redirected away from `Settings`
 - `sales` can reach `Payments`
 
-This is `8 runnable smoke checks`, not full workflow coverage.
+This is `10 runnable smoke checks`, not full workflow coverage.
 
 Optional seeded workflow coverage:
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import BillingStateNotice from './BillingStateNotice';
 
 function statusTone(status) {
     if (['connected', 'healthy', 'success'].includes(status)) {
@@ -16,7 +17,7 @@ function statusTone(status) {
     return 'border-rose-200 bg-rose-50 text-rose-800';
 }
 
-export default function BillingDiagnosticsTab({ isLoading, services }) {
+export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsEnabled = false, services }) {
     const cards = [
         {
             key: 'wallet_system',
@@ -54,6 +55,47 @@ export default function BillingDiagnosticsTab({ isLoading, services }) {
                         <div className="h-32 rounded-xl border border-slate-200 bg-white" />
                     </div>
                 </div>
+            </div>
+        );
+    }
+
+    if (!diagnosticsEnabled) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="forbidden"
+                    eyebrow="Diagnostics"
+                    title="Billing diagnostics is still gated"
+                    message="The Billing workspace can render its diagnostics shell, but the new diagnostics surface remains behind the `diagnostics_v2` rollout flag."
+                />
+            </div>
+        );
+    }
+
+    if (isError) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="degraded"
+                    eyebrow="Diagnostics"
+                    title="Billing diagnostics data is unavailable"
+                    message="CRM could not refresh the Billing diagnostics summary right now. Retry after the integrations payload is available again."
+                />
+            </div>
+        );
+    }
+
+    const hasKnownSignals = cards.some((card) => !['unknown', 'deferred'].includes(card.status));
+
+    if (!hasKnownSignals) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="empty"
+                    eyebrow="Diagnostics"
+                    title="No diagnostics health signals have been published yet"
+                    message="The Billing diagnostics shell loaded, but the current integrations payload does not expose any provider or wallet-system health signals for this session."
+                />
             </div>
         );
     }

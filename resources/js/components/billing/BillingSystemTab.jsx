@@ -1,14 +1,36 @@
 import React from 'react';
+import BillingStateNotice from './BillingStateNotice';
 
 const environments = ['sandbox', 'production'];
 
-export default function BillingSystemTab({ walletSystem }) {
+export default function BillingSystemTab({ walletSystem, liveReadEnabled = false }) {
     const mode = walletSystem?.mode || 'disabled';
     const domains = walletSystem?.billing_domains || {};
     const branding = walletSystem?.billing_branding || {};
+    const hasConfiguredData = environments.some((environment) => {
+        return Boolean(domains?.[environment] || branding?.[environment]?.business_name || branding?.[environment]?.description);
+    });
 
     return (
         <div className="space-y-4 p-5">
+            {!liveReadEnabled ? (
+                <BillingStateNotice
+                    state="degraded"
+                    eyebrow="Billing System"
+                    title="Live reads are still pinned to the legacy wallet settings path"
+                    message="This compatibility view reflects the current wallet system source of truth while the new Billing System settings model remains behind rollout flags."
+                />
+            ) : null}
+
+            {!hasConfiguredData ? (
+                <BillingStateNotice
+                    state="empty"
+                    eyebrow="Billing System"
+                    title="No billing system metadata is configured yet"
+                    message="Billing domains and branding are empty for both sandbox and production in the current wallet system payload."
+                />
+            ) : null}
+
             <section className="rounded-xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>

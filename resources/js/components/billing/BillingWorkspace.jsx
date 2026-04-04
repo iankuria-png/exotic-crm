@@ -26,7 +26,7 @@ export default function BillingWorkspace() {
     const diagnosticsQuery = useQuery({
         queryKey: ['billing-diagnostics-summary'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
-        enabled: activeTab === 'diagnostics',
+        enabled: activeTab === 'diagnostics' && Boolean(overviewQuery.data?.billing?.features?.diagnostics_v2),
         staleTime: 30_000,
     });
 
@@ -107,15 +107,27 @@ export default function BillingWorkspace() {
             ) : null}
 
             {activeTab === 'providers' ? (
-                <BillingProvidersTab providerFamilies={providerFamilies} walletProviderKeys={walletProviderKeys} />
+                <BillingProvidersTab
+                    providerFamilies={providerFamilies}
+                    walletProviderKeys={walletProviderKeys}
+                    registryEnabled={Boolean(features.registry)}
+                />
             ) : null}
 
             {activeTab === 'billing_system' ? (
-                <BillingSystemTab walletSystem={walletSystem} />
+                <BillingSystemTab
+                    walletSystem={walletSystem}
+                    liveReadEnabled={Boolean(features.billing_system_live_read)}
+                />
             ) : null}
 
             {activeTab === 'diagnostics' ? (
-                <BillingDiagnosticsTab isLoading={diagnosticsQuery.isLoading} services={diagnosticsQuery.data?.services || {}} />
+                <BillingDiagnosticsTab
+                    isLoading={diagnosticsQuery.isLoading}
+                    isError={diagnosticsQuery.isError}
+                    diagnosticsEnabled={Boolean(features.diagnostics_v2)}
+                    services={diagnosticsQuery.data?.services || {}}
+                />
             ) : null}
         </section>
     );

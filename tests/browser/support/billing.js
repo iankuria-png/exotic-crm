@@ -3,6 +3,7 @@ export async function stubBillingWorkspace(page, options = {}) {
         features = {},
         providerFamilies = {},
         services = {},
+        wallet = {},
         onIntegrationsRequest = null,
     } = options;
 
@@ -46,6 +47,10 @@ export async function stubBillingWorkspace(page, options = {}) {
                         ...(billing.provider_families || {}),
                         ...providerFamilies,
                     },
+                },
+                wallet: {
+                    ...(payload?.wallet || {}),
+                    ...wallet,
                 },
                 services: {
                     ...defaultServices,

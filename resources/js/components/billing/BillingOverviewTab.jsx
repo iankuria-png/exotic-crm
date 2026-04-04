@@ -1,4 +1,5 @@
 import React from 'react';
+import BillingStateNotice from './BillingStateNotice';
 
 function tone(enabled) {
     return enabled
@@ -40,6 +41,33 @@ export default function BillingOverviewTab({ summary, features }) {
 
     return (
         <div className="space-y-4 p-5">
+            {!summary.billingEnabled ? (
+                <BillingStateNotice
+                    state="degraded"
+                    eyebrow="Overview"
+                    title="Billing rollout is still disabled"
+                    message="The Billing workspace shell is visible for migration planning, but live billing orchestration remains on the legacy compatibility path until the rollout flags are enabled."
+                />
+            ) : null}
+
+            {!features.wallet_auto_renew ? (
+                <BillingStateNotice
+                    state="degraded"
+                    eyebrow="Wallet Auto-Renew"
+                    title="Wallet auto-renew fallback remains on the legacy path"
+                    message="Operators can inspect the rollout posture here, but wallet renewal fallback is still governed by the legacy runtime until Billing wallet rules are introduced."
+                />
+            ) : null}
+
+            {summary.totalMarkets === 0 ? (
+                <BillingStateNotice
+                    state="empty"
+                    eyebrow="Overview"
+                    title="No market billing data loaded yet"
+                    message="CRM did not return any visible market records for this session, so the Billing workspace cannot summarize market-level wallet readiness."
+                />
+            ) : null}
+
             <div className="grid gap-4 xl:grid-cols-4">
                 {cards.map((card) => (
                     <section key={card.key} className={`rounded-xl border p-4 ${tone(card.enabled)}`}>
