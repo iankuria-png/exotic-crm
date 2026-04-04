@@ -3050,9 +3050,7 @@ class SettingsController extends Controller
                 'last_error' => $platform->sync_last_error,
                 'last_result' => $platform->sync_last_result,
             ],
-            'payment_link_providers' => is_array($platform->payment_link_providers)
-                ? $platform->payment_link_providers
-                : null,
+            'payment_link_providers' => $this->walletSettingsService->currentPaymentLinkProviders($platform),
             'wallet' => $this->walletSettingsService->currentPlatformConfig($platform, masked: true),
             'packages' => $packageRows,
             'package_setup' => $packageSetup,
@@ -3116,9 +3114,7 @@ class SettingsController extends Controller
             'sync_last_scope' => $platform->sync_last_scope,
             'sync_last_status' => $platform->sync_last_status,
             'sync_last_error' => $platform->sync_last_error,
-            'payment_link_providers' => is_array($platform->payment_link_providers)
-                ? $platform->payment_link_providers
-                : null,
+            'payment_link_providers' => $this->walletSettingsService->currentPaymentLinkProviders($platform),
             'wallet' => $this->walletSettingsService->currentPlatformConfig($platform, masked: true),
         ];
     }

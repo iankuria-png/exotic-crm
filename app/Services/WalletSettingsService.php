@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Support\LegacyBillingConfigProjector;
 use App\Billing\Support\LegacyBillingSystemProjector;
 use App\Mail\WalletSettingsTestMail;
 use App\Models\BillingSystemSetting;
@@ -24,6 +25,7 @@ class WalletSettingsService
 
     public function __construct(
         private readonly BillingProviderRegistryContract $providerRegistry,
+        private readonly LegacyBillingConfigProjector $legacyBillingConfigProjector,
         private readonly LegacyBillingSystemProjector $legacyBillingSystemProjector
     ) {
     }
@@ -224,6 +226,19 @@ class WalletSettingsService
             'effective_mode' => $this->effectiveMode($system['mode'], $settings),
             'credentials' => $this->runtimePlatformCredentials($credentials),
         ]);
+    }
+
+    public function currentPaymentLinkProviders(Platform $platform): ?array
+    {
+        $legacy = is_array($platform->payment_link_providers)
+            ? $platform->payment_link_providers
+            : null;
+
+        if (!$this->shadowReadEnabled()) {
+            return $legacy;
+        }
+
+        return $this->legacyBillingConfigProjector->projectPaymentLinkProviders($platform, $legacy);
     }
 
     public function savePlatformConfig(Platform $platform, array $payload): array
@@ -595,8 +610,13 @@ class WalletSettingsService
     private function resolvePlatformSettings(Platform $platform): array
     {
         $current = is_array($platform->wallet_settings) ? $platform->wallet_settings : [];
+        $legacy = $this->mergePlatformSettings($platform, $this->defaultPlatformSettings($platform), $current);
 
-        return $this->mergePlatformSettings($platform, $this->defaultPlatformSettings($platform), $current);
+        if (!$this->shadowReadEnabled()) {
+            return $legacy;
+        }
+
+        return $this->legacyBillingConfigProjector->projectWalletSettings($platform, $legacy);
     }
 
     private function defaultPlatformSettings(Platform $platform): array
@@ -639,11 +659,15 @@ class WalletSettingsService
             ->where('key', $this->platformCredentialsKey((int) $platform->id))
             ->value('value');
 
-        if (!is_array($stored)) {
-            return $default;
+        $legacy = is_array($stored)
+            ? $this->mergePlatformCredentials($default, $stored)
+            : $default;
+
+        if (!$this->shadowReadEnabled()) {
+            return $legacy;
         }
 
-        return $this->mergePlatformCredentials($default, $stored);
+        return $this->legacyBillingConfigProjector->projectPlatformCredentials($platform, $legacy);
     }
 
     private function defaultPlatformCredentials(): array
@@ -1143,6 +1167,11 @@ class WalletSettingsService
         }
 
         return $platformConfig['mode_override'] ?: $systemMode;
+    }
+
+    private function shadowReadEnabled(): bool
+    {
+        return (bool) config('billing.shadow_read.enabled', false);
     }
 
     private function testPesapal(array $credentials, string $environment): array
