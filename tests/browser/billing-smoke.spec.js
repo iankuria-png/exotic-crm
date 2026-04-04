@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { cleanupAuthState, loginAndOpen } from './support/auth.js';
+import { cleanupAuthState, loginAndOpen, loginViaApi, seedAuthState } from './support/auth.js';
+import { stubBillingWorkspace } from './support/billing.js';
 import { missingRoleMessage, roleCredentialsAvailable } from './support/env.js';
 
 test.describe('billing browser smoke coverage', () => {
@@ -33,6 +34,56 @@ test.describe('billing browser smoke coverage', () => {
         await expect(page).toHaveURL(/\/payments$/);
         await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
         await expect(page.getByRole('button', { name: 'Auto-match queue' })).toBeVisible();
+    });
+
+    test('admin can open the billing workspace shell', async ({ page, request }) => {
+        test.skip(!roleCredentialsAvailable('admin'), missingRoleMessage('admin'));
+
+        const authPayload = await loginViaApi(request, 'admin');
+        await seedAuthState(page, authPayload);
+        await stubBillingWorkspace(page);
+
+        await page.goto('/settings', { waitUntil: 'domcontentloaded' });
+
+        await expect(page.getByRole('button', { name: 'Billing' })).toBeVisible();
+        await page.getByRole('button', { name: 'Billing' }).click();
+
+        await expect(page.getByRole('heading', { name: 'Billing' })).toBeVisible();
+        await expect(page.getByText(/Read-only Phase 0B shell/)).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Overview' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Providers' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Billing System' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Diagnostics' })).toBeVisible();
+    });
+
+    test('admin lazy-loads billing diagnostics after opening the billing workspace', async ({ page, request }) => {
+        test.skip(!roleCredentialsAvailable('admin'), missingRoleMessage('admin'));
+
+        const authPayload = await loginViaApi(request, 'admin');
+        await seedAuthState(page, authPayload);
+
+        let integrationsRequests = 0;
+        await stubBillingWorkspace(page, {
+            onIntegrationsRequest: () => {
+                integrationsRequests += 1;
+            },
+        });
+
+        await page.goto('/settings', { waitUntil: 'domcontentloaded' });
+        await page.getByRole('button', { name: 'Billing' }).click();
+
+        await expect(page.getByText(/Phase 0B Scope/)).toBeVisible();
+
+        const requestsBeforeDiagnostics = integrationsRequests;
+
+        await page.getByRole('button', { name: 'Diagnostics' }).click();
+
+        await expect(page.getByText('Billing Diagnostics Foundation')).toBeVisible();
+        await expect(page.getByText('Wallet System')).toBeVisible();
+        await expect(page.getByText('KopoKopo')).toBeVisible();
+        await expect(page.getByText('Payment Service')).toBeVisible();
+        await expect(page.getByText('SendGrid')).toBeVisible();
+        await expect.poll(() => integrationsRequests).toBeGreaterThan(requestsBeforeDiagnostics);
     });
 
     test('sub_admin can reach settings wallet workspace', async ({ page, request }) => {

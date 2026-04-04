@@ -54,7 +54,10 @@ test.describe('billing browser placeholders', () => {
     });
 
     test('billing diagnostics admin health surface', async () => {
-        test.fixme(true, 'Awaiting BILL-705/BILL-706 implementation of Settings > Billing > Diagnostics.');
+        test.fixme(
+            true,
+            'Replaced by billing smoke coverage for the Phase 0B Billing workspace shell. Keep this placeholder until BILL-705/BILL-706 ships the full diagnostics surface.',
+        );
     });
 
     test('wallet renewal fallback visibility for operators', async () => {

@@ -93,12 +93,14 @@ Runnable smoke coverage:
 
 - `admin` can reach `Settings > Wallet`
 - `admin` can reach `Payments`
+- `admin` can open the `Billing` workspace shell
+- `admin` can lazy-load the `Billing > Diagnostics` shell
 - `sub_admin` can reach `Settings > Wallet`
 - `sub_admin` can reach `Payments`
 - `sales` is redirected away from `Settings`
 - `sales` can reach `Payments`
 
-This is `6 runnable smoke checks`, not full workflow coverage.
+This is `8 runnable smoke checks`, not full workflow coverage.
 
 Optional seeded workflow coverage:
 
@@ -110,10 +112,8 @@ These tests skip automatically until you provide the optional fixture ids above.
 Intentional placeholders:
 
 - out-of-scope forbidden-state coverage for `sub_admin`
-- degraded `Payment Diagnostics`
-- `Billing Diagnostics`
 - wallet renewal fallback visibility
 
-These `4 placeholders` are tracked with `test.fixme(...)` and should never be counted as implemented coverage.
+The remaining placeholders are tracked with `test.fixme(...)` and should never be counted as implemented coverage.
 
 The placeholders are marked with `test.fixme(...)` so they show up in the suite without pretending coverage exists yet.
