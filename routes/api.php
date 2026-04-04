@@ -246,7 +246,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
     Route::get('/settings/billing/providers-catalog', [SettingsController::class, 'providersCatalog']);
-    Route::get('/crm/billing/provider-profiles', [SettingsController::class, 'providerProfiles']);
+    Route::get('/settings/billing/provider-profiles', [SettingsController::class, 'providerProfiles']);
+        Route::get('/settings/billing/routing-rules/{market}', [SettingsController::class, 'billingRoutingRules']);
+        Route::get('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'billingWalletRules']);
+        Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
     Route::get('/settings/system-health/updates', [SystemHealthUpdateController::class, 'show'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/log', [SystemHealthUpdateController::class, 'log'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/commits', [SystemHealthUpdateController::class, 'commitHistory'])->middleware('role:admin,sub_admin');

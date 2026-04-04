@@ -19,6 +19,7 @@ class BillingProviderProfile extends Model
         'config_json',
         'secrets_json',
         'active',
+        'tested_at',
     ];
 
     protected $casts = [
@@ -26,6 +27,7 @@ class BillingProviderProfile extends Model
         'config_json' => 'array',
         'secrets_json' => 'array',
         'active' => 'boolean',
+        'tested_at' => 'datetime',
     ];
 
     public function market()

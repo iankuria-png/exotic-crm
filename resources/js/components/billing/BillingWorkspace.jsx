@@ -5,6 +5,9 @@ import BillingDiagnosticsTab from './BillingDiagnosticsTab';
 import BillingOverviewTab from './BillingOverviewTab';
 import ProvidersTab from './ProvidersTab';
 import ProviderProfilesTab from './ProviderProfilesTab';
+import MarketRoutingTab from './MarketRoutingTab';
+import WalletRulesTab from './WalletRulesTab';
+import SubscriptionRulesTab from './SubscriptionRulesTab';
 import BillingSystemTab from './BillingSystemTab';
 import BillingTabNav from './BillingTabNav';
 
@@ -12,6 +15,9 @@ const billingTabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'providers', label: 'Providers' },
     { id: 'profiles', label: 'Profiles' },
+    { id: 'market_routing', label: 'Market Routing' },
+    { id: 'wallet_rules', label: 'Wallet Rules' },
+    { id: 'subscription_rules', label: 'Subscription Rules' },
     { id: 'billing_system', label: 'Billing System' },
     { id: 'diagnostics', label: 'Diagnostics' },
 ];
@@ -121,6 +127,18 @@ export default function BillingWorkspace() {
 
             {activeTab === 'profiles' ? (
                 <ProviderProfilesTab />
+            ) : null}
+
+            {activeTab === 'market_routing' ? (
+                <MarketRoutingTab platforms={platforms} />
+            ) : null}
+
+            {activeTab === 'wallet_rules' ? (
+                <WalletRulesTab platforms={platforms} />
+            ) : null}
+
+            {activeTab === 'subscription_rules' ? (
+                <SubscriptionRulesTab platforms={platforms} />
             ) : null}
 
             {activeTab === 'billing_system' ? (

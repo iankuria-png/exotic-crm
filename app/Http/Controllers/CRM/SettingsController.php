@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
 use App\Billing\Support\BillingSurface;
+use App\Billing\BillingPermissions;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
@@ -18,6 +19,9 @@ use App\Models\ScraperSource;
 use App\Models\SupportBoardSyncRun;
 use App\Models\Template;
 use App\Models\User;
+use App\Models\BillingRoutingRule;
+use App\Models\BillingWalletRule;
+use App\Models\BillingSubscriptionRule;
 use App\Services\AuditService;
 use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
@@ -566,6 +570,116 @@ class SettingsController extends Controller
                 $this->billingProviderRegistry->definitions()
             ),
             'count' => count($profiles),
+        ]);
+    }
+
+    public function billingRoutingRules(int $marketId)
+    {
+        // BILL-307: Authorization check - Billing workspace restricted to admin/sub_admin
+        if (!BillingPermissions::canViewRoutingRules(auth()->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $rules = BillingRoutingRule::query()
+            ->with(["primaryBinding.providerProfile", "market:id,name,country"])
+            ->where("market_id", $marketId)
+            ->orderBy("billing_surface")
+            ->get()
+            ->map(function (BillingRoutingRule $rule) {
+                return [
+                    "id" => $rule->id,
+                    "market_id" => $rule->market_id,
+                    "billing_surface" => $rule->billing_surface,
+                    "active" => $rule->active,
+                    "fallback_strategy_json" => $rule->fallback_strategy_json,
+                    "risk_policy_json" => $rule->risk_policy_json,
+                    "primary_binding" => $rule->primaryBinding ? [
+                        "id" => $rule->primaryBinding->id,
+                        "billing_surface" => $rule->primaryBinding->billing_surface,
+                        "priority" => $rule->primaryBinding->priority,
+                        "provider_profile" => $rule->primaryBinding->providerProfile ? [
+                            "id" => $rule->primaryBinding->providerProfile->id,
+                            "provider_type_key" => $rule->primaryBinding->providerProfile->provider_type_key,
+                            "profile_name" => $rule->primaryBinding->providerProfile->profile_name,
+                            "country_code" => $rule->primaryBinding->providerProfile->country_code,
+                            "market_id" => $rule->primaryBinding->providerProfile->market_id,
+                            "environment" => $rule->primaryBinding->providerProfile->environment,
+                            "active" => $rule->primaryBinding->providerProfile->active,
+                        ] : null,
+                    ] : null,
+                ];
+            });
+
+        return response()->json([
+            "routing_rules" => $rules,
+            "count" => count($rules),
+        ]);
+    }
+
+    public function billingWalletRules(int $marketId)
+    {
+        // BILL-307: Authorization check - Billing workspace restricted to admin/sub_admin
+        if (!BillingPermissions::canViewWalletRules(auth()->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $rule = BillingWalletRule::query()
+            ->with(["market:id,name,country"])
+            ->where("market_id", $marketId)
+            ->first();
+
+        if (!$rule) {
+            $rule = [
+                "id" => null,
+                "market_id" => $marketId,
+                "enabled" => false,
+                "currency_code" => null,
+                "topup_preset_json" => null,
+                "limit_json" => null,
+                "auto_renew_json" => null,
+                "ui_json" => null,
+                "created_at" => null,
+                "updated_at" => null,
+            ];
+        } else {
+            $rule = $rule->toArray();
+        }
+
+        return response()->json([
+            "wallet_rule" => $rule,
+        ]);
+    }
+
+    public function billingSubscriptionRules(int $marketId)
+    {
+        // BILL-307: Authorization check - Billing workspace restricted to admin/sub_admin
+        if (!BillingPermissions::canViewSubscriptionRules(auth()->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $rule = BillingSubscriptionRule::query()
+            ->with(["market:id,name,country"])
+            ->where("market_id", $marketId)
+            ->first();
+
+        if (!$rule) {
+            $rule = [
+                "id" => null,
+                "market_id" => $marketId,
+                "activation_method_json" => null,
+                "renewal_method_json" => null,
+                "free_trial_json" => null,
+                "discount_json" => null,
+                "expiry_policy_json" => null,
+                "created_at" => null,
+                "updated_at" => null,
+            ];
+        } else {
+            $rule = $rule->toArray();
+        }
+
+        return response()->json([
+            "subscription_rule" => $rule,
         ]);
     }
 

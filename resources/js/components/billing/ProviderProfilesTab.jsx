@@ -18,7 +18,7 @@ export default function ProviderProfilesTab() {
      */
     const profilesQuery = useQuery({
         queryKey: ['billing-provider-profiles'],
-        queryFn: () => api.get('/crm/billing/provider-profiles').then(
+        queryFn: () => api.get('/crm/settings/billing/provider-profiles').then(
             (response) => response.data
         ),
         staleTime: 10 * 60 * 1000, // 10 minutes
