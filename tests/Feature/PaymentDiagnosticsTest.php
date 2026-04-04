@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
@@ -134,6 +135,77 @@ class PaymentDiagnosticsTest extends TestCase
         ]);
     }
 
+    public function test_provider_status_check_prefers_pinned_snapshot_for_alias_provider_and_environment(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');
+
+        app(PaymentLinkService::class)->sendLink($payment, [
+            'channel' => 'sms',
+            'actor_id' => $user->id,
+            'reason' => 'Prepare aliased proxy session for provider check',
+            'notification_purpose' => 'payment_link',
+        ]);
+
+        $payment = $payment->fresh();
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+        $paymentData['link_proxy']['initialized_at'] = now()->subMinutes(20)->toIso8601String();
+        $paymentData['link_proxy']['provider_reference'] = 'PSTK-ALIAS-STATUS-001';
+
+        $payment->forceFill([
+            'status' => 'pending',
+            'provider_key' => 'paystack_checkout',
+            'provider_environment' => 'production',
+            'reference_number' => 'CRM-DIAG-ALIAS-001',
+            'payment_data' => $paymentData,
+        ])->save();
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $payment->platform_id,
+            'billing_surface' => 'payment_link',
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'sandbox',
+            'decision_version' => 1,
+            'surface_cutover_flag' => 'billing.shadow_read',
+            'snapshot_json' => [
+                'provider_family' => 'hosted_checkout',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        Http::fake([
+            'https://api.paystack.co/transaction/verify/*' => Http::response([
+                'status' => true,
+                'data' => [
+                    'status' => 'success',
+                    'gateway_response' => 'Approved',
+                    'reference' => 'CRM-DIAG-ALIAS-001',
+                ],
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/payments/{$payment->id}/check-provider-status");
+
+        $response->assertOk()
+            ->assertJsonPath('provider', 'paystack')
+            ->assertJsonPath('provider_environment', 'sandbox')
+            ->assertJsonPath('status', 'completed');
+
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'provider_status_check',
+            'provider' => 'paystack',
+            'status' => 'completed',
+        ]);
+    }
+
     public function test_diagnostics_endpoint_blocks_live_subscription_recommendations_for_sandbox_completed_payments(): void
     {
         ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');
@@ -160,6 +232,61 @@ class PaymentDiagnosticsTest extends TestCase
         $recommendationKeys = collect($response->json('recommendations'))->pluck('key')->all();
         $this->assertContains('manual_review', $recommendationKeys);
         $this->assertNotContains('create_subscription', $recommendationKeys);
+    }
+
+    public function test_diagnostics_recommendations_prefer_pinned_snapshot_for_alias_provider_payments(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');
+
+        app(PaymentLinkService::class)->sendLink($payment, [
+            'channel' => 'sms',
+            'actor_id' => $user->id,
+            'reason' => 'Prepare alias proxy session for recommendation diagnostics',
+            'notification_purpose' => 'payment_link',
+        ]);
+
+        $payment = $payment->fresh();
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+        $paymentData['link_proxy']['initialized_at'] = now()->subMinutes(65)->toIso8601String();
+        $paymentData['link_proxy']['provider_reference'] = 'PSTK-ALIAS-RECO-001';
+
+        $payment->forceFill([
+            'status' => 'pending',
+            'created_at' => now()->subHours(2),
+            'provider_key' => 'paystack_checkout',
+            'provider_environment' => 'production',
+            'payment_data' => $paymentData,
+        ])->save();
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $payment->platform_id,
+            'billing_surface' => 'payment_link',
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'sandbox',
+            'decision_version' => 1,
+            'surface_cutover_flag' => 'billing.shadow_read',
+            'snapshot_json' => [
+                'provider_family' => 'hosted_checkout',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('link_proxy.provider_key', 'paystack')
+            ->assertJsonPath('link_proxy.environment', 'sandbox');
+
+        $recommendationKeys = collect($response->json('recommendations'))->pluck('key')->all();
+        $this->assertContains('sandbox_reconcile', $recommendationKeys);
     }
 
     public function test_stk_initiate_attempt_populates_diagnostics(): void

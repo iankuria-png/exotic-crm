@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -182,6 +183,77 @@ class SandboxPaymentReconcileTest extends TestCase
         $this->assertDatabaseHas('payment_attempts', [
             'payment_id' => $payment->id,
             'attempt_type' => 'sandbox_reconcile',
+            'status' => 'completed',
+        ]);
+    }
+
+    public function test_sandbox_reconcile_prefers_pinned_snapshot_for_alias_provider_and_environment(): void
+    {
+        ['platform' => $platform, 'client' => $client, 'user' => $user] = $this->seedCrmSandboxContext();
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'product_id' => null,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'paystack_checkout',
+            'provider_environment' => 'production',
+            'amount' => 1800,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-SANDBOX-ALIAS-001',
+            'transaction_reference' => 'WTU-SANDBOX-ALIAS-001',
+            'status' => 'pending',
+            'completed_at' => null,
+            'raw_payload' => [],
+            'payment_data' => [],
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_topup',
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'sandbox',
+            'decision_version' => 1,
+            'surface_cutover_flag' => 'billing.shadow_read',
+            'snapshot_json' => [
+                'provider_family' => 'hosted_checkout',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.paystack.co/transaction/verify/*' => Http::response([
+                'status' => true,
+                'data' => [
+                    'status' => 'success',
+                    'reference' => 'WTU-SANDBOX-ALIAS-001',
+                    'gateway_response' => 'Successful',
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->postJson("/api/crm/payments/{$payment->id}/sandbox-reconcile");
+
+        $response->assertOk()
+            ->assertJsonPath('reconciled', true)
+            ->assertJsonPath('provider_snapshot.provider', 'paystack')
+            ->assertJsonPath('provider_snapshot.provider_environment', 'sandbox');
+
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'sandbox_reconcile',
+            'provider' => 'paystack',
             'status' => 'completed',
         ]);
     }

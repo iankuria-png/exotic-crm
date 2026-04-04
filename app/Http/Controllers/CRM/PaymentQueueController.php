@@ -29,6 +29,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
+use App\Models\BillingRoutingDecision;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -891,15 +892,17 @@ class PaymentQueueController extends Controller
     public function checkProviderStatus(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
+        $resolvedProvider = $this->resolvedProviderType($payment);
+        $resolvedEnvironment = $this->resolvedEnvironment($payment);
 
         try {
             $snapshot = $this->verifyProviderStatus($payment);
 
             $this->paymentAttemptService->record($payment, 'provider_status_check', (string) ($snapshot['status'] ?? 'failed'), [
-                'provider' => $payment->provider_key,
+                'provider' => $resolvedProvider,
                 'error_message' => $snapshot['message'] ?? null,
                 'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                    'provider_environment' => $payment->provider_environment,
+                    'provider_environment' => $resolvedEnvironment,
                     'reference_number' => $payment->reference_number,
                     'provider_reference' => $snapshot['provider_reference'] ?? null,
                 ]),
@@ -914,11 +917,11 @@ class PaymentQueueController extends Controller
             return response()->json($snapshot);
         } catch (InvalidArgumentException $exception) {
             $this->paymentAttemptService->record($payment, 'provider_status_check', 'failed', [
-                'provider' => $payment->provider_key,
+                'provider' => $resolvedProvider,
                 'error_code' => 'provider_status_unavailable',
                 'error_message' => $exception->getMessage(),
                 'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                    'provider_environment' => $payment->provider_environment,
+                    'provider_environment' => $resolvedEnvironment,
                     'reference_number' => $payment->reference_number,
                 ]),
                 'created_by' => optional($request->user())->id,
@@ -929,11 +932,11 @@ class PaymentQueueController extends Controller
             ], 422);
         } catch (\Throwable $exception) {
             $this->paymentAttemptService->record($payment, 'provider_status_check', 'failed', [
-                'provider' => $payment->provider_key,
+                'provider' => $resolvedProvider,
                 'error_code' => 'provider_status_check_failed',
                 'error_message' => $exception->getMessage(),
                 'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                    'provider_environment' => $payment->provider_environment,
+                    'provider_environment' => $resolvedEnvironment,
                     'reference_number' => $payment->reference_number,
                 ]),
                 'created_by' => optional($request->user())->id,
@@ -948,6 +951,8 @@ class PaymentQueueController extends Controller
     public function sandboxReconcile(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
+        $resolvedProvider = $this->resolvedProviderType($payment);
+        $resolvedEnvironment = $this->resolvedEnvironment($payment);
 
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
@@ -962,9 +967,9 @@ class PaymentQueueController extends Controller
             if ($this->isSandboxReconcileTerminal($payment)) {
                 $freshPayment = $payment->fresh(['platform', 'product', 'client']);
                 $this->paymentAttemptService->record($freshPayment, 'sandbox_reconcile', (string) data_get($freshPayment->payment_data, 'test_result', $freshPayment->status), [
-                    'provider' => $freshPayment->provider_key,
+                    'provider' => $this->resolvedProviderType($freshPayment),
                     'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                        'provider_environment' => $freshPayment->provider_environment,
+                        'provider_environment' => $this->resolvedEnvironment($freshPayment),
                         'reference_number' => $freshPayment->reference_number,
                         'already_reconciled' => true,
                     ]),
@@ -1010,10 +1015,10 @@ class PaymentQueueController extends Controller
 
             $afterState = $this->sandboxReconcileState($updatedPayment);
             $this->paymentAttemptService->record($updatedPayment, 'sandbox_reconcile', $providerStatus, [
-                'provider' => $updatedPayment->provider_key,
+                'provider' => $this->resolvedProviderType($updatedPayment),
                 'error_message' => $snapshot['message'] ?? null,
                 'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                    'provider_environment' => $updatedPayment->provider_environment,
+                    'provider_environment' => $this->resolvedEnvironment($updatedPayment),
                     'reference_number' => $updatedPayment->reference_number,
                     'provider_reference' => $snapshot['provider_reference'] ?? null,
                 ]),
@@ -1048,11 +1053,11 @@ class PaymentQueueController extends Controller
             ]);
         } catch (InvalidArgumentException $exception) {
             $this->paymentAttemptService->record($payment, 'sandbox_reconcile', 'failed', [
-                'provider' => $payment->provider_key,
+                'provider' => $resolvedProvider,
                 'error_code' => 'sandbox_reconcile_unavailable',
                 'error_message' => $exception->getMessage(),
                 'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                    'provider_environment' => $payment->provider_environment,
+                    'provider_environment' => $resolvedEnvironment,
                     'reference_number' => $payment->reference_number,
                 ]),
                 'created_by' => optional($request->user())->id,
@@ -1063,11 +1068,11 @@ class PaymentQueueController extends Controller
             ], 422);
         } catch (\Throwable $exception) {
             $this->paymentAttemptService->record($payment, 'sandbox_reconcile', 'failed', [
-                'provider' => $payment->provider_key,
+                'provider' => $resolvedProvider,
                 'error_code' => 'sandbox_reconcile_failed',
                 'error_message' => $exception->getMessage(),
                 'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                    'provider_environment' => $payment->provider_environment,
+                    'provider_environment' => $resolvedEnvironment,
                     'reference_number' => $payment->reference_number,
                 ]),
                 'created_by' => optional($request->user())->id,
@@ -1514,11 +1519,12 @@ class PaymentQueueController extends Controller
             ? now()->diffInHours($payment->created_at)
             : 0;
         $sandboxPayment = $this->isSandboxPayment($payment);
+        $resolvedProvider = $this->resolvedProviderType($payment);
         $canCheckProviderStatus = is_array($linkProxy)
             && ($linkProxy['mode'] ?? null) === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
             && $ageHours >= 1
             && in_array((string) $payment->status, ['initiated', 'pending'], true)
-            && in_array((string) $payment->provider_key, ['paystack', 'pesapal'], true)
+            && in_array($resolvedProvider, ['paystack', 'pesapal'], true)
             && (!empty($linkProxy['initialized_at']) || !empty($linkProxy['provider_reference']));
         $providerRecoveryRecommendation = $canCheckProviderStatus
             ? ($sandboxPayment
@@ -1665,9 +1671,9 @@ class PaymentQueueController extends Controller
 
         return [
             'mode' => $linkProxy['mode'] ?? PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT,
-            'provider_key' => $linkProxy['provider_key'] ?? $payment->provider_key,
+            'provider_key' => $linkProxy['provider_key'] ?? $this->resolvedProviderType($payment),
             'provider_config_key' => $linkProxy['provider_config_key'] ?? null,
-            'environment' => $linkProxy['environment'] ?? $payment->provider_environment,
+            'environment' => $linkProxy['environment'] ?? $this->resolvedEnvironment($payment),
             'token_status' => $this->resolveLinkProxyTokenStatus($linkProxy, $rotationCount),
             'token_expires_at' => $tokenExpiresAt,
             'rotation_count' => $rotationCount,
@@ -1743,7 +1749,7 @@ class PaymentQueueController extends Controller
     private function verifyProviderStatus(Payment $payment): array
     {
         $payment->loadMissing(['platform', 'client', 'product']);
-        $provider = strtolower(trim((string) $payment->provider_key));
+        $provider = $this->resolvedProviderType($payment);
 
         if (!in_array($provider, ['paystack', 'pesapal'], true)) {
             throw new InvalidArgumentException('Live provider checks are available only for Paystack and Pesapal payments.');
@@ -1763,7 +1769,7 @@ class PaymentQueueController extends Controller
             $payment->platform,
             $provider,
             requireEnabled: false,
-            environmentOverride: $payment->provider_environment
+            environmentOverride: $this->resolvedEnvironment($payment)
         );
 
         $result = match ($provider) {
@@ -1783,7 +1789,7 @@ class PaymentQueueController extends Controller
         return [
             'payment_id' => (int) $payment->id,
             'provider' => $provider,
-            'provider_environment' => $payment->provider_environment,
+            'provider_environment' => $this->resolvedEnvironment($payment),
             'provider_reference' => $provider === 'pesapal'
                 ? $this->resolvePesapalTrackingId($payment)
                 : ($payment->transaction_reference ?: $payment->reference_number),
@@ -1820,7 +1826,7 @@ class PaymentQueueController extends Controller
             throw new InvalidArgumentException('Sandbox reconcile is available only for sandbox payments.');
         }
 
-        if (!in_array(strtolower(trim((string) $payment->provider_key)), ['paystack', 'pesapal'], true)) {
+        if (!in_array($this->resolvedProviderType($payment), ['paystack', 'pesapal'], true)) {
             throw new InvalidArgumentException('Sandbox reconcile is available only for Paystack and Pesapal hosted checkout payments.');
         }
 
@@ -1837,8 +1843,43 @@ class PaymentQueueController extends Controller
 
     private function isSandboxPayment(Payment $payment): bool
     {
-        return strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+        return $this->resolvedEnvironment($payment) === 'sandbox'
             || (bool) data_get($payment->payment_data, 'test_mode', false);
+    }
+
+    private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
+    {
+        if ($payment->relationLoaded('routingDecisions')) {
+            return $payment->routingDecisions
+                ->sortByDesc(function (BillingRoutingDecision $decision) {
+                    return optional($decision->created_at)->getTimestamp() ?? 0;
+                })
+                ->first();
+        }
+
+        return $payment->routingDecisions()->latest('created_at')->first();
+    }
+
+    private function resolvedProviderType(Payment $payment): string
+    {
+        $provider = $this->latestPinnedDecision($payment)?->provider_type_key;
+        if (is_string($provider) && trim($provider) !== '') {
+            return strtolower(trim($provider));
+        }
+
+        return strtolower(trim((string) $payment->provider_key));
+    }
+
+    private function resolvedEnvironment(Payment $payment): ?string
+    {
+        $environment = $this->latestPinnedDecision($payment)?->environment;
+        if (is_string($environment) && trim($environment) !== '') {
+            return strtolower(trim($environment));
+        }
+
+        $legacy = strtolower(trim((string) $payment->provider_environment));
+
+        return $legacy !== '' ? $legacy : null;
     }
 
     private function sandboxReconcileState(Payment $payment): array
