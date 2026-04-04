@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
@@ -114,6 +115,7 @@ class SelfCheckoutApiTest extends TestCase
             ->assertJsonPath('checkout_url', 'https://checkout.paystack.test/redirect');
 
         $payment = Payment::query()->firstOrFail();
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();
 
         $this->assertSame('paystack', $payment->provider_key);
         $this->assertSame('production', $payment->provider_environment);
@@ -130,6 +132,13 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('KES', data_get($payment->payment_data, 'fx_override.target_currency'));
         $this->assertSame(15750.0, (float) $payment->amount);
         $this->assertSame('KES', $payment->currency);
+        $this->assertNotNull($decision);
+        $this->assertSame('self_checkout', $decision->billing_surface);
+        $this->assertSame('paystack', $decision->provider_type_key);
+        $this->assertSame('proxy', $decision->execution_mode);
+        $this->assertSame('hosted_redirect', data_get($decision->snapshot_json, 'execution_family'));
+        $this->assertSame('fixed_override', data_get($decision->snapshot_json, 'fx_quote.mode'));
+        $this->assertSame('primary', data_get($decision->snapshot_json, 'provider_config_key'));
 
         $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->firstOrFail();
         $this->assertSame('hosted_checkout_init', $attempt->attempt_type);

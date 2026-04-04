@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Billing\Support\BillingRoutingDecisionRecorder;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use App\Models\Client;
@@ -37,7 +38,8 @@ class PaymentController extends Controller
         private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly BillingModeService $billingModeService,
         private readonly WalletCheckoutService $walletCheckoutService,
-        private readonly PaymentAttemptService $paymentAttemptService
+        private readonly PaymentAttemptService $paymentAttemptService,
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
     ) {
     }
 
@@ -2446,26 +2448,34 @@ class PaymentController extends Controller
 
             $payment->loadMissing(['client', 'platform', 'product']);
 
+            $checkoutCompletionUrl = $this->billingModeService->buildAbsoluteUrl(
+                $platform,
+                '/billing/complete',
+                ['payment' => $payment->transaction_uuid],
+                $context['environment'] ?? null
+            );
+
+            $dispatchContext = array_merge($context, [
+                'provider_key' => $providerKey,
+            ]);
+            $this->billingRoutingDecisionRecorder->recordSelfCheckout(
+                $payment,
+                $dispatchContext,
+                $resolvedProvider,
+                $chargePricing,
+                $checkoutCompletionUrl
+            );
+
             $action = match ($providerKey) {
                 'paystack' => $this->hostedCheckoutService->initializePaystack($payment, $context, [
-                    'callback_url' => $this->billingModeService->buildAbsoluteUrl(
-                        $platform,
-                        '/billing/complete',
-                        ['payment' => $payment->transaction_uuid],
-                        $context['environment'] ?? null
-                    ),
+                    'callback_url' => $checkoutCompletionUrl,
                     'metadata' => [
                         'channel' => 'self_checkout',
                         'provider_config_key' => $providerConfigKey,
                     ],
                 ]),
                 'pesapal' => $this->hostedCheckoutService->initializePesapal($payment, $context, [
-                    'callback_url' => $this->billingModeService->buildAbsoluteUrl(
-                        $platform,
-                        '/billing/complete',
-                        ['payment' => $payment->transaction_uuid],
-                        $context['environment'] ?? null
-                    ),
+                    'callback_url' => $checkoutCompletionUrl,
                     'description' => 'Subscription payment',
                 ]),
                 default => throw new \InvalidArgumentException('Unsupported hosted checkout provider.'),
