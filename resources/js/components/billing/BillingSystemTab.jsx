@@ -3,7 +3,37 @@ import BillingStateNotice from './BillingStateNotice';
 
 const environments = ['sandbox', 'production'];
 
-export default function BillingSystemTab({ walletSystem, liveReadEnabled = false }) {
+export default function BillingSystemTab({
+    walletSystem,
+    liveReadEnabled = false,
+    isLoading = false,
+    isError = false,
+}) {
+    if (isLoading) {
+        return (
+            <div className="space-y-4 p-5 animate-pulse">
+                <div className="h-24 rounded-xl border border-slate-200 bg-white" />
+                <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="h-48 rounded-xl border border-slate-200 bg-white" />
+                    <div className="h-48 rounded-xl border border-slate-200 bg-white" />
+                </div>
+            </div>
+        );
+    }
+
+    if (isError) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="degraded"
+                    eyebrow="Billing System"
+                    title="Billing system metadata unavailable"
+                    message="CRM could not load the billing system configuration right now. Retry later."
+                />
+            </div>
+        );
+    }
+
     const mode = walletSystem?.mode || 'disabled';
     const domains = walletSystem?.billing_domains || {};
     const branding = walletSystem?.billing_branding || {};

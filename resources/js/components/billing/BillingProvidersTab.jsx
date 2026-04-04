@@ -7,7 +7,35 @@ function providerCardTone(enabled) {
         : 'border-slate-200 bg-slate-50';
 }
 
-export default function BillingProvidersTab({ providerFamilies, walletProviderKeys = [], registryEnabled = false }) {
+export default function BillingProvidersTab({
+    providerFamilies,
+    walletProviderKeys = [],
+    registryEnabled = false,
+    isLoading = false,
+    isError = false,
+}) {
+    if (isLoading) {
+        return (
+            <div className="space-y-4 p-5 animate-pulse">
+                <div className="h-32 rounded-xl border border-slate-200 bg-white" />
+                <div className="h-24 rounded-xl border border-slate-200 bg-white" />
+            </div>
+        );
+    }
+
+    if (isError) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="degraded"
+                    eyebrow="Providers"
+                    title="Provider metadata unavailable"
+                    message="CRM could not load the provider registry state right now. Verify connectivity and retry."
+                />
+            </div>
+        );
+    }
+
     const entries = Object.entries(providerFamilies || {});
 
     return (

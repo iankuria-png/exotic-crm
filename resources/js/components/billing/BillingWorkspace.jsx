@@ -26,7 +26,7 @@ export default function BillingWorkspace() {
     const diagnosticsQuery = useQuery({
         queryKey: ['billing-diagnostics-summary'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
-        enabled: activeTab === 'diagnostics' && Boolean(overviewQuery.data?.billing?.features?.diagnostics_v2),
+        enabled: activeTab === 'diagnostics' && Boolean(features.diagnostics_v2),
         staleTime: 30_000,
     });
 
@@ -103,7 +103,12 @@ export default function BillingWorkspace() {
             <BillingTabNav tabs={billingTabs} activeTab={activeTab} onChange={setActiveTab} />
 
             {activeTab === 'overview' ? (
-                <BillingOverviewTab summary={summary} features={features} />
+                <BillingOverviewTab
+                    summary={summary}
+                    features={features}
+                    isLoading={overviewQuery.isLoading && !overviewQuery.data}
+                    isError={overviewQuery.isError && !overviewQuery.data}
+                />
             ) : null}
 
             {activeTab === 'providers' ? (
@@ -111,6 +116,8 @@ export default function BillingWorkspace() {
                     providerFamilies={providerFamilies}
                     walletProviderKeys={walletProviderKeys}
                     registryEnabled={Boolean(features.registry)}
+                    isLoading={overviewQuery.isLoading && !overviewQuery.data}
+                    isError={overviewQuery.isError && !overviewQuery.data}
                 />
             ) : null}
 
@@ -118,6 +125,8 @@ export default function BillingWorkspace() {
                 <BillingSystemTab
                     walletSystem={walletSystem}
                     liveReadEnabled={Boolean(features.billing_system_live_read)}
+                    isLoading={overviewQuery.isLoading && !overviewQuery.data}
+                    isError={overviewQuery.isError && !overviewQuery.data}
                 />
             ) : null}
 

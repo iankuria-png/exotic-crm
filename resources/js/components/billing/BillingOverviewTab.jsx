@@ -7,7 +7,38 @@ function tone(enabled) {
         : 'border-slate-200 bg-slate-50 text-slate-700';
 }
 
-export default function BillingOverviewTab({ summary, features }) {
+export default function BillingOverviewTab({
+    summary,
+    features,
+    isLoading = false,
+    isError = false,
+}) {
+    if (isLoading) {
+        return (
+            <div className="space-y-4 p-5 animate-pulse">
+                <div className="grid gap-4 xl:grid-cols-4">
+                    <div className="h-32 rounded-xl border border-slate-200 bg-white" />
+                    <div className="h-32 rounded-xl border border-slate-200 bg-white" />
+                    <div className="h-32 rounded-xl border border-slate-200 bg-white" />
+                    <div className="h-32 rounded-xl border border-slate-200 bg-white" />
+                </div>
+            </div>
+        );
+    }
+
+    if (isError) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="degraded"
+                    eyebrow="Overview"
+                    title="Billing summary unavailable"
+                    message="CRM could not load the billing overview right now. Refresh the page to retry."
+                />
+            </div>
+        );
+    }
+
     const cards = [
         {
             key: 'billing',
