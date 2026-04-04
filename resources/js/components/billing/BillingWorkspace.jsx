@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingDiagnosticsTab from './BillingDiagnosticsTab';
@@ -27,33 +27,34 @@ export default function BillingWorkspace() {
 
     const overviewQuery = useQuery({
         queryKey: ['billing-workspace-overview'],
-        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+        queryFn: () => api.get('/crm/settings/billing/overview').then((response) => response.data),
         staleTime: 60_000,
     });
 
-    // Extract data early to avoid Temporal Dead Zone issues in query hooks
     const data = overviewQuery.data || {};
     const billing = data.billing || {};
     const features = billing.features || {};
+    const markets = data.markets || [];
+    const summary = data.summary || {
+        billingEnabled: false,
+        walletMode: 'disabled',
+        totalMarkets: 0,
+        walletEnabledMarkets: 0,
+    };
+
+    const billingSystemQuery = useQuery({
+        queryKey: ['billing-system-settings'],
+        queryFn: () => api.get('/crm/settings/billing/system').then((response) => response.data),
+        enabled: activeTab === 'billing_system',
+        staleTime: 60_000,
+    });
 
     const diagnosticsQuery = useQuery({
         queryKey: ['billing-diagnostics-summary'],
-        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
+        queryFn: () => api.get('/crm/settings/billing/diagnostics-summary').then((response) => response.data),
         enabled: activeTab === 'diagnostics' && Boolean(features.diagnostics_v2),
         staleTime: 30_000,
     });
-
-    const providerFamilies = billing.provider_families || {};
-    const walletSystem = data.wallet?.system || {};
-    const walletProviderKeys = data.wallet?.provider_keys || [];
-    const platforms = data.platforms || [];
-
-    const summary = useMemo(() => ({
-        billingEnabled: Boolean(billing.enabled),
-        walletMode: walletSystem.mode || 'disabled',
-        totalMarkets: platforms.length,
-        walletEnabledMarkets: platforms.filter((platform) => Boolean(platform?.wallet?.enabled)).length,
-    }), [billing.enabled, walletSystem.mode, platforms]);
 
     if (overviewQuery.isLoading) {
         return (
@@ -122,31 +123,31 @@ export default function BillingWorkspace() {
             ) : null}
 
             {activeTab === 'providers' ? (
-                <ProvidersTab />
+                <ProvidersTab registryEnabled={Boolean(features.registry)} />
             ) : null}
 
             {activeTab === 'profiles' ? (
-                <ProviderProfilesTab />
+                <ProviderProfilesTab registryEnabled={Boolean(features.registry)} />
             ) : null}
 
             {activeTab === 'market_routing' ? (
-                <MarketRoutingTab platforms={platforms} />
+                <MarketRoutingTab platforms={markets} />
             ) : null}
 
             {activeTab === 'wallet_rules' ? (
-                <WalletRulesTab platforms={platforms} />
+                <WalletRulesTab platforms={markets} />
             ) : null}
 
             {activeTab === 'subscription_rules' ? (
-                <SubscriptionRulesTab platforms={platforms} />
+                <SubscriptionRulesTab platforms={markets} />
             ) : null}
 
             {activeTab === 'billing_system' ? (
                 <BillingSystemTab
-                    walletSystem={walletSystem}
-                    liveReadEnabled={Boolean(features.billing_system_live_read)}
-                    isLoading={overviewQuery.isLoading && !overviewQuery.data}
-                    isError={overviewQuery.isError && !overviewQuery.data}
+                    system={billingSystemQuery.data?.system || {}}
+                    source={billingSystemQuery.data?.source || {}}
+                    isLoading={billingSystemQuery.isLoading}
+                    isError={billingSystemQuery.isError}
                 />
             ) : null}
 

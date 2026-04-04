@@ -4,8 +4,8 @@ import BillingStateNotice from './BillingStateNotice';
 const environments = ['sandbox', 'production'];
 
 export default function BillingSystemTab({
-    walletSystem,
-    liveReadEnabled = false,
+    system,
+    source = {},
     isLoading = false,
     isError = false,
 }) {
@@ -34,9 +34,12 @@ export default function BillingSystemTab({
         );
     }
 
-    const mode = walletSystem?.mode || 'disabled';
-    const domains = walletSystem?.billing_domains || {};
-    const branding = walletSystem?.billing_branding || {};
+    const mode = system?.mode || 'disabled';
+    const domains = system?.billing_domains || {};
+    const branding = system?.billing_branding || {};
+    const timing = system?.timing || {};
+    const smtp = system?.smtp || {};
+    const liveReadEnabled = Boolean(source?.live_read_enabled);
     const hasConfiguredData = environments.some((environment) => {
         return Boolean(domains?.[environment] || branding?.[environment]?.business_name || branding?.[environment]?.description);
     });
@@ -75,6 +78,24 @@ export default function BillingSystemTab({
                         {mode}
                     </span>
                 </div>
+                <dl className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Default Currency</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">{system?.default_currency || 'KES'}</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Max Single Wallet Funding</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">{system?.max_single_topup_default || 'Not configured'}</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Max Wallet Balance</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">{system?.max_wallet_balance_default || 'Not configured'}</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Source of Truth</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">{source?.source_of_truth || 'wallet_system_config'}</dd>
+                    </div>
+                </dl>
             </section>
 
             <div className="grid gap-4 xl:grid-cols-2">
@@ -103,6 +124,52 @@ export default function BillingSystemTab({
                         </dl>
                     </section>
                 ))}
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                    <h5 className="text-sm font-semibold text-slate-900">Timing Controls</h5>
+                    <dl className="mt-4 space-y-3 text-sm text-slate-600">
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">Redirect delay</dt>
+                            <dd>{timing?.redirect_delay_seconds ?? 'Not configured'}s</dd>
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">Wallet refresh rate limit</dt>
+                            <dd>{timing?.wallet_refresh_rate_limit_seconds ?? 'Not configured'}s</dd>
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">Wallet refresh timeout</dt>
+                            <dd>{timing?.wallet_refresh_timeout_seconds ?? 'Not configured'}s</dd>
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">Wallet funding poll interval</dt>
+                            <dd>{timing?.topup_poll_interval_seconds ?? 'Not configured'}s</dd>
+                        </div>
+                    </dl>
+                </section>
+
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                    <h5 className="text-sm font-semibold text-slate-900">SMTP & Billing Posture</h5>
+                    <dl className="mt-4 space-y-3 text-sm text-slate-600">
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">SMTP enabled</dt>
+                            <dd>{smtp?.enabled ? 'Enabled' : 'Disabled'}</dd>
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">SMTP host</dt>
+                            <dd>{smtp?.host || 'Not configured'}</dd>
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">SMTP from</dt>
+                            <dd>{smtp?.from_address || 'Not configured'}</dd>
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                            <dt className="font-medium text-slate-900">SMTP password</dt>
+                            <dd>{smtp?.password_configured ? 'Configured' : 'Not configured'}</dd>
+                        </div>
+                    </dl>
+                </section>
             </div>
         </div>
     );

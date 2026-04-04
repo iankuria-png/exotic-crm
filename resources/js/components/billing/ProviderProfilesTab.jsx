@@ -8,8 +8,21 @@ import BillingStateNotice from './BillingStateNotice';
  * Profiles allow storing multiple credentials per provider with market-level scoping.
  * Phase 3 is read-only; write operations deferred to Phase 4.
  */
-export default function ProviderProfilesTab() {
+export default function ProviderProfilesTab({ registryEnabled = true }) {
     const [selectedProvider, setSelectedProvider] = useState(null);
+
+    if (!registryEnabled) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="forbidden"
+                    eyebrow="Provider Profiles"
+                    title="Provider profiles are waiting on the registry rollout"
+                    message="Enable the billing registry rollout before reviewing provider profiles and masked credentials in the new Billing workspace."
+                />
+            </div>
+        );
+    }
 
     /**
      * Fetch provider profiles from API.

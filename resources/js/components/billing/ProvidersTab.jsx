@@ -7,7 +7,20 @@ import BillingStateNotice from './BillingStateNotice';
  * ProvidersTab component displays the complete catalog of billing providers.
  * Each provider card shows key, label, family, capabilities, and market/currency support.
  */
-export default function ProvidersTab() {
+export default function ProvidersTab({ registryEnabled = true }) {
+    if (!registryEnabled) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="forbidden"
+                    eyebrow="Providers Catalog"
+                    title="Provider registry is still locked"
+                    message="The new provider-family registry stays read-only until the registry rollout flag is enabled for this environment."
+                />
+            </div>
+        );
+    }
+
     /**
      * Fetch provider catalog from API.
      * Query key scoped to this component for cache isolation.

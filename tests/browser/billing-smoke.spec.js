@@ -62,10 +62,14 @@ test.describe('billing browser smoke coverage', () => {
         const authPayload = await loginViaApi(request, 'admin');
         await seedAuthState(page, authPayload);
 
-        let integrationsRequests = 0;
+        let overviewRequests = 0;
+        let diagnosticsRequests = 0;
         await stubBillingWorkspace(page, {
-            onIntegrationsRequest: () => {
-                integrationsRequests += 1;
+            onOverviewRequest: () => {
+                overviewRequests += 1;
+            },
+            onDiagnosticsRequest: () => {
+                diagnosticsRequests += 1;
             },
         });
 
@@ -74,7 +78,7 @@ test.describe('billing browser smoke coverage', () => {
 
         await expect(page.getByText(/Phase 0B Scope/)).toBeVisible();
 
-        const requestsBeforeDiagnostics = integrationsRequests;
+        const overviewRequestsBeforeDiagnostics = overviewRequests;
 
         await page.getByRole('button', { name: 'Diagnostics' }).click();
 
@@ -83,7 +87,8 @@ test.describe('billing browser smoke coverage', () => {
         await expect(page.getByText('KopoKopo')).toBeVisible();
         await expect(page.getByText('Payment Service')).toBeVisible();
         await expect(page.getByText('SendGrid')).toBeVisible();
-        await expect.poll(() => integrationsRequests).toBeGreaterThan(requestsBeforeDiagnostics);
+        await expect.poll(() => overviewRequests).toBe(overviewRequestsBeforeDiagnostics);
+        await expect.poll(() => diagnosticsRequests).toBeGreaterThan(0);
     });
 
     test('admin sees providers tab forbidden state while registry rollout is disabled', async ({ page, request }) => {

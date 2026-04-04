@@ -6510,7 +6510,7 @@ export default function Settings() {
     const canDeployUpdates = (user?.role || '') === 'admin';
     const billingAvailabilityQuery = useQuery({
         queryKey: ['billing-workspace-availability'],
-        queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data?.billing || {}),
+        queryFn: () => api.get('/crm/settings/billing/overview').then((response) => response.data?.billing || {}),
         enabled: !isSales,
         staleTime: 60_000,
     });

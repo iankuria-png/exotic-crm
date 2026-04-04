@@ -66,23 +66,7 @@ class SettingsController extends Controller
 
     public function integrations(Request $request)
     {
-        $platformQuery = Platform::query()->orderBy('id');
-        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
-
-        if (is_array($allowedPlatformIds)) {
-            $platformQuery->whereIn('id', $allowedPlatformIds);
-        }
-
-        $platforms = $platformQuery->get();
-        $supportBoardSyncRuns = $this->supportBoardSyncRunService->latestRunsForPlatforms(
-            $platforms->pluck('id')->map(fn ($id) => (int) $id)->all()
-        );
-        $platformStatuses = $platforms
-            ->map(fn(Platform $platform) => $this->serializePlatformIntegration(
-                $platform,
-                $supportBoardSyncRuns->get((int) $platform->id)
-            ))
-            ->values();
+        [$platforms, $platformStatuses, $allowedPlatformIds] = $this->accessiblePlatformsAndStatuses($request);
 
         $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
         $pushProvider = $this->scopePushConfigForUser(
@@ -183,6 +167,100 @@ class SettingsController extends Controller
                 'fetch_schedules' => ScraperSourceService::FETCH_SCHEDULES,
                 'dedupe_modes' => ScraperSourceService::DEDUPE_MODES,
             ],
+            'last_checked_at' => now()->toDateTimeString(),
+        ]);
+    }
+
+    public function billingOverview(Request $request)
+    {
+        if (!BillingPermissions::canAccessBillingWorkspace($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        [$platforms, $platformStatuses] = $this->accessiblePlatformsAndStatuses($request);
+        $walletSystem = $this->walletSettingsService->currentSystemConfig(masked: true);
+        $billing = $this->billingWorkspaceMetadata();
+
+        return response()->json([
+            'billing' => $billing,
+            'summary' => [
+                'billingEnabled' => (bool) $billing['enabled'],
+                'walletMode' => $walletSystem['mode'] ?? 'disabled',
+                'totalMarkets' => $platformStatuses->count(),
+                'walletEnabledMarkets' => $platformStatuses
+                    ->filter(fn (array $platform) => (bool) data_get($platform, 'wallet.enabled'))
+                    ->count(),
+            ],
+            'markets' => $platforms->map(function (Platform $platform) {
+                $wallet = $this->walletSettingsService->currentPlatformConfig($platform, masked: true);
+
+                return [
+                    'id' => (int) $platform->id,
+                    'name' => $platform->name,
+                    'country' => $platform->country,
+                    'wallet' => [
+                        'enabled' => (bool) ($wallet['enabled'] ?? false),
+                        'mode_override' => $wallet['mode_override'] ?? null,
+                    ],
+                ];
+            })->values(),
+            'last_checked_at' => now()->toDateTimeString(),
+        ]);
+    }
+
+    public function billingSystem(Request $request)
+    {
+        if (!BillingPermissions::canViewBillingSystem($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $system = $this->walletSettingsService->currentSystemConfig(masked: true);
+
+        return response()->json([
+            'system' => [
+                'mode' => $system['mode'] ?? 'disabled',
+                'default_currency' => $system['default_currency'] ?? 'KES',
+                'max_single_topup_default' => $system['max_single_topup_default'] ?? null,
+                'max_wallet_balance_default' => $system['max_wallet_balance_default'] ?? null,
+                'billing_domains' => (array) ($system['billing_domains'] ?? []),
+                'billing_branding' => (array) ($system['billing_branding'] ?? []),
+                'timing' => [
+                    'redirect_delay_seconds' => $system['redirect_delay_seconds'] ?? null,
+                    'wallet_refresh_rate_limit_seconds' => $system['wallet_refresh_rate_limit_seconds'] ?? null,
+                    'wallet_refresh_timeout_seconds' => $system['wallet_refresh_timeout_seconds'] ?? null,
+                    'topup_poll_interval_seconds' => $system['topup_poll_interval_seconds'] ?? null,
+                ],
+                'smtp' => [
+                    'enabled' => (bool) data_get($system, 'smtp.enabled', false),
+                    'host' => data_get($system, 'smtp.host'),
+                    'port' => data_get($system, 'smtp.port'),
+                    'username' => data_get($system, 'smtp.username'),
+                    'encryption' => data_get($system, 'smtp.encryption'),
+                    'from_address' => data_get($system, 'smtp.from_address'),
+                    'from_name' => data_get($system, 'smtp.from_name'),
+                    'password_configured' => (bool) data_get($system, 'smtp.password_configured', false),
+                ],
+                'discount_config' => (array) ($system['discount_config'] ?? []),
+            ],
+            'source' => [
+                'live_read_enabled' => (bool) config('services.billing.billing_system_live_read.enabled', false),
+                'source_of_truth' => (bool) config('services.billing.billing_system_live_read.enabled', false)
+                    ? 'billing_system_settings'
+                    : 'wallet_system_config',
+            ],
+        ]);
+    }
+
+    public function billingDiagnosticsSummary(Request $request)
+    {
+        if (!BillingPermissions::canViewBillingDiagnostics($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        [, $platformStatuses] = $this->accessiblePlatformsAndStatuses($request);
+
+        return response()->json([
+            'services' => $this->billingDiagnosticsServices($request, $platformStatuses),
             'last_checked_at' => now()->toDateTimeString(),
         ]);
     }
@@ -509,6 +587,10 @@ class SettingsController extends Controller
      */
     public function providersCatalog()
     {
+        if (!BillingPermissions::canViewProviderProfiles(auth()->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
         $providers = array_map(
             fn ($definition) => $definition->toArray(),
             $this->billingProviderRegistry->definitions()
@@ -530,6 +612,10 @@ class SettingsController extends Controller
      */
     public function providerProfiles()
     {
+        if (!BillingPermissions::canViewProviderProfiles(auth()->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
         $profiles = \App\Models\BillingProviderProfile::query()
             ->select([
                 'id',
@@ -3323,6 +3409,87 @@ class SettingsController extends Controller
             'enabled_markets' => $enabledMarkets,
             'production_overrides' => $productionOverrides,
         ];
+    }
+
+    private function billingWorkspaceMetadata(): array
+    {
+        return [
+            'enabled' => (bool) config('services.billing.enabled', false),
+            'features' => (array) config('services.billing.features', []),
+            'provider_families' => (array) config('services.billing.provider_family', []),
+        ];
+    }
+
+    private function billingDiagnosticsServices(Request $request, $platformStatuses): array
+    {
+        $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
+        $pushProvider = $this->scopePushConfigForUser(
+            $this->pushProviderService->currentPushConfig(masked: true),
+            $request->user()
+        );
+        $activeProvider = (string) ($smsProvider['active_provider'] ?? 'legacy_gateway');
+        $activeConfigured = match ($activeProvider) {
+            'africastalking' => (bool) ($smsProvider['africastalking']['username'] ?? null)
+                && (bool) ($smsProvider['africastalking']['api_key_configured'] ?? false),
+            default => (bool) ($smsProvider['legacy_gateway']['gateway_url'] ?? null)
+                && (bool) ($smsProvider['legacy_gateway']['org_code'] ?? null),
+        };
+        $smsStatus = $activeConfigured
+            ? (($smsProvider['enabled'] ?? false) ? 'connected' : 'configured_disabled')
+            : 'pending';
+
+        return [
+            'wallet_system' => $this->walletSystemSummary($platformStatuses),
+            'sms_gateway' => [
+                'status' => $smsStatus,
+                'enabled' => (bool) ($smsProvider['enabled'] ?? false),
+                'gateway_url' => $smsProvider['legacy_gateway']['gateway_url'] ?? null,
+                'org_code' => $smsProvider['legacy_gateway']['org_code'] ?? null,
+                'active_provider' => $activeProvider,
+            ],
+            'sms_provider' => $smsProvider,
+            'push_provider' => $pushProvider,
+            'kopokopo' => [
+                'status' => config('services.kopokopo.client_id') && config('services.kopokopo.client_secret')
+                    ? 'connected'
+                    : 'pending',
+                'base_url' => config('services.kopokopo.base_url'),
+                'till_number' => config('services.kopokopo.till_number'),
+            ],
+            'payment_service' => [
+                'status' => config('services.django.base_url') ? 'connected' : 'pending',
+                'base_url' => config('services.django.base_url'),
+                'payment_link_path' => config('services.payment_link.path'),
+                'note' => 'STK push (including retry) and payment initiation use this Django proxy URL.',
+            ],
+            'sendgrid' => [
+                'status' => 'deferred',
+                'note' => 'SendGrid email dispatch is deferred until post Sprint 3 stabilization.',
+            ],
+        ];
+    }
+
+    private function accessiblePlatformsAndStatuses(Request $request): array
+    {
+        $platformQuery = Platform::query()->orderBy('id');
+        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        if (is_array($allowedPlatformIds)) {
+            $platformQuery->whereIn('id', $allowedPlatformIds);
+        }
+
+        $platforms = $platformQuery->get();
+        $supportBoardSyncRuns = $this->supportBoardSyncRunService->latestRunsForPlatforms(
+            $platforms->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
+        $platformStatuses = $platforms
+            ->map(fn (Platform $platform) => $this->serializePlatformIntegration(
+                $platform,
+                $supportBoardSyncRuns->get((int) $platform->id)
+            ))
+            ->values();
+
+        return [$platforms, $platformStatuses, $allowedPlatformIds];
     }
 
     private function normalizePaymentLinkProviders(array $config): ?array
