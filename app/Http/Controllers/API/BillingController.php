@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -203,10 +204,10 @@ class BillingController extends Controller
         $testMode = false;
 
         if ($payment) {
-            $payment->loadMissing(['client.platform', 'platform']);
+            $payment->loadMissing(['client.platform', 'platform', 'routingDecisions']);
             $context = $this->billingModeService->walletContext($payment->platform);
             $redirectDelay = (int) data_get($context, 'system.redirect_delay_seconds', 3);
-            $mode = (string) ($payment->provider_environment ?: ($context['environment'] ?? 'sandbox'));
+            $mode = $this->resolveExecutionEnvironment($payment, (string) ($context['environment'] ?? 'sandbox'));
             $testMode = (bool) data_get($payment->payment_data, 'test_mode', false);
             $statusLabel = (string) ($payment->status ?: 'processing');
             if ($mode === 'sandbox' && $testMode) {
@@ -356,5 +357,21 @@ class BillingController extends Controller
         }
 
         return str_contains($host, '.');
+    }
+
+    private function resolveExecutionEnvironment(Payment $payment, string $default = 'sandbox'): string
+    {
+        $decision = $payment->relationLoaded('routingDecisions')
+            ? $payment->routingDecisions->first()
+            : $payment->routingDecisions()
+                ->where('immutable_until_terminal_state', true)
+                ->latest('id')
+                ->first();
+
+        if ($decision instanceof BillingRoutingDecision) {
+            return strtolower(trim((string) ($decision->environment ?: $default)));
+        }
+
+        return strtolower(trim((string) ($payment->provider_environment ?: $default)));
     }
 }

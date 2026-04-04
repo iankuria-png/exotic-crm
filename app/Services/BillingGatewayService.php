@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Billing\Support\BillingRoutingDecisionRecorder;
+use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -240,17 +241,14 @@ class BillingGatewayService
             throw new InvalidArgumentException('Paystack webhook payload is missing the transaction reference.');
         }
 
-        $payment = Payment::query()
-            ->where('provider_key', 'paystack')
-            ->where('reference_number', $reference)
-            ->firstOrFail();
+        $payment = $this->resolveHostedCheckoutPaymentByReference('paystack', $reference);
 
         $payment->loadMissing(['client.platform', 'platform']);
         $context = $this->billingModeService->providerContext(
             $payment->platform,
             'paystack',
             requireEnabled: false,
-            environmentOverride: $payment->provider_environment
+            environmentOverride: $this->resolvedEnvironment($payment)
         );
         $secretKey = (string) data_get($context, 'provider_credentials.secret_key', '');
         $expected = hash_hmac('sha512', $rawBody, $secretKey);
@@ -307,17 +305,14 @@ class BillingGatewayService
             throw new InvalidArgumentException('Pesapal IPN payload is missing the merchant reference.');
         }
 
-        $payment = Payment::query()
-            ->where('provider_key', 'pesapal')
-            ->where('reference_number', $merchantReference)
-            ->firstOrFail();
+        $payment = $this->resolveHostedCheckoutPaymentByReference('pesapal', $merchantReference);
 
         $payment->loadMissing(['client.platform', 'platform']);
         $context = $this->billingModeService->providerContext(
             $payment->platform,
             'pesapal',
             requireEnabled: false,
-            environmentOverride: $payment->provider_environment
+            environmentOverride: $this->resolvedEnvironment($payment)
         );
         $trackingId = (string) ($payload['OrderTrackingId'] ?? $payload['order_tracking_id'] ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id', ''));
         if ($trackingId === '') {
@@ -379,7 +374,7 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()->findOrFail($paymentId);
-        if ($payment->purpose !== 'wallet_topup' || $payment->provider_key !== 'mpesa_stk') {
+        if ($payment->purpose !== 'wallet_topup' || $this->resolvedProviderType($payment) !== 'mpesa_stk') {
             throw new InvalidArgumentException('M-Pesa callback does not target a wallet top-up payment.');
         }
 
@@ -766,6 +761,51 @@ class BillingGatewayService
     private function completeVerifiedPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
         return $this->paymentCompletionService->complete($payment, $providerPayload, $options);
+    }
+
+    private function resolveHostedCheckoutPaymentByReference(string $providerTypeKey, string $referenceNumber): Payment
+    {
+        return Payment::query()
+            ->where('reference_number', $referenceNumber)
+            ->where(function ($query) use ($providerTypeKey) {
+                $query->where('provider_key', $providerTypeKey)
+                    ->orWhereHas('routingDecisions', function ($decisionQuery) use ($providerTypeKey) {
+                        $decisionQuery->where('immutable_until_terminal_state', true)
+                            ->where('provider_type_key', $providerTypeKey);
+                    });
+            })
+            ->latest('id')
+            ->firstOrFail();
+    }
+
+    private function resolvedProviderType(Payment $payment): string
+    {
+        return strtolower(trim((string) (
+            $this->latestPinnedDecision($payment)?->provider_type_key
+            ?? $payment->provider_key
+            ?? ''
+        )));
+    }
+
+    private function resolvedEnvironment(Payment $payment): string
+    {
+        return strtolower(trim((string) (
+            $this->latestPinnedDecision($payment)?->environment
+            ?? $payment->provider_environment
+            ?? 'production'
+        )));
+    }
+
+    private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
+    {
+        if ($payment->relationLoaded('routingDecisions')) {
+            return $payment->routingDecisions->first();
+        }
+
+        return $payment->routingDecisions()
+            ->where('immutable_until_terminal_state', true)
+            ->latest('id')
+            ->first();
     }
 
     private function requestMetaFromRequest(?Request $request, array $extra = []): ?array

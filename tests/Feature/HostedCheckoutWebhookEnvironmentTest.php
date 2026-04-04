@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -132,6 +133,88 @@ class HostedCheckoutWebhookEnvironmentTest extends TestCase
         Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://cybqa.pesapal.com/pesapalv3/api/Auth/RequestToken'));
         Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://cybqa.pesapal.com/pesapalv3/api/Transactions/GetTransactionStatus')
             && $request->hasHeader('Authorization', 'Bearer sandbox-token'));
+    }
+
+    public function test_paystack_webhook_prefers_pinned_snapshot_for_alias_provider_and_environment(): void
+    {
+        ['platform' => $platform, 'client' => $client] = $this->seedProductionBillingContext();
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'product_id' => null,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'paystack_checkout',
+            'provider_environment' => 'production',
+            'amount' => 1500,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-SNAPSHOT-WEBHOOK-001',
+            'transaction_reference' => 'WTU-SNAPSHOT-WEBHOOK-001',
+            'status' => 'pending',
+            'completed_at' => null,
+            'raw_payload' => [],
+            'payment_data' => [],
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => (int) $payment->id,
+            'market_id' => (int) $platform->id,
+            'billing_surface' => 'proxy_hosted_checkout',
+            'chosen_binding_id' => null,
+            'provider_profile_id' => null,
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'sandbox',
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'shadow_diff_json' => null,
+            'surface_cutover_flag' => null,
+            'snapshot_json' => [
+                'provider_key' => 'paystack_checkout',
+                'provider_type_key' => 'paystack',
+                'environment' => 'sandbox',
+            ],
+            'immutable_until_terminal_state' => true,
+            'decision_json' => [
+                'source' => 'payment_link_send',
+            ],
+            'created_at' => now(),
+        ]);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.paystack.co/transaction/verify/*' => Http::response([
+                'status' => true,
+                'data' => [
+                    'status' => 'success',
+                    'reference' => 'WTU-SNAPSHOT-WEBHOOK-001',
+                    'gateway_response' => 'Successful',
+                ],
+            ], 200),
+        ]);
+
+        $payload = [
+            'event' => 'charge.success',
+            'data' => [
+                'reference' => 'WTU-SNAPSHOT-WEBHOOK-001',
+            ],
+        ];
+        $rawBody = json_encode($payload, JSON_THROW_ON_ERROR);
+        $signature = hash_hmac('sha512', $rawBody, 'sk_test_wallet');
+
+        $response = $this->call('POST', '/api/billing/paystack/webhook', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X-Paystack-Signature' => $signature,
+        ], $rawBody);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://api.paystack.co/transaction/verify/WTU-SNAPSHOT-WEBHOOK-001'
+            && $request->hasHeader('Authorization', 'Bearer sk_test_wallet'));
     }
 
     private function seedProductionBillingContext(): array

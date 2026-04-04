@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -170,6 +171,46 @@ class PaymentLinkProxyRouteTest extends TestCase
             ->assertSee('local or private host')
             ->assertDontSee('Open profile anyway')
             ->assertDontSee('window.location.replace');
+    }
+
+    public function test_billing_complete_route_prefers_snapshot_environment_for_proxy_alias_payments(): void
+    {
+        ['payment' => $payment, 'platform' => $platform] = $this->seedProxyContext('paystack');
+        $payment->forceFill([
+            'provider_environment' => 'production',
+            'status' => 'pending',
+        ])->save();
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => (int) $payment->id,
+            'market_id' => (int) $platform->id,
+            'billing_surface' => 'proxy_hosted_checkout',
+            'chosen_binding_id' => null,
+            'provider_profile_id' => null,
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'sandbox',
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'shadow_diff_json' => null,
+            'surface_cutover_flag' => null,
+            'snapshot_json' => [
+                'provider_key' => 'paystack_checkout',
+                'provider_type_key' => 'paystack',
+                'environment' => 'sandbox',
+            ],
+            'immutable_until_terminal_state' => true,
+            'decision_json' => [
+                'source' => 'payment_link_send',
+            ],
+            'created_at' => now(),
+        ]);
+
+        $response = $this->get('/billing/complete?payment=' . $payment->transaction_uuid);
+
+        $response->assertOk()
+            ->assertSee('Sandbox payment result')
+            ->assertDontSee('Redirecting in 2 seconds');
     }
 
     private function seedProxyContext(string $provider): array
