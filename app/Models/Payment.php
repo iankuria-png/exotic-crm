@@ -123,6 +123,11 @@ class Payment extends Model
         return $this->hasMany(PaymentAttempt::class);
     }
 
+    public function routingDecisions()
+    {
+        return $this->hasMany(BillingRoutingDecision::class);
+    }
+
     public function importBatch()
     {
         return $this->belongsTo(PaymentImportBatch::class, 'import_batch_id');

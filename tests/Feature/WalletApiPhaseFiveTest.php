@@ -6,11 +6,13 @@ use App\Models\BillingWalletRule;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
+use App\Models\BillingRoutingDecision;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\User;
 use App\Services\KopokopoService;
+use App\Services\Routing\ProviderRoutingDispatcher;
 use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -398,6 +400,94 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('error_code', 'provider_not_supported');
     }
 
+    public function test_billing_initiate_routes_wallet_topups_through_provider_dispatcher(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+            'bearer_key' => $bearerKey,
+            'hmac_secret' => $hmacSecret,
+        ] = $this->seedWalletContext();
+
+        Http::fake([
+            'https://api.paystack.co/transaction/initialize' => Http::response([
+                'status' => true,
+                'message' => 'Authorization URL created',
+                'data' => [
+                    'authorization_url' => 'https://checkout.paystack.test/redirect-dispatcher',
+                    'reference' => 'WTU-REF-DISPATCHER',
+                    'access_code' => 'ACCESS-CODE-DISPATCHER',
+                ],
+            ], 200),
+        ]);
+
+        $recordingDispatcher = new class(app(ProviderRoutingDispatcher::class)) extends ProviderRoutingDispatcher {
+            public array $calls = [];
+
+            public function __construct(private readonly ProviderRoutingDispatcher $inner)
+            {
+            }
+
+            public function dispatch(Payment $payment, array $context, array $options = []): array
+            {
+                $this->calls[] = compact('payment', 'context', 'options');
+
+                return $this->inner->dispatch($payment, $context, $options);
+            }
+
+            public function supports(string $providerKey): bool
+            {
+                return $this->inner->supports($providerKey);
+            }
+
+            public function registeredProviders(): array
+            {
+                return $this->inner->registeredProviders();
+            }
+        };
+        $this->app->instance(ProviderRoutingDispatcher::class, $recordingDispatcher);
+
+        $payload = [
+            'wp_user_id' => $client->wp_user_id,
+            'provider' => 'paystack',
+            'amount' => '1200.00',
+        ];
+        $headers = $this->walletHeaders(
+            $platform,
+            $bearerKey,
+            $hmacSecret,
+            'POST',
+            '/api/billing/initiate',
+            $payload,
+            'topup-dispatch-' . Str::uuid()
+        );
+
+        $response = $this->withHeaders($headers)->postJson('/api/billing/initiate', $payload);
+        $response->assertCreated()
+            ->assertJsonPath('provider', 'paystack')
+            ->assertJsonPath('action.type', 'redirect')
+            ->assertJsonPath('action.url', 'https://checkout.paystack.test/redirect-dispatcher');
+
+        $this->assertCount(1, $recordingDispatcher->calls);
+        $call = $recordingDispatcher->calls[0];
+        $this->assertSame('wallet_topup', $call['payment']->purpose);
+        $this->assertSame('paystack', $call['context']['provider_key'] ?? null);
+        $this->assertSame('Wallet top-up', $call['options']['description'] ?? null);
+        $this->assertSame($client->phone_normalized, $call['payment']->phone);
+
+        $decision = BillingRoutingDecision::query()
+            ->where('payment_id', (int) $response->json('payment.id'))
+            ->latest('id')
+            ->first();
+        $this->assertNotNull($decision);
+        $this->assertSame('wallet_funding', $decision->billing_surface);
+        $this->assertSame('paystack', $decision->provider_type_key);
+        $this->assertSame('direct', $decision->execution_mode);
+        $this->assertSame('hosted_redirect', data_get($decision->snapshot_json, 'execution_family'));
+        $this->assertSame('browser_completion', data_get($decision->snapshot_json, 'callback_contract.type'));
+        $this->assertSame('1200.00', data_get($decision->snapshot_json, 'pricing.amount'));
+    }
+
     public function test_paystack_webhook_credits_wallet_once_after_verification_for_production_payments(): void
     {
         [
@@ -660,6 +750,17 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('provider', 'mpesa_stk')
             ->assertJsonPath('action.type', 'stk_pending')
             ->assertJsonPath('action.retry_available', true);
+
+        $routingDecision = BillingRoutingDecision::query()
+            ->where('payment_id', (int) $initiate->json('payment.id'))
+            ->latest('id')
+            ->first();
+        $this->assertNotNull($routingDecision);
+        $this->assertSame('wallet_funding', $routingDecision->billing_surface);
+        $this->assertSame('mpesa_stk', $routingDecision->provider_type_key);
+        $this->assertSame('direct', $routingDecision->execution_mode);
+        $this->assertSame('mobile_collection', data_get($routingDecision->snapshot_json, 'execution_family'));
+        $this->assertSame('webhook', data_get($routingDecision->snapshot_json, 'callback_contract.type'));
 
         $paymentId = (int) $initiate->json('payment.id');
         $initialAttempts = PaymentAttempt::query()

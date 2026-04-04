@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Services\Routing\ProviderRoutingDispatcher;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -20,7 +22,8 @@ class BillingGatewayService
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly KopokopoService $kopokopoService,
-        private readonly PaymentAttemptService $paymentAttemptService
+        private readonly PaymentAttemptService $paymentAttemptService,
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
     ) {
     }
 
@@ -99,14 +102,17 @@ class BillingGatewayService
         ]);
         $payment->loadMissing(['client', 'platform']);
 
-        $action = match ($provider) {
-            'paystack' => $this->initiatePaystack($payment, $context, $request),
-            'pesapal' => $this->initiatePesapal($payment, $context, [
-                'description' => 'Wallet top-up',
-            ], $request),
-            'mpesa_stk' => $this->initiateMpesaStk($payment, $context, $options, $request),
-            default => throw new InvalidArgumentException('Unsupported wallet billing provider.'),
-        };
+        $dispatchContext = array_merge($context, [
+            'provider_key' => $provider,
+        ]);
+        $this->billingRoutingDecisionRecorder->recordWalletFunding($payment, $dispatchContext, array_merge($options, [
+            'description' => 'Wallet top-up',
+        ]));
+
+        $action = app(ProviderRoutingDispatcher::class)->dispatch($payment, $dispatchContext, array_merge($options, [
+            'request' => $request,
+            'description' => 'Wallet top-up',
+        ]));
 
         return [
             'payment' => $payment->fresh(['platform', 'client']),
@@ -125,6 +131,22 @@ class BillingGatewayService
     public function initiateStkForRouting(Payment $payment, array $context, array $options = [], ?Request $request = null): array
     {
         return $this->initiateMpesaStk($payment, $context, $options, $request);
+    }
+
+    /**
+     * Initiate hosted checkout routing for provider-agnostic executor.
+     *
+     * Public API for ProviderRoutingExecutor to call while preserving the
+     * existing payment-attempt logging, resume state, and payload persistence
+     * implemented by the wallet top-up flow.
+     */
+    public function initiateHostedCheckoutForRouting(Payment $payment, array $context, array $options = [], ?Request $request = null): array
+    {
+        return match ($context['provider_key'] ?? $payment->provider_key) {
+            'paystack' => $this->initiatePaystack($payment, $context, $request),
+            'pesapal' => $this->initiatePesapal($payment, $context, $options, $request),
+            default => throw new InvalidArgumentException('Unsupported hosted checkout billing provider.'),
+        };
     }
 
     public function retryMpesaTopup(Payment $payment, array $options = [], ?Request $request = null): array

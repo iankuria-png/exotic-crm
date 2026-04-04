@@ -4,7 +4,8 @@ namespace App\Services\Routing;
 
 use App\Contracts\ProviderRoutingExecutor;
 use App\Models\Payment;
-use App\Services\HostedCheckoutService;
+use App\Services\BillingGatewayService;
+use Illuminate\Http\Request;
 
 /**
  * Hosted checkout routing executor.
@@ -21,7 +22,7 @@ class HostedCheckoutRoutingExecutor implements ProviderRoutingExecutor
     private const SUPPORTED_PROVIDERS = ['paystack', 'pesapal'];
 
     public function __construct(
-        private readonly HostedCheckoutService $hostedCheckoutService
+        private readonly BillingGatewayService $billingGatewayService
     ) {
     }
 
@@ -35,10 +36,14 @@ class HostedCheckoutRoutingExecutor implements ProviderRoutingExecutor
             );
         }
 
-        return match ($providerKey) {
-            'paystack' => $this->hostedCheckoutService->initializePaystack($payment, $context, $options),
-            'pesapal' => $this->hostedCheckoutService->initializePesapal($payment, $context, $options),
-        };
+        $request = $options['request'] ?? null;
+
+        return $this->billingGatewayService->initiateHostedCheckoutForRouting(
+            $payment,
+            $context,
+            $options,
+            $request instanceof Request ? $request : null
+        );
     }
 
     public function supports(string $providerKey): bool

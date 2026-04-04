@@ -5,6 +5,7 @@ namespace App\Services\Routing;
 use App\Contracts\ProviderRoutingExecutor;
 use App\Models\Payment;
 use App\Services\BillingGatewayService;
+use Illuminate\Http\Request;
 use InvalidArgumentException;
 
 /**
@@ -39,7 +40,14 @@ class MpesaStkRoutingExecutor implements ProviderRoutingExecutor
         // Delegate to BillingGatewayService's internal STK method
         // The service handles transport selection (direct_provider vs proxies)
         // and returns normalized STK action response
-        return $this->billingGatewayService->initiateStkForRouting($payment, $context, $options);
+        $request = $options['request'] ?? null;
+
+        return $this->billingGatewayService->initiateStkForRouting(
+            $payment,
+            $context,
+            $options,
+            $request instanceof Request ? $request : null
+        );
     }
 
     public function supports(string $providerKey): bool
