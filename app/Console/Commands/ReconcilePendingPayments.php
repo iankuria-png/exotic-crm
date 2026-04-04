@@ -77,29 +77,31 @@ class ReconcilePendingPayments extends Command
 
             try {
                 $verification = $this->verifyPayment($payment);
-                $status = (string) ($verification['status'] ?? 'failed');
-                $message = (string) ($verification['message'] ?? '');
+                $decision = $this->providerStatusQueryOrchestrator->decideMutation($payment, $verification);
+                $status = (string) ($decision['winning_status'] ?? $verification['status'] ?? 'failed');
+                $message = (string) ($decision['message'] ?? $verification['message'] ?? '');
                 $providerPayload = is_array($verification['data'] ?? null) ? $verification['data'] : [];
 
-                if ($status === 'completed') {
+                if (($decision['decision'] ?? null) === 'apply_completed') {
                     $this->paymentCompletionService->complete($payment, $providerPayload, [
                         'transaction_reference' => $this->resolveTransactionReference($payment, $providerPayload),
                         'raw_payload' => [
                             'reconciliation' => [
                                 'checked_at' => now()->toDateTimeString(),
-                                'provider_status' => $status,
+                                'provider_status' => $verification['status'] ?? null,
+                                'decision' => $decision,
                             ],
                         ],
                     ]);
                     $totals['completed']++;
-                } elseif ($status === 'failed') {
+                } elseif (($decision['decision'] ?? null) === 'apply_failed') {
                     $this->markPaymentFailed($payment, $message ?: 'Provider reported a failed payment state.', $providerPayload);
                     $totals['failed']++;
                 } else {
                     $totals['pending']++;
                 }
 
-                $this->recordAttempt($payment, $status, $message, $providerPayload, $staleMinutes);
+                $this->recordAttempt($payment, $status, $message, $providerPayload, $staleMinutes, null, $decision);
                 Log::info('Pending payment reconciliation result', [
                     'payment_id' => (int) $payment->id,
                     'provider' => $this->resolveProviderTypeKey($payment),
@@ -175,7 +177,8 @@ class ReconcilePendingPayments extends Command
         ?string $message,
         array $providerPayload,
         int $staleMinutes,
-        ?string $errorCode = null
+        ?string $errorCode = null,
+        array $decision = []
     ): void {
         $this->paymentAttemptService->record($payment, 'reconciliation_check', $status, [
             'provider' => $payment->provider_key,
@@ -189,7 +192,8 @@ class ReconcilePendingPayments extends Command
                 'stale_minutes' => $staleMinutes,
             ],
             'response_meta' => [
-                'verification_status' => $status,
+                'verification_status' => $decision['verification_status'] ?? $status,
+                'decision' => $decision,
                 'provider_payload' => $providerPayload,
             ],
         ]);

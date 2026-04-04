@@ -260,19 +260,23 @@ class BillingGatewayService
         $verification = $this->providerStatusQueryOrchestrator->verify($payment, [
             'reference' => $reference,
         ]);
+        $decision = $this->providerStatusQueryOrchestrator->decideMutation($payment, $verification, [
+            'reference' => $reference,
+        ]);
         $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
-        if (($verification['status'] ?? 'failed') !== 'completed') {
+        if (($decision['decision'] ?? null) === 'apply_failed') {
             $failed = $this->failPayment(
                 $payment,
-                (string) ($verification['message'] ?? 'Paystack transaction did not complete successfully.'),
+                (string) ($decision['message'] ?? $verification['message'] ?? 'Paystack transaction did not complete successfully.'),
                 $verifiedData
             );
             $this->recordBillingCallbackAttempt($failed, 'paystack_webhook', 'failed', [
-                'error_message' => (string) ($verification['message'] ?? 'Paystack transaction did not complete successfully.'),
+                'error_message' => (string) ($decision['message'] ?? $verification['message'] ?? 'Paystack transaction did not complete successfully.'),
                 'response_meta' => [
                     'reference' => $reference,
                     'gateway_response' => $verifiedData['gateway_response'] ?? null,
                     'verification_status' => $verification['status'] ?? null,
+                    'decision' => $decision,
                 ],
             ]);
 
@@ -282,20 +286,38 @@ class BillingGatewayService
             ];
         }
 
-        $completed = $this->completeVerifiedPayment($payment, $verifiedData, [
-            'transaction_reference' => $verifiedData['reference'] ?? $reference,
-        ]);
-        $this->recordBillingCallbackAttempt($completed['payment'], 'paystack_webhook', 'success', [
+        if (($decision['decision'] ?? null) === 'apply_completed') {
+            $completed = $this->completeVerifiedPayment($payment, $verifiedData, [
+                'transaction_reference' => $verifiedData['reference'] ?? $reference,
+            ]);
+            $this->recordBillingCallbackAttempt($completed['payment'], 'paystack_webhook', 'success', [
+                'response_meta' => [
+                    'reference' => $verifiedData['reference'] ?? $reference,
+                    'gateway_response' => $verifiedData['gateway_response'] ?? null,
+                    'verification_status' => $verification['status'] ?? null,
+                    'decision' => $decision,
+                ],
+            ]);
+
+            return array_merge($completed, [
+                'status' => 'completed',
+            ]);
+        }
+
+        $freshPayment = $payment->fresh() ?? $payment;
+        $this->recordBillingCallbackAttempt($freshPayment, 'paystack_webhook', 'success', [
             'response_meta' => [
                 'reference' => $verifiedData['reference'] ?? $reference,
                 'gateway_response' => $verifiedData['gateway_response'] ?? null,
                 'verification_status' => $verification['status'] ?? null,
+                'decision' => $decision,
             ],
         ]);
 
-        return array_merge($completed, [
-            'status' => 'completed',
-        ]);
+        return [
+            'payment' => $freshPayment,
+            'status' => (string) ($decision['winning_status'] ?? $payment->status),
+        ];
     }
 
     public function handlePesapalIpn(array $payload): array
@@ -326,20 +348,25 @@ class BillingGatewayService
             'tracking_id' => $trackingId,
             'provider_reference' => $trackingId,
         ]);
+        $decision = $this->providerStatusQueryOrchestrator->decideMutation($payment, $verification, [
+            'tracking_id' => $trackingId,
+            'provider_reference' => $trackingId,
+        ]);
         $verified = is_array($verification['data'] ?? null) ? $verification['data'] : [];
 
-        if (($verification['status'] ?? 'failed') !== 'completed') {
+        if (($decision['decision'] ?? null) === 'apply_failed') {
             $failed = $this->failPayment(
                 $payment,
-                (string) ($verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
+                (string) ($decision['message'] ?? $verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
                 $verified
             );
             $this->recordBillingCallbackAttempt($failed, 'pesapal_ipn', 'failed', [
-                'error_message' => (string) ($verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
+                'error_message' => (string) ($decision['message'] ?? $verification['message'] ?? 'Pesapal transaction did not complete successfully.'),
                 'response_meta' => [
                     'merchant_reference' => $merchantReference,
                     'tracking_id' => $trackingId,
                     'verification_status' => $verification['status'] ?? null,
+                    'decision' => $decision,
                 ],
             ]);
 
@@ -349,20 +376,38 @@ class BillingGatewayService
             ];
         }
 
-        $completed = $this->completeVerifiedPayment($payment, $verified, [
-            'transaction_reference' => $trackingId,
-        ]);
-        $this->recordBillingCallbackAttempt($completed['payment'], 'pesapal_ipn', 'success', [
+        if (($decision['decision'] ?? null) === 'apply_completed') {
+            $completed = $this->completeVerifiedPayment($payment, $verified, [
+                'transaction_reference' => $trackingId,
+            ]);
+            $this->recordBillingCallbackAttempt($completed['payment'], 'pesapal_ipn', 'success', [
+                'response_meta' => [
+                    'merchant_reference' => $merchantReference,
+                    'tracking_id' => $trackingId,
+                    'verification_status' => $verification['status'] ?? null,
+                    'decision' => $decision,
+                ],
+            ]);
+
+            return array_merge($completed, [
+                'status' => 'completed',
+            ]);
+        }
+
+        $freshPayment = $payment->fresh() ?? $payment;
+        $this->recordBillingCallbackAttempt($freshPayment, 'pesapal_ipn', 'success', [
             'response_meta' => [
                 'merchant_reference' => $merchantReference,
                 'tracking_id' => $trackingId,
                 'verification_status' => $verification['status'] ?? null,
+                'decision' => $decision,
             ],
         ]);
 
-        return array_merge($completed, [
-            'status' => 'completed',
-        ]);
+        return [
+            'payment' => $freshPayment,
+            'status' => (string) ($decision['winning_status'] ?? $payment->status),
+        ];
     }
 
     public function handleMpesaCallback(string $rawBody, string $signature): array

@@ -217,6 +217,70 @@ class HostedCheckoutWebhookEnvironmentTest extends TestCase
             && $request->hasHeader('Authorization', 'Bearer sk_test_wallet'));
     }
 
+    public function test_paystack_webhook_does_not_downgrade_completed_payments_on_late_failed_verification(): void
+    {
+        ['platform' => $platform, 'client' => $client] = $this->seedProductionBillingContext();
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'product_id' => null,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'paystack',
+            'provider_environment' => 'sandbox',
+            'amount' => 1500,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-LATE-FAILED-001',
+            'transaction_reference' => 'WTU-LATE-FAILED-001',
+            'status' => 'completed',
+            'completed_at' => now(),
+            'raw_payload' => [],
+            'payment_data' => [
+                'test_mode' => true,
+                'test_result' => 'completed',
+                'side_effects_skipped' => true,
+            ],
+        ]);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.paystack.co/transaction/verify/*' => Http::response([
+                'status' => true,
+                'data' => [
+                    'status' => 'failed',
+                    'reference' => 'WTU-LATE-FAILED-001',
+                    'gateway_response' => 'Declined',
+                ],
+            ], 200),
+        ]);
+
+        $payload = [
+            'event' => 'charge.failed',
+            'data' => [
+                'reference' => 'WTU-LATE-FAILED-001',
+            ],
+        ];
+        $rawBody = json_encode($payload, JSON_THROW_ON_ERROR);
+        $signature = hash_hmac('sha512', $rawBody, 'sk_test_wallet');
+
+        $response = $this->call('POST', '/api/billing/paystack/webhook', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X-Paystack-Signature' => $signature,
+        ], $rawBody);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $payment->refresh();
+
+        $this->assertSame('completed', $payment->status);
+        $this->assertNull($payment->failure_reason);
+        $this->assertSame('completed', data_get($payment->payment_data, 'test_result'));
+    }
+
     private function seedProductionBillingContext(): array
     {
         config([

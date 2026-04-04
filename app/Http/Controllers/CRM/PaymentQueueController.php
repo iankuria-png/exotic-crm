@@ -989,22 +989,23 @@ class PaymentQueueController extends Controller
             }
 
             $snapshot = $this->verifyProviderStatus($payment);
-            $providerStatus = (string) ($snapshot['status'] ?? 'failed');
+            $decision = $this->providerStatusQueryOrchestrator->decideMutation($payment, $snapshot);
+            $providerStatus = (string) ($decision['winning_status'] ?? $snapshot['status'] ?? 'failed');
             $updatedPayment = $payment->fresh(['platform', 'product', 'client']);
             $reconciled = false;
-            $message = 'Provider still reports this sandbox payment as pending.';
+            $message = (string) ($decision['message'] ?? 'Provider still reports this sandbox payment as pending.');
 
-            if ($providerStatus === 'completed') {
+            if (($decision['decision'] ?? null) === 'apply_completed') {
                 $completion = $this->paymentCompletionService->complete($payment, is_array($snapshot['data'] ?? null) ? $snapshot['data'] : [], [
                     'transaction_reference' => $snapshot['provider_reference'] ?? null,
                 ]);
                 $updatedPayment = $completion['payment'] ?? $payment->fresh(['platform', 'product', 'client']);
                 $reconciled = true;
                 $message = 'Sandbox payment reconciled as completed.';
-            } elseif ($providerStatus === 'failed') {
+            } elseif (($decision['decision'] ?? null) === 'apply_failed') {
                 $updatedPayment = $this->billingGatewayService->failPayment(
                     $payment,
-                    (string) ($snapshot['message'] ?? 'Sandbox provider verification failed.'),
+                    (string) ($decision['message'] ?? $snapshot['message'] ?? 'Sandbox provider verification failed.'),
                     is_array($snapshot['data'] ?? null) ? $snapshot['data'] : []
                 );
                 $reconciled = true;
@@ -1024,6 +1025,7 @@ class PaymentQueueController extends Controller
                     'provider_status' => $providerStatus,
                     'provider_message' => $snapshot['message'] ?? null,
                     'provider_payload' => $snapshot['data'] ?? null,
+                    'decision' => $decision,
                     'reconciled' => $reconciled,
                     'before_state' => $beforeState,
                     'after_state' => $afterState,
