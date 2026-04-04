@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
@@ -265,6 +266,82 @@ class ReconcilePendingPaymentsCommandTest extends TestCase
         $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
         $this->assertDatabaseHas('payment_attempts', [
             'payment_id' => $sandboxPayment->id,
+            'attempt_type' => 'reconciliation_check',
+            'status' => 'completed',
+        ]);
+    }
+
+    public function test_command_prefers_pinned_routing_snapshot_for_provider_and_environment_resolution(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedBillingContext([
+            'client_balance' => 400,
+        ]);
+
+        Http::fake([
+            'https://api.paystack.co/transaction/verify/*' => Http::response([
+                'status' => true,
+                'data' => [
+                    'status' => 'success',
+                    'reference' => 'WTU-SNAPSHOT-001',
+                    'gateway_response' => 'Successful',
+                ],
+            ], 200),
+        ]);
+
+        $payment = $this->createStalePayment([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'paystack_checkout',
+            'provider_environment' => 'sandbox',
+            'amount' => 1200,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-SNAPSHOT-001',
+            'transaction_reference' => 'WTU-SNAPSHOT-001',
+            'status' => 'pending',
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => (int) $payment->id,
+            'market_id' => (int) $platform->id,
+            'billing_surface' => 'proxy_hosted_checkout',
+            'chosen_binding_id' => null,
+            'provider_profile_id' => null,
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'production',
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'shadow_diff_json' => null,
+            'surface_cutover_flag' => null,
+            'snapshot_json' => [
+                'provider_key' => 'paystack_checkout',
+                'provider_type_key' => 'paystack',
+                'execution_family' => 'hosted_redirect',
+                'environment' => 'production',
+            ],
+            'immutable_until_terminal_state' => true,
+            'decision_json' => [
+                'source' => 'payment_link_send',
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->artisan('crm:reconcile-pending-payments', [
+            '--delay-ms' => 0,
+        ])->assertExitCode(0);
+
+        $payment->refresh();
+
+        $this->assertSame('completed', $payment->status);
+        $this->assertSame('1600.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
             'attempt_type' => 'reconciliation_check',
             'status' => 'completed',
         ]);

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Client;
+use App\Models\BillingRoutingDecision;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Product;
@@ -317,8 +318,24 @@ class PaymentCompletionService
         return (bool) data_get($payment->payment_data, 'test_mode', false)
             || (
                 strtolower(trim((string) $payment->source)) === 'gateway'
-                && strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+                && $this->resolveExecutionEnvironment($payment) === 'sandbox'
             );
+    }
+
+    private function resolveExecutionEnvironment(Payment $payment): string
+    {
+        $decision = $payment->relationLoaded('routingDecisions')
+            ? $payment->routingDecisions->first()
+            : $payment->routingDecisions()
+                ->where('immutable_until_terminal_state', true)
+                ->latest('id')
+                ->first();
+
+        if ($decision instanceof BillingRoutingDecision) {
+            return strtolower(trim((string) ($decision->environment ?: 'production')));
+        }
+
+        return strtolower(trim((string) ($payment->provider_environment ?: 'production')));
     }
 
     private function sandboxMetadata(Payment $payment, string $result): array

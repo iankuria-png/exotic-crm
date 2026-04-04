@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Payment;
+use App\Models\BillingRoutingDecision;
 use App\Services\BillingModeService;
 use App\Services\HostedCheckoutService;
 use App\Services\PaymentAttemptService;
@@ -38,19 +39,30 @@ class ReconcilePendingPayments extends Command
         $includeSandbox = (bool) $this->option('include-sandbox');
 
         $paymentsQuery = Payment::query()
-            ->with(['platform', 'client', 'product'])
+            ->with([
+                'platform',
+                'client',
+                'product',
+                'routingDecisions' => fn ($query) => $query
+                    ->where('immutable_until_terminal_state', true)
+                    ->latest('id'),
+            ])
             ->where('status', 'pending')
-            ->whereIn('provider_key', ['paystack', 'pesapal'])
+            ->where(function ($query) {
+                $query->whereIn('provider_key', ['paystack', 'pesapal'])
+                    ->orWhereHas('routingDecisions', function ($decisionQuery) {
+                        $decisionQuery->where('immutable_until_terminal_state', true)
+                            ->whereIn('provider_type_key', ['paystack', 'pesapal']);
+                    });
+            })
             ->whereIn('purpose', ['wallet_topup', 'subscription'])
             ->where('updated_at', '<', now()->subMinutes($staleMinutes))
             ->orderBy('updated_at')
             ->limit($limit);
 
-        if (!$includeSandbox) {
-            $paymentsQuery->liveOnly();
-        }
-
-        $payments = $paymentsQuery->get();
+        $payments = $paymentsQuery->get()
+            ->filter(fn (Payment $payment) => $this->shouldProcessPayment($payment, $includeSandbox))
+            ->values();
 
         $totals = [
             'processed' => 0,
@@ -92,7 +104,7 @@ class ReconcilePendingPayments extends Command
                 $this->recordAttempt($payment, $status, $message, $providerPayload, $staleMinutes);
                 Log::info('Pending payment reconciliation result', [
                     'payment_id' => (int) $payment->id,
-                    'provider' => $payment->provider_key,
+                    'provider' => $this->resolveProviderTypeKey($payment),
                     'purpose' => $payment->purpose,
                     'status' => $status,
                     'message' => $message,
@@ -102,7 +114,7 @@ class ReconcilePendingPayments extends Command
                 $this->recordAttempt($payment, 'failed', $exception->getMessage(), [], $staleMinutes, 'verification_exception');
                 Log::warning('Pending payment reconciliation failed', [
                     'payment_id' => (int) $payment->id,
-                    'provider' => $payment->provider_key,
+                    'provider' => $this->resolveProviderTypeKey($payment),
                     'purpose' => $payment->purpose,
                     'error' => $exception->getMessage(),
                 ]);
@@ -128,12 +140,12 @@ class ReconcilePendingPayments extends Command
     private function verifyPayment(Payment $payment): array
     {
         $payment->loadMissing('platform');
-        $provider = (string) $payment->provider_key;
+        $provider = $this->resolveProviderTypeKey($payment);
         $context = $this->billingModeService->providerContext(
             $payment->platform,
             $provider,
             requireEnabled: false,
-            environmentOverride: $payment->provider_environment
+            environmentOverride: $this->resolveEnvironment($payment)
         );
 
         return match ($provider) {
@@ -206,10 +218,11 @@ class ReconcilePendingPayments extends Command
     ): void {
         $this->paymentAttemptService->record($payment, 'reconciliation_check', $status, [
             'provider' => $payment->provider_key,
+            'resolved_provider' => $this->resolveProviderTypeKey($payment),
             'error_code' => $errorCode,
             'error_message' => $message,
             'request_meta' => [
-                'provider_environment' => $payment->provider_environment,
+                'provider_environment' => $this->resolveEnvironment($payment),
                 'reference_number' => $payment->reference_number,
                 'transaction_reference' => $payment->transaction_reference,
                 'stale_minutes' => $staleMinutes,
@@ -219,5 +232,48 @@ class ReconcilePendingPayments extends Command
                 'provider_payload' => $providerPayload,
             ],
         ]);
+    }
+
+    private function shouldProcessPayment(Payment $payment, bool $includeSandbox): bool
+    {
+        if ($includeSandbox) {
+            return true;
+        }
+
+        if ((bool) data_get($payment->payment_data, 'test_mode', false)) {
+            return false;
+        }
+
+        return $this->resolveEnvironment($payment) !== 'sandbox';
+    }
+
+    private function resolveProviderTypeKey(Payment $payment): string
+    {
+        return strtolower(trim((string) (
+            $this->latestPinnedDecision($payment)?->provider_type_key
+            ?? $payment->provider_key
+            ?? ''
+        )));
+    }
+
+    private function resolveEnvironment(Payment $payment): string
+    {
+        return strtolower(trim((string) (
+            $this->latestPinnedDecision($payment)?->environment
+            ?? $payment->provider_environment
+            ?? 'production'
+        )));
+    }
+
+    private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
+    {
+        if ($payment->relationLoaded('routingDecisions')) {
+            return $payment->routingDecisions->first();
+        }
+
+        return $payment->routingDecisions()
+            ->where('immutable_until_terminal_state', true)
+            ->latest('id')
+            ->first();
     }
 }
