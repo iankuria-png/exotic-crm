@@ -3,14 +3,15 @@ import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingDiagnosticsTab from './BillingDiagnosticsTab';
 import BillingOverviewTab from './BillingOverviewTab';
-import BillingProvidersTab from './BillingProvidersTab';
 import ProvidersTab from './ProvidersTab';
+import ProviderProfilesTab from './ProviderProfilesTab';
 import BillingSystemTab from './BillingSystemTab';
 import BillingTabNav from './BillingTabNav';
 
 const billingTabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'providers', label: 'Providers' },
+    { id: 'profiles', label: 'Profiles' },
     { id: 'billing_system', label: 'Billing System' },
     { id: 'diagnostics', label: 'Diagnostics' },
 ];
@@ -116,6 +117,10 @@ export default function BillingWorkspace() {
 
             {activeTab === 'providers' ? (
                 <ProvidersTab />
+            ) : null}
+
+            {activeTab === 'profiles' ? (
+                <ProviderProfilesTab />
             ) : null}
 
             {activeTab === 'billing_system' ? (

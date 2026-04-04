@@ -516,6 +516,59 @@ class SettingsController extends Controller
         ]);
     }
 
+    /**
+     * Get provider profiles with masking for sensitive data.
+     * Returns all configured provider profiles grouped by provider type.
+     * Secrets are masked to prevent exposure in responses.
+     * Phase 3: Read-only view; write operations deferred to Phase 4.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function providerProfiles()
+    {
+        $profiles = \App\Models\BillingProviderProfile::query()
+            ->select([
+                'id',
+                'provider_type_key',
+                'profile_name',
+                'country_code',
+                'market_id',
+                'environment',
+                'config_json',
+                'secrets_json',
+                'active',
+                'tested_at',
+                'created_at',
+                'updated_at',
+            ])
+            ->orderBy('provider_type_key')
+            ->orderBy('profile_name')
+            ->get()
+            ->map(function ($profile) {
+                $data = $profile->toArray();
+
+                // Mask secrets - only indicate presence, not values
+                if (!empty($data['secrets_json'])) {
+                    $data['secrets_json'] = array_map(
+                        fn ($v) => '••••••••',
+                        $data['secrets_json']
+                    );
+                }
+
+                return $data;
+            });
+
+        // Return profiles with provider definitions for context
+        return response()->json([
+            'profiles' => $profiles,
+            'providers' => array_map(
+                fn ($definition) => $definition->toArray(),
+                $this->billingProviderRegistry->definitions()
+            ),
+            'count' => count($profiles),
+        ]);
+    }
+
     public function wallet(Request $request)
     {
         $platformQuery = Platform::query()->orderBy('id');
