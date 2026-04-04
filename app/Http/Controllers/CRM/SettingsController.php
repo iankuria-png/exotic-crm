@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
@@ -53,7 +54,8 @@ class SettingsController extends Controller
         private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService,
-        private readonly BillingProviderRegistryContract $billingProviderRegistry
+        private readonly BillingProviderRegistryContract $billingProviderRegistry,
+        private readonly ProviderCredentialSchemaRegistryContract $providerCredentialSchemaRegistry
     ) {
     }
 
@@ -157,11 +159,13 @@ class SettingsController extends Controller
                         static fn ($definition) => $definition->toArray(),
                         $this->billingProviderRegistry->definitions()
                     )),
+                    'schemas' => $this->serializeProviderSchemas(),
                 ],
             ],
             'wallet' => [
                 'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
                 'provider_keys' => $this->walletSettingsService->providerKeys(),
+                'provider_schemas' => $this->serializeProviderSchemas($this->walletSettingsService->providerKeys()),
                 'mode_options' => WalletSettingsService::MODES,
                 'environment_options' => WalletSettingsService::ENVIRONMENTS,
             ],
@@ -513,9 +517,37 @@ class SettingsController extends Controller
             'system' => $this->walletSettingsService->currentSystemConfig(masked: true),
             'platforms' => $platforms,
             'provider_keys' => $this->walletSettingsService->providerKeys(),
+            'provider_schemas' => $this->serializeProviderSchemas($this->walletSettingsService->providerKeys()),
             'mode_options' => WalletSettingsService::MODES,
             'environment_options' => WalletSettingsService::ENVIRONMENTS,
         ]);
+    }
+
+    /**
+     * @param  list<string>|null  $providerKeys
+     * @return array<string, array<string, mixed>>
+     */
+    private function serializeProviderSchemas(?array $providerKeys = null): array
+    {
+        $schemas = $this->providerCredentialSchemaRegistry->all();
+
+        if ($providerKeys !== null) {
+            $schemas = array_filter(
+                $schemas,
+                static fn ($schema, string $providerKey): bool => in_array($providerKey, $providerKeys, true),
+                ARRAY_FILTER_USE_BOTH
+            );
+        }
+
+        return array_map(
+            static fn ($schema) => [
+                'provider_key' => $schema->providerKey(),
+                'label' => $schema->label(),
+                'supported_environments' => $schema->supportedEnvironments(),
+                'fields' => $schema->fields(),
+            ],
+            $schemas
+        );
     }
 
     public function updateWallet(Request $request)

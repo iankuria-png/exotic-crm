@@ -62,4 +62,34 @@ class Platform extends Model
     {
         return $this->belongsToMany(User::class, 'user_platforms');
     }
+
+    public function billingProviderProfiles()
+    {
+        return $this->hasMany(BillingProviderProfile::class, 'market_id');
+    }
+
+    public function billingMarketProviderBindings()
+    {
+        return $this->hasMany(BillingMarketProviderBinding::class, 'market_id');
+    }
+
+    public function billingRoutingRules()
+    {
+        return $this->hasMany(BillingRoutingRule::class, 'market_id');
+    }
+
+    public function billingWalletRule()
+    {
+        return $this->hasOne(BillingWalletRule::class, 'market_id');
+    }
+
+    public function billingSubscriptionRule()
+    {
+        return $this->hasOne(BillingSubscriptionRule::class, 'market_id');
+    }
+
+    public function billingRoutingDecisions()
+    {
+        return $this->hasMany(BillingRoutingDecision::class, 'market_id');
+    }
 }

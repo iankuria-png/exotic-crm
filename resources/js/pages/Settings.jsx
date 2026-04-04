@@ -326,6 +326,118 @@ function paymentLinkProviderOptionLabel(provider) {
     return `${baseLabel} (${paymentLinkModeLabel(provider?.mode)})`;
 }
 
+const DEFAULT_WALLET_PROVIDER_SCHEMAS = {
+    pesapal: {
+        provider_key: 'pesapal',
+        label: 'Pesapal',
+        supported_environments: ['sandbox', 'production'],
+        fields: [
+            { key: 'consumer_key', label: 'Consumer key', type: 'text', placeholder: 'Consumer key', configured_flag: 'consumer_key_configured', serialize: 'trim' },
+            { key: 'consumer_secret', label: 'Consumer secret', type: 'secret', placeholder: 'Consumer secret', configured_flag: 'consumer_secret_configured', serialize: 'trim' },
+            { key: 'ipn_id', label: 'IPN ID', type: 'text', placeholder: 'IPN ID', serialize: 'trim' },
+        ],
+    },
+    paystack: {
+        provider_key: 'paystack',
+        label: 'Paystack',
+        supported_environments: ['sandbox', 'production'],
+        fields: [
+            { key: 'public_key', label: 'Public key', type: 'text', placeholder: 'Public key', configured_flag: 'public_key_configured', serialize: 'trim' },
+            { key: 'secret_key', label: 'Secret key', type: 'secret', placeholder: 'Secret key', configured_flag: 'secret_key_configured', serialize: 'trim' },
+        ],
+    },
+    mpesa_stk: {
+        provider_key: 'mpesa_stk',
+        label: 'M-Pesa STK',
+        supported_environments: ['sandbox', 'production'],
+        fields: [
+            { key: 'transport', label: 'Transport', type: 'select', default: 'django_proxy', serialize: 'raw', options: ['django_proxy', 'direct_provider'] },
+            { key: 'payment_service_base_url', label: 'Payment service base URL', type: 'url', placeholder: 'Payment service base URL', serialize: 'trim_or_null' },
+            { key: 'organization_code', label: 'Organization code', type: 'text', placeholder: 'Organization code', default: '76', serialize: 'trim' },
+            { key: 'callback_base_url', label: 'Callback base URL', type: 'url', placeholder: 'Callback base URL', serialize: 'trim_or_null' },
+        ],
+    },
+};
+
+function walletProviderSchemaLabel(providerKey, schema) {
+    return schema?.label || walletProviderLabel(providerKey);
+}
+
+function walletProviderFieldOptions(field) {
+    return Array.isArray(field?.options) ? field.options : [];
+}
+
+function walletProviderSelectOptionLabel(option) {
+    if (option && typeof option === 'object') {
+        return option.label || option.value || 'Option';
+    }
+
+    if (option === 'django_proxy') return 'Django proxy';
+    if (option === 'direct_provider') return 'Direct provider';
+
+    return String(option || '').replaceAll('_', ' ') || 'Option';
+}
+
+function walletProviderSelectOptionValue(option) {
+    if (option && typeof option === 'object') {
+        return option.value || '';
+    }
+
+    return String(option || '');
+}
+
+function walletProviderCredentialStatus(schema, providerConfig) {
+    const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+    const configuredFields = fields.filter((field) => field.configured_flag);
+
+    if (configuredFields.length) {
+        const configuredCount = configuredFields.filter((field) => Boolean(providerConfig?.[field.configured_flag])).length;
+
+        return {
+            tone: configuredCount === configuredFields.length ? 'text-emerald-700' : 'text-amber-700',
+            text: configuredCount === configuredFields.length
+                ? 'Secrets stored'
+                : `${configuredCount}/${configuredFields.length} secrets stored`,
+        };
+    }
+
+    const selectField = fields.find((field) => field.type === 'select');
+    if (selectField) {
+        const selectedValue = providerConfig?.[selectField.key] ?? selectField.default ?? '';
+        const selectedOption = walletProviderFieldOptions(selectField).find((option) => (
+            walletProviderSelectOptionValue(option) === selectedValue
+        ));
+
+        return {
+            tone: 'text-slate-500',
+            text: walletProviderSelectOptionLabel(selectedOption || selectedValue || selectField.default || ''),
+        };
+    }
+
+    return {
+        tone: 'text-slate-500',
+        text: 'Configured per environment',
+    };
+}
+
+function serializeWalletProviderField(field, value) {
+    if (field?.serialize === 'raw') {
+        return value ?? field?.default ?? '';
+    }
+
+    const normalized = typeof value === 'string' ? value.trim() : value;
+
+    if (field?.serialize === 'trim_or_null') {
+        return normalized ? normalized : null;
+    }
+
+    if (normalized === null || normalized === undefined) {
+        return field?.default ?? '';
+    }
+
+    return normalized;
+}
+
 function paymentLinkReadinessState(provider, selectedPlatform, walletSystemConfig) {
     if (provider?.mode !== 'proxy_hosted_checkout') {
         return null;
@@ -739,54 +851,38 @@ function buildWalletPlatformForm(platform) {
     };
 }
 
-function buildWalletProvidersForm(platform) {
+function buildWalletProvidersForm(platform, providerSchemas = DEFAULT_WALLET_PROVIDER_SCHEMAS, environmentOptions = ['sandbox', 'production']) {
     const credentials = platform?.wallet?.credentials || {};
+    const schemas = providerSchemas && Object.keys(providerSchemas).length ? providerSchemas : DEFAULT_WALLET_PROVIDER_SCHEMAS;
+    const form = {};
+
+    Object.entries(schemas).forEach(([providerKey, schema]) => {
+        const schemaEnvironments = schema?.supported_environments?.length ? schema.supported_environments : environmentOptions;
+        const schemaFields = Array.isArray(schema?.fields) ? schema.fields : [];
+
+        form[providerKey] = {};
+
+        schemaEnvironments.forEach((environment) => {
+            const maskedCredentials = credentials?.[providerKey]?.[environment] || {};
+            const environmentForm = {};
+
+            schemaFields.forEach((field) => {
+                environmentForm[field.key] = maskedCredentials[field.key] ?? field.default ?? '';
+
+                if (field.configured_flag) {
+                    environmentForm[field.configured_flag] = Boolean(maskedCredentials[field.configured_flag]);
+                }
+            });
+
+            form[providerKey][environment] = {
+                ...maskedCredentials,
+                ...environmentForm,
+            };
+        });
+    });
 
     return {
-        pesapal: {
-            sandbox: {
-                consumer_key: '',
-                consumer_secret: '',
-                consumer_key_configured: Boolean(credentials.pesapal?.sandbox?.consumer_key_configured),
-                consumer_secret_configured: Boolean(credentials.pesapal?.sandbox?.consumer_secret_configured),
-                ipn_id: credentials.pesapal?.sandbox?.ipn_id || '',
-            },
-            production: {
-                consumer_key: '',
-                consumer_secret: '',
-                consumer_key_configured: Boolean(credentials.pesapal?.production?.consumer_key_configured),
-                consumer_secret_configured: Boolean(credentials.pesapal?.production?.consumer_secret_configured),
-                ipn_id: credentials.pesapal?.production?.ipn_id || '',
-            },
-        },
-        paystack: {
-            sandbox: {
-                public_key: '',
-                secret_key: '',
-                public_key_configured: Boolean(credentials.paystack?.sandbox?.public_key_configured),
-                secret_key_configured: Boolean(credentials.paystack?.sandbox?.secret_key_configured),
-            },
-            production: {
-                public_key: '',
-                secret_key: '',
-                public_key_configured: Boolean(credentials.paystack?.production?.public_key_configured),
-                secret_key_configured: Boolean(credentials.paystack?.production?.secret_key_configured),
-            },
-        },
-        mpesa_stk: {
-            sandbox: {
-                transport: credentials.mpesa_stk?.sandbox?.transport || 'django_proxy',
-                payment_service_base_url: credentials.mpesa_stk?.sandbox?.payment_service_base_url || '',
-                organization_code: credentials.mpesa_stk?.sandbox?.organization_code || '76',
-                callback_base_url: credentials.mpesa_stk?.sandbox?.callback_base_url || '',
-            },
-            production: {
-                transport: credentials.mpesa_stk?.production?.transport || 'django_proxy',
-                payment_service_base_url: credentials.mpesa_stk?.production?.payment_service_base_url || '',
-                organization_code: credentials.mpesa_stk?.production?.organization_code || '76',
-                callback_base_url: credentials.mpesa_stk?.production?.callback_base_url || '',
-            },
-        },
+        ...form,
         wp_to_crm: credentials.wp_to_crm || {
             sandbox: { bearer_key_configured: false, hmac_configured: false, bearer_last_rotated_at: null, hmac_last_rotated_at: null },
             production: { bearer_key_configured: false, hmac_configured: false, bearer_last_rotated_at: null, hmac_last_rotated_at: null },
@@ -970,6 +1066,7 @@ function IntegrationsWorkspace({
     const walletModeOptions = walletConfig.mode_options || ['disabled', 'sandbox', 'production'];
     const walletEnvironmentOptions = walletConfig.environment_options || ['sandbox', 'production'];
     const walletProviderKeys = walletConfig.provider_keys || ['pesapal', 'paystack', 'mpesa_stk'];
+    const walletProviderSchemas = walletConfig.provider_schemas || DEFAULT_WALLET_PROVIDER_SCHEMAS;
     const smsProviderConfig = services.sms_provider || null;
     const pushProviderConfig = services.push_provider || null;
     const activeProviderLabel = smsProviderLabel(smsProviderConfig?.active_provider || 'legacy_gateway');
@@ -1106,7 +1203,7 @@ function IntegrationsWorkspace({
         setPaymentLinkForm(buildPaymentLinkProviderForm(selectedPlatform));
         setPackageEditor(buildPackageEditor(selectedPlatform));
         setWalletPlatformForm(buildWalletPlatformForm(selectedPlatform));
-        setWalletProvidersForm(buildWalletProvidersForm(selectedPlatform));
+        setWalletProvidersForm(buildWalletProvidersForm(selectedPlatform, walletProviderSchemas, walletEnvironmentOptions));
         setWalletCredentialReveal(null);
     }, [selectedPlatformId, selectedPlatform]);
 
@@ -1546,7 +1643,7 @@ function IntegrationsWorkspace({
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
             if (response?.platform) {
                 setWalletPlatformForm(buildWalletPlatformForm(response.platform));
-                setWalletProvidersForm(buildWalletProvidersForm(response.platform));
+                setWalletProvidersForm(buildWalletProvidersForm(response.platform, walletProviderSchemas, walletEnvironmentOptions));
             }
             const syncSummary = summarizeWalletSyncResponse(response);
             if (syncSummary) {
@@ -1566,7 +1663,7 @@ function IntegrationsWorkspace({
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
             if (response?.platform) {
-                setWalletProvidersForm(buildWalletProvidersForm(response.platform));
+                setWalletProvidersForm(buildWalletProvidersForm(response.platform, walletProviderSchemas, walletEnvironmentOptions));
             }
             const syncSummary = summarizeWalletSyncResponse(response);
             if (syncSummary) {
@@ -1613,7 +1710,7 @@ function IntegrationsWorkspace({
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
             if (response?.platform) {
-                setWalletProvidersForm(buildWalletProvidersForm(response.platform));
+                setWalletProvidersForm(buildWalletProvidersForm(response.platform, walletProviderSchemas, walletEnvironmentOptions));
             }
 
             const syncSummary = summarizeWalletSyncResponse(response);
@@ -1962,45 +2059,31 @@ function IntegrationsWorkspace({
             return;
         }
 
+        const providerPayload = walletProviderKeys.reduce((carry, providerKey) => {
+            const schema = walletProviderSchemas[providerKey] || DEFAULT_WALLET_PROVIDER_SCHEMAS[providerKey];
+            const schemaFields = Array.isArray(schema?.fields) ? schema.fields : [];
+            const schemaEnvironments = schema?.supported_environments?.length ? schema.supported_environments : walletEnvironmentOptions;
+
+            carry[providerKey] = schemaEnvironments.reduce((environmentCarry, environment) => {
+                environmentCarry[environment] = schemaFields.reduce((fieldCarry, field) => {
+                    fieldCarry[field.key] = serializeWalletProviderField(
+                        field,
+                        walletProvidersForm?.[providerKey]?.[environment]?.[field.key]
+                    );
+
+                    return fieldCarry;
+                }, {});
+
+                return environmentCarry;
+            }, {});
+
+            return carry;
+        }, {});
+
         saveWalletProvidersMutation.mutate({
             platformId: selectedPlatform.platform_id,
             payload: {
-                pesapal: {
-                    sandbox: {
-                        consumer_key: walletProvidersForm.pesapal.sandbox.consumer_key.trim(),
-                        consumer_secret: walletProvidersForm.pesapal.sandbox.consumer_secret.trim(),
-                        ipn_id: walletProvidersForm.pesapal.sandbox.ipn_id.trim(),
-                    },
-                    production: {
-                        consumer_key: walletProvidersForm.pesapal.production.consumer_key.trim(),
-                        consumer_secret: walletProvidersForm.pesapal.production.consumer_secret.trim(),
-                        ipn_id: walletProvidersForm.pesapal.production.ipn_id.trim(),
-                    },
-                },
-                paystack: {
-                    sandbox: {
-                        public_key: walletProvidersForm.paystack.sandbox.public_key.trim(),
-                        secret_key: walletProvidersForm.paystack.sandbox.secret_key.trim(),
-                    },
-                    production: {
-                        public_key: walletProvidersForm.paystack.production.public_key.trim(),
-                        secret_key: walletProvidersForm.paystack.production.secret_key.trim(),
-                    },
-                },
-                mpesa_stk: {
-                    sandbox: {
-                        transport: walletProvidersForm.mpesa_stk.sandbox.transport,
-                        payment_service_base_url: walletProvidersForm.mpesa_stk.sandbox.payment_service_base_url.trim() || null,
-                        organization_code: walletProvidersForm.mpesa_stk.sandbox.organization_code.trim(),
-                        callback_base_url: walletProvidersForm.mpesa_stk.sandbox.callback_base_url.trim() || null,
-                    },
-                    production: {
-                        transport: walletProvidersForm.mpesa_stk.production.transport,
-                        payment_service_base_url: walletProvidersForm.mpesa_stk.production.payment_service_base_url.trim() || null,
-                        organization_code: walletProvidersForm.mpesa_stk.production.organization_code.trim(),
-                        callback_base_url: walletProvidersForm.mpesa_stk.production.callback_base_url.trim() || null,
-                    },
-                },
+                ...providerPayload,
                 reason: walletProvidersForm.reason.trim(),
             },
         });
@@ -3679,108 +3762,63 @@ function IntegrationsWorkspace({
                                             <div className="mt-3 space-y-3">
                                                 {walletProviderKeys.map((providerKey) => (
                                                     <div key={`wallet-provider-credentials-${providerKey}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                                                        <div className="flex flex-wrap items-center justify-between gap-2">
-                                                            <h5 className="text-sm font-semibold text-slate-900">{walletProviderLabel(providerKey)}</h5>
-                                                            <span className="text-xs text-slate-500">{selectedPlatform.platform_name}</span>
-                                                        </div>
+                                                        {(() => {
+                                                            const schema = walletProviderSchemas[providerKey] || DEFAULT_WALLET_PROVIDER_SCHEMAS[providerKey];
+                                                            const schemaFields = Array.isArray(schema?.fields) ? schema.fields : [];
 
-                                                        <div className="mt-3 grid gap-3 xl:grid-cols-2">
-                                                            {walletEnvironmentOptions.map((environment) => {
-                                                                const providerConfig = walletProvidersForm[providerKey]?.[environment] || {};
-
-                                                                return (
-                                                                    <div key={`${providerKey}-${environment}`} className="rounded-md border border-slate-200 bg-white p-3">
-                                                                        <div className="flex items-center justify-between gap-2">
-                                                                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{environment}</p>
-                                                                            {providerKey === 'pesapal' ? (
-                                                                                <span className={`text-[11px] ${providerConfig.consumer_key_configured && providerConfig.consumer_secret_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
-                                                                                    {providerConfig.consumer_key_configured && providerConfig.consumer_secret_configured ? 'Secrets stored' : 'Secrets incomplete'}
-                                                                                </span>
-                                                                            ) : providerKey === 'paystack' ? (
-                                                                                <span className={`text-[11px] ${providerConfig.public_key_configured && providerConfig.secret_key_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
-                                                                                    {providerConfig.public_key_configured && providerConfig.secret_key_configured ? 'Keys stored' : 'Keys incomplete'}
-                                                                                </span>
-                                                                            ) : (
-                                                                                <span className="text-[11px] text-slate-500">{providerConfig.transport || 'django_proxy'}</span>
-                                                                            )}
-                                                                        </div>
-
-                                                                        {providerKey === 'pesapal' ? (
-                                                                            <div className="mt-3 grid gap-2">
-                                                                                <input
-                                                                                    value={providerConfig.consumer_key || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'consumer_key', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="Consumer key"
-                                                                                />
-                                                                                <input
-                                                                                    type="password"
-                                                                                    value={providerConfig.consumer_secret || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'consumer_secret', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="Consumer secret"
-                                                                                />
-                                                                                <input
-                                                                                    value={providerConfig.ipn_id || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'ipn_id', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="IPN ID"
-                                                                                />
-                                                                            </div>
-                                                                        ) : null}
-
-                                                                        {providerKey === 'paystack' ? (
-                                                                            <div className="mt-3 grid gap-2">
-                                                                                <input
-                                                                                    value={providerConfig.public_key || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'public_key', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="Public key"
-                                                                                />
-                                                                                <input
-                                                                                    type="password"
-                                                                                    value={providerConfig.secret_key || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'secret_key', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="Secret key"
-                                                                                />
-                                                                            </div>
-                                                                        ) : null}
-
-                                                                        {providerKey === 'mpesa_stk' ? (
-                                                                            <div className="mt-3 grid gap-2">
-                                                                                <select
-                                                                                    value={providerConfig.transport || 'django_proxy'}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'transport', event.target.value)}
-                                                                                    className="crm-select"
-                                                                                >
-                                                                                    <option value="django_proxy">Django proxy</option>
-                                                                                    <option value="direct_provider">Direct provider</option>
-                                                                                </select>
-                                                                                <input
-                                                                                    value={providerConfig.payment_service_base_url || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'payment_service_base_url', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="Payment service base URL"
-                                                                                />
-                                                                                <input
-                                                                                    value={providerConfig.organization_code || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'organization_code', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="Organization code"
-                                                                                />
-                                                                                <input
-                                                                                    value={providerConfig.callback_base_url || ''}
-                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, 'callback_base_url', event.target.value)}
-                                                                                    className="crm-input"
-                                                                                    placeholder="Callback base URL"
-                                                                                />
-                                                                            </div>
-                                                                        ) : null}
+                                                            return (
+                                                                <>
+                                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                                        <h5 className="text-sm font-semibold text-slate-900">{walletProviderSchemaLabel(providerKey, schema)}</h5>
+                                                                        <span className="text-xs text-slate-500">{selectedPlatform.platform_name}</span>
                                                                     </div>
-                                                                );
-                                                            })}
-                                                        </div>
+
+                                                                    <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                                                                        {walletEnvironmentOptions.map((environment) => {
+                                                                            const providerConfig = walletProvidersForm[providerKey]?.[environment] || {};
+                                                                            const status = walletProviderCredentialStatus(schema, providerConfig);
+
+                                                                            return (
+                                                                                <div key={`${providerKey}-${environment}`} className="rounded-md border border-slate-200 bg-white p-3">
+                                                                                    <div className="flex items-center justify-between gap-2">
+                                                                                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{environment}</p>
+                                                                                        <span className={`text-[11px] ${status.tone}`}>{status.text}</span>
+                                                                                    </div>
+
+                                                                                    <div className="mt-3 grid gap-2">
+                                                                                        {schemaFields.map((field) => (
+                                                                                            field.type === 'select' ? (
+                                                                                                <select
+                                                                                                    key={`${providerKey}-${environment}-${field.key}`}
+                                                                                                    value={providerConfig[field.key] || field.default || ''}
+                                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, field.key, event.target.value)}
+                                                                                                    className="crm-select"
+                                                                                                >
+                                                                                                    {walletProviderFieldOptions(field).map((option) => (
+                                                                                                        <option key={`${providerKey}-${environment}-${field.key}-${walletProviderSelectOptionValue(option)}`} value={walletProviderSelectOptionValue(option)}>
+                                                                                                            {walletProviderSelectOptionLabel(option)}
+                                                                                                        </option>
+                                                                                                    ))}
+                                                                                                </select>
+                                                                                            ) : (
+                                                                                                <input
+                                                                                                    key={`${providerKey}-${environment}-${field.key}`}
+                                                                                                    type={field.type === 'secret' ? 'password' : 'text'}
+                                                                                                    value={providerConfig[field.key] || ''}
+                                                                                                    onChange={(event) => updateWalletProviderCredentialField(providerKey, environment, field.key, event.target.value)}
+                                                                                                    className="crm-input"
+                                                                                                    placeholder={field.placeholder || field.label}
+                                                                                                />
+                                                                                            )
+                                                                                        ))}
+                                                                                    </div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </>
+                                                            );
+                                                        })()}
                                                     </div>
                                                 ))}
                                             </div>

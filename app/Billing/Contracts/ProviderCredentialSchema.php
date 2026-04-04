@@ -6,6 +6,8 @@ interface ProviderCredentialSchema
 {
     public function providerKey(): string;
 
+    public function label(): string;
+
     /**
      * @return list<array<string, mixed>>
      */
