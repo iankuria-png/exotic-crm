@@ -228,6 +228,33 @@ class WalletSettingsService
         ]);
     }
 
+    public function runtimeRecentTransactionsLimit(?Platform $platform, int $default = 10): int
+    {
+        if (!$platform) {
+            return max(1, min(50, $default));
+        }
+
+        return max(
+            1,
+            min(
+                50,
+                (int) data_get($this->runtimePlatformConfig($platform), 'recent_transactions_limit', $default)
+            )
+        );
+    }
+
+    public function runtimeWalletCurrencyCode(?Platform $platform, string $default = 'KES'): string
+    {
+        $fallback = strtoupper(trim($default)) !== '' ? strtoupper(trim($default)) : 'KES';
+        if (!$platform) {
+            return $fallback;
+        }
+
+        $configured = strtoupper(trim((string) data_get($this->runtimePlatformConfig($platform), 'currency_code', '')));
+
+        return $configured !== '' ? $configured : $fallback;
+    }
+
     public function currentPaymentLinkProviders(Platform $platform): ?array
     {
         $legacy = is_array($platform->payment_link_providers)

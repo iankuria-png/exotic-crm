@@ -32,7 +32,7 @@ class ClientWalletController extends Controller
             'platform_id' => (int) $client->platform_id,
             'wallet' => $this->walletService->summary(
                 $client,
-                (int) data_get($client->platform?->wallet_settings, 'recent_transactions_limit', 10)
+                $this->walletSettingsService->runtimeRecentTransactionsLimit($client->platform, 10)
             ),
         ]);
     }
@@ -44,7 +44,7 @@ class ClientWalletController extends Controller
             'limit' => 'nullable|integer|min:1|max:50',
         ]);
 
-        $limit = (int) ($validated['limit'] ?? data_get($client->platform?->wallet_settings, 'recent_transactions_limit', 10));
+        $limit = (int) ($validated['limit'] ?? $this->walletSettingsService->runtimeRecentTransactionsLimit($client->platform, 10));
         $transactions = $this->walletService->recentTransactions($client, $limit);
 
         return response()->json([

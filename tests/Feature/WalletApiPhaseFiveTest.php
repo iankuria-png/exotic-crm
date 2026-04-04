@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingWalletRule;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
@@ -195,6 +196,61 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('mode', 'sandbox')
             ->assertJsonPath('config.sandbox_badge', true)
             ->assertJsonPath('last_topup.type', 'credit');
+    }
+
+    public function test_crm_client_wallet_summary_uses_projected_runtime_currency_and_recent_transaction_limit(): void
+    {
+        config(['billing.shadow_read.enabled' => true]);
+
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 1800,
+        ]);
+
+        $platform->forceFill([
+            'wallet_settings' => null,
+        ])->save();
+
+        BillingWalletRule::query()->create([
+            'market_id' => $platform->id,
+            'enabled' => true,
+            'currency_code' => 'GHS',
+            'topup_preset_json' => ['150.00', '300.00'],
+            'limit_json' => [
+                'max_single_topup' => '9000.00',
+                'max_wallet_balance' => '120000.00',
+            ],
+            'auto_renew_json' => ['enabled' => true],
+            'ui_json' => [
+                'show_refresh_button' => false,
+                'allow_combined_topup_subscribe' => false,
+                'recent_transactions_limit' => 2,
+            ],
+        ]);
+
+        foreach ([1200, 500, 100] as $index => $amount) {
+            $client->walletTransactions()->create([
+                'platform_id' => $platform->id,
+                'type' => 'credit',
+                'currency_code' => 'GHS',
+                'amount' => $amount,
+                'balance_after' => 1800 + $amount + $index,
+                'reference_type' => 'wallet_topup',
+                'reference_id' => $index + 1,
+                'description' => 'Projected wallet credit #' . ($index + 1),
+            ]);
+        }
+
+        Sanctum::actingAs($this->createUser('admin'));
+
+        $response = $this->getJson("/api/crm/clients/{$client->id}/wallet");
+
+        $response->assertOk()
+            ->assertJsonPath('wallet.currency', 'GHS');
+
+        $this->assertCount(2, $response->json('wallet.transactions'));
     }
 
     public function test_wallet_subscribe_is_idempotent_and_uses_shared_provisioning_path(): void

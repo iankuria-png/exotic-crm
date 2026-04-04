@@ -16,7 +16,8 @@ class PaymentCompletionService
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
-        private readonly WalletSyncService $walletSyncService
+        private readonly WalletSyncService $walletSyncService,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -49,7 +50,7 @@ class PaymentCompletionService
                 'credited' => false,
                 'replayed' => $alreadyCompleted,
                 'wallet' => $payment->client
-                    ? $this->walletService->summary($payment->client, (int) data_get($payment->platform?->wallet_settings, 'recent_transactions_limit', 10))
+                    ? $this->walletService->summary($payment->client, $this->walletRecentTransactionsLimit($payment))
                     : null,
             ];
         }
@@ -64,7 +65,7 @@ class PaymentCompletionService
                 'credited' => false,
                 'replayed' => true,
                 'wallet' => $payment->client
-                    ? $this->walletService->summary($payment->client, (int) data_get($payment->platform?->wallet_settings, 'recent_transactions_limit', 10))
+                    ? $this->walletService->summary($payment->client, $this->walletRecentTransactionsLimit($payment))
                     : null,
             ];
         }
@@ -143,7 +144,7 @@ class PaymentCompletionService
             'payment' => $payment->fresh(['platform', 'client']),
             'credited' => true,
             'replayed' => false,
-            'wallet' => $this->walletService->summary($credit['client'], (int) data_get($payment->platform?->wallet_settings, 'recent_transactions_limit', 10)),
+            'wallet' => $this->walletService->summary($credit['client'], $this->walletRecentTransactionsLimit($payment)),
             'auto_subscribe' => $autoSubscribeResult,
         ];
     }
@@ -330,5 +331,10 @@ class PaymentCompletionService
             'side_effects_skipped' => true,
             'verified_at' => (string) ($existing['verified_at'] ?? now()->toIso8601String()),
         ]);
+    }
+
+    private function walletRecentTransactionsLimit(Payment $payment, int $default = 10): int
+    {
+        return $this->walletSettingsService->runtimeRecentTransactionsLimit($payment->platform, $default);
     }
 }

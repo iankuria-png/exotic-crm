@@ -12,6 +12,11 @@ use RuntimeException;
 
 class WalletService
 {
+    public function __construct(
+        private readonly WalletSettingsService $walletSettingsService
+    ) {
+    }
+
     public function summary(Client $client, int $limit = 10): array
     {
         $freshClient = $client->fresh(['platform']) ?? $client->loadMissing('platform');
@@ -185,8 +190,7 @@ class WalletService
             return $overrideCurrency;
         }
 
-        $walletSettings = is_array($client->platform?->wallet_settings) ? $client->platform->wallet_settings : [];
-        $walletConfigCurrency = strtoupper(trim((string) ($walletSettings['currency_code'] ?? '')));
+        $walletConfigCurrency = $this->walletSettingsService->runtimeWalletCurrencyCode($client->platform, '');
         if ($walletConfigCurrency !== '') {
             return $walletConfigCurrency;
         }
