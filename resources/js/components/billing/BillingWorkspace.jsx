@@ -24,6 +24,11 @@ export default function BillingWorkspace() {
         staleTime: 60_000,
     });
 
+    // Extract data early to avoid Temporal Dead Zone issues in query hooks
+    const data = overviewQuery.data || {};
+    const billing = data.billing || {};
+    const features = billing.features || {};
+
     const diagnosticsQuery = useQuery({
         queryKey: ['billing-diagnostics-summary'],
         queryFn: () => api.get('/crm/settings/integrations').then((response) => response.data),
@@ -31,9 +36,6 @@ export default function BillingWorkspace() {
         staleTime: 30_000,
     });
 
-    const data = overviewQuery.data || {};
-    const billing = data.billing || {};
-    const features = billing.features || {};
     const providerFamilies = billing.provider_families || {};
     const walletSystem = data.wallet?.system || {};
     const walletProviderKeys = data.wallet?.provider_keys || [];
