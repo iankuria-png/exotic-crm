@@ -4,15 +4,15 @@
         "phone": "254700000222",
         "amount": 1500,
         "currency": "KES",
-        "transaction_uuid": "8369cb5c-b329-3283-85dd-3bb1632c3df0",
-        "transaction_reference": "TXN-4974DE",
+        "transaction_uuid": "03a8773c-98a4-3129-b004-0dc589f1bd11",
+        "transaction_reference": "TXN-7988VN",
         "status": "pending",
-        "duration": "monthly",
-        "start_date": "2026-04-04T15:45:49.000000Z",
-        "end_date": "2026-05-04T15:45:49.000000Z",
+        "duration": "weekly",
+        "start_date": "2026-04-04T17:46:02.000000Z",
+        "end_date": "2026-05-04T17:46:02.000000Z",
         "raw_payload": [],
-        "created_at": "2026-04-04T15:45:49.000000Z",
-        "updated_at": "2026-04-04T15:45:49.000000Z",
+        "created_at": "2026-04-04T17:46:02.000000Z",
+        "updated_at": "2026-04-04T17:46:02.000000Z",
         "escort_post_id": null,
         "deal_id": null,
         "match_confidence": null,
@@ -23,13 +23,13 @@
         "import_legacy_hash": null,
         "reconciliation_confidence": "low",
         "reconciliation_state": "open",
-        "completed_at": "2026-04-04T15:45:49.000000Z",
+        "completed_at": "2026-04-04T17:46:02.000000Z",
         "failure_reason": null,
         "reference_number": "CRM-BASELINE-REF-001",
         "payment_data": {
             "link_proxy": {
-                "token_hash": "1973adc3816d0da058d057db02ad61a32069c36fdfa9aa280124230c84bc330d",
-                "token_expires_at": "2026-04-05T15:45:49+00:00",
+                "token_hash": "d96d71913d7a3aa0ed9609258bcf5a5677af2545d3e8dcf761dfc8a6d6bd4110",
+                "token_expires_at": "2026-04-05T17:46:02+00:00",
                 "provider_key": "paystack",
                 "provider_config_key": "paystack_checkout",
                 "mode": "proxy_hosted_checkout",
@@ -39,7 +39,7 @@
                 "initialized_at": "2026-04-03T10:01:00Z",
                 "opened_at": "2026-04-03T10:00:00Z",
                 "open_count": 1,
-                "sent_at": "2026-04-04T15:45:49+00:00"
+                "sent_at": "2026-04-04T17:46:02+00:00"
             }
         },
         "purpose": "subscription",
@@ -54,11 +54,11 @@
             "country": "Kenya",
             "is_active": true,
             "db_host": "127.0.0.1",
-            "db_name": "wp_marketywgl",
+            "db_name": "wp_marketmurb",
             "db_user": "root",
             "db_prefix": "wp_",
-            "created_at": "2026-04-04T15:45:49.000000Z",
-            "updated_at": "2026-04-04T15:45:49.000000Z",
+            "created_at": "2026-04-04T17:46:02.000000Z",
+            "updated_at": "2026-04-04T17:46:02.000000Z",
             "wp_api_url": "https:\/\/baseline-market.example.test\/wp-json\/exotic-crm-sync\/v1",
             "wp_api_user": "crm-user",
             "phone_prefix": "254",
@@ -89,17 +89,17 @@
         },
         "product": {
             "id": 1,
-            "name": "Premium 080",
-            "monthly_price": 8605.15,
-            "biweekly_price": 1972.12,
+            "name": "Premium 734",
+            "monthly_price": 4262.48,
+            "biweekly_price": 4718.09,
             "currency": "KES",
             "is_active": true,
-            "created_at": "2026-04-04T15:45:49.000000Z",
-            "updated_at": "2026-04-04T15:45:49.000000Z",
-            "weekly_price": 907.09,
+            "created_at": "2026-04-04T17:46:02.000000Z",
+            "updated_at": "2026-04-04T17:46:02.000000Z",
+            "weekly_price": 1837.43,
             "platform_id": 1,
-            "display_name": "Premium 080",
-            "slug": "premium-080",
+            "display_name": "Premium 734",
+            "slug": "premium-734",
             "tier": "custom",
             "is_archived": false,
             "sort_order": 0
@@ -113,7 +113,7 @@
             "name": "Baseline Client",
             "phone_normalized": "254700000222",
             "email": "baseline-client@example.test",
-            "city": "South Lewis",
+            "city": "North Laurentown",
             "profile_status": "publish",
             "premium": false,
             "premium_expire": null,
@@ -121,11 +121,11 @@
             "featured_expire": null,
             "escort_expire": null,
             "verified": false,
-            "main_image_url": "https:\/\/via.placeholder.com\/640x800.png\/00ddaa?text=unde",
+            "main_image_url": "https:\/\/via.placeholder.com\/640x800.png\/0077dd?text=tempora",
             "assigned_to": null,
-            "last_synced_at": "2026-04-04T15:45:49.000000Z",
-            "created_at": "2026-04-04T15:45:49.000000Z",
-            "updated_at": "2026-04-04T15:45:49.000000Z",
+            "last_synced_at": "2026-04-04T17:46:02.000000Z",
+            "created_at": "2026-04-04T17:46:02.000000Z",
+            "updated_at": "2026-04-04T17:46:02.000000Z",
             "last_online_at": null,
             "duplicate_of": null,
             "wallet_balance": "0.00",
@@ -145,11 +145,11 @@
                 "country": "Kenya",
                 "is_active": true,
                 "db_host": "127.0.0.1",
-                "db_name": "wp_marketywgl",
+                "db_name": "wp_marketmurb",
                 "db_user": "root",
                 "db_prefix": "wp_",
-                "created_at": "2026-04-04T15:45:49.000000Z",
-                "updated_at": "2026-04-04T15:45:49.000000Z",
+                "created_at": "2026-04-04T17:46:02.000000Z",
+                "updated_at": "2026-04-04T17:46:02.000000Z",
                 "wp_api_url": "https:\/\/baseline-market.example.test\/wp-json\/exotic-crm-sync\/v1",
                 "wp_api_user": "crm-user",
                 "phone_prefix": "254",
@@ -191,9 +191,9 @@
     },
     "performance": {
         "attempt_count": 1,
-        "avg_latency_ms": 6,
-        "p95_latency_ms": 6,
-        "last_latency_ms": 6
+        "avg_latency_ms": 7,
+        "p95_latency_ms": 7,
+        "last_latency_ms": 7
     },
     "browser_meta": {
         "context_type": null,
@@ -224,15 +224,15 @@
         "provider_config_key": "paystack_checkout",
         "environment": "sandbox",
         "token_status": "active",
-        "token_expires_at": "2026-04-05 15:45:49",
+        "token_expires_at": "2026-04-05 17:46:02",
         "rotation_count": 0,
-        "sent_at": "2026-04-04 15:45:49",
+        "sent_at": "2026-04-04 17:46:02",
         "opened_at": "2026-04-03 10:00:00",
         "open_count": 1,
         "initialized_at": "2026-04-03 10:01:00",
         "redirect_url": "https:\/\/checkout.paystack.test\/redirect",
         "provider_reference": "PSTK-BASELINE-001",
-        "callback_at": "2026-04-04 15:45:49",
+        "callback_at": "2026-04-04 17:46:02",
         "session_status": "checkout_initialized",
         "last_provider_check": null
     },
@@ -245,7 +245,7 @@
             "error_code": null,
             "error_message": null,
             "http_status": null,
-            "latency_ms": 6,
+            "latency_ms": 7,
             "request_meta": {
                 "channel": "sms",
                 "requested_provider": "paystack_checkout",
@@ -254,14 +254,14 @@
             "response_meta": {
                 "sms_status": "disabled",
                 "provider_response": "SMS dispatch disabled (SMS_ENABLED=false)",
-                "payment_url": "https:\/\/billing-sandbox.example.test\/api\/payments\/link\/EHzdAjmqTeXGlyihxTd9zrpDqRy96toYj1pHDSaFYN5ZcSy4fxCpArtEoR2xxigr"
+                "payment_url": "https:\/\/billing-sandbox.example.test\/api\/payments\/link\/O0HpfXi8MOf4uy7FQOj0NU5gIhD7jJuvHSHYMSPeqAYsYomTIWnnLMPwDNxfGF80"
             },
             "actor": {
                 "id": 1,
                 "name": "Sales Baseline",
-                "email": "5JkNj2sc@example.test"
+                "email": "nc9vTAmd@example.test"
             },
-            "created_at": "2026-04-04 15:45:49"
+            "created_at": "2026-04-04 17:46:02"
         }
     ],
     "audit_trail": [
@@ -284,7 +284,7 @@
                 "id": 1,
                 "name": "Sales Baseline"
             },
-            "created_at": "2026-04-04 15:45:49"
+            "created_at": "2026-04-04 17:46:02"
         }
     ],
     "timeline": []

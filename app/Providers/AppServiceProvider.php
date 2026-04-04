@@ -15,6 +15,7 @@ use App\Billing\Routing\BillingRouteResolver;
 use App\Services\Routing\ProviderRoutingDispatcher;
 use App\Services\Routing\HostedCheckoutRoutingExecutor;
 use App\Services\Routing\MpesaStkRoutingExecutor;
+use App\Services\Routing\SubscriptionRoutingExecutor;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -53,6 +54,11 @@ class AppServiceProvider extends ServiceProvider
             );
             
             return $dispatcher;
+        });
+
+        // Subscription routing executor uses dispatcher internally
+        $this->app->singleton(SubscriptionRoutingExecutor::class, function ($app) {
+            return new SubscriptionRoutingExecutor($app->make(ProviderRoutingDispatcher::class));
         });
 
         config()->set('billing', array_replace_recursive(
