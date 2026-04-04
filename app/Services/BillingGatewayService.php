@@ -116,6 +116,17 @@ class BillingGatewayService
         ];
     }
 
+    /**
+     * Initiate STK routing for provider-agnostic executor.
+     *
+     * Public API for ProviderRoutingExecutor to call, normalizing
+     * M-Pesa STK initialization through a consistent interface.
+     */
+    public function initiateStkForRouting(Payment $payment, array $context, array $options = [], ?Request $request = null): array
+    {
+        return $this->initiateMpesaStk($payment, $context, $options, $request);
+    }
+
     public function retryMpesaTopup(Payment $payment, array $options = [], ?Request $request = null): array
     {
         $payment->loadMissing(['client.platform', 'platform', 'client']);
