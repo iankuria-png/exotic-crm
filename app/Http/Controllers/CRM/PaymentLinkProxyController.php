@@ -5,14 +5,14 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Services\BillingModeService;
-use App\Services\HostedCheckoutService;
+use App\Services\Routing\HostedCheckoutRoutingExecutor;
 use App\Services\PaymentLinkService;
 use Illuminate\Http\RedirectResponse;
 
 class PaymentLinkProxyController extends Controller
 {
     public function __construct(
-        private readonly HostedCheckoutService $hostedCheckoutService,
+        private readonly HostedCheckoutRoutingExecutor $hostedCheckoutExecutor,
         private readonly BillingModeService $billingModeService
     ) {
     }
@@ -65,32 +65,23 @@ class PaymentLinkProxyController extends Controller
                     requireEnabled: false,
                     environmentOverride: $environment
                 );
-                $action = match ($providerKey) {
-                    'paystack' => $this->hostedCheckoutService->initializePaystack($payment, $context, [
-                        'callback_url' => $this->billingModeService->buildAbsoluteUrl(
-                            $platform,
-                            '/billing/complete',
-                            ['payment' => $payment->transaction_uuid],
-                            $environment
-                        ),
-                        'metadata' => [
-                            'channel' => 'payment_link',
-                            'provider_config_key' => $linkProxy['provider_config_key'] ?? null,
-                        ],
-                    ]),
-                    'pesapal' => $this->hostedCheckoutService->initializePesapal($payment, $context, [
-                        'callback_url' => $this->billingModeService->buildAbsoluteUrl(
-                            $platform,
-                            '/billing/complete',
-                            ['payment' => $payment->transaction_uuid],
-                            $environment
-                        ),
-                        'description' => $payment->purpose === 'subscription'
-                            ? 'Subscription payment'
-                            : 'Payment link checkout',
-                    ]),
-                    default => null,
-                };
+                $context['provider_key'] = $providerKey;
+                
+                $action = $this->hostedCheckoutExecutor->execute($payment, $context, [
+                    'callback_url' => $this->billingModeService->buildAbsoluteUrl(
+                        $platform,
+                        '/billing/complete',
+                        ['payment' => $payment->transaction_uuid],
+                        $environment
+                    ),
+                    'metadata' => [
+                        'channel' => 'payment_link',
+                        'provider_config_key' => $linkProxy['provider_config_key'] ?? null,
+                    ],
+                    'description' => $payment->purpose === 'subscription'
+                        ? 'Subscription payment'
+                        : 'Payment link checkout',
+                ]);
             } catch (\Throwable $exception) {
                 return response($exception->getMessage(), 502);
             }
