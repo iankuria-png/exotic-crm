@@ -19,6 +19,7 @@ class BillingGatewayService
     public function __construct(
         private readonly BillingModeService $billingModeService,
         private readonly HostedCheckoutService $hostedCheckoutService,
+        private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator,
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
@@ -256,7 +257,9 @@ class BillingGatewayService
             throw new RuntimeException('Invalid Paystack signature.');
         }
 
-        $verification = $this->hostedCheckoutService->verifyPaystackTransaction($payment, $context, $reference);
+        $verification = $this->providerStatusQueryOrchestrator->verify($payment, [
+            'reference' => $reference,
+        ]);
         $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
         if (($verification['status'] ?? 'failed') !== 'completed') {
             $failed = $this->failPayment(
@@ -319,7 +322,10 @@ class BillingGatewayService
             throw new InvalidArgumentException('Pesapal IPN payload is missing the tracking ID.');
         }
 
-        $verification = $this->hostedCheckoutService->verifyPesapalTransaction($payment, $context, $trackingId);
+        $verification = $this->providerStatusQueryOrchestrator->verify($payment, [
+            'tracking_id' => $trackingId,
+            'provider_reference' => $trackingId,
+        ]);
         $verified = is_array($verification['data'] ?? null) ? $verification['data'] : [];
 
         if (($verification['status'] ?? 'failed') !== 'completed') {

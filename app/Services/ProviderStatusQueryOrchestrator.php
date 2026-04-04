@@ -15,7 +15,7 @@ class ProviderStatusQueryOrchestrator
     ) {
     }
 
-    public function verify(Payment $payment): array
+    public function verify(Payment $payment, array $options = []): array
     {
         $payment->loadMissing(['platform']);
 
@@ -35,22 +35,24 @@ class ProviderStatusQueryOrchestrator
             'paystack' => $this->hostedCheckoutService->verifyPaystackTransaction(
                 $payment,
                 $context,
-                (string) $payment->reference_number
+                (string) ($options['reference'] ?? $payment->reference_number)
             ),
             'pesapal' => $this->hostedCheckoutService->verifyPesapalTransaction(
                 $payment,
                 $context,
-                $this->resolvePesapalTrackingId($payment)
+                $this->resolvePesapalTrackingId($payment, $options)
             ),
         };
+
+        $providerReference = $provider === 'pesapal'
+            ? $this->resolvePesapalTrackingId($payment, $options)
+            : (string) ($options['reference'] ?? $payment->transaction_reference ?: $payment->reference_number);
 
         return [
             'payment_id' => (int) $payment->id,
             'provider' => $provider,
             'provider_environment' => $this->resolveEnvironment($payment),
-            'provider_reference' => $provider === 'pesapal'
-                ? $this->resolvePesapalTrackingId($payment)
-                : ($payment->transaction_reference ?: $payment->reference_number),
+            'provider_reference' => $providerReference,
             'status' => (string) ($verification['status'] ?? 'failed'),
             'message' => $verification['message'] ?? null,
             'checked_at' => now()->toDateTimeString(),
@@ -76,14 +78,22 @@ class ProviderStatusQueryOrchestrator
         )));
     }
 
-    public function resolvePesapalTrackingId(Payment $payment): string
+    public function resolvePesapalTrackingId(Payment $payment, array $options = []): string
     {
         $trackingId = trim((string) (
+            $options['tracking_id'] ?? null
+            ?? $options['provider_reference'] ?? null
+            ?? null
+        ));
+
+        if ($trackingId === '') {
+            $trackingId = trim((string) (
             $payment->transaction_reference
             ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id')
             ?? data_get($payment->payment_data, 'link_proxy.provider_reference')
             ?? ''
-        ));
+            ));
+        }
 
         if ($trackingId === '') {
             throw new RuntimeException('Pesapal payment is missing a tracking id for reconciliation.');
