@@ -4,6 +4,7 @@ import api from '../../services/api';
 import BillingDiagnosticsTab from './BillingDiagnosticsTab';
 import BillingOverviewTab from './BillingOverviewTab';
 import BillingProvidersTab from './BillingProvidersTab';
+import ProvidersTab from './ProvidersTab';
 import BillingSystemTab from './BillingSystemTab';
 import BillingTabNav from './BillingTabNav';
 
@@ -112,13 +113,7 @@ export default function BillingWorkspace() {
             ) : null}
 
             {activeTab === 'providers' ? (
-                <BillingProvidersTab
-                    providerFamilies={providerFamilies}
-                    walletProviderKeys={walletProviderKeys}
-                    registryEnabled={Boolean(features.registry)}
-                    isLoading={overviewQuery.isLoading && !overviewQuery.data}
-                    isError={overviewQuery.isError && !overviewQuery.data}
-                />
+                <ProvidersTab />
             ) : null}
 
             {activeTab === 'billing_system' ? (

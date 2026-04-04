@@ -497,6 +497,25 @@ class SettingsController extends Controller
         ], 201);
     }
 
+    /**
+     * Get the complete provider catalog from the billing provider registry.
+     * Used by the Providers Tab (BILL-302) to display all available providers.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function providersCatalog()
+    {
+        $providers = array_map(
+            fn ($definition) => $definition->toArray(),
+            $this->billingProviderRegistry->definitions()
+        );
+
+        return response()->json([
+            'providers' => array_values($providers),
+            'count' => count($providers),
+        ]);
+    }
+
     public function wallet(Request $request)
     {
         $platformQuery = Platform::query()->orderBy('id');
