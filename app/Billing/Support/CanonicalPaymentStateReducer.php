@@ -41,6 +41,25 @@ class CanonicalPaymentStateReducer
         ];
     }
 
+    public function reviewSettlement(Payment $payment, array $context = []): array
+    {
+        $paymentData = $this->normalizePaymentData($context['payment_data'] ?? $payment->payment_data ?? []);
+        $intentStatus = (string) ($context['payment_intent_status'] ?? 'underpaid');
+
+        return [
+            'status' => 'pending',
+            'failure_reason' => null,
+            'completed_at' => null,
+            'payment_data' => $this->mergeCanonicalState($paymentData, [
+                'payment_intent_status' => $intentStatus,
+                'wallet_funding_status' => $context['wallet_funding_status'] ?? null,
+                'provisioning_status' => $context['provisioning_status'] ?? null,
+                'transition' => (string) ($context['transition'] ?? 'settlement_review_required'),
+                'sandbox_suppressed' => (bool) ($context['sandbox_suppressed'] ?? false),
+            ]),
+        ];
+    }
+
     private function mergeCanonicalState(array $paymentData, array $state): array
     {
         $paymentData['canonical_state'] = array_filter(array_merge(

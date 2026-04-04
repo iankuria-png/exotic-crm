@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Billing\Settlement\SettlementTolerancePolicy;
+use App\Billing\Support\BillingProviderTransactionRecorder;
 use App\Billing\Support\CanonicalPaymentStateReducer;
 use App\Models\Client;
 use App\Models\BillingRoutingDecision;
@@ -20,7 +22,9 @@ class PaymentCompletionService
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly WalletSyncService $walletSyncService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly CanonicalPaymentStateReducer $canonicalPaymentStateReducer
+        private readonly CanonicalPaymentStateReducer $canonicalPaymentStateReducer,
+        private readonly SettlementTolerancePolicy $settlementTolerancePolicy,
+        private readonly BillingProviderTransactionRecorder $billingProviderTransactionRecorder
     ) {
     }
 
@@ -73,6 +77,32 @@ class PaymentCompletionService
             ];
         }
 
+        $settlementAssessment = $this->settlementTolerancePolicy->evaluate($payment, $providerPayload, $options);
+        $this->billingProviderTransactionRecorder->recordSettlement($payment, $settlementAssessment, $providerPayload);
+
+        if ($this->shouldHoldForSettlementReview($settlementAssessment)) {
+            $payment = $this->markPaymentForSettlementReview($payment, $providerPayload, array_merge($options, [
+                'payment_intent_status' => $this->settlementIntentStatus($settlementAssessment),
+                'wallet_funding_status' => 'underpaid',
+                'transition' => 'wallet_funding_settlement_review',
+                'payment_data' => array_merge(
+                    is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                    [
+                    'settlement_assessment' => $settlementAssessment,
+                    ]
+                ),
+            ]));
+
+            return [
+                'payment' => $payment,
+                'credited' => false,
+                'replayed' => false,
+                'wallet' => $payment->client
+                    ? $this->walletService->summary($payment->client, $this->walletRecentTransactionsLimit($payment))
+                    : null,
+            ];
+        }
+
         $transactionReference = $this->resolveTransactionReference($payment, $providerPayload, $options);
         $resolvedProvider = $this->resolveProviderType($payment);
         $resolvedEnvironment = $this->resolveExecutionEnvironment($payment);
@@ -94,6 +124,13 @@ class PaymentCompletionService
             'transaction_reference' => $transactionReference,
             'wallet_funding_status' => 'credited',
             'transition' => 'wallet_credit_succeeded',
+            'payment_data' => array_merge(
+                is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                [
+                    'settlement_assessment' => $settlementAssessment,
+                    'settlement_review_required' => (bool) ($settlementAssessment['review_required'] ?? false),
+                ]
+            ),
         ]));
 
         $payment->refresh();
@@ -158,6 +195,8 @@ class PaymentCompletionService
         return DB::transaction(function () use ($payment, $providerPayload, $options) {
             $client = $options['client'] ?? $this->resolveClientForPayment($payment);
             $deal = null;
+            $settlementAssessment = $this->settlementTolerancePolicy->evaluate($payment, $providerPayload, $options);
+            $this->billingProviderTransactionRecorder->recordSettlement($payment, $settlementAssessment, $providerPayload);
 
             if ($this->isSandboxPayment($payment)) {
                 $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
@@ -175,9 +214,37 @@ class PaymentCompletionService
                 ];
             }
 
+            if ($this->shouldHoldForSettlementReview($settlementAssessment)) {
+                $payment = $this->markPaymentForSettlementReview($payment, $providerPayload, array_merge($options, [
+                    'payment_intent_status' => $this->settlementIntentStatus($settlementAssessment),
+                    'provisioning_status' => 'underpaid_review_required',
+                    'transition' => 'subscription_settlement_review',
+                    'payment_data' => array_merge(
+                        is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                        [
+                        'settlement_assessment' => $settlementAssessment,
+                        ]
+                    ),
+                ]));
+
+                return [
+                    'payment' => $payment->fresh(['platform', 'client', 'deal', 'product']),
+                    'client' => $client,
+                    'deal' => null,
+                    'provisioned' => false,
+                ];
+            }
+
             $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
                 'provisioning_status' => 'pending',
                 'transition' => 'subscription_provider_succeeded',
+                'payment_data' => array_merge(
+                    is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                    [
+                        'settlement_assessment' => $settlementAssessment,
+                        'settlement_review_required' => (bool) ($settlementAssessment['review_required'] ?? false),
+                    ]
+                ),
             ]));
 
             if ($client) {
@@ -234,8 +301,35 @@ class PaymentCompletionService
             $options['payment_data'] = $this->sandboxMetadata($payment, 'completed');
         }
 
+        $settlementAssessment = $this->settlementTolerancePolicy->evaluate($payment, $providerPayload, $options);
+        $this->billingProviderTransactionRecorder->recordSettlement($payment, $settlementAssessment, $providerPayload);
+
+        if ($this->shouldHoldForSettlementReview($settlementAssessment)) {
+            return [
+                'payment' => $this->markPaymentForSettlementReview($payment, $providerPayload, array_merge($options, [
+                    'payment_intent_status' => $this->settlementIntentStatus($settlementAssessment),
+                    'transition' => 'generic_settlement_review',
+                    'payment_data' => array_merge(
+                        is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                        [
+                        'settlement_assessment' => $settlementAssessment,
+                        ]
+                    ),
+                ])),
+                'replayed' => false,
+            ];
+        }
+
         return [
-            'payment' => $this->markPaymentCompleted($payment, $providerPayload, $options),
+            'payment' => $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+                'payment_data' => array_merge(
+                    is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
+                    [
+                        'settlement_assessment' => $settlementAssessment,
+                        'settlement_review_required' => (bool) ($settlementAssessment['review_required'] ?? false),
+                    ]
+                ),
+            ])),
             'replayed' => false,
         ];
     }
@@ -302,6 +396,30 @@ class PaymentCompletionService
             'provisioning_status' => $options['provisioning_status'] ?? null,
             'transition' => $options['transition'] ?? null,
             'sandbox_suppressed' => (bool) ($options['sandbox_suppressed'] ?? false),
+        ]);
+
+        $payment->forceFill(array_merge($state, [
+            'transaction_reference' => (string) $this->resolveTransactionReference($payment, $providerPayload, $options),
+            'raw_payload' => $this->mergeRawPayload($payment, $providerPayload, $options),
+        ]))->save();
+
+        return $payment->fresh(['platform', 'client', 'deal', 'product']);
+    }
+
+    private function markPaymentForSettlementReview(Payment $payment, array $providerPayload = [], array $options = []): Payment
+    {
+        $payment->loadMissing(['client.platform', 'platform', 'product', 'deal']);
+        $paymentData = array_merge(
+            is_array($payment->payment_data) ? $payment->payment_data : [],
+            is_array($options['payment_data'] ?? null) ? $options['payment_data'] : []
+        );
+
+        $state = $this->canonicalPaymentStateReducer->reviewSettlement($payment, [
+            'payment_data' => $paymentData,
+            'payment_intent_status' => $options['payment_intent_status'] ?? 'underpaid',
+            'wallet_funding_status' => $options['wallet_funding_status'] ?? null,
+            'provisioning_status' => $options['provisioning_status'] ?? null,
+            'transition' => $options['transition'] ?? 'settlement_review_required',
         ]);
 
         $payment->forceFill(array_merge($state, [
@@ -398,6 +516,19 @@ class PaymentCompletionService
         }
 
         return strtolower(trim((string) $payment->provider_key));
+    }
+
+    private function shouldHoldForSettlementReview(array $settlementAssessment): bool
+    {
+        return ($settlementAssessment['completion_policy'] ?? null) === 'hold_for_review';
+    }
+
+    private function settlementIntentStatus(array $settlementAssessment): string
+    {
+        return match ($settlementAssessment['settlement_status'] ?? null) {
+            'currency_mismatch' => 'currency_mismatch',
+            default => 'underpaid',
+        };
     }
 
     private function walletRecentTransactionsLimit(Payment $payment, int $default = 10): int

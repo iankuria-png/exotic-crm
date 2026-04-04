@@ -69,6 +69,47 @@ class BillingProviderTransactionRecorder
             ->first();
     }
 
+    public function recordSettlement(Payment $payment, array $assessment, array $providerPayload = []): ?BillingProviderTransaction
+    {
+        $providerTypeKey = strtolower(trim((string) ($assessment['provider_type_key'] ?? '')));
+        $transaction = $this->latestAttempt($payment, $providerTypeKey !== '' ? $providerTypeKey : null);
+
+        if (!$transaction) {
+            return null;
+        }
+
+        $confirmationState = is_array($transaction->confirmation_state_json) ? $transaction->confirmation_state_json : [];
+        $confirmationState['settlement_assessment'] = [
+            'disposition' => $assessment['disposition'] ?? null,
+            'settlement_status' => $assessment['settlement_status'] ?? null,
+            'variance_amount' => $assessment['variance_amount'] ?? null,
+            'review_required' => (bool) ($assessment['review_required'] ?? false),
+            'completion_policy' => $assessment['completion_policy'] ?? null,
+        ];
+
+        $rawState = is_array($transaction->raw_state_json) ? $transaction->raw_state_json : [];
+        if ($providerPayload !== []) {
+            $rawState['settlement_payload'] = $providerPayload;
+        }
+
+        $transaction->forceFill([
+            'normalized_status' => $this->resolveNormalizedSettlementStatus($transaction, $assessment),
+            'settled_amount' => $assessment['settled_amount'] ?? null,
+            'settled_currency' => $assessment['settled_currency'] ?? null,
+            'fee_amount' => $assessment['fee_amount'] ?? null,
+            'fee_currency' => $assessment['fee_currency'] ?? null,
+            'fx_rate' => $assessment['fx_rate'] ?? null,
+            'fx_source' => $assessment['fx_source'] ?? null,
+            'fx_locked_at' => $assessment['fx_locked_at'] ?? null,
+            'settlement_status' => $assessment['settlement_status'] ?? null,
+            'confirmation_state_json' => $confirmationState,
+            'raw_state_json' => $rawState,
+            'last_status_at' => now(),
+        ])->save();
+
+        return $transaction->fresh();
+    }
+
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
     {
         return $payment->routingDecisions()
@@ -121,5 +162,16 @@ class BillingProviderTransactionRecorder
         return in_array($providerTypeKey, ['paystack', 'pesapal'], true) && $providerReference !== ''
             ? $providerReference
             : null;
+    }
+
+    private function resolveNormalizedSettlementStatus(BillingProviderTransaction $transaction, array $assessment): string
+    {
+        $disposition = strtolower(trim((string) ($assessment['disposition'] ?? '')));
+
+        if ($disposition === 'amount_unavailable') {
+            return (string) $transaction->normalized_status;
+        }
+
+        return 'completed';
     }
 }
