@@ -902,6 +902,25 @@ class SupportBoardIntegrationTest extends TestCase
         $this->assertSame('phone', $client->sb_matched_by);
     }
 
+    public function test_support_board_sync_command_skips_duplicate_invocation_when_lock_exists(): void
+    {
+        $lock = Cache::lock('crm:sync-sb-users', 600);
+
+        $this->assertTrue($lock->get());
+
+        try {
+            Http::fake();
+
+            $this->artisan('crm:sync-sb-users')
+                ->expectsOutput('Support Board sync is already running. Skipping duplicate invocation.')
+                ->assertExitCode(0);
+
+            Http::assertNothingSent();
+        } finally {
+            $lock->release();
+        }
+    }
+
     private function fakeSupportBoardResponse(ClientRequest $request, int $conversationUserId)
     {
         $function = $request->data()['function'] ?? null;

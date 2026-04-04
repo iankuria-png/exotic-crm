@@ -31,8 +31,9 @@ class Kernel extends ConsoleKernel
         // Subscription check command - RUNS DAILY AT 12:05 AM
         $schedule->command('subscriptions:check')
                  ->name('check_subscriptions')
-                 ->dailyAt('00:05') 
-                 ->onOneServer() 
+                 ->dailyAt('00:05')
+                 ->withoutOverlapping(60)
+                 ->onOneServer()
                  ->sendOutputTo(storage_path('logs/subscription_check.log'));
 
         $schedule->command('crm:compute-daily-stats')
@@ -64,6 +65,7 @@ class Kernel extends ConsoleKernel
         })
         ->name('handle_payment_timeouts')
         ->everyFiveMinutes()
+        ->withoutOverlapping(10)
         ->onOneServer()
         ->sendOutputTo(storage_path('logs/payment_timeouts.log'));
 
@@ -100,6 +102,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('crm:run-renewals')
             ->name('crm_run_renewals')
             ->hourly()
+            ->withoutOverlapping(55)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_run_renewals.log'));
 
@@ -122,6 +125,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('crm:sync-push-subscribers')
             ->name('crm_sync_push_subscribers')
             ->daily()
+            ->withoutOverlapping(120)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sync_push_subscribers.log'));
 
@@ -136,12 +140,19 @@ class Kernel extends ConsoleKernel
         // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
         // --queue=push,default ensures push notifications are never blocked by slow sync jobs.
         // --max-jobs=100 prevents memory leaks during long-running batches.
-        $schedule->command('queue:work database --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3')
-            ->name('queue_worker')
-            ->everyMinute()
-            ->withoutOverlapping(2)
-            ->onOneServer()
-            ->sendOutputTo(storage_path('logs/queue_worker.log'));
+        $queueConnection = (string) config('queue.default', 'sync');
+
+        if ($queueConnection !== 'sync') {
+            $schedule->command(sprintf(
+                'queue:work %s --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
+                $queueConnection
+            ))
+                ->name('queue_worker')
+                ->everyMinute()
+                ->withoutOverlapping(2)
+                ->onOneServer()
+                ->sendOutputTo(storage_path('logs/queue_worker.log'));
+        }
     }
 
     /**

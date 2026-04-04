@@ -72,7 +72,7 @@ class CheckExpiredSubscriptions extends Command
                 $this->error("Failed to process {$failedCount} subscriptions");
             }
 
-            return $processedCount > 0 ? 0 : 1;
+            return $failedCount > 0 ? self::FAILURE : self::SUCCESS;
             
         } catch (\Exception $e) {
             $this->error('Command failed completely: ' . $e->getMessage());
