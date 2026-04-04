@@ -13,6 +13,7 @@ use App\Models\ProductPrice;
 use App\Models\User;
 use App\Services\KopokopoService;
 use App\Services\Routing\ProviderRoutingDispatcher;
+use App\Services\WalletCheckoutService;
 use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -309,6 +310,66 @@ class WalletApiPhaseFiveTest extends TestCase
             'source' => 'wallet',
             'status' => 'completed',
         ]);
+
+        $payment = Payment::query()
+            ->where('platform_id', $platform->id)
+            ->where('client_id', $client->id)
+            ->where('product_id', $product->id)
+            ->latest('id')
+            ->first();
+
+        $routingDecision = BillingRoutingDecision::query()
+            ->where('payment_id', (int) $payment?->id)
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($routingDecision);
+        $this->assertSame('self_checkout', $routingDecision->billing_surface);
+        $this->assertSame('wallet_balance', $routingDecision->provider_type_key);
+        $this->assertSame('direct', $routingDecision->execution_mode);
+        $this->assertSame('internal_ledger', data_get($routingDecision->snapshot_json, 'execution_family'));
+        $this->assertSame('wp_wallet_subscribe', data_get($routingDecision->snapshot_json, 'wallet_policy.origin'));
+    }
+
+    public function test_wallet_auto_subscribe_pins_wallet_auto_renew_snapshot(): void
+    {
+        [
+            'platform' => $platform,
+            'product' => $product,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 5000,
+        ]);
+
+        $this->fakeProvisioningApis($platform, $client, [
+            'premium' => true,
+            'premium_expire' => now()->addDays(30)->timestamp,
+        ]);
+
+        $checkout = app(WalletCheckoutService::class)->payForSubscriptionFromWallet(
+            $client,
+            $product,
+            '1_month',
+            'wallet-auto-subscribe-' . Str::uuid(),
+            [
+                'environment' => 'production',
+                'origin' => 'wallet_auto_subscribe',
+                'topup_payment_id' => 321,
+            ]
+        );
+
+        $routingDecision = BillingRoutingDecision::query()
+            ->where('payment_id', (int) $checkout['payment']->id)
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($routingDecision);
+        $this->assertSame('wallet_auto_renew', $routingDecision->billing_surface);
+        $this->assertSame('wallet_balance', $routingDecision->provider_type_key);
+        $this->assertSame('direct', $routingDecision->execution_mode);
+        $this->assertSame('internal_ledger', data_get($routingDecision->snapshot_json, 'execution_family'));
+        $this->assertSame('wallet_auto_subscribe', data_get($routingDecision->snapshot_json, 'wallet_policy.origin'));
+        $this->assertSame(321, data_get($routingDecision->snapshot_json, 'wallet_policy.topup_payment_id'));
     }
 
     public function test_billing_initiate_supports_paystack_and_rejects_cybersource(): void

@@ -7,6 +7,7 @@ use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Product;
 use App\Models\ProductPrice;
+use App\Billing\Support\BillingRoutingDecisionRecorder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -17,7 +18,8 @@ class WalletCheckoutService
 {
     public function __construct(
         private readonly WalletService $walletService,
-        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
     ) {
     }
 
@@ -146,6 +148,13 @@ class WalletCheckoutService
                     'origin' => $options['origin'] ?? 'wallet_subscribe',
                     'topup_payment_id' => isset($options['topup_payment_id']) ? (int) $options['topup_payment_id'] : null,
                 ],
+            ]);
+
+            $this->billingRoutingDecisionRecorder->recordWalletSubscription($payment, $pricing, [
+                'environment' => $options['environment'] ?? null,
+                'origin' => $options['origin'] ?? 'wallet_subscribe',
+                'topup_payment_id' => $options['topup_payment_id'] ?? null,
+                'idempotency_key' => $idempotencyKey,
             ]);
 
             $debit = $this->walletService->debit($lockedClient, $amount, [

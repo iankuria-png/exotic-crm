@@ -194,6 +194,80 @@ class BillingRoutingDecisionRecorder
         ]);
     }
 
+    public function recordWalletSubscription(
+        Payment $payment,
+        array $pricing,
+        array $options = []
+    ): BillingRoutingDecision {
+        if ($existing = $this->existingPinnedDecision($payment)) {
+            return $existing;
+        }
+
+        $origin = strtolower(trim((string) ($options['origin'] ?? data_get($payment->payment_data, 'origin') ?? 'wallet_subscribe')));
+        $surface = $origin === 'wallet_auto_subscribe'
+            ? BillingSurface::WalletAutoRenew
+            : BillingSurface::SelfCheckout;
+        $environment = strtolower(trim((string) ($options['environment'] ?? $payment->provider_environment ?? 'production')));
+
+        return BillingRoutingDecision::query()->create([
+            'payment_id' => (int) $payment->id,
+            'market_id' => (int) $payment->platform_id,
+            'billing_surface' => $surface->value,
+            'chosen_binding_id' => null,
+            'provider_profile_id' => null,
+            'provider_type_key' => BillingRail::WalletBalance->value,
+            'execution_mode' => ExecutionMode::Direct->value,
+            'environment' => $environment,
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'shadow_diff_json' => null,
+            'surface_cutover_flag' => null,
+            'snapshot_json' => [
+                'payment_id' => (int) $payment->id,
+                'payment_purpose' => (string) ($payment->purpose ?: 'subscription'),
+                'billing_surface' => $surface->value,
+                'provider_key' => (string) ($payment->provider_key ?: 'wallet'),
+                'provider_type_key' => BillingRail::WalletBalance->value,
+                'provider_label' => 'Wallet balance',
+                'provider_family' => 'internal_wallet',
+                'execution_family' => 'internal_ledger',
+                'environment' => $environment,
+                'execution_mode' => ExecutionMode::Direct->value,
+                'callback_contract' => [
+                    'type' => 'internal_completion',
+                    'path' => null,
+                ],
+                'pricing' => [
+                    'amount' => number_format((float) ($pricing['amount'] ?? $payment->amount), 2, '.', ''),
+                    'currency' => (string) ($pricing['currency'] ?? $payment->currency),
+                    'duration_key' => $pricing['duration_key'] ?? data_get($payment->payment_data, 'duration_key'),
+                    'duration_days' => $pricing['duration_days'] ?? data_get($payment->payment_data, 'duration_days'),
+                    'duration_label' => $pricing['duration_label'] ?? data_get($payment->payment_data, 'duration_label'),
+                ],
+                'fx_quote' => [
+                    'mode' => 'same_currency',
+                    'quote_locked' => true,
+                    'market_currency' => (string) ($payment->platform?->currency_code ?: $pricing['currency'] ?? $payment->currency),
+                    'payment_currency' => (string) ($pricing['currency'] ?? $payment->currency),
+                ],
+                'rail' => BillingRail::WalletBalance->value,
+                'wallet_policy' => [
+                    'origin' => $origin,
+                    'topup_payment_id' => $options['topup_payment_id'] ?? data_get($payment->payment_data, 'topup_payment_id'),
+                    'idempotency_key' => $options['idempotency_key'] ?? data_get($payment->payment_data, 'idempotency_key'),
+                ],
+            ],
+            'immutable_until_terminal_state' => true,
+            'decision_json' => [
+                'source' => 'wallet_subscription_initiation',
+                'origin' => $origin,
+                'trigger' => $origin === 'wallet_auto_subscribe' ? 'auto_renew' : 'self_service',
+                'topup_payment_id' => $options['topup_payment_id'] ?? data_get($payment->payment_data, 'topup_payment_id'),
+            ],
+            'created_at' => now(),
+        ]);
+    }
+
     private function walletFundingSnapshot(
         Payment $payment,
         array $context,
