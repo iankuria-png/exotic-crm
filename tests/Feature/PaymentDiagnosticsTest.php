@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingProviderTransaction;
 use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
@@ -328,6 +329,82 @@ class PaymentDiagnosticsTest extends TestCase
             ->assertJsonPath('browser_meta.referrer', 'https://www.exoticnairobi.com/escort/ada')
             ->assertJsonPath('browser_meta.user_agent_family', 'Chrome')
             ->assertJsonPath('attempts.0.attempt_type', 'stk_initiate');
+    }
+
+    public function test_diagnostics_endpoint_includes_provider_transaction_lineage(): void
+    {
+        ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('mpesa_stk');
+
+        $firstAttempt = BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'mpesa_stk',
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => 'https://sandbox.kopokopo.test/incoming_payments/attempt-1',
+            'provider_session_id' => 'https://sandbox.kopokopo.test/incoming_payments/attempt-1',
+            'provider_status' => 'initiated',
+            'requested_amount' => '900.00',
+            'requested_currency' => 'KES',
+            'charge_amount' => '900.00',
+            'charge_currency' => 'KES',
+            'confirmation_state_json' => [
+                'reason_code' => 'initial_initiation',
+                'billing_surface' => 'wallet_funding',
+            ],
+            'upstream_reference_json' => [
+                'payment_reference_number' => 'CRM-DIAG-LINEAGE-001',
+            ],
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:mpesa_stk',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => 'CRM-DIAG-LINEAGE-001',
+            'state_version' => 1,
+            'raw_state_json' => [
+                'action' => ['type' => 'stk_pending'],
+            ],
+            'last_status_at' => now()->subMinutes(2),
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'mpesa_stk',
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => 'https://sandbox.kopokopo.test/incoming_payments/attempt-2',
+            'provider_session_id' => 'https://sandbox.kopokopo.test/incoming_payments/attempt-2',
+            'provider_status' => 'initiated',
+            'requested_amount' => '900.00',
+            'requested_currency' => 'KES',
+            'charge_amount' => '900.00',
+            'charge_currency' => 'KES',
+            'confirmation_state_json' => [
+                'reason_code' => 'manual_retry',
+                'billing_surface' => 'wallet_funding',
+            ],
+            'upstream_reference_json' => [
+                'payment_reference_number' => 'CRM-DIAG-LINEAGE-001',
+            ],
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:mpesa_stk',
+            'attempt_sequence' => 2,
+            'retry_of_provider_transaction_id' => $firstAttempt->id,
+            'compatibility_reference' => 'CRM-DIAG-LINEAGE-001-R2',
+            'state_version' => 1,
+            'raw_state_json' => [
+                'action' => ['type' => 'stk_pending'],
+            ],
+            'last_status_at' => now()->subMinute(),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('provider_transactions.0.provider_type_key', 'mpesa_stk')
+            ->assertJsonPath('provider_transactions.0.attempt_sequence', 1)
+            ->assertJsonPath('provider_transactions.0.confirmation_state.reason_code', 'initial_initiation')
+            ->assertJsonPath('provider_transactions.1.attempt_sequence', 2)
+            ->assertJsonPath('provider_transactions.1.retry_of_provider_transaction_id', $firstAttempt->id)
+            ->assertJsonPath('provider_transactions.1.lineage.retry_of.id', $firstAttempt->id)
+            ->assertJsonPath('provider_transactions.1.lineage.retry_of.attempt_sequence', 1)
+            ->assertJsonPath('provider_transactions.1.confirmation_state.reason_code', 'manual_retry');
     }
 
     public function test_browser_meta_prefers_initiation_over_callback(): void

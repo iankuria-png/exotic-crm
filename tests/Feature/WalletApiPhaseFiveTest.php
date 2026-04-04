@@ -6,6 +6,7 @@ use App\Models\BillingWalletRule;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
+use App\Models\BillingProviderTransaction;
 use App\Models\BillingRoutingDecision;
 use App\Models\Platform;
 use App\Models\Product;
@@ -547,6 +548,17 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertSame('hosted_redirect', data_get($decision->snapshot_json, 'execution_family'));
         $this->assertSame('browser_completion', data_get($decision->snapshot_json, 'callback_contract.type'));
         $this->assertSame('1200.00', data_get($decision->snapshot_json, 'pricing.amount'));
+
+        $providerTransaction = BillingProviderTransaction::query()
+            ->where('payment_id', (int) $response->json('payment.id'))
+            ->latest('id')
+            ->first();
+        $this->assertNotNull($providerTransaction);
+        $this->assertSame('paystack', $providerTransaction->provider_type_key);
+        $this->assertSame('pending', $providerTransaction->normalized_status);
+        $this->assertSame('WTU-REF-DISPATCHER', $providerTransaction->provider_transaction_id);
+        $this->assertSame(1, $providerTransaction->attempt_sequence);
+        $this->assertSame('initial_initiation', data_get($providerTransaction->confirmation_state_json, 'reason_code'));
     }
 
     public function test_paystack_webhook_credits_wallet_once_after_verification_for_production_payments(): void
@@ -1030,6 +1042,18 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertCount(2, $retryAttempts);
         $this->assertSame('success', $retryAttempts->last()->status);
         $this->assertSame('kopokopo_direct', $retryAttempts->last()->provider);
+
+        $providerTransactions = BillingProviderTransaction::query()
+            ->where('payment_id', $paymentId)
+            ->where('provider_type_key', 'mpesa_stk')
+            ->orderBy('attempt_sequence')
+            ->get();
+        $this->assertCount(2, $providerTransactions);
+        $this->assertSame(1, $providerTransactions[0]->attempt_sequence);
+        $this->assertSame(2, $providerTransactions[1]->attempt_sequence);
+        $this->assertSame($providerTransactions[0]->attempt_group_key, $providerTransactions[1]->attempt_group_key);
+        $this->assertSame($providerTransactions[0]->id, $providerTransactions[1]->retry_of_provider_transaction_id);
+        $this->assertSame('manual_retry', data_get($providerTransactions[1]->confirmation_state_json, 'reason_code'));
     }
 
     public function test_mpesa_callback_records_attempt(): void

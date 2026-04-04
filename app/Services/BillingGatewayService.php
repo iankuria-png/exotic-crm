@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Billing\Support\BillingRoutingDecisionRecorder;
+use App\Billing\Support\BillingProviderTransactionRecorder;
 use App\Billing\Support\CanonicalPaymentStateReducer;
 use App\Models\BillingRoutingDecision;
 use App\Models\Client;
@@ -27,6 +28,7 @@ class BillingGatewayService
         private readonly KopokopoService $kopokopoService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
+        private readonly BillingProviderTransactionRecorder $billingProviderTransactionRecorder,
         private readonly CanonicalPaymentStateReducer $canonicalPaymentStateReducer
     ) {
     }
@@ -191,6 +193,12 @@ class BillingGatewayService
                 'resume' => $storedAction,
             ]),
         ])->save();
+
+        $retryOf = $this->billingProviderTransactionRecorder->latestAttempt($payment, 'mpesa_stk');
+        $this->billingProviderTransactionRecorder->recordInitiation($payment, $context, $action, [
+            'reason_code' => 'manual_retry',
+            'retry_of_provider_transaction_id' => $retryOf?->id,
+        ]);
 
         return [
             'payment' => $payment->fresh(['platform', 'client']),
@@ -527,6 +535,10 @@ class BillingGatewayService
             ]),
         ])->save();
 
+        $this->billingProviderTransactionRecorder->recordInitiation($payment, $context, $action, [
+            'reason_code' => 'initial_initiation',
+        ]);
+
         $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
             'provider' => 'paystack',
             'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
@@ -580,6 +592,10 @@ class BillingGatewayService
             ]),
         ])->save();
 
+        $this->billingProviderTransactionRecorder->recordInitiation($payment, $context, $action, [
+            'reason_code' => 'initial_initiation',
+        ]);
+
         $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
             'provider' => 'pesapal',
             'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
@@ -629,6 +645,10 @@ class BillingGatewayService
                 'retry_count' => 0,
             ]),
         ])->save();
+
+        $this->billingProviderTransactionRecorder->recordInitiation($payment, $context, $action, [
+            'reason_code' => 'initial_initiation',
+        ]);
 
         unset($action['provider_payload']);
 

@@ -38,6 +38,8 @@ return new class extends Migration
             $table->json('upstream_reference_json')->nullable();
             $table->string('attempt_group_key', 160)->nullable();
             $table->unsignedSmallInteger('attempt_sequence')->nullable();
+            $table->foreignId('retry_of_provider_transaction_id')->nullable();
+            $table->foreignId('fallback_from_provider_transaction_id')->nullable();
             $table->foreign('retry_of_provider_transaction_id')->references('id')->on('billing_provider_transactions')->nullOnDelete()->name('billing_tx_retry_fk');
             $table->foreign('fallback_from_provider_transaction_id')->references('id')->on('billing_provider_transactions')->nullOnDelete()->name('billing_tx_fallback_fk');
             $table->string('compatibility_reference', 160)->nullable();

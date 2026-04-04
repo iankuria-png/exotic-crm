@@ -804,6 +804,15 @@ class PaymentQueueController extends Controller
             ->orderByDesc('created_at')
             ->limit(30)
             ->get();
+        $providerTransactions = $payment->providerTransactions()
+            ->with([
+                'retryOf:id,attempt_sequence,compatibility_reference,provider_type_key',
+                'fallbackFrom:id,attempt_sequence,compatibility_reference,provider_type_key',
+            ])
+            ->orderBy('attempt_group_key')
+            ->orderBy('attempt_sequence')
+            ->orderBy('id')
+            ->get();
 
         $failureStage = $this->resolveFailureStage($payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta, $linkProxy);
         $failureReason = $latestFailedAttempt?->error_message
@@ -882,6 +891,53 @@ class PaymentQueueController extends Controller
                         'email' => $event->actor->email,
                     ] : null,
                     'created_at' => optional($event->created_at)->toDateTimeString(),
+                ];
+            })->values(),
+            'provider_transactions' => $providerTransactions->map(function ($transaction) {
+                return [
+                    'id' => (int) $transaction->id,
+                    'provider_type_key' => $transaction->provider_type_key,
+                    'provider_profile_id' => $transaction->provider_profile_id ? (int) $transaction->provider_profile_id : null,
+                    'normalized_status' => $transaction->normalized_status,
+                    'provider_status' => $transaction->provider_status,
+                    'provider_transaction_id' => $transaction->provider_transaction_id,
+                    'provider_session_id' => $transaction->provider_session_id,
+                    'provider_invoice_id' => $transaction->provider_invoice_id,
+                    'requested_amount' => $transaction->requested_amount,
+                    'requested_currency' => $transaction->requested_currency,
+                    'charge_amount' => $transaction->charge_amount,
+                    'charge_currency' => $transaction->charge_currency,
+                    'settled_amount' => $transaction->settled_amount,
+                    'settled_currency' => $transaction->settled_currency,
+                    'fee_amount' => $transaction->fee_amount,
+                    'fee_currency' => $transaction->fee_currency,
+                    'fx_rate' => $transaction->fx_rate,
+                    'fx_source' => $transaction->fx_source,
+                    'settlement_status' => $transaction->settlement_status,
+                    'confirmation_state' => $transaction->confirmation_state_json,
+                    'upstream_reference' => $transaction->upstream_reference_json,
+                    'attempt_group_key' => $transaction->attempt_group_key,
+                    'attempt_sequence' => $transaction->attempt_sequence ? (int) $transaction->attempt_sequence : null,
+                    'retry_of_provider_transaction_id' => $transaction->retry_of_provider_transaction_id ? (int) $transaction->retry_of_provider_transaction_id : null,
+                    'fallback_from_provider_transaction_id' => $transaction->fallback_from_provider_transaction_id ? (int) $transaction->fallback_from_provider_transaction_id : null,
+                    'compatibility_reference' => $transaction->compatibility_reference,
+                    'state_version' => (int) $transaction->state_version,
+                    'last_status_at' => optional($transaction->last_status_at)->toDateTimeString(),
+                    'created_at' => optional($transaction->created_at)->toDateTimeString(),
+                    'lineage' => [
+                        'retry_of' => $transaction->retryOf ? [
+                            'id' => (int) $transaction->retryOf->id,
+                            'provider_type_key' => $transaction->retryOf->provider_type_key,
+                            'attempt_sequence' => $transaction->retryOf->attempt_sequence ? (int) $transaction->retryOf->attempt_sequence : null,
+                            'compatibility_reference' => $transaction->retryOf->compatibility_reference,
+                        ] : null,
+                        'fallback_from' => $transaction->fallbackFrom ? [
+                            'id' => (int) $transaction->fallbackFrom->id,
+                            'provider_type_key' => $transaction->fallbackFrom->provider_type_key,
+                            'attempt_sequence' => $transaction->fallbackFrom->attempt_sequence ? (int) $transaction->fallbackFrom->attempt_sequence : null,
+                            'compatibility_reference' => $transaction->fallbackFrom->compatibility_reference,
+                        ] : null,
+                    ],
                 ];
             })->values(),
         ]);
