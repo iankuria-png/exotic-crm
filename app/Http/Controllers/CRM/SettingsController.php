@@ -4,6 +4,7 @@ namespace App\Http\Controllers\CRM;
 
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
+use App\Billing\Support\BillingSurface;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
@@ -1860,7 +1861,7 @@ class SettingsController extends Controller
             'payment_link_providers.providers.*.url' => 'nullable|url|max:500',
             'payment_link_providers.providers.*.base_url' => 'nullable|url|max:500',
             'payment_link_providers.providers.*.path' => 'nullable|string|max:255',
-            'payment_link_providers.providers.*.wallet_provider_key' => ['nullable', Rule::in(['paystack', 'pesapal'])],
+            'payment_link_providers.providers.*.wallet_provider_key' => ['nullable', Rule::in($this->billingProviderRegistry->keysForSurface(BillingSurface::ProxyHostedCheckout))],
             'payment_link_providers.providers.*.environment' => ['nullable', Rule::in(['sandbox', 'production'])],
             'payment_link_providers.providers.*.self_checkout_fx_enabled' => 'nullable|boolean',
             'payment_link_providers.providers.*.self_checkout_fx_currency' => 'nullable|string|size:3',
@@ -3187,8 +3188,9 @@ class SettingsController extends Controller
             }
 
             if ($mode === 'proxy_hosted_checkout') {
-                if (!in_array($walletProviderKey, ['paystack', 'pesapal'], true)) {
-                    $errors["payment_link_providers.providers.{$providerKey}.wallet_provider_key"] = 'Proxy providers require wallet_provider_key of paystack or pesapal.';
+                $proxyCapableKeys = $this->billingProviderRegistry->keysForSurface(BillingSurface::ProxyHostedCheckout);
+                if (!in_array($walletProviderKey, $proxyCapableKeys, true)) {
+                    $errors["payment_link_providers.providers.{$providerKey}.wallet_provider_key"] = 'Proxy providers require a hosted-checkout-capable wallet_provider_key.';
                 }
 
                 if (!in_array($environment, ['sandbox', 'production'], true)) {

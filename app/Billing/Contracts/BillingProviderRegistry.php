@@ -3,6 +3,7 @@
 namespace App\Billing\Contracts;
 
 use App\Billing\Providers\ProviderDefinition;
+use App\Billing\Support\BillingSurface;
 
 interface BillingProviderRegistry
 {
@@ -25,6 +26,11 @@ interface BillingProviderRegistry
      * @return list<string>
      */
     public function legacyWalletProviderKeys(): array;
+
+    /**
+     * @return list<string>
+     */
+    public function keysForSurface(BillingSurface $surface): array;
 
     public function find(string $providerKey): ?BillingProviderAdapter;
 
