@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Client;
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingProviderProfile;
+use App\Models\BillingRoutingDecision;
 use App\Models\BillingRoutingRule;
 use App\Models\Deal;
 use App\Models\PaymentAttempt;
@@ -121,6 +122,13 @@ class DealControllerTest extends TestCase
         $this->assertSame('site_pay_page', data_get($payment->raw_payload, 'resolved_provider'));
         $this->assertSame('site_pay_page', $attempt->provider);
         $this->assertSame('site_pay_page', data_get($attempt->request_meta, 'requested_provider'));
+
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();
+        $this->assertNotNull($decision);
+        $this->assertSame('subscription_link', $decision->billing_surface);
+        $this->assertSame('site_pay_page', $decision->provider_type_key);
+        $this->assertSame('direct', $decision->execution_mode);
+        $this->assertSame('subscription_link', data_get($decision->snapshot_json, 'execution_family'));
     }
 
     public function test_deal_link_activation_uses_selected_payment_link_provider(): void
@@ -150,6 +158,13 @@ class DealControllerTest extends TestCase
         $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'resolved_provider'));
         $this->assertSame('paystack_checkout', $attempt->provider);
         $this->assertSame('paystack_checkout', data_get($attempt->request_meta, 'requested_provider'));
+
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();
+        $this->assertNotNull($decision);
+        $this->assertSame('proxy_hosted_checkout', $decision->billing_surface);
+        $this->assertSame('paystack', $decision->provider_type_key);
+        $this->assertSame('proxy', $decision->execution_mode);
+        $this->assertSame('hosted_redirect', data_get($decision->snapshot_json, 'execution_family'));
     }
 
     public function test_deal_link_activation_uses_projected_payment_link_provider_when_shadow_read_is_enabled(): void
@@ -186,6 +201,13 @@ class DealControllerTest extends TestCase
         $this->assertSame('paystack_checkout', data_get($payment->raw_payload, 'resolved_provider'));
         $this->assertSame('paystack_checkout', $attempt->provider);
         $this->assertSame('paystack_checkout', data_get($attempt->request_meta, 'requested_provider'));
+
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();
+        $this->assertNotNull($decision);
+        $this->assertSame('proxy_hosted_checkout', $decision->billing_surface);
+        $this->assertSame('paystack', $decision->provider_type_key);
+        $this->assertSame('proxy', $decision->execution_mode);
+        $this->assertSame('paystack_checkout', data_get($decision->snapshot_json, 'provider_key'));
     }
 
     public function test_deal_free_trial_activation_accepts_configured_pin_and_ignores_legacy_approved_by(): void

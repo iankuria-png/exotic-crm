@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Support\CrmAuditAction;
@@ -19,7 +20,8 @@ class PaymentLinkService
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly AuditService $auditService,
         private readonly BillingModeService $billingModeService,
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
     ) {
     }
 
@@ -140,6 +142,13 @@ class PaymentLinkService
                 'http_status' => 422,
                 'message' => 'Payment page URL could not be determined for this market.',
             ];
+        }
+
+        if (is_array($resolvedProvider)) {
+            $this->billingRoutingDecisionRecorder->recordPaymentLink($payment, $resolvedProvider, $paymentUrl, [
+                'requested_provider' => $requestedProvider,
+                'notification_purpose' => $options['notification_purpose'] ?? 'payment_link',
+            ]);
         }
 
         $currency = $payment->currency ?: ($platform->currency_code ?: 'KES');
