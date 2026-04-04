@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Support\LegacyBillingSystemProjector;
 use App\Mail\WalletSettingsTestMail;
+use App\Models\BillingSystemSetting;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use Illuminate\Support\Facades\Crypt;
@@ -21,7 +23,8 @@ class WalletSettingsService
     public const ENVIRONMENTS = ['sandbox', 'production'];
 
     public function __construct(
-        private readonly BillingProviderRegistryContract $providerRegistry
+        private readonly BillingProviderRegistryContract $providerRegistry,
+        private readonly LegacyBillingSystemProjector $legacyBillingSystemProjector
     ) {
     }
 
@@ -521,16 +524,24 @@ class WalletSettingsService
     private function resolveSystemConfig(): array
     {
         $default = $this->defaultSystemConfig();
-
         $stored = IntegrationSetting::query()
             ->where('key', self::SYSTEM_SETTINGS_KEY)
             ->value('value');
 
-        if (!is_array($stored)) {
-            return $default;
+        $legacy = is_array($stored)
+            ? $this->mergeSystemConfig($default, $this->systemConfigFromStorage($stored))
+            : $default;
+
+        if (!(bool) config('billing.billing_system_live_read.enabled', false)) {
+            return $legacy;
         }
 
-        return $this->mergeSystemConfig($default, $this->systemConfigFromStorage($stored));
+        $setting = BillingSystemSetting::query()
+            ->where('scope', 'global')
+            ->latest('id')
+            ->first();
+
+        return $this->legacyBillingSystemProjector->project($setting, $legacy);
     }
 
     private function defaultSystemConfig(): array
