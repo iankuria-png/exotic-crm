@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Billing\Support\CanonicalPaymentStateReducer;
 use App\Models\Payment;
 use App\Models\BillingRoutingDecision;
 use App\Services\PaymentAttemptService;
@@ -24,7 +25,8 @@ class ReconcilePendingPayments extends Command
     public function __construct(
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly PaymentAttemptService $paymentAttemptService,
-        private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator
+        private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator,
+        private readonly CanonicalPaymentStateReducer $canonicalPaymentStateReducer
     ) {
         parent::__construct();
     }
@@ -159,14 +161,17 @@ class ReconcilePendingPayments extends Command
             return $payment->fresh() ?? $payment;
         }
 
-        $payment->forceFill([
-            'status' => 'failed',
-            'failure_reason' => mb_substr($reason, 0, 190),
+        $state = $this->canonicalPaymentStateReducer->fail($payment, $reason, [
+            'payment_data' => is_array($payment->payment_data) ? $payment->payment_data : [],
+            'transition' => 'reconciliation_provider_failed',
+        ]);
+
+        $payment->forceFill(array_merge($state, [
             'raw_payload' => array_merge(is_array($payment->raw_payload) ? $payment->raw_payload : [], [
                 'reconciliation_failure' => $providerPayload,
                 'reconciliation_failed_at' => now()->toDateTimeString(),
             ]),
-        ])->save();
+        ]))->save();
 
         return $payment->fresh(['platform', 'client', 'product']);
     }

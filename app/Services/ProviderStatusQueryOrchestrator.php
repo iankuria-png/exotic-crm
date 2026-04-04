@@ -283,7 +283,7 @@ class ProviderStatusQueryOrchestrator
     private function isCompleted(Payment $payment): bool
     {
         return (string) $payment->status === 'completed'
-            || (bool) $payment->completed_at
+            || strtolower(trim((string) data_get($payment->payment_data, 'canonical_state.payment_intent_status', ''))) === 'completed'
             || (bool) $payment->wallet_transaction_id;
     }
 

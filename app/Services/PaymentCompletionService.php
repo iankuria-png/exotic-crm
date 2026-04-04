@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Support\CanonicalPaymentStateReducer;
 use App\Models\Client;
 use App\Models\BillingRoutingDecision;
 use App\Models\Deal;
@@ -18,7 +19,8 @@ class PaymentCompletionService
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly WalletSyncService $walletSyncService,
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly CanonicalPaymentStateReducer $canonicalPaymentStateReducer
     ) {
     }
 
@@ -74,13 +76,6 @@ class PaymentCompletionService
         $transactionReference = $this->resolveTransactionReference($payment, $providerPayload, $options);
         $resolvedProvider = $this->resolveProviderType($payment);
         $resolvedEnvironment = $this->resolveExecutionEnvironment($payment);
-        $payment->forceFill([
-            'status' => 'completed',
-            'failure_reason' => null,
-            'completed_at' => $payment->completed_at ?? now(),
-            'transaction_reference' => (string) $transactionReference,
-            'raw_payload' => $this->mergeRawPayload($payment, $providerPayload, $options),
-        ])->save();
 
         $credit = $this->walletService->credit($payment->client, (float) $payment->amount, [
             'payment' => $payment,
@@ -94,6 +89,12 @@ class PaymentCompletionService
                 'transaction_reference' => $transactionReference,
             ],
         ]);
+
+        $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+            'transaction_reference' => $transactionReference,
+            'wallet_funding_status' => 'credited',
+            'transition' => 'wallet_credit_succeeded',
+        ]));
 
         $payment->refresh();
         $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
@@ -134,13 +135,13 @@ class PaymentCompletionService
         }
 
         if ($autoSubscribeResult !== null) {
-            $payment->forceFill([
-                'payment_data' => array_merge($paymentData, [
-                    'auto_subscribe' => array_merge($autoSubscribe, [
-                        'result' => $autoSubscribeResult,
-                    ]),
+        $payment->forceFill([
+            'payment_data' => array_merge($paymentData, [
+                'auto_subscribe' => array_merge($autoSubscribe, [
+                    'result' => $autoSubscribeResult,
                 ]),
-            ])->save();
+            ]),
+        ])->save();
         }
 
         return [
@@ -155,13 +156,15 @@ class PaymentCompletionService
     public function completeSubscriptionPayment(Payment $payment, array $providerPayload = [], array $options = []): array
     {
         return DB::transaction(function () use ($payment, $providerPayload, $options) {
-            $payment = $this->markPaymentCompleted($payment, $providerPayload, $options);
             $client = $options['client'] ?? $this->resolveClientForPayment($payment);
             $deal = null;
 
             if ($this->isSandboxPayment($payment)) {
                 $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
                     'payment_data' => $this->sandboxMetadata($payment, 'completed'),
+                    'provisioning_status' => 'suppressed_sandbox',
+                    'sandbox_suppressed' => true,
+                    'transition' => 'subscription_sandbox_succeeded',
                 ]));
 
                 return [
@@ -171,6 +174,11 @@ class PaymentCompletionService
                     'provisioned' => false,
                 ];
             }
+
+            $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+                'provisioning_status' => 'pending',
+                'transition' => 'subscription_provider_succeeded',
+            ]));
 
             if ($client) {
                 $deal = $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
@@ -192,12 +200,23 @@ class PaymentCompletionService
                     'emit_profile_activated_timeline' => $options['emit_profile_activated_timeline'] ?? false,
                     'emit_deal_activated_timeline' => $options['emit_deal_activated_timeline'] ?? true,
                 ]);
+
+                $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+                    'client' => $client,
+                    'provisioning_status' => 'completed',
+                    'transition' => 'subscription_provisioned',
+                ]));
             } else {
                 Log::warning('Successful payment could not be linked to a CRM client', [
                     'payment_id' => $payment->id,
                     'platform_id' => $payment->platform_id,
                     'user_id' => $payment->user_id,
                 ]);
+
+                $payment = $this->markPaymentCompleted($payment, $providerPayload, array_merge($options, [
+                    'provisioning_status' => 'client_unresolved',
+                    'transition' => 'subscription_client_unresolved',
+                ]));
             }
 
             return [
@@ -277,14 +296,18 @@ class PaymentCompletionService
             is_array($options['payment_data'] ?? null) ? $options['payment_data'] : []
         );
 
-        $payment->forceFill([
-            'status' => 'completed',
-            'failure_reason' => null,
-            'completed_at' => $payment->completed_at ?? now(),
+        $state = $this->canonicalPaymentStateReducer->complete($payment, [
+            'payment_data' => $paymentData,
+            'wallet_funding_status' => $options['wallet_funding_status'] ?? null,
+            'provisioning_status' => $options['provisioning_status'] ?? null,
+            'transition' => $options['transition'] ?? null,
+            'sandbox_suppressed' => (bool) ($options['sandbox_suppressed'] ?? false),
+        ]);
+
+        $payment->forceFill(array_merge($state, [
             'transaction_reference' => (string) $this->resolveTransactionReference($payment, $providerPayload, $options),
             'raw_payload' => $this->mergeRawPayload($payment, $providerPayload, $options),
-            'payment_data' => !empty($paymentData) ? $paymentData : $payment->payment_data,
-        ])->save();
+        ]))->save();
 
         return $payment->fresh(['platform', 'client', 'deal', 'product']);
     }

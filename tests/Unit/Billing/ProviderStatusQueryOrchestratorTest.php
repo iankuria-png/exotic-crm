@@ -56,6 +56,26 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
         $this->assertTrue($decision['late_signal']);
     }
 
+    public function test_pending_payments_with_legacy_completed_at_still_accept_verified_success(): void
+    {
+        $orchestrator = $this->makeOrchestrator();
+        $payment = $this->makePayment([
+            'status' => 'pending',
+            'completed_at' => now(),
+        ]);
+
+        $decision = $orchestrator->decideMutation($payment, [
+            'provider' => 'paystack',
+            'provider_environment' => 'production',
+            'provider_reference' => 'PSTK-STATUS-001',
+            'status' => 'completed',
+        ]);
+
+        $this->assertSame('apply_completed', $decision['decision']);
+        $this->assertSame('completed', $decision['winning_status']);
+        $this->assertFalse($decision['late_signal']);
+    }
+
     public function test_mismatched_provider_contracts_are_treated_as_superseded(): void
     {
         $orchestrator = $this->makeOrchestrator();

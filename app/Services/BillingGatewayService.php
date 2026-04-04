@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Billing\Support\BillingRoutingDecisionRecorder;
+use App\Billing\Support\CanonicalPaymentStateReducer;
 use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
@@ -25,7 +26,8 @@ class BillingGatewayService
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly KopokopoService $kopokopoService,
         private readonly PaymentAttemptService $paymentAttemptService,
-        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
+        private readonly CanonicalPaymentStateReducer $canonicalPaymentStateReducer
     ) {
     }
 
@@ -223,14 +225,17 @@ class BillingGatewayService
             ]);
         }
 
-        $payment->forceFill([
-            'status' => 'failed',
-            'failure_reason' => mb_substr($reason, 0, 190),
+        $state = $this->canonicalPaymentStateReducer->fail($payment, $reason, [
+            'payment_data' => $paymentData,
+            'transition' => !empty($paymentData['test_mode']) ? 'sandbox_provider_failed' : null,
+            'sandbox_suppressed' => !empty($paymentData['test_mode']),
+        ]);
+
+        $payment->forceFill(array_merge($state, [
             'raw_payload' => array_merge($payment->raw_payload ?? [], [
                 'failure_payload' => $providerPayload,
             ]),
-            'payment_data' => !empty($paymentData) ? $paymentData : $payment->payment_data,
-        ])->save();
+        ]))->save();
 
         return $payment->fresh();
     }
