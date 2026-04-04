@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -373,7 +374,27 @@ class SubscriptionProvisioningService
         return (bool) data_get($payment->payment_data, 'test_mode', false)
             || (
                 strtolower(trim((string) $payment->source)) === 'gateway'
-                && strtolower(trim((string) $payment->provider_environment)) === 'sandbox'
+                && $this->resolveExecutionEnvironment($payment) === 'sandbox'
             );
+    }
+
+    private function resolveExecutionEnvironment(Payment $payment): string
+    {
+        $decision = $payment->relationLoaded('routingDecisions')
+            ? $payment->routingDecisions
+                ->sortByDesc(function (BillingRoutingDecision $decision) {
+                    return optional($decision->created_at)->getTimestamp() ?? 0;
+                })
+                ->first()
+            : $payment->routingDecisions()
+                ->where('immutable_until_terminal_state', true)
+                ->latest('id')
+                ->first();
+
+        if ($decision instanceof BillingRoutingDecision) {
+            return strtolower(trim((string) ($decision->environment ?: 'production')));
+        }
+
+        return strtolower(trim((string) ($payment->provider_environment ?: 'production')));
     }
 }

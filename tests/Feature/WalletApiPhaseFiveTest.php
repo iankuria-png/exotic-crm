@@ -701,6 +701,97 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertSame('production', data_get($transaction->metadata, 'provider_environment'));
     }
 
+    public function test_paystack_webhook_subscription_provisioning_prefers_pinned_snapshot_environment(): void
+    {
+        [
+            'platform' => $platform,
+            'product' => $product,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        Http::fake(array_merge(
+            $this->provisioningApiFakes($platform, $client, [
+                'premium' => true,
+                'premium_expire' => now()->addDays(30)->timestamp,
+            ]),
+            [
+                'https://api.paystack.co/transaction/verify/*' => Http::response([
+                    'status' => true,
+                    'data' => [
+                        'status' => 'success',
+                        'reference' => 'SUB-PAYSTACK-ALIAS-ENV-001',
+                        'gateway_response' => 'Successful',
+                    ],
+                ], 200),
+            ]
+        ));
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'product_id' => $product->id,
+            'purpose' => 'subscription',
+            'source' => 'gateway',
+            'provider_key' => 'paystack_checkout',
+            'provider_environment' => 'sandbox',
+            'amount' => 2400,
+            'currency' => 'KES',
+            'duration' => 'monthly',
+            'reference_number' => 'SUB-PAYSTACK-ALIAS-ENV-001',
+            'transaction_reference' => 'SUB-PAYSTACK-ALIAS-ENV-001',
+            'status' => 'pending',
+            'raw_payload' => [
+                'method' => 'link',
+            ],
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'subscription_link',
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'production',
+            'decision_version' => 1,
+            'surface_cutover_flag' => 'billing.shadow_read',
+            'snapshot_json' => [
+                'provider_key' => 'paystack_checkout',
+                'provider_family' => 'hosted_checkout',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        $payload = [
+            'event' => 'charge.success',
+            'data' => [
+                'reference' => 'SUB-PAYSTACK-ALIAS-ENV-001',
+            ],
+        ];
+        $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        $signature = hash_hmac('sha512', $rawBody, 'sk_live_wallet');
+
+        $response = $this->call('POST', '/api/billing/paystack/webhook', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_PAYSTACK_SIGNATURE' => $signature,
+        ], $rawBody);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $payment->refresh();
+        $this->assertSame('completed', $payment->status);
+        $this->assertNotNull($payment->deal_id);
+        $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        $this->assertDatabaseCount('wallet_transactions', 0);
+    }
+
     public function test_paystack_webhook_completes_subscription_payments_without_wallet_credit_side_effects_for_production_payments(): void
     {
         [
