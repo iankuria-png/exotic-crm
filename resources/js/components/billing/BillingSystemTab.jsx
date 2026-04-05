@@ -84,9 +84,9 @@ export default function BillingSystemTab({
                     <div>
                         <h4 className="text-sm font-semibold text-slate-900">Billing System Compatibility View</h4>
                         <p className="mt-2 text-sm text-slate-600">
-                            During Phase 0B and Phase 1, the live billing system configuration still comes from the
-                            existing wallet system settings. This tab exposes that source of truth without reusing the
-                            Integrations UI tree.
+                            This view shows the live billing-system posture that still powers wallet limits, billing
+                            domains, branding, and SMTP posture while the registry model takes over market and provider
+                            execution paths.
                         </p>
                     </div>
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">
@@ -186,6 +186,12 @@ export default function BillingSystemTab({
                     </dl>
                 </section>
             </div>
+
+            <section className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+                Billing System remains the operational source of truth for global posture, while provider profiles and
+                routing rules now move into the Billing workspace. That split is intentional during Phase 5 so runtime
+                cutover stays controlled and reversible.
+            </section>
         </div>
     );
 }

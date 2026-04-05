@@ -166,6 +166,140 @@ class BillingWorkspaceEndpointsTest extends TestCase
             ->assertJsonPath('subscription_rule.activation_method_json.payment_link', true);
     }
 
+    public function test_admin_can_create_provider_profile_with_schema_fields(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/settings/billing/provider-profiles', [
+            'provider_type_key' => 'daraja',
+            'profile_name' => 'Kenya Daraja Live',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'active' => true,
+            'fields' => [
+                'consumer_key' => 'ck-live',
+                'consumer_secret' => 'cs-live',
+                'short_code' => '174379',
+                'passkey' => 'pass-live',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('profile.provider_type_key', 'daraja')
+            ->assertJsonPath('profile.profile_name', 'Kenya Daraja Live')
+            ->assertJsonPath('profile.secret_state.consumer_secret', true)
+            ->assertJsonPath('profile.secret_state.passkey', true)
+            ->assertJsonPath('profile.secrets_json.consumer_secret', '••••••••');
+
+        $this->assertDatabaseHas('billing_provider_profiles', [
+            'provider_type_key' => 'daraja',
+            'profile_name' => 'Kenya Daraja Live',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+        ]);
+    }
+
+    public function test_admin_can_update_provider_profile_without_overwriting_blank_secrets(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin');
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Live',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => [
+                'base_url' => 'https://api.pawapay.io',
+                'callback_base_url' => 'https://crm.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'existing-secret',
+            ],
+            'active' => true,
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->putJson("/api/crm/settings/billing/provider-profiles/{$profile->id}", [
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Primary',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'active' => true,
+            'fields' => [
+                'api_key' => '',
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.exotic.test',
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('profile.profile_name', 'pawaPay Kenya Primary')
+            ->assertJsonPath('profile.secret_state.api_key', true)
+            ->assertJsonPath('profile.secrets_json.api_key', '••••••••')
+            ->assertJsonPath('profile.config_json.base_url', 'https://api.sandbox.pawapay.io');
+
+        $profile->refresh();
+
+        $this->assertSame('existing-secret', data_get($profile->secrets_json, 'api_key'));
+        $this->assertSame('https://api.sandbox.pawapay.io', data_get($profile->config_json, 'base_url'));
+    }
+
+    public function test_sub_admin_cannot_create_or_update_provider_profiles(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $subAdmin = $this->createUser('sub_admin', [$platform->id]);
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'Kenya Live',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => ['callback_base_url' => 'https://example.test'],
+            'secrets_json' => ['api_key' => 'secret-value'],
+            'active' => true,
+        ]);
+
+        Sanctum::actingAs($subAdmin);
+
+        $this->postJson('/api/crm/settings/billing/provider-profiles', [
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'Blocked create',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'fields' => [
+                'base_url' => 'https://api.kopokopo.com',
+                'client_id' => 'client-id',
+                'client_secret' => 'client-secret',
+                'api_key' => 'api-key',
+                'till_number' => '123456',
+            ],
+        ])->assertForbidden();
+
+        $this->putJson("/api/crm/settings/billing/provider-profiles/{$profile->id}", [
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'Blocked update',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'fields' => [
+                'base_url' => 'https://api.kopokopo.com',
+                'client_id' => 'client-id',
+                'client_secret' => '',
+                'api_key' => '',
+                'till_number' => '123456',
+            ],
+        ])->assertForbidden();
+    }
+
     private function createPlatform(string $name): Platform
     {
         return Platform::query()->create([

@@ -101,20 +101,20 @@ export default function BillingOverviewTab({
 
             <div className="grid gap-4 xl:grid-cols-4">
                 {cards.map((card) => (
-                    <section key={card.key} className={`rounded-xl border p-4 ${tone(card.enabled)}`}>
+                    <section key={card.key} className={`rounded-2xl border p-5 ${tone(card.enabled)}`}>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.08em]">{card.label}</p>
                         <p className="mt-3 text-lg font-semibold">{card.value}</p>
-                        <p className="mt-2 text-sm">{card.detail}</p>
+                        <p className="mt-2 text-sm leading-6">{card.detail}</p>
                     </section>
                 ))}
             </div>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h4 className="text-sm font-semibold text-slate-900">Phase 0B Scope</h4>
-                <p className="mt-2 text-sm text-slate-600">
-                    This Billing workspace is currently a read-only shell. It is here to establish a clean top-level
-                    workspace boundary, separate query keys, and a safe migration path out of the legacy Integrations
-                    branch before runtime billing logic moves.
+            <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h4 className="text-sm font-semibold text-slate-900">Workspace posture</h4>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                    This panel tracks whether the CRM is ready to operate billing from registry-backed provider
+                    profiles and market routing instead of the legacy integration payloads. Use it to confirm rollout
+                    posture before opening provider credentials or routing rules to operators.
                 </p>
             </section>
         </div>

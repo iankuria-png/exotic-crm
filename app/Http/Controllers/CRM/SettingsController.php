@@ -6,6 +6,7 @@ use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryCont
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
 use App\Billing\Support\BillingSurface;
 use App\Billing\BillingPermissions;
+use App\Billing\Support\ProviderProfileManager;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
@@ -22,6 +23,7 @@ use App\Models\User;
 use App\Models\BillingRoutingRule;
 use App\Models\BillingWalletRule;
 use App\Models\BillingSubscriptionRule;
+use App\Models\BillingProviderProfile;
 use App\Services\AuditService;
 use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
@@ -60,7 +62,8 @@ class SettingsController extends Controller
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService,
         private readonly BillingProviderRegistryContract $billingProviderRegistry,
-        private readonly ProviderCredentialSchemaRegistryContract $providerCredentialSchemaRegistry
+        private readonly ProviderCredentialSchemaRegistryContract $providerCredentialSchemaRegistry,
+        private readonly ProviderProfileManager $providerProfileManager
     ) {
     }
 
@@ -616,7 +619,7 @@ class SettingsController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
-        $profiles = \App\Models\BillingProviderProfile::query()
+        $profiles = BillingProviderProfile::query()
             ->select([
                 'id',
                 'provider_type_key',
@@ -634,19 +637,8 @@ class SettingsController extends Controller
             ->orderBy('provider_type_key')
             ->orderBy('profile_name')
             ->get()
-            ->map(function ($profile) {
-                $data = $profile->toArray();
-
-                // Mask secrets - only indicate presence, not values
-                if (!empty($data['secrets_json'])) {
-                    $data['secrets_json'] = array_map(
-                        fn ($v) => '••••••••',
-                        $data['secrets_json']
-                    );
-                }
-
-                return $data;
-            });
+            ->map(fn (BillingProviderProfile $profile) => $this->providerProfileManager->maskedProfile($profile))
+            ->values();
 
         // Return profiles with provider definitions for context
         return response()->json([
@@ -655,7 +647,61 @@ class SettingsController extends Controller
                 fn ($definition) => $definition->toArray(),
                 $this->billingProviderRegistry->definitions()
             ),
+            'schemas' => $this->serializeProviderSchemas(),
+            'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
             'count' => count($profiles),
+        ]);
+    }
+
+    public function storeProviderProfile(Request $request)
+    {
+        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $validated = $request->validate([
+            'provider_type_key' => ['required', 'string', 'max:50'],
+            'profile_name' => ['required', 'string', 'max:120'],
+            'country_code' => ['nullable', 'string', 'size:2'],
+            'market_id' => ['nullable', 'integer', 'exists:platforms,id'],
+            'environment' => ['required', 'string', 'max:30'],
+            'active' => ['sometimes', 'boolean'],
+            'merchant_scope_json' => ['nullable', 'array'],
+            'config_json' => ['nullable', 'array'],
+            'secrets_json' => ['nullable', 'array'],
+            'fields' => ['nullable', 'array'],
+        ]);
+
+        $profile = $this->providerProfileManager->create($validated);
+
+        return response()->json([
+            'profile' => $this->providerProfileManager->maskedProfile($profile),
+        ], 201);
+    }
+
+    public function updateProviderProfile(Request $request, BillingProviderProfile $profile)
+    {
+        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $validated = $request->validate([
+            'provider_type_key' => ['required', 'string', 'max:50'],
+            'profile_name' => ['required', 'string', 'max:120'],
+            'country_code' => ['nullable', 'string', 'size:2'],
+            'market_id' => ['nullable', 'integer', 'exists:platforms,id'],
+            'environment' => ['required', 'string', 'max:30'],
+            'active' => ['sometimes', 'boolean'],
+            'merchant_scope_json' => ['nullable', 'array'],
+            'config_json' => ['nullable', 'array'],
+            'secrets_json' => ['nullable', 'array'],
+            'fields' => ['nullable', 'array'],
+        ]);
+
+        $profile = $this->providerProfileManager->update($profile, $validated);
+
+        return response()->json([
+            'profile' => $this->providerProfileManager->maskedProfile($profile),
         ]);
     }
 

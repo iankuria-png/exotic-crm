@@ -1,16 +1,74 @@
 import React, { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
+import { useToast } from '../ToastProvider';
 import BillingStateNotice from './BillingStateNotice';
+import ProviderProfileEditorModal from './ProviderProfileEditorModal';
 import { isForbiddenQueryError } from './queryState';
 
-/**
- * ProviderProfilesTab component displays and manages provider profile configurations.
- * Profiles allow storing multiple credentials per provider with market-level scoping.
- * Phase 3 is read-only; write operations deferred to Phase 4.
- */
-export default function ProviderProfilesTab({ registryEnabled = true }) {
-    const [selectedProvider, setSelectedProvider] = useState(null);
+function firstErrorMessage(error) {
+    const validation = error?.response?.data?.errors;
+    if (validation && typeof validation === 'object') {
+        const first = Object.values(validation).flat()[0];
+        if (first) {
+            return String(first);
+        }
+    }
+
+    return error?.response?.data?.message || 'CRM could not save the provider profile.';
+}
+
+function formatKey(value) {
+    return String(value || '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function providerTone(status) {
+    if (status === 'compatibility') {
+        return 'border-amber-200 bg-amber-50 text-amber-800';
+    }
+
+    if (status === 'deferred' || status === 'legacy') {
+        return 'border-slate-200 bg-slate-100 text-slate-700';
+    }
+
+    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+}
+
+export default function ProviderProfilesTab({ registryEnabled = true, markets = [] }) {
+    const toast = useToast();
+    const queryClient = useQueryClient();
+    const [activeProvider, setActiveProvider] = useState('all');
+    const [editingProfile, setEditingProfile] = useState(null);
+    const [modalOpen, setModalOpen] = useState(false);
+
+    const profilesQuery = useQuery({
+        queryKey: ['billing-provider-profiles'],
+        queryFn: () => api.get('/crm/settings/billing/provider-profiles').then((response) => response.data),
+        staleTime: 60_000,
+    });
+
+    const saveProfileMutation = useMutation({
+        mutationFn: (payload) => {
+            if (payload.id) {
+                return api.put(`/crm/settings/billing/provider-profiles/${payload.id}`, payload).then((response) => response.data);
+            }
+
+            return api.post('/crm/settings/billing/provider-profiles', payload).then((response) => response.data);
+        },
+        onSuccess: (_, payload) => {
+            queryClient.invalidateQueries({ queryKey: ['billing-provider-profiles'] });
+            toast.success(payload.id ? 'Provider profile updated.' : 'Provider profile created.');
+            setModalOpen(false);
+            setEditingProfile(null);
+        },
+        onError: (error) => {
+            toast.error(firstErrorMessage(error), {
+                title: 'Provider profile save failed',
+            });
+        },
+    });
 
     if (!registryEnabled) {
         return (
@@ -18,59 +76,26 @@ export default function ProviderProfilesTab({ registryEnabled = true }) {
                 <BillingStateNotice
                     state="forbidden"
                     eyebrow="Provider Profiles"
-                    title="Provider profiles are waiting on the registry rollout"
-                    message="Enable the billing registry rollout before reviewing provider profiles and masked credentials in the new Billing workspace."
+                    title="Provider profiles stay locked until the registry is active"
+                    message="Enable the billing registry rollout before creating market-bound provider credentials in this workspace."
                 />
             </div>
         );
     }
 
-    /**
-     * Fetch provider profiles from API.
-     * Query key scoped to this component for cache isolation.
-     * staleTime: 10 minutes - profiles change less frequently than catalog
-     */
-    const profilesQuery = useQuery({
-        queryKey: ['billing-provider-profiles'],
-        queryFn: () => api.get('/crm/settings/billing/provider-profiles').then(
-            (response) => response.data
-        ),
-        staleTime: 10 * 60 * 1000, // 10 minutes
-    });
-
-    const { data = {} } = profilesQuery;
-    const profiles = useMemo(() => data.profiles || [], [data.profiles]);
-    const providers = useMemo(() => data.providers || [], [data.providers]);
-
-    // Group profiles by provider for display
-    const profilesByProvider = useMemo(() => {
-        const grouped = {};
-        profiles.forEach((profile) => {
-            if (!grouped[profile.provider_type_key]) {
-                grouped[profile.provider_type_key] = [];
-            }
-            grouped[profile.provider_type_key].push(profile);
-        });
-        return grouped;
-    }, [profiles]);
-
-    // Handle loading state
     if (profilesQuery.isLoading) {
         return (
             <div className="space-y-4 p-5 animate-pulse">
-                <div className="space-y-4">
-                    {[...Array(4)].map((_, i) => (
-                        <div
-                            key={i}
-                            className="h-40 rounded-xl border border-slate-200 bg-white"
-                        />
-                    ))}
+                <div className="h-28 rounded-2xl border border-slate-200 bg-white" />
+                <div className="grid gap-4 xl:grid-cols-3">
+                    <div className="h-56 rounded-2xl border border-slate-200 bg-white" />
+                    <div className="h-56 rounded-2xl border border-slate-200 bg-white" />
+                    <div className="h-56 rounded-2xl border border-slate-200 bg-white" />
                 </div>
             </div>
         );
     }
 
-    // Handle error state
     if (profilesQuery.isError) {
         if (isForbiddenQueryError(profilesQuery.error)) {
             return (
@@ -78,8 +103,8 @@ export default function ProviderProfilesTab({ registryEnabled = true }) {
                     <BillingStateNotice
                         state="forbidden"
                         eyebrow="Provider Profiles"
-                        title="Provider profile access is restricted"
-                        message="This role cannot inspect masked provider profile details in the new Billing workspace."
+                        title="Profile management is restricted"
+                        message="This role can open the Billing workspace, but it cannot inspect or edit provider credentials in this environment."
                     />
                 </div>
             );
@@ -90,232 +115,264 @@ export default function ProviderProfilesTab({ registryEnabled = true }) {
                 <BillingStateNotice
                     state="degraded"
                     eyebrow="Provider Profiles"
-                    title="Profiles unavailable"
-                    message="CRM could not load provider profiles right now. Refresh the page to retry."
+                    title="Provider profile data is unavailable"
+                    message="CRM could not load the provider profile registry right now. Retry after the billing endpoints recover."
                 />
             </div>
         );
     }
 
-    // Handle empty state
-    if (profiles.length === 0) {
-        return (
-            <div className="space-y-4 p-5">
-                <BillingStateNotice
-                    state="empty"
-                    eyebrow="Provider Profiles"
-                    title="No provider profiles configured"
-                    message="Create provider profiles in Phase 4 to add credentials and payment gateway configurations."
-                />
-            </div>
-        );
-    }
+    const data = profilesQuery.data || {};
+    const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+    const providers = Array.isArray(data.providers) ? data.providers : [];
+    const schemas = Array.isArray(data.schemas) ? data.schemas : Object.values(data.schemas || {});
+    const editable = Boolean(data.editable);
+
+    const countsByProvider = useMemo(() => {
+        return profiles.reduce((carry, profile) => {
+            carry[profile.provider_type_key] = (carry[profile.provider_type_key] || 0) + 1;
+            return carry;
+        }, {});
+    }, [profiles]);
+
+    const filteredProfiles = useMemo(() => {
+        if (activeProvider === 'all') {
+            return profiles;
+        }
+
+        return profiles.filter((profile) => profile.provider_type_key === activeProvider);
+    }, [activeProvider, profiles]);
+
+    const activeCount = profiles.filter((profile) => profile.active).length;
+    const testedCount = profiles.filter((profile) => profile.tested_at).length;
+    const providerFamiliesConfigured = Object.keys(countsByProvider).length;
 
     return (
-        <div className="space-y-4 p-5">
-            {/* Introduction section */}
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h4 className="text-sm font-semibold text-slate-900">
-                    Provider Profiles
-                </h4>
-                <p className="mt-2 text-sm text-slate-600">
-                    Manage multiple provider configurations per payment gateway. Each profile
-                    can target specific markets and exposes masked credential status for review.
-                </p>
+        <div className="space-y-5 p-5">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                    <div className="space-y-3">
+                        <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                                Provider Profiles
+                            </p>
+                            <h4 className="mt-2 text-xl font-semibold text-slate-950">
+                                Credential sets that route real money flows
+                            </h4>
+                            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                                Each profile binds a provider family to an environment, market, and credential set. Use
+                                multiple profiles per country when you need controlled fallback, merchant separation, or
+                                sandbox validation.
+                            </p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                            <FilterPill
+                                active={activeProvider === 'all'}
+                                label={`All profiles (${profiles.length})`}
+                                onClick={() => setActiveProvider('all')}
+                            />
+                            {providers.map((provider) => (
+                                <FilterPill
+                                    key={provider.key}
+                                    active={activeProvider === provider.key}
+                                    label={`${provider.label} (${countsByProvider[provider.key] || 0})`}
+                                    onClick={() => setActiveProvider(provider.key)}
+                                />
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 xl:min-w-[320px]">
+                        <div className="grid grid-cols-3 gap-3">
+                            <MetricCard label="Active" value={activeCount} tone="emerald" />
+                            <MetricCard label="Verified" value={testedCount} tone="sky" />
+                            <MetricCard label="Families" value={providerFamiliesConfigured} tone="slate" />
+                        </div>
+                        {editable ? (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setEditingProfile(null);
+                                    setModalOpen(true);
+                                }}
+                                className="crm-btn-primary w-full justify-center px-4 py-3 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                Add provider profile
+                            </button>
+                        ) : (
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                                Provider profiles are visible here, but only admin users can create or update them.
+                            </div>
+                        )}
+                    </div>
+                </div>
             </section>
 
-            {/* Profiles organized by provider */}
-            <div className="space-y-4">
-                {providers
-                    .filter((p) => profilesByProvider[p.key])
-                    .map((provider) => (
-                        <ProviderProfileGroup
-                            key={provider.key}
-                            provider={provider}
-                            profiles={profilesByProvider[provider.key] || []}
-                            isSelected={selectedProvider === provider.key}
-                            onSelect={setSelectedProvider}
+            {filteredProfiles.length === 0 ? (
+                <BillingStateNotice
+                    state={profiles.length === 0 ? 'empty' : 'degraded'}
+                    eyebrow="Provider Profiles"
+                    title={profiles.length === 0 ? 'No provider profiles configured yet' : 'No profiles match this filter'}
+                    message={
+                        profiles.length === 0
+                            ? 'Create the first provider profile to bind a provider family to a market and environment. Secrets stay masked after save.'
+                            : 'Switch to another provider family filter or clear the filter to view all configured profiles.'
+                    }
+                />
+            ) : (
+                <div className="grid gap-4 xl:grid-cols-2">
+                    {filteredProfiles.map((profile) => (
+                        <ProfileCard
+                            key={profile.id}
+                            profile={profile}
+                            markets={markets}
+                            onEdit={
+                                editable
+                                    ? () => {
+                                          setEditingProfile(profile);
+                                          setModalOpen(true);
+                                      }
+                                    : null
+                            }
                         />
                     ))}
-            </div>
+                </div>
+            )}
 
-            {/* Phase 3 Notice */}
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h4 className="text-sm font-semibold text-slate-900">
-                    Phase 3 Read-Only Mode
-                </h4>
-                <p className="mt-2 text-sm text-slate-600">
-                    Provider profile management (create, edit, delete) is available in Phase 4.
-                    This view displays existing configurations and validates credentials.
-                </p>
-            </section>
+            <ProviderProfileEditorModal
+                open={modalOpen}
+                profile={editingProfile}
+                providers={providers}
+                schemas={schemas}
+                markets={markets}
+                isSaving={saveProfileMutation.isPending}
+                onClose={() => {
+                    if (saveProfileMutation.isPending) {
+                        return;
+                    }
+
+                    setModalOpen(false);
+                    setEditingProfile(null);
+                }}
+                onSubmit={(payload) => {
+                    saveProfileMutation.mutate(editingProfile ? { ...payload, id: editingProfile.id } : payload);
+                }}
+            />
         </div>
     );
 }
 
-/**
- * ProviderProfileGroup displays all profiles for a single provider.
- */
-function ProviderProfileGroup({
-    provider,
-    profiles,
-    isSelected,
-    onSelect,
-}) {
+function MetricCard({ label, value, tone = 'slate' }) {
+    const tones = {
+        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+        sky: 'border-sky-200 bg-sky-50 text-sky-900',
+        slate: 'border-slate-200 bg-slate-50 text-slate-900',
+    };
+
     return (
-        <section className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="flex items-center justify-between">
-                <div className="flex-1">
-                    <button
-                        type="button"
-                        onClick={() =>
-                            onSelect(
-                                isSelected ? null : provider.key
-                            )
-                        }
-                        className="flex items-center gap-2 text-left"
-                    >
-                        <div
-                            className={`transition-transform ${
-                                isSelected ? 'rotate-90' : ''
+        <div className={`rounded-2xl border px-4 py-3 ${tones[tone] || tones.slate}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] opacity-70">{label}</p>
+            <p className="mt-2 text-2xl font-semibold">{value}</p>
+        </div>
+    );
+}
+
+function FilterPill({ active, label, onClick }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                active
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
+            }`}
+        >
+            {label}
+        </button>
+    );
+}
+
+function ProfileCard({ profile, markets, onEdit }) {
+    const market = markets.find((entry) => Number(entry.id) === Number(profile.market_id));
+    const configuredSecrets = Object.values(profile.secret_state || {}).filter(Boolean).length;
+    const configCount = Object.keys(profile.config_json || {}).length;
+    const status = profile.provider_status || 'active';
+
+    return (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-600">
+                            {formatKey(profile.provider_family || profile.provider_type_key)}
+                        </span>
+                        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${providerTone(status)}`}>
+                            {status}
+                        </span>
+                        <span
+                            className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${
+                                profile.active
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : 'border-slate-200 bg-slate-50 text-slate-600'
                             }`}
                         >
-                            <svg
-                                className="h-4 w-4 text-slate-400"
-                                fill="currentColor"
-                                viewBox="0 0 20 20"
-                            >
-                                <path
-                                    fillRule="evenodd"
-                                    d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-                                    clipRule="evenodd"
-                                />
-                            </svg>
-                        </div>
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
-                                {provider.family}
-                            </p>
-                            <h5 className="mt-1 text-sm font-semibold text-slate-900">
-                                {provider.label}
-                            </h5>
-                        </div>
-                    </button>
+                            {profile.active ? 'Active' : 'Disabled'}
+                        </span>
+                    </div>
+                    <div>
+                        <h5 className="text-lg font-semibold text-slate-950">{profile.profile_name}</h5>
+                        <p className="mt-1 text-sm text-slate-600">
+                            {profile.provider_label} · {formatKey(profile.environment)}
+                            {profile.country_code ? ` · ${profile.country_code}` : ''}
+                        </p>
+                    </div>
                 </div>
-                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                    {profiles.length} profile{profiles.length !== 1 ? 's' : ''}
-                </span>
+
+                {onEdit ? (
+                    <button
+                        type="button"
+                        onClick={onEdit}
+                        className="crm-btn-secondary px-3 py-2 text-sm"
+                    >
+                        Edit profile
+                    </button>
+                ) : null}
             </div>
 
-            {/* Expanded profiles list */}
-            {isSelected && (
-                <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
-                    {profiles.map((profile) => (
-                        <ProfileCard
-                            key={profile.id}
-                            profile={profile}
-                            provider={provider}
-                        />
-                    ))}
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <SummaryChip label="Market" value={market?.name || 'All visible markets'} />
+                <SummaryChip label="Secrets configured" value={configuredSecrets > 0 ? String(configuredSecrets) : 'None'} />
+                <SummaryChip label="Non-secret fields" value={String(configCount)} />
+                <SummaryChip label="Last validation" value={profile.tested_at ? new Date(profile.tested_at).toLocaleString() : 'Not yet tested'} />
+            </div>
+
+            {Object.keys(profile.config_json || {}).length > 0 ? (
+                <div className="mt-5 border-t border-slate-100 pt-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Configured fields</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                        {Object.entries(profile.config_json || {}).map(([key, value]) => (
+                            <span
+                                key={key}
+                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700"
+                            >
+                                <span className="font-semibold text-slate-900">{formatKey(key)}:</span>{' '}
+                                {String(value || 'Not configured')}
+                            </span>
+                        ))}
+                    </div>
                 </div>
-            )}
+            ) : null}
         </section>
     );
 }
 
-/**
- * ProfileCard displays a single provider profile with status and configuration details.
- */
-function ProfileCard({ profile, provider }) {
-    const statusColor = profile.active
-        ? 'bg-emerald-100 text-emerald-700'
-        : 'bg-slate-100 text-slate-700';
-
-    const marketLabel = profile.market_id
-        ? `Market ${profile.country_code || 'Global'}`
-        : 'All Markets';
-
+function SummaryChip({ label, value }) {
     return (
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <div className="flex items-start justify-between gap-2">
-                <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                        <h6 className="text-sm font-semibold text-slate-900">
-                            {profile.profile_name}
-                        </h6>
-                        <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${statusColor}`}
-                        >
-                            {profile.active ? 'Active' : 'Inactive'}
-                        </span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-600">
-                        {marketLabel} • {profile.environment || 'production'}
-                    </p>
-
-                    {/* Configuration summary */}
-                    {profile.config_json && (
-                        <div className="mt-2 space-y-1">
-                            {Object.entries(profile.config_json)
-                                .slice(0, 2)
-                                .map(([key, value]) => (
-                                    <p
-                                        key={key}
-                                        className="text-xs text-slate-500"
-                                    >
-                                        <span className="font-mono text-[9px]">
-                                            {key}:
-                                        </span>{' '}
-                                        <span className="font-mono">
-                                            {typeof value === 'string' &&
-                                            value.length > 20
-                                                ? value.substring(
-                                                      0,
-                                                      20
-                                                  ) + '…'
-                                                : String(value)}
-                                        </span>
-                                    </p>
-                                ))}
-                            {Object.keys(profile.config_json).length > 2 && (
-                                <p className="text-xs text-slate-500">
-                                    +{Object.keys(profile.config_json).length - 2}{' '}
-                                    more fields
-                                </p>
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                {/* Secrets indicator */}
-                <div className="text-right">
-                    {profile.secrets_json && (
-                        <div className="flex items-center gap-1">
-                            <svg
-                                className="h-4 w-4 text-amber-600"
-                                fill="currentColor"
-                                viewBox="0 0 20 20"
-                            >
-                                <path
-                                    fillRule="evenodd"
-                                    d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z"
-                                    clipRule="evenodd"
-                                />
-                            </svg>
-                            <span className="text-[10px] font-semibold text-amber-700">
-                                Encrypted
-                            </span>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* Test status */}
-            {profile.tested_at && (
-                <div className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-500">
-                    Last tested: {new Date(profile.tested_at).toLocaleDateString()}
-                </div>
-            )}
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+            <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
         </div>
     );
 }

@@ -250,9 +250,11 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/settings/billing/diagnostics-summary', [SettingsController::class, 'billingDiagnosticsSummary']);
     Route::get('/settings/billing/providers-catalog', [SettingsController::class, 'providersCatalog']);
     Route::get('/settings/billing/provider-profiles', [SettingsController::class, 'providerProfiles']);
-        Route::get('/settings/billing/routing-rules/{market}', [SettingsController::class, 'billingRoutingRules']);
-        Route::get('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'billingWalletRules']);
-        Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
+    Route::post('/settings/billing/provider-profiles', [SettingsController::class, 'storeProviderProfile']);
+    Route::put('/settings/billing/provider-profiles/{profile}', [SettingsController::class, 'updateProviderProfile']);
+    Route::get('/settings/billing/routing-rules/{market}', [SettingsController::class, 'billingRoutingRules']);
+    Route::get('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'billingWalletRules']);
+    Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
     Route::get('/settings/system-health/updates', [SystemHealthUpdateController::class, 'show'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/log', [SystemHealthUpdateController::class, 'log'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/commits', [SystemHealthUpdateController::class, 'commitHistory'])->middleware('role:admin,sub_admin');

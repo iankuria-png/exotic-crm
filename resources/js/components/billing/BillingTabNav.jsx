@@ -10,8 +10,8 @@ export default function BillingTabNav({ tabs, activeTab, onChange }) {
                     onClick={() => onChange(tab.id)}
                     className={`rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] transition ${
                         activeTab === tab.id
-                            ? 'bg-teal-600 text-white'
-                            : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
+                            ? 'border border-slate-900 bg-slate-900 text-white shadow-sm shadow-slate-950/10'
+                            : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900'
                     }`}
                 >
                     {tab.label}

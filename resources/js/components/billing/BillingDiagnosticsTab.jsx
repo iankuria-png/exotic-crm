@@ -117,11 +117,11 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
     return (
         <div className="space-y-4 p-5">
             <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h4 className="text-sm font-semibold text-slate-900">Billing Diagnostics Foundation</h4>
+                <h4 className="text-sm font-semibold text-slate-900">Billing diagnostics posture</h4>
                 <p className="mt-2 text-sm text-slate-600">
-                    This is the Phase 0B health surface that validates the Billing workspace can lazy-load
-                    diagnostics data without depending on the Payments drawer. The full diagnostics experience lands
-                    later under `BILL-705` and `BILL-706`.
+                    This surface summarizes whether the billing runtime has enough health signals to support provider
+                    verification, wallet posture checks, and operator escalation from the Settings workspace without
+                    dropping back into the Payments drawer.
                 </p>
             </section>
 

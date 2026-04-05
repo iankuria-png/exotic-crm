@@ -30,11 +30,11 @@ export default function BillingStateNotice({
     const tone = tones[state] || tones.empty;
 
     return (
-        <section className={`rounded-xl border p-4 ${tone.wrapper}`}>
+        <section className={`rounded-2xl border p-5 ${tone.wrapper}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <p className={`text-[11px] font-semibold uppercase tracking-[0.08em] ${tone.body}`}>{eyebrow}</p>
-                    <h4 className={`mt-2 text-sm font-semibold ${tone.title}`}>{title}</h4>
+                    <h4 className={`mt-2 text-base font-semibold ${tone.title}`}>{title}</h4>
                 </div>
                 <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${tone.badge}`}>
                     {state}

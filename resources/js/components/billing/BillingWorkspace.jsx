@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import BillingDiagnosticsTab from './BillingDiagnosticsTab';
@@ -56,6 +56,16 @@ export default function BillingWorkspace() {
         staleTime: 30_000,
     });
 
+    const headerChips = useMemo(
+        () => [
+            features.registry ? 'Registry active' : null,
+            features.workspace ? 'Workspace visible' : null,
+            features.diagnostics_v2 ? 'Diagnostics online' : null,
+            features.wallet_auto_renew ? 'Auto-renew policy' : null,
+        ].filter(Boolean),
+        [features.diagnostics_v2, features.registry, features.wallet_auto_renew, features.workspace]
+    );
+
     if (overviewQuery.isLoading) {
         return (
             <section className="crm-surface overflow-hidden">
@@ -106,10 +116,23 @@ export default function BillingWorkspace() {
                 <div>
                     <h3 className="crm-panel-title">Billing</h3>
                     <p className="crm-panel-subtitle">
-                        Read-only Phase 0B shell for the future billing registry, routing, and diagnostics workspace.
+                        Operate provider families, credential profiles, routing rules, wallet controls, and billing
+                        health from one CRM workspace.
                     </p>
                 </div>
             </header>
+            {headerChips.length > 0 ? (
+                <div className="flex flex-wrap gap-2 border-b border-slate-100 px-5 py-4">
+                    {headerChips.map((chip) => (
+                        <span
+                            key={chip}
+                            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600"
+                        >
+                            {chip}
+                        </span>
+                    ))}
+                </div>
+            ) : null}
 
             <BillingTabNav tabs={billingTabs} activeTab={activeTab} onChange={setActiveTab} />
 
@@ -127,7 +150,7 @@ export default function BillingWorkspace() {
             ) : null}
 
             {activeTab === 'profiles' ? (
-                <ProviderProfilesTab registryEnabled={Boolean(features.registry)} />
+                <ProviderProfilesTab registryEnabled={Boolean(features.registry)} markets={markets} />
             ) : null}
 
             {activeTab === 'market_routing' ? (
