@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter;
 use App\Models\Payment;
 use App\Models\Platform;
 use Illuminate\Http\Request;
@@ -13,7 +14,7 @@ class LegacyStkService
 {
     public function __construct(
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly KopokopoService $kopokopoService,
+        private readonly KopoKopoCompatibilityAdapter $kopokopoCompatibilityAdapter,
         private readonly PaymentAttemptService $paymentAttemptService
     ) {
     }
@@ -157,7 +158,7 @@ class LegacyStkService
 
     private function initiateDirectProvider(Payment $payment, Platform $platform, string $environment, array $payload): array
     {
-        $result = $this->kopokopoService->initiateStkPush(
+        $result = $this->kopokopoCompatibilityAdapter->initiateStkPush(
             $payload['phone'],
             $payload['amount'],
             url('/api/payment-callback'),

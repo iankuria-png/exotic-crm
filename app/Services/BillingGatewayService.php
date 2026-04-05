@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter;
 use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Billing\Support\BillingProviderTransactionRecorder;
@@ -23,11 +24,11 @@ class BillingGatewayService
         private readonly BillingModeService $billingModeService,
         private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly PesapalCompatibilityAdapter $pesapalCompatibilityAdapter,
+        private readonly KopoKopoCompatibilityAdapter $kopokopoCompatibilityAdapter,
         private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator,
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
-        private readonly KopokopoService $kopokopoService,
         private readonly KopokopoConfigService $kopokopoConfigService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
@@ -434,7 +435,7 @@ class BillingGatewayService
 
     public function handleMpesaCallback(string $rawBody, string $signature): array
     {
-        $result = $this->kopokopoService->handleWebhook($rawBody, $signature);
+        $result = $this->kopokopoCompatibilityAdapter->handleWebhook($rawBody, $signature);
         if (($result['status'] ?? null) !== 'success') {
             throw new RuntimeException('Invalid M-Pesa callback signature.');
         }
@@ -694,7 +695,7 @@ class BillingGatewayService
                 throw new InvalidArgumentException('M-Pesa wallet top-up requires the direct_provider transport for this CRM contract.');
             }
 
-            $result = $this->kopokopoService->initiateStkPush(
+            $result = $this->kopokopoCompatibilityAdapter->initiateStkPush(
                 $phone,
                 (float) $payment->amount,
                 $this->billingModeService->buildAbsoluteUrl($payment->platform, '/api/billing/mpesa/callback'),
