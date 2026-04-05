@@ -100,12 +100,12 @@ export default function BillingOverviewTab({
                 {cards.map((card) => (
                     <section key={card.key} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
                         <div className="flex items-center justify-between gap-3">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{card.eyebrow}</p>
+                            <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-400">{card.eyebrow}</p>
                             <StatusDot enabled={card.enabled} />
                         </div>
                         <div className="mt-4 min-w-0">
                             <p className="text-sm font-semibold text-slate-700">{card.label}</p>
-                            <p className="mt-3 break-words text-[2rem] font-semibold leading-none tracking-tight text-slate-950">
+                            <p className="mt-3 break-words text-[1.95rem] font-semibold leading-none tracking-[-0.05em] text-slate-950">
                                 {card.value}
                             </p>
                         </div>
@@ -137,11 +137,11 @@ export default function BillingOverviewTab({
 
 function StatusDot({ enabled }) {
     return (
-        <span className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] ${
-            enabled ? 'text-emerald-700' : 'text-slate-500'
-        }`}>
-            <span className={`h-2 w-2 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-            {enabled ? 'Online' : 'Deferred'}
+        <span
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+            aria-hidden="true"
+        >
+            <span className={`h-2.5 w-2.5 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-slate-300'}`} />
         </span>
     );
 }

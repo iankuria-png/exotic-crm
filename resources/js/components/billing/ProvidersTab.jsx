@@ -95,7 +95,7 @@ export default function ProvidersTab({ registryEnabled = true }) {
     return (
         <div className="space-y-4 p-5">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] xl:items-end">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)] xl:items-end">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Provider Catalog</p>
                         <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
@@ -107,7 +107,7 @@ export default function ProvidersTab({ registryEnabled = true }) {
                         </p>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[372px]">
+                    <div className="grid gap-2 sm:grid-cols-3 xl:ml-auto xl:w-full xl:max-w-[360px]">
                         <MetricCard label="Total" value={providers.length} status="neutral" />
                         <MetricCard label="Active" value={statusCounts.active || 0} status="online" />
                         <MetricCard label="Legacy" value={statusCounts.compatibility || 0} status="attention" />
@@ -221,17 +221,19 @@ function CapabilityRow({ label, values }) {
 
 function MetricCard({ label, value, status = 'neutral' }) {
     return (
-        <div className="relative min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
-            <span
-                className="absolute right-4 top-4 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
-                aria-hidden="true"
-            >
-                <span className={`h-1.5 w-1.5 rounded-full ${metricStatusDot(status)}`} />
-            </span>
+        <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white px-3.5 py-3.5 shadow-sm shadow-slate-950/[0.02]">
+            <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-[7px] font-semibold uppercase tracking-[0.18em] text-slate-400">{label}</p>
+                <span
+                    className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                    aria-hidden="true"
+                >
+                    <span className={`h-1.5 w-1.5 rounded-full ${metricStatusDot(status)}`} />
+                </span>
+            </div>
 
-            <div className="min-h-[88px] pr-10">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
-                <p className="mt-6 tabular-nums text-[1.9rem] font-semibold leading-none tracking-[-0.05em] text-slate-950">
+            <div className="mt-5 min-h-[52px]">
+                <p className="tabular-nums text-[1.75rem] font-semibold leading-none tracking-[-0.05em] text-slate-950">
                     {value}
                 </p>
             </div>

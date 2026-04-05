@@ -101,7 +101,7 @@ export default function BillingSystemTab({
             ) : null}
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] xl:items-end">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] xl:items-end">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Billing system posture</p>
                         <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
@@ -113,7 +113,7 @@ export default function BillingSystemTab({
                             provider and market execution.
                         </p>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:ml-auto xl:w-full">
                         {summaryCards.map((card) => (
                             <MetricCell key={card.label} label={card.label} value={card.value} />
                         ))}
@@ -223,8 +223,8 @@ function formatMode(mode) {
 function MetricCell({ label, value }) {
     return (
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
-            <p className="mt-2 break-words text-base font-semibold text-slate-950">{value}</p>
+            <p className="text-[8px] font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</p>
+            <p className="mt-2 break-words text-sm font-semibold leading-6 text-slate-950">{value}</p>
         </div>
     );
 }

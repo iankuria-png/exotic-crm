@@ -165,7 +165,7 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
                         </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 xl:min-w-[320px]">
+                    <div className="flex flex-col gap-3 xl:min-w-[360px]">
                         <div className="grid gap-3 sm:grid-cols-3">
                             <MetricCard label="Active" value={activeCount} status="online" />
                             <MetricCard label="Verified" value={testedCount} status="verified" />
@@ -247,12 +247,12 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
 
 function MetricCard({ label, value, status = 'neutral' }) {
     return (
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-950/[0.02]">
+        <div className="rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
             <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+                <p className="max-w-[72%] text-[8px] font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</p>
                 <StatusDot status={status} />
             </div>
-            <p className="mt-2 text-2xl font-semibold text-slate-950">{value}</p>
+            <p className="mt-6 tabular-nums text-[1.9rem] font-semibold leading-none tracking-[-0.05em] text-slate-950">{value}</p>
         </div>
     );
 }
