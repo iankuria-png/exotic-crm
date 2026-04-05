@@ -110,7 +110,7 @@ export default function ProvidersTab({ registryEnabled = true }) {
                     <div className="grid gap-3 sm:grid-cols-3">
                         <MetricCard label="Total" value={providers.length} status="neutral" />
                         <MetricCard label="Active" value={statusCounts.active || 0} status="online" />
-                        <MetricCard label="Compatibility" value={statusCounts.compatibility || 0} status="attention" />
+                        <MetricCard label="Legacy" value={statusCounts.compatibility || 0} status="attention" />
                     </div>
                 </div>
             </section>
@@ -222,13 +222,20 @@ function CapabilityRow({ label, values }) {
 function MetricCard({ label, value, status = 'neutral' }) {
     return (
         <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
-            <div className="flex min-h-[104px] flex-col justify-between">
-                <div className="flex items-start justify-between gap-3">
-                    <p className="text-[8px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
-                    <span className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${metricStatusDot(status)}`} />
+            <div className="relative flex min-h-[108px] flex-col justify-between overflow-hidden">
+                <div className="pr-8">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
                 </div>
-                <div className="pt-5">
-                    <p className="tabular-nums text-[1.6rem] font-semibold leading-none tracking-[-0.04em] text-slate-950">{value}</p>
+                <span
+                    className="absolute right-0 top-0 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                    aria-hidden="true"
+                >
+                    <span className={`h-2.5 w-2.5 rounded-full ${metricStatusDot(status)}`} />
+                </span>
+                <div className="pt-4">
+                    <p className="tabular-nums text-[2.2rem] font-semibold leading-none tracking-[-0.05em] text-slate-950">
+                        {value}
+                    </p>
                 </div>
             </div>
         </div>
