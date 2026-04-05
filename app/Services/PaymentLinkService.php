@@ -2,13 +2,13 @@
 
 namespace App\Services;
 
+use App\Billing\Support\BillingProxyLifecycleService;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 
 class PaymentLinkService
 {
@@ -21,7 +21,8 @@ class PaymentLinkService
         private readonly AuditService $auditService,
         private readonly BillingModeService $billingModeService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
+        private readonly BillingProxyLifecycleService $billingProxyLifecycleService
     ) {
     }
 
@@ -319,30 +320,6 @@ class PaymentLinkService
 
     private function storeProxyToken(Payment $payment, array $providerConfig): string
     {
-        $token = Str::random(64);
-        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
-
-        $paymentData['link_proxy'] = [
-            'token_hash' => hash('sha256', $token),
-            'token_expires_at' => now()->addHours(24)->toIso8601String(),
-            'provider_key' => $providerConfig['wallet_provider_key'] ?? null,
-            'provider_config_key' => $providerConfig['key'] ?? null,
-            'mode' => $providerConfig['mode'] ?? self::MODE_PROXY_HOSTED_CHECKOUT,
-            'environment' => $providerConfig['environment'] ?? 'sandbox',
-            'redirect_url' => null,
-            'provider_reference' => null,
-            'initialized_at' => null,
-            'opened_at' => null,
-            'open_count' => 0,
-            'sent_at' => now()->toIso8601String(),
-        ];
-
-        $payment->forceFill([
-            'provider_key' => $providerConfig['wallet_provider_key'] ?? $payment->provider_key,
-            'provider_environment' => $providerConfig['environment'] ?? $payment->provider_environment,
-            'payment_data' => $paymentData,
-        ])->save();
-
-        return $token;
+        return $this->billingProxyLifecycleService->issueToken($payment, $providerConfig);
     }
 }

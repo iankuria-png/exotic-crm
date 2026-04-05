@@ -133,6 +133,11 @@ class Payment extends Model
         return $this->hasMany(BillingProviderTransaction::class);
     }
 
+    public function proxySessions()
+    {
+        return $this->hasMany(BillingProxySession::class);
+    }
+
     public function importBatch()
     {
         return $this->belongsTo(PaymentImportBatch::class, 'import_batch_id');

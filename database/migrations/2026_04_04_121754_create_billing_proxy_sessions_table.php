@@ -14,8 +14,8 @@ return new class extends Migration
         Schema::create('billing_proxy_sessions', function (Blueprint $table) {
             $table->id();
             $table->foreignId('payment_id')->constrained('payments')->cascadeOnDelete();
-            $table->foreignId('billing_routing_decision_id')->constrained('billing_routing_decisions')->cascadeOnDelete();
-            $table->foreignId('provider_profile_id')->constrained('billing_provider_profiles')->cascadeOnDelete();
+            $table->foreignId('billing_routing_decision_id')->nullable()->constrained('billing_routing_decisions')->nullOnDelete();
+            $table->foreignId('provider_profile_id')->nullable()->constrained('billing_provider_profiles')->nullOnDelete();
             $table->string('provider_type_key', 80);
             $table->string('environment', 32)->default('production');
             $table->string('token_hash', 128)->unique();

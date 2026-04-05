@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Billing\Support\BillingProxyLifecycleService;
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Services\BillingModeService;
@@ -13,29 +14,33 @@ class PaymentLinkProxyController extends Controller
 {
     public function __construct(
         private readonly HostedCheckoutRoutingExecutor $hostedCheckoutExecutor,
-        private readonly BillingModeService $billingModeService
+        private readonly BillingModeService $billingModeService,
+        private readonly BillingProxyLifecycleService $billingProxyLifecycleService
     ) {
     }
 
     public function handle(string $token): RedirectResponse|\Illuminate\Http\Response
     {
-        $tokenHash = hash('sha256', trim($token));
-        $payment = Payment::query()
-            ->whereNotNull('payment_data')
-            ->orderByDesc('id')
-            ->get()
-            ->first(function (Payment $candidate) use ($tokenHash) {
-                return data_get($candidate->payment_data, 'link_proxy.token_hash') === $tokenHash;
-            });
+        $session = $this->billingProxyLifecycleService->findSessionByToken($token);
+        $payment = $session?->payment;
+
+        if (!$payment) {
+            $tokenHash = hash('sha256', trim($token));
+            $payment = Payment::query()
+                ->whereNotNull('payment_data')
+                ->orderByDesc('id')
+                ->get()
+                ->first(function (Payment $candidate) use ($tokenHash) {
+                    return data_get($candidate->payment_data, 'link_proxy.token_hash') === $tokenHash;
+                });
+        }
 
         if (!$payment) {
             abort(404);
         }
 
         $payment->loadMissing(['platform', 'client']);
-        $linkProxy = is_array(data_get($payment->payment_data, 'link_proxy'))
-            ? data_get($payment->payment_data, 'link_proxy')
-            : null;
+        $linkProxy = $this->billingProxyLifecycleService->currentLinkProxy($payment);
         $platform = $payment->platform;
 
         if (!$platform || !$linkProxy || (string) ($linkProxy['mode'] ?? '') !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
@@ -53,8 +58,7 @@ class PaymentLinkProxyController extends Controller
             abort(404);
         }
 
-        $linkProxy['opened_at'] = $linkProxy['opened_at'] ?? now()->toIso8601String();
-        $linkProxy['open_count'] = ((int) ($linkProxy['open_count'] ?? 0)) + 1;
+        $linkProxy = $this->billingProxyLifecycleService->markOpened($payment, $session, $linkProxy);
 
         $redirectUrl = trim((string) ($linkProxy['redirect_url'] ?? ''));
         if ($redirectUrl === '') {
@@ -95,11 +99,13 @@ class PaymentLinkProxyController extends Controller
             $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
             $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
 
-            $paymentData['link_proxy'] = array_merge($linkProxy, [
-                'redirect_url' => $redirectUrl,
-                'provider_reference' => $providerReference !== '' ? $providerReference : null,
-                'initialized_at' => now()->toIso8601String(),
-            ]);
+            $linkProxy = $this->billingProxyLifecycleService->markInitialized(
+                $payment,
+                $session,
+                $linkProxy,
+                $redirectUrl,
+                $providerReference !== '' ? $providerReference : null
+            );
 
             $payment->forceFill([
                 'status' => 'pending',
@@ -109,13 +115,6 @@ class PaymentLinkProxyController extends Controller
                 'raw_payload' => array_merge($rawPayload, [
                     $providerKey => $action['provider_payload'] ?? null,
                 ]),
-                'payment_data' => $paymentData,
-            ])->save();
-        } else {
-            $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
-            $paymentData['link_proxy'] = $linkProxy;
-            $payment->forceFill([
-                'payment_data' => $paymentData,
             ])->save();
         }
 

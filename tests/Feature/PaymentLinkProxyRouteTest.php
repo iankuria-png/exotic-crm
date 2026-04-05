@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingProxySession;
 use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
@@ -38,6 +39,7 @@ class PaymentLinkProxyRouteTest extends TestCase
         $first->assertRedirect('https://checkout.paystack.test/redirect');
 
         $payment->refresh();
+        $session = BillingProxySession::query()->where('payment_id', $payment->id)->first();
         $this->assertSame('pending', $payment->status);
         $this->assertSame('paystack', $payment->provider_key);
         $this->assertSame('sandbox', $payment->provider_environment);
@@ -45,12 +47,18 @@ class PaymentLinkProxyRouteTest extends TestCase
         $this->assertNotNull(data_get($payment->payment_data, 'link_proxy.opened_at'));
         $this->assertSame(1, (int) data_get($payment->payment_data, 'link_proxy.open_count'));
         $this->assertSame('https://checkout.paystack.test/redirect', data_get($payment->payment_data, 'link_proxy.redirect_url'));
+        $this->assertNotNull($session);
+        $this->assertSame('checkout_initialized', $session->state);
+        $this->assertSame('https://checkout.paystack.test/redirect', $session->redirect_url);
+        $this->assertSame(1, (int) $session->open_count);
 
         $second = $this->get('/api/payments/link/' . $token);
         $second->assertRedirect('https://checkout.paystack.test/redirect');
 
         $payment->refresh();
+        $session->refresh();
         $this->assertSame(2, (int) data_get($payment->payment_data, 'link_proxy.open_count'));
+        $this->assertSame(2, (int) $session->open_count);
         Http::assertSentCount(1);
     }
 
@@ -102,13 +110,18 @@ class PaymentLinkProxyRouteTest extends TestCase
         $firstUrl = $this->sendProxyLink($payment);
         $firstToken = $this->extractToken($firstUrl);
         $firstHash = data_get($payment->fresh()->payment_data, 'link_proxy.token_hash');
+        $firstSessionHash = BillingProxySession::query()->where('payment_id', $payment->id)->value('token_hash');
 
         $secondUrl = $this->sendProxyLink($payment->fresh());
         $secondToken = $this->extractToken($secondUrl);
         $secondHash = data_get($payment->fresh()->payment_data, 'link_proxy.token_hash');
+        $secondSession = BillingProxySession::query()->where('payment_id', $payment->id)->first();
 
         $this->assertNotSame($firstToken, $secondToken);
         $this->assertNotSame($firstHash, $secondHash);
+        $this->assertSame($firstHash, $firstSessionHash);
+        $this->assertSame($secondHash, $secondSession?->token_hash);
+        $this->assertSame(1, (int) ($secondSession?->rotation_count ?? 0));
 
         $this->get('/api/payments/link/not-a-real-token')->assertNotFound();
         $this->get('/api/payments/link/' . $firstToken)->assertNotFound();
