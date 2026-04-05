@@ -122,15 +122,17 @@ export default function BillingWorkspace() {
                 </div>
             </header>
             {headerChips.length > 0 ? (
-                <div className="flex flex-wrap gap-2 border-b border-slate-100 px-5 py-4">
+                <div className="border-b border-slate-100 bg-slate-50/40 px-5 py-4">
+                    <div className="flex flex-wrap gap-2">
                     {headerChips.map((chip) => (
                         <span
                             key={chip}
-                            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600"
+                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 shadow-sm shadow-slate-950/[0.03]"
                         >
                             {chip}
                         </span>
                     ))}
+                    </div>
                 </div>
             ) : null}
 

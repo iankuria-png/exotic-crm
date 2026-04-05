@@ -24,6 +24,7 @@ use App\Models\BillingRoutingRule;
 use App\Models\BillingWalletRule;
 use App\Models\BillingSubscriptionRule;
 use App\Models\BillingProviderProfile;
+use App\Models\BillingMarketProviderBinding;
 use App\Services\AuditService;
 use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
@@ -712,49 +713,209 @@ class SettingsController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
+        $market = Platform::query()->select(['id', 'name', 'country'])->findOrFail($marketId);
+        $profiles = BillingProviderProfile::query()
+            ->where(function ($query) use ($marketId) {
+                $query->where('market_id', $marketId)
+                    ->orWhereNull('market_id');
+            })
+            ->orderByDesc('market_id')
+            ->orderBy('provider_type_key')
+            ->orderBy('profile_name')
+            ->get()
+            ->map(fn (BillingProviderProfile $profile) => $this->providerProfileManager->maskedProfile($profile))
+            ->values();
+
+        $bindings = BillingMarketProviderBinding::query()
+            ->with(['providerProfile'])
+            ->where('market_id', $marketId)
+            ->orderBy('billing_surface')
+            ->orderBy('priority')
+            ->get()
+            ->map(fn (BillingMarketProviderBinding $binding) => $this->serializeRoutingBinding($binding))
+            ->values();
+
         $rules = BillingRoutingRule::query()
             ->with(["primaryBinding.providerProfile", "market:id,name,country"])
             ->where("market_id", $marketId)
             ->orderBy("billing_surface")
             ->get()
-            ->map(function (BillingRoutingRule $rule) {
-                return [
-                    "id" => $rule->id,
-                    "market_id" => $rule->market_id,
-                    "billing_surface" => $rule->billing_surface,
-                    "active" => $rule->active,
-                    "fallback_strategy_json" => $rule->fallback_strategy_json,
-                    "risk_policy_json" => $rule->risk_policy_json,
-                    "primary_binding" => $rule->primaryBinding ? [
-                        "id" => $rule->primaryBinding->id,
-                        "billing_surface" => $rule->primaryBinding->billing_surface,
-                        "priority" => $rule->primaryBinding->priority,
-                        "provider_profile" => $rule->primaryBinding->providerProfile ? [
-                            "id" => $rule->primaryBinding->providerProfile->id,
-                            "provider_type_key" => $rule->primaryBinding->providerProfile->provider_type_key,
-                            "profile_name" => $rule->primaryBinding->providerProfile->profile_name,
-                            "country_code" => $rule->primaryBinding->providerProfile->country_code,
-                            "market_id" => $rule->primaryBinding->providerProfile->market_id,
-                            "environment" => $rule->primaryBinding->providerProfile->environment,
-                            "active" => $rule->primaryBinding->providerProfile->active,
-                        ] : null,
-                    ] : null,
-                ];
-            });
+            ->map(fn (BillingRoutingRule $rule) => $this->serializeRoutingRule($rule))
+            ->values();
 
         return response()->json([
+            "market" => $market,
             "routing_rules" => $rules,
+            "bindings" => $bindings,
+            "profiles" => $profiles,
+            "surfaces" => array_map(
+                static fn (BillingSurface $surface) => [
+                    'key' => $surface->value,
+                    'label' => Str::headline(str_replace('_', ' ', $surface->value)),
+                ],
+                BillingSurface::cases()
+            ),
+            "editable" => BillingPermissions::canEditBillingConfig(auth()->user()),
             "count" => count($rules),
         ]);
     }
 
+    public function storeBillingRoutingRules(Request $request, int $marketId)
+    {
+        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $market = Platform::query()->findOrFail($marketId);
+        $surfaceValues = array_map(static fn (BillingSurface $surface) => $surface->value, BillingSurface::cases());
+
+        $validated = $request->validate([
+            'rules' => ['required', 'array', 'min:1'],
+            'rules.*.billing_surface' => ['required', 'string', Rule::in($surfaceValues)],
+            'rules.*.active' => ['required', 'boolean'],
+            'rules.*.primary_profile_id' => ['nullable', 'integer', 'exists:billing_provider_profiles,id'],
+            'rules.*.fallback_profile_ids' => ['nullable', 'array'],
+            'rules.*.fallback_profile_ids.*' => ['integer', 'exists:billing_provider_profiles,id'],
+            'rules.*.execution_mode' => ['nullable', 'string', Rule::in(['direct', 'proxy'])],
+            'rules.*.operator_enabled' => ['nullable', 'boolean'],
+            'rules.*.self_service_enabled' => ['nullable', 'boolean'],
+            'rules.*.notes' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $rules = collect($validated['rules'])->keyBy('billing_surface');
+        $referencedProfileIds = $rules
+            ->flatMap(function (array $rule) {
+                return array_filter(array_merge(
+                    [$rule['primary_profile_id'] ?? null],
+                    $rule['fallback_profile_ids'] ?? []
+                ));
+            })
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $profilesById = BillingProviderProfile::query()
+            ->whereIn('id', $referencedProfileIds)
+            ->get()
+            ->keyBy('id');
+
+        $profileScopeErrors = [];
+        foreach ($referencedProfileIds as $profileId) {
+            $profile = $profilesById->get($profileId);
+
+            if (!$profile) {
+                continue;
+            }
+
+            if ($profile->market_id !== null && (int) $profile->market_id !== (int) $market->id) {
+                $profileScopeErrors["rules.profile_{$profileId}"] = 'Selected provider profile does not belong to this market.';
+            }
+        }
+
+        if ($profileScopeErrors !== []) {
+            throw ValidationException::withMessages($profileScopeErrors);
+        }
+
+        DB::transaction(function () use ($rules, $market) {
+            foreach ($rules as $surface => $rule) {
+                $active = (bool) ($rule['active'] ?? false);
+                $executionMode = strtolower(trim((string) ($rule['execution_mode'] ?? 'direct'))) ?: 'direct';
+                $operatorEnabled = array_key_exists('operator_enabled', $rule) ? (bool) $rule['operator_enabled'] : true;
+                $selfServiceEnabled = array_key_exists('self_service_enabled', $rule) ? (bool) $rule['self_service_enabled'] : false;
+                $notes = trim((string) ($rule['notes'] ?? ''));
+                $primaryProfileId = isset($rule['primary_profile_id']) ? (int) $rule['primary_profile_id'] : null;
+                $fallbackProfileIds = collect($rule['fallback_profile_ids'] ?? [])
+                    ->map(fn ($id) => (int) $id)
+                    ->reject(fn ($id) => $id === $primaryProfileId)
+                    ->unique()
+                    ->values();
+
+                $selectedProfileIds = collect([$primaryProfileId])
+                    ->filter()
+                    ->merge($fallbackProfileIds)
+                    ->values();
+
+                $bindingsByProfile = BillingMarketProviderBinding::query()
+                    ->where('market_id', $market->id)
+                    ->where('billing_surface', $surface)
+                    ->get()
+                    ->keyBy('provider_profile_id');
+
+                $orderedBindings = collect();
+
+                foreach ($selectedProfileIds as $index => $profileId) {
+                    $binding = BillingMarketProviderBinding::query()->updateOrCreate(
+                        [
+                            'market_id' => $market->id,
+                            'provider_profile_id' => $profileId,
+                            'billing_surface' => $surface,
+                        ],
+                        [
+                            'enabled' => $active,
+                            'operator_enabled' => $operatorEnabled,
+                            'self_service_enabled' => $selfServiceEnabled,
+                            'execution_mode' => $executionMode,
+                            'priority' => 100 + ($index * 100),
+                            'fallback_group' => $fallbackProfileIds->isNotEmpty() ? "{$surface}-ordered" : null,
+                            'restriction_json' => [
+                                'managed_in_billing_workspace' => true,
+                            ],
+                            'notes' => $notes !== '' ? $notes : null,
+                        ]
+                    );
+
+                    $orderedBindings->push($binding);
+                }
+
+                $bindingsByProfile
+                    ->reject(fn (BillingMarketProviderBinding $binding) => $selectedProfileIds->contains((int) $binding->provider_profile_id))
+                    ->each(function (BillingMarketProviderBinding $binding) use ($notes) {
+                        $binding->update([
+                            'enabled' => false,
+                            'priority' => 999,
+                            'fallback_group' => null,
+                            'notes' => $notes !== '' ? $notes : $binding->notes,
+                        ]);
+                    });
+
+                $primaryBinding = $orderedBindings->first();
+                $fallbackBindings = $orderedBindings->slice(1)->values();
+
+                BillingRoutingRule::query()->updateOrCreate(
+                    [
+                        'market_id' => $market->id,
+                        'billing_surface' => $surface,
+                    ],
+                    [
+                        'primary_binding_id' => $primaryBinding?->id,
+                        'fallback_strategy_json' => $fallbackBindings->isNotEmpty()
+                            ? [
+                                'type' => 'ordered_bindings',
+                                'binding_ids' => $fallbackBindings->pluck('id')->values()->all(),
+                                'provider_profile_ids' => $fallbackBindings->pluck('provider_profile_id')->values()->all(),
+                            ]
+                            : ['type' => 'none', 'binding_ids' => [], 'provider_profile_ids' => []],
+                        'risk_policy_json' => [
+                            'execution_mode' => $executionMode,
+                            'operator_enabled' => $operatorEnabled,
+                            'self_service_enabled' => $selfServiceEnabled,
+                        ],
+                        'active' => $active && $primaryBinding !== null,
+                    ]
+                );
+            }
+        });
+
+        return $this->billingRoutingRules($marketId);
+    }
+
     public function billingWalletRules(int $marketId)
     {
-        // BILL-307: Authorization check - Billing workspace restricted to admin/sub_admin
         if (!BillingPermissions::canViewWalletRules(auth()->user())) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
+        $market = Platform::query()->select(['id', 'name', 'country', 'currency_code'])->findOrFail($marketId);
         $rule = BillingWalletRule::query()
             ->with(["market:id,name,country"])
             ->where("market_id", $marketId)
@@ -778,8 +939,84 @@ class SettingsController extends Controller
         }
 
         return response()->json([
+            'market' => $market,
             "wallet_rule" => $rule,
+            'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
         ]);
+    }
+
+    public function storeBillingWalletRules(Request $request, int $marketId)
+    {
+        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $market = Platform::query()->findOrFail($marketId);
+
+        $validated = $request->validate([
+            'enabled' => ['required', 'boolean'],
+            'currency_code' => ['nullable', 'string', 'max:8'],
+            'topup_preset_json' => ['nullable', 'array'],
+            'topup_preset_json.*' => ['nullable'],
+            'limit_json' => ['nullable', 'array'],
+            'limit_json.max_single_topup' => ['nullable'],
+            'limit_json.max_wallet_balance' => ['nullable'],
+            'auto_renew_json' => ['nullable', 'array'],
+            'auto_renew_json.enabled' => ['nullable', 'boolean'],
+            'ui_json' => ['nullable', 'array'],
+            'ui_json.allow_combined_topup_subscribe' => ['nullable', 'boolean'],
+            'ui_json.show_refresh_button' => ['nullable', 'boolean'],
+            'ui_json.recent_transactions_limit' => ['nullable', 'integer', 'min:1', 'max:50'],
+            'ui_json.wallet_funding_label' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $presets = collect($validated['topup_preset_json'] ?? [])
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->values()
+            ->all();
+
+        $limitJson = collect($validated['limit_json'] ?? [])
+            ->mapWithKeys(function ($value, $key) {
+                $normalized = trim((string) $value);
+
+                return $normalized === '' ? [] : [$key => $normalized];
+            })
+            ->all();
+
+        $uiJson = collect($validated['ui_json'] ?? [])
+            ->mapWithKeys(function ($value, $key) {
+                if (is_bool($value)) {
+                    return [$key => $value];
+                }
+
+                if ($value === null) {
+                    return [];
+                }
+
+                $normalized = trim((string) $value);
+
+                return $normalized === '' ? [] : [$key => $normalized];
+            })
+            ->all();
+
+        $autoRenewJson = [
+            'enabled' => (bool) data_get($validated, 'auto_renew_json.enabled', false),
+        ];
+
+        BillingWalletRule::query()->updateOrCreate(
+            ['market_id' => $market->id],
+            [
+                'enabled' => (bool) $validated['enabled'],
+                'currency_code' => strtoupper(trim((string) ($validated['currency_code'] ?? $market->currency_code ?? ''))),
+                'topup_preset_json' => $presets,
+                'limit_json' => $limitJson,
+                'auto_renew_json' => $autoRenewJson,
+                'ui_json' => $uiJson,
+            ]
+        );
+
+        return $this->billingWalletRules($marketId);
     }
 
     public function billingSubscriptionRules(int $marketId)
@@ -813,6 +1050,38 @@ class SettingsController extends Controller
         return response()->json([
             "subscription_rule" => $rule,
         ]);
+    }
+
+    private function serializeRoutingRule(BillingRoutingRule $rule): array
+    {
+        return [
+            "id" => $rule->id,
+            "market_id" => $rule->market_id,
+            "billing_surface" => $rule->billing_surface,
+            "active" => $rule->active,
+            "fallback_strategy_json" => $rule->fallback_strategy_json,
+            "risk_policy_json" => $rule->risk_policy_json,
+            "primary_binding" => $rule->primaryBinding ? $this->serializeRoutingBinding($rule->primaryBinding) : null,
+        ];
+    }
+
+    private function serializeRoutingBinding(BillingMarketProviderBinding $binding): array
+    {
+        $binding->loadMissing('providerProfile');
+
+        return [
+            'id' => $binding->id,
+            'billing_surface' => $binding->billing_surface,
+            'priority' => $binding->priority,
+            'enabled' => (bool) $binding->enabled,
+            'operator_enabled' => (bool) $binding->operator_enabled,
+            'self_service_enabled' => (bool) $binding->self_service_enabled,
+            'execution_mode' => $binding->execution_mode,
+            'fallback_group' => $binding->fallback_group,
+            'notes' => $binding->notes,
+            'provider_profile_id' => $binding->provider_profile_id,
+            'provider_profile' => $binding->providerProfile ? $this->providerProfileManager->maskedProfile($binding->providerProfile) : null,
+        ];
     }
 
     public function wallet(Request $request)

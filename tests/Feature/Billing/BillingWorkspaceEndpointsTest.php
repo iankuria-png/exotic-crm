@@ -3,6 +3,7 @@
 namespace Tests\Feature\Billing;
 
 use App\Models\BillingProviderProfile;
+use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingRoutingRule;
 use App\Models\BillingSubscriptionRule;
 use App\Models\BillingSystemSetting;
@@ -297,6 +298,175 @@ class BillingWorkspaceEndpointsTest extends TestCase
                 'api_key' => '',
                 'till_number' => '123456',
             ],
+        ])->assertForbidden();
+    }
+
+    public function test_admin_can_store_market_routing_rules_with_primary_and_fallback_profiles(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin');
+
+        $primaryProfile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'daraja',
+            'profile_name' => 'Kenya Daraja Primary',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => ['callback_base_url' => 'https://billing.example.test'],
+            'secrets_json' => ['consumer_secret' => 'secret'],
+            'active' => true,
+        ]);
+
+        $fallbackProfile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'Kenya pawaPay Fallback',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => ['base_url' => 'https://api.pawapay.io'],
+            'secrets_json' => ['api_key' => 'secret'],
+            'active' => true,
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->putJson("/api/crm/settings/billing/routing-rules/{$platform->id}", [
+            'rules' => [
+                [
+                    'billing_surface' => 'wallet_funding',
+                    'active' => true,
+                    'primary_profile_id' => $primaryProfile->id,
+                    'fallback_profile_ids' => [$fallbackProfile->id],
+                    'execution_mode' => 'proxy',
+                    'operator_enabled' => true,
+                    'self_service_enabled' => false,
+                    'notes' => 'High-risk flows should pin the CRM proxy.',
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('editable', true)
+            ->assertJsonPath('count', 1)
+            ->assertJsonPath('routing_rules.0.billing_surface', 'wallet_funding')
+            ->assertJsonPath('routing_rules.0.active', true)
+            ->assertJsonPath('routing_rules.0.primary_binding.provider_profile.id', $primaryProfile->id)
+            ->assertJsonPath('routing_rules.0.risk_policy_json.execution_mode', 'proxy')
+            ->assertJsonPath('routing_rules.0.fallback_strategy_json.type', 'ordered_bindings')
+            ->assertJsonPath('routing_rules.0.fallback_strategy_json.provider_profile_ids.0', $fallbackProfile->id);
+
+        $this->assertDatabaseHas('billing_routing_rules', [
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_funding',
+            'active' => true,
+        ]);
+
+        $primaryBinding = BillingMarketProviderBinding::query()
+            ->where('market_id', $platform->id)
+            ->where('billing_surface', 'wallet_funding')
+            ->where('provider_profile_id', $primaryProfile->id)
+            ->first();
+
+        $fallbackBinding = BillingMarketProviderBinding::query()
+            ->where('market_id', $platform->id)
+            ->where('billing_surface', 'wallet_funding')
+            ->where('provider_profile_id', $fallbackProfile->id)
+            ->first();
+
+        $this->assertNotNull($primaryBinding);
+        $this->assertNotNull($fallbackBinding);
+        $this->assertSame('proxy', $primaryBinding->execution_mode);
+        $this->assertSame(100, $primaryBinding->priority);
+        $this->assertSame(200, $fallbackBinding->priority);
+        $this->assertTrue((bool) $primaryBinding->enabled);
+        $this->assertTrue((bool) $fallbackBinding->enabled);
+    }
+
+    public function test_sub_admin_cannot_store_market_routing_rules(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $subAdmin = $this->createUser('sub_admin', [$platform->id]);
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'daraja',
+            'profile_name' => 'Blocked route',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => ['callback_base_url' => 'https://billing.example.test'],
+            'secrets_json' => ['consumer_secret' => 'secret'],
+            'active' => true,
+        ]);
+
+        Sanctum::actingAs($subAdmin);
+
+        $this->putJson("/api/crm/settings/billing/routing-rules/{$platform->id}", [
+            'rules' => [
+                [
+                    'billing_surface' => 'wallet_funding',
+                    'active' => true,
+                    'primary_profile_id' => $profile->id,
+                    'fallback_profile_ids' => [],
+                    'execution_mode' => 'direct',
+                    'operator_enabled' => true,
+                    'self_service_enabled' => true,
+                ],
+            ],
+        ])->assertForbidden();
+    }
+
+    public function test_admin_can_store_wallet_rules_for_a_market(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin');
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->putJson("/api/crm/settings/billing/wallet-rules/{$platform->id}", [
+            'enabled' => true,
+            'currency_code' => 'KES',
+            'topup_preset_json' => ['500.00', '1000.00', '2500.00'],
+            'limit_json' => [
+                'max_single_topup' => '50000.00',
+                'max_wallet_balance' => '200000.00',
+            ],
+            'auto_renew_json' => [
+                'enabled' => true,
+            ],
+            'ui_json' => [
+                'allow_combined_topup_subscribe' => true,
+                'show_refresh_button' => true,
+                'recent_transactions_limit' => 6,
+                'wallet_funding_label' => 'Wallet funding',
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('editable', true)
+            ->assertJsonPath('wallet_rule.enabled', true)
+            ->assertJsonPath('wallet_rule.currency_code', 'KES')
+            ->assertJsonPath('wallet_rule.topup_preset_json.0', '500.00')
+            ->assertJsonPath('wallet_rule.limit_json.max_single_topup', '50000.00')
+            ->assertJsonPath('wallet_rule.auto_renew_json.enabled', true)
+            ->assertJsonPath('wallet_rule.ui_json.recent_transactions_limit', '6');
+
+        $this->assertDatabaseHas('billing_wallet_rules', [
+            'market_id' => $platform->id,
+            'enabled' => true,
+            'currency_code' => 'KES',
+        ]);
+    }
+
+    public function test_sub_admin_cannot_store_wallet_rules(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $subAdmin = $this->createUser('sub_admin', [$platform->id]);
+
+        Sanctum::actingAs($subAdmin);
+
+        $this->putJson("/api/crm/settings/billing/wallet-rules/{$platform->id}", [
+            'enabled' => true,
+            'currency_code' => 'KES',
+            'topup_preset_json' => ['500.00'],
         ])->assertForbidden();
     }
 

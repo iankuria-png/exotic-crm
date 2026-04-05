@@ -4,27 +4,17 @@ import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
 import { isForbiddenQueryError } from './queryState';
 
-/**
- * SubscriptionRulesTab component displays and manages market-level subscription rules.
- * Per-market subscription rules determine activation methods, renewal policies, and free trial settings.
- * Phase 3 is read-only; write operations deferred to Phase 4.
- */
 export default function SubscriptionRulesTab({ platforms = [] }) {
     const [selectedMarket, setSelectedMarket] = useState(null);
 
     const marketId = selectedMarket?.id;
 
-    /**
-     * Fetch subscription rules for the selected market.
-     * Query key includes marketId to refetch when market changes.
-     * staleTime: 10 minutes - subscription rules change less frequently
-     */
     const subscriptionRulesQuery = useQuery({
         queryKey: ['billing-subscription-rules', marketId],
         queryFn: () =>
             api.get(`/crm/settings/billing/subscription-rules/${marketId}`).then((response) => response.data),
         enabled: Boolean(marketId),
-        staleTime: 10 * 60 * 1000, // 10 minutes
+        staleTime: 10 * 60 * 1000,
     });
 
     const { data = {} } = subscriptionRulesQuery;
@@ -48,16 +38,20 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
     if (!selectedMarket) {
         return (
             <div className="space-y-4 p-5">
-                {/* Introduction section */}
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
-                    <h4 className="text-sm font-semibold text-slate-900">Subscription Rules Configuration</h4>
-                    <p className="mt-2 text-sm text-slate-600">
-                        Select a market below to view and configure subscription activation methods, renewal
-                        policies, and free trial settings.
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                        Subscription Rules
+                    </p>
+                    <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                        Choose a market to review subscription policy
+                    </h4>
+                    <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+                        Review activation methods, renewal posture, free trials, and discount policy by
+                        market. This gives operators a reliable policy view while registry-backed editing
+                        is being wired into the same workspace.
                     </p>
                 </section>
 
-                {/* Markets grid */}
                 <div className="grid gap-4 xl:grid-cols-3">
                     {platforms.map((platform) => (
                         <MarketCard
@@ -71,7 +65,6 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
         );
     }
 
-    // Loading state
     if (subscriptionRulesQuery.isLoading) {
         return (
             <div className="space-y-4 p-5 animate-pulse">
@@ -84,7 +77,6 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
         );
     }
 
-    // Error state
     if (subscriptionRulesQuery.isError) {
         if (isForbiddenQueryError(subscriptionRulesQuery.error)) {
             return (
@@ -125,7 +117,6 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
         );
     }
 
-    // Empty subscription rules state
     if (!subscriptionRules) {
         return (
             <div className="space-y-4 p-5">
@@ -133,7 +124,7 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                     state="empty"
                     eyebrow={`Subscription Rules - ${selectedMarket?.name}`}
                     title="No subscription rules configured"
-                    message="Create subscription rules in Phase 4 to define activation methods and renewal policies for this market."
+                    message="This market does not yet have a registry-backed subscription policy. Once authoring is enabled here, this panel will hold the live activation and renewal rule set."
                 />
                 <button
                     type="button"
@@ -148,11 +139,13 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
 
     return (
         <div className="space-y-4 p-5">
-            {/* Header with back button */}
-            <section className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4">
+            <section className="flex items-center justify-between rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
                 <div className="flex-1">
-                    <h4 className="text-sm font-semibold text-slate-900">{selectedMarket?.name} Subscription Rules</h4>
-                    <p className="mt-2 text-sm text-slate-600">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                        Subscription Policy
+                    </p>
+                    <h4 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{selectedMarket?.name} Subscription Rules</h4>
+                    <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
                         Subscription configuration rules for this market including activation methods, renewal
                         policies, and free trial settings.
                     </p>
@@ -166,9 +159,8 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                 </button>
             </section>
 
-            {/* Activation Methods */}
             {subscriptionRules.activation_method_json && Object.keys(subscriptionRules.activation_method_json).length > 0 && (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
                     <h5 className="text-sm font-semibold text-slate-900">Activation Methods</h5>
                     <p className="mt-1 text-xs text-slate-600">Subscription types enabled for this market</p>
                     <dl className="mt-3 space-y-2">
@@ -195,9 +187,8 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                 </section>
             )}
 
-            {/* Renewal Methods */}
             {subscriptionRules.renewal_method_json && Object.keys(subscriptionRules.renewal_method_json).length > 0 && (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
                     <h5 className="text-sm font-semibold text-slate-900">Renewal Methods</h5>
                     <p className="mt-1 text-xs text-slate-600">Subscription renewal and wallet-paid renewal policies</p>
                     <dl className="mt-3 space-y-2">
@@ -225,9 +216,8 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                 </section>
             )}
 
-            {/* Free Trial Settings */}
             {subscriptionRules.free_trial_json && Object.keys(subscriptionRules.free_trial_json).length > 0 && (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
                     <h5 className="text-sm font-semibold text-slate-900">Free Trial Settings</h5>
                     <p className="mt-1 text-xs text-slate-600">Free trial policies and duration</p>
                     <dl className="mt-3 space-y-2">
@@ -244,9 +234,8 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                 </section>
             )}
 
-            {/* Discount Policies */}
             {subscriptionRules.discount_json && Object.keys(subscriptionRules.discount_json).length > 0 && (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
                     <h5 className="text-sm font-semibold text-slate-900">Discount Policies</h5>
                     <p className="mt-1 text-xs text-slate-600">Subscription discount rules</p>
                     <dl className="mt-3 space-y-2">
@@ -265,7 +254,7 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
 
             {/* Expiry Policies */}
             {subscriptionRules.expiry_policy_json && Object.keys(subscriptionRules.expiry_policy_json).length > 0 && (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
                     <h5 className="text-sm font-semibold text-slate-900">Expiry Policies</h5>
                     <p className="mt-1 text-xs text-slate-600">Subscription expiry and cleanup policies</p>
                     <dl className="mt-3 space-y-2">
@@ -282,12 +271,12 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                 </section>
             )}
 
-            {/* Phase 3 Notice */}
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h4 className="text-sm font-semibold text-slate-900">Phase 3 Read-Only Mode</h4>
-                <p className="mt-2 text-sm text-slate-600">
-                    Subscription rule configuration (create, edit, delete) is available in Phase 4. This view
-                    displays existing subscription rules and their status.
+            <section className="rounded-3xl border border-slate-200 bg-slate-50/80 p-5">
+                <h4 className="text-sm font-semibold text-slate-900">Editing posture</h4>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                    Subscription rule authoring is being connected to the registry-backed billing model.
+                    Use this panel to confirm activation, renewal, and expiry posture before enabling
+                    direct edits for operators.
                 </p>
             </section>
         </div>

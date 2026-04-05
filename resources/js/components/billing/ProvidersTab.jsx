@@ -88,13 +88,13 @@ export default function ProvidersTab({ registryEnabled = true }) {
 
     return (
         <div className="space-y-4 p-5">
-            <section className="rounded-2xl border border-slate-200 bg-white p-5">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
+                <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                             Provider Catalog
                         </p>
-                        <h4 className="mt-2 text-xl font-semibold text-slate-950">
+                        <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
                             Billing providers available to the CRM registry
                         </h4>
                         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
@@ -103,7 +103,7 @@ export default function ProvidersTab({ registryEnabled = true }) {
                         </p>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3 xl:min-w-[320px]">
+                    <div className="grid grid-cols-3 gap-3 xl:min-w-[380px]">
                         <MetricCard label="Total" value={providers.length} tone="slate" />
                         <MetricCard label="Active" value={statusCounts.active || 0} tone="emerald" />
                         <MetricCard label="Compatibility" value={statusCounts.compatibility || 0} tone="amber" />
@@ -142,7 +142,7 @@ function ProviderCard({ provider }) {
     const status = meta.status || 'active';
 
     return (
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02] transition hover:border-slate-300">
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md hover:shadow-slate-950/[0.05]">
             <div className="flex items-start justify-between gap-3">
                 <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
@@ -157,7 +157,7 @@ function ProviderCard({ provider }) {
                 </span>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
                 <SummaryCell
                     label="Coverage"
                     value={countryCodes.length > 0 ? `${countryCodes.length} market(s)` : 'All configured markets'}
@@ -229,15 +229,18 @@ function CapabilityRow({ label, values }) {
 
 function MetricCard({ label, value, tone = 'slate' }) {
     const tones = {
-        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-        amber: 'border-amber-200 bg-amber-50 text-amber-900',
-        slate: 'border-slate-200 bg-slate-50 text-slate-900',
+        emerald: 'border-emerald-200 bg-[linear-gradient(180deg,rgba(236,253,245,0.95)_0%,rgba(255,255,255,1)_100%)] text-emerald-950',
+        amber: 'border-amber-200 bg-[linear-gradient(180deg,rgba(255,251,235,0.95)_0%,rgba(255,255,255,1)_100%)] text-amber-950',
+        slate: 'border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.95)_0%,rgba(255,255,255,1)_100%)] text-slate-950',
     };
 
     return (
-        <div className={`rounded-2xl border px-4 py-3 ${tones[tone] || tones.slate}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] opacity-70">{label}</p>
-            <p className="mt-2 text-2xl font-semibold">{value}</p>
+        <div className={`rounded-2xl border px-4 py-4 shadow-sm shadow-slate-950/[0.03] ${tones[tone] || tones.slate}`}>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] opacity-65">{label}</p>
+            <div className="mt-3 flex items-end justify-between">
+                <p className="text-4xl font-semibold tracking-tight">{value}</p>
+                <span className="text-[11px] font-medium uppercase tracking-[0.08em] opacity-60">Providers</span>
+            </div>
         </div>
     );
 }

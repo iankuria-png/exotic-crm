@@ -253,7 +253,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/settings/billing/provider-profiles', [SettingsController::class, 'storeProviderProfile']);
     Route::put('/settings/billing/provider-profiles/{profile}', [SettingsController::class, 'updateProviderProfile']);
     Route::get('/settings/billing/routing-rules/{market}', [SettingsController::class, 'billingRoutingRules']);
+    Route::put('/settings/billing/routing-rules/{market}', [SettingsController::class, 'storeBillingRoutingRules']);
     Route::get('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'billingWalletRules']);
+    Route::put('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'storeBillingWalletRules']);
     Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
     Route::get('/settings/system-health/updates', [SystemHealthUpdateController::class, 'show'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/log', [SystemHealthUpdateController::class, 'log'])->middleware('role:admin,sub_admin');
