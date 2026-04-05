@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Billing\Support\LegacyBillingOperationsCatalog;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Deal;
@@ -48,6 +49,7 @@ class PaymentQueueController extends Controller
         private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator,
         private readonly LegacyStkService $legacyStkService,
         private readonly PaymentCompletionService $paymentCompletionService,
+        private readonly LegacyBillingOperationsCatalog $legacyBillingOperationsCatalog,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
@@ -195,6 +197,8 @@ class PaymentQueueController extends Controller
         $payload['environment_filter'] = $environmentFilter !== '' ? $environmentFilter : null;
         $payload['stats_scope'] = $environmentFilter === 'sandbox' ? 'sandbox' : 'live';
         $payload['baseline_cutoff'] = $baselineCutoff?->toDateString();
+        $payload['legacy_operations'] = $this->legacyBillingOperationsCatalog->paymentsWorkspaceCatalog();
+        $payload['legacy_operations_summary'] = $this->legacyBillingOperationsCatalog->workspaceSummary();
 
         return response()->json($payload);
     }
@@ -940,6 +944,8 @@ class PaymentQueueController extends Controller
                     ],
                 ];
             })->values(),
+            'legacy_operations' => $this->legacyBillingOperationsCatalog->paymentsWorkspaceCatalog(),
+            'legacy_operations_summary' => $this->legacyBillingOperationsCatalog->workspaceSummary(),
         ]);
     }
 

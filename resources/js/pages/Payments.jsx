@@ -797,6 +797,8 @@ export default function Payments() {
     };
 
     const rows = data?.data || [];
+    const legacyOperations = data?.legacy_operations || [];
+    const legacyOperationsSummary = data?.legacy_operations_summary || { preserved: 0, migrated: 0, retired: 0 };
 
     const summary = useMemo(() => {
         if (data?.stats) {
@@ -1453,6 +1455,54 @@ export default function Payments() {
                         Triage: link within 1h, retry STK within 24h, escalate after 72h
                     </p>
                 </div>
+
+                {legacyOperations.length ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Operational billing compatibility</p>
+                                <p className="mt-1 text-sm text-slate-600">
+                                    Preserved manual actions stay available while the new billing runtime takes over execution.
+                                </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.08em]">
+                                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700">
+                                    Preserved {legacyOperationsSummary.preserved || 0}
+                                </span>
+                                <span className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-sky-700">
+                                    Migrated {legacyOperationsSummary.migrated || 0}
+                                </span>
+                                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">
+                                    Retired {legacyOperationsSummary.retired || 0}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                            {legacyOperations.map((operation) => (
+                                <div key={operation.key} className="rounded-md border border-white/80 bg-white/90 px-3 py-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-semibold text-slate-900">{operation.label}</p>
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                                            operation.disposition === 'preserved'
+                                                ? 'bg-emerald-50 text-emerald-700'
+                                                : operation.disposition === 'migrated'
+                                                    ? 'bg-sky-50 text-sky-700'
+                                                    : 'bg-slate-100 text-slate-600'
+                                        }`}>
+                                            {operation.disposition}
+                                        </span>
+                                    </div>
+                                    <p className="mt-1 text-xs text-slate-600">{operation.summary}</p>
+                                    {operation.replacement ? (
+                                        <p className="mt-1 text-[11px] text-slate-500">
+                                            Replacement: <span className="font-medium text-slate-700">{operation.replacement}</span>
+                                        </p>
+                                    ) : null}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ) : null}
             </section>
 
             <DataTable
