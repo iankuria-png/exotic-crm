@@ -12,6 +12,8 @@ use Throwable;
 
 class SupportBoardLinkSyncService
 {
+    public const BULK_SYNC_CHUNK_SIZE = 100;
+
     public function configuredPlatforms(?int $platformId = null): Collection
     {
         return Platform::query()
@@ -71,6 +73,21 @@ class SupportBoardLinkSyncService
             ->first();
     }
 
+    /**
+     * @return \Illuminate\Support\Collection<int, Client>
+     */
+    public function nextClientChunkForPlatform(
+        Platform $platform,
+        bool $refresh = false,
+        int $afterId = 0,
+        int $limit = self::BULK_SYNC_CHUNK_SIZE
+    ): Collection {
+        return $this->platformClientQuery($platform, $refresh, $afterId)
+            ->orderBy('id')
+            ->limit(max(1, $limit))
+            ->get();
+    }
+
     public function syncClient(Client $client, ?SupportBoardService $supportBoard = null): array
     {
         $supportBoard = $supportBoard ?: new SupportBoardService($client->platform);
@@ -121,12 +138,6 @@ class SupportBoardLinkSyncService
      */
     public function syncPlatformBulk(Platform $platform, bool $refresh = false, ?callable $onProcessed = null): array
     {
-        $supportBoard = new SupportBoardService($platform);
-
-        if (!$supportBoard->isConfigured()) {
-            throw new RuntimeException('Support Board is not configured for this market.');
-        }
-
         $result = [
             'platform_id' => (int) $platform->id,
             'platform_name' => $platform->name ?: $platform->domain ?: "Platform {$platform->id}",
@@ -142,41 +153,105 @@ class SupportBoardLinkSyncService
             'errors_detail' => [],
         ];
 
-        $clients = $this->platformClientQuery($platform, $refresh)->get();
-        $result['candidates'] = $clients->count();
+        $result['candidates'] = $this->countClientsForPlatform($platform, $refresh);
+        $cursor = 0;
+
+        do {
+            $chunk = $this->syncPlatformBulkChunk(
+                $platform,
+                $refresh,
+                $cursor,
+                self::BULK_SYNC_CHUNK_SIZE
+            );
+
+            $result['processed'] += (int) ($chunk['processed'] ?? 0);
+            $result['matched'] += (int) ($chunk['matched'] ?? 0);
+            $result['updated'] += (int) ($chunk['updated'] ?? 0);
+            $result['cleared'] += (int) ($chunk['cleared'] ?? 0);
+            $result['unchanged'] += (int) ($chunk['unchanged'] ?? 0);
+            $result['errors'] += (int) ($chunk['errors'] ?? 0);
+
+            foreach (array_values(is_array($chunk['errors_detail'] ?? null) ? $chunk['errors_detail'] : []) as $errorDetail) {
+                if (is_array($errorDetail) && count($result['errors_detail']) < 25) {
+                    $result['errors_detail'][] = $errorDetail;
+                }
+            }
+
+            for ($processed = 0; $processed < (int) ($chunk['processed'] ?? 0); $processed++) {
+                if ($onProcessed) {
+                    $onProcessed();
+                }
+            }
+
+            $cursor = (int) ($chunk['last_processed_client_id'] ?? 0);
+            $hasMore = (bool) ($chunk['has_more'] ?? false);
+        } while ($hasMore && $cursor > 0);
+
+        return $result;
+    }
+
+    public function syncPlatformBulkChunk(
+        Platform $platform,
+        bool $refresh = false,
+        int $afterId = 0,
+        int $limit = self::BULK_SYNC_CHUNK_SIZE
+    ): array {
+        $supportBoard = new SupportBoardService($platform);
+
+        if (!$supportBoard->isConfigured()) {
+            throw new RuntimeException('Support Board is not configured for this market.');
+        }
+
+        $result = [
+            'platform_id' => (int) $platform->id,
+            'platform_name' => $platform->name ?: $platform->domain ?: "Platform {$platform->id}",
+            'refresh' => $refresh,
+            'ran_at' => now()->toDateTimeString(),
+            'processed' => 0,
+            'matched' => 0,
+            'updated' => 0,
+            'cleared' => 0,
+            'unchanged' => 0,
+            'errors' => 0,
+            'errors_detail' => [],
+            'last_processed_client_id' => null,
+            'last_processed_client_name' => null,
+            'has_more' => false,
+        ];
+
+        $clients = $this->nextClientChunkForPlatform($platform, $refresh, $afterId, $limit);
 
         if ($clients->isEmpty()) {
             return $result;
         }
 
-        try {
-            $bulkResults = $supportBoard->bulkResolveClients($clients);
-        } catch (Throwable $e) {
-            Log::warning('Bulk SB sync failed, falling back to per-client.', [
-                'platform_id' => $platform->id,
-                'error' => $e->getMessage(),
-            ]);
+        $bulkResults = $supportBoard->bulkResolveClients($clients);
 
-            return $this->syncPlatform($platform, $refresh, $onProcessed);
+        foreach ($clients as $client) {
+            $outcome = $bulkResults[(int) $client->id] ?? [
+                'client_id' => (int) $client->id,
+                'client_name' => $client->name,
+                'processed' => 1,
+                'matched' => 0,
+                'updated' => 0,
+                'cleared' => 0,
+                'unchanged' => 0,
+                'errors' => 1,
+                'error_detail' => [
+                    'client_id' => (int) $client->id,
+                    'message' => 'Support Board bulk resolver returned no outcome.',
+                ],
+            ];
+
+            $this->mergeClientOutcome($result, $outcome);
         }
 
-        foreach ($bulkResults as $clientId => $resolved) {
-            $result['processed']++;
-
-            if ($resolved['matched']) {
-                if ($resolved['changed']) {
-                    $result['matched']++;
-                } else {
-                    $result['unchanged']++;
-                }
-            } else {
-                $result['unchanged']++;
-            }
-
-            if ($onProcessed) {
-                $onProcessed();
-            }
-        }
+        $lastClient = $clients->last();
+        $result['last_processed_client_id'] = $lastClient ? (int) $lastClient->id : null;
+        $result['last_processed_client_name'] = $lastClient?->name;
+        $result['has_more'] = $lastClient
+            ? $this->nextClientForPlatform($platform, $refresh, (int) $lastClient->id) !== null
+            : false;
 
         return $result;
     }

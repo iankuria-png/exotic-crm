@@ -662,50 +662,63 @@ class SupportBoardService
 
         foreach ($clients as $client) {
             $clientId = (int) $client->id;
+            $beforeSbUserId = $client->sb_user_id ? (int) $client->sb_user_id : null;
+            $beforeMatchedBy = $client->sb_matched_by ?: null;
 
-            // Fast path: already linked
-            if ($client->sb_user_id) {
-                $results[$clientId] = [
-                    'matched' => true,
-                    'sb_user_id' => (int) $client->sb_user_id,
-                    'matched_by' => $client->sb_matched_by ?? 'phone',
-                    'changed' => false,
-                ];
-                continue;
-            }
-
-            // Try phone variants against the map
-            $phoneVariants = $this->phoneVariants((string) ($client->phone_normalized ?: ''));
-            $matchedUserId = null;
-            $matchedBy = null;
-
-            foreach ($phoneVariants as $variant) {
-                $digits = preg_replace('/\D+/', '', $variant);
-                if (isset($phoneMap[$digits])) {
-                    $matchedUserId = $phoneMap[$digits];
-                    $matchedBy = 'phone';
-                    break;
-                }
-            }
-
-            // Fallback: try email
-            if (!$matchedUserId) {
-                $email = strtolower(trim((string) ($client->email ?: '')));
-                if ($email !== '' && isset($emailMap[$email])) {
-                    $matchedUserId = $emailMap[$email];
-                    $matchedBy = 'email';
-                }
-            }
-
-            // Persist the link (same path as resolveClient)
-            $this->syncClientLink($client, $matchedUserId, $matchedBy);
-
-            $results[$clientId] = [
-                'matched' => $matchedUserId !== null,
-                'sb_user_id' => $matchedUserId,
-                'matched_by' => $matchedBy,
-                'changed' => true,
+            $result = [
+                'client_id' => $clientId,
+                'client_name' => $client->name,
+                'processed' => 1,
+                'matched' => 0,
+                'updated' => 0,
+                'cleared' => 0,
+                'unchanged' => 0,
+                'errors' => 0,
+                'error_detail' => null,
             ];
+
+            try {
+                // Fast path: already linked
+                if ($client->sb_user_id) {
+                    $matchedUserId = (int) $client->sb_user_id;
+                    $matchedBy = $client->sb_matched_by ?? 'phone';
+                } else {
+                    // Try phone variants against the map
+                    $phoneVariants = $this->phoneVariants((string) ($client->phone_normalized ?: ''));
+                    $matchedUserId = null;
+                    $matchedBy = null;
+
+                    foreach ($phoneVariants as $variant) {
+                        $digits = preg_replace('/\D+/', '', $variant);
+                        if (isset($phoneMap[$digits])) {
+                            $matchedUserId = $phoneMap[$digits];
+                            $matchedBy = 'phone';
+                            break;
+                        }
+                    }
+
+                    // Fallback: try email
+                    if (!$matchedUserId) {
+                        $email = strtolower(trim((string) ($client->email ?: '')));
+                        if ($email !== '' && isset($emailMap[$email])) {
+                            $matchedUserId = $emailMap[$email];
+                            $matchedBy = 'email';
+                        }
+                    }
+                }
+
+                // Persist the link (same path as resolveClient)
+                $this->syncClientLink($client, $matchedUserId, $matchedBy);
+                $this->recordBulkOutcome($result, $beforeSbUserId, $beforeMatchedBy, $matchedUserId, $matchedBy);
+            } catch (\Throwable $caughtException) {
+                $result['errors'] = 1;
+                $result['error_detail'] = [
+                    'client_id' => $clientId,
+                    'message' => $caughtException->getMessage(),
+                ];
+            }
+
+            $results[$clientId] = $result;
         }
 
         return $results;
@@ -726,6 +739,31 @@ class SupportBoardService
             'sb_user_id' => $normalizedSbUserId,
             'sb_matched_by' => $normalizedMatchedBy,
         ])->saveQuietly();
+    }
+
+    private function recordBulkOutcome(
+        array &$result,
+        ?int $beforeSbUserId,
+        ?string $beforeMatchedBy,
+        ?int $afterSbUserId,
+        ?string $afterMatchedBy
+    ): void {
+        if ($afterSbUserId && !$beforeSbUserId) {
+            $result['matched']++;
+            return;
+        }
+
+        if (!$afterSbUserId && $beforeSbUserId) {
+            $result['cleared']++;
+            return;
+        }
+
+        if ($afterSbUserId !== $beforeSbUserId || $afterMatchedBy !== $beforeMatchedBy) {
+            $result['updated']++;
+            return;
+        }
+
+        $result['unchanged']++;
     }
 
     private function normalizeUser(array $user): array

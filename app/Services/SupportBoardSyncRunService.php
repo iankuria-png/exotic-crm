@@ -82,42 +82,27 @@ class SupportBoardSyncRunService
      */
     public function startRun(Platform $platform, User $user, bool $refresh = false, ?string $reason = null): array
     {
-        $activeRun = $this->activeRunForPlatform((int) $platform->id);
-        if ($activeRun && $this->isStale($activeRun)) {
-            $activeRun = $this->markFailed(
-                $activeRun,
-                'Support Board sync run became stale and was superseded by a new manual run.'
-            );
-            $activeRun = null;
-        }
+        return $this->startRunInternal(
+            $platform,
+            $user,
+            $refresh,
+            $reason,
+            'Support Board sync run became stale and was superseded by a new manual run.'
+        );
+    }
 
-        if ($activeRun) {
-            return [
-                'run' => $activeRun,
-                'reused' => true,
-            ];
-        }
-
-        $run = SupportBoardSyncRun::query()->create([
-            'platform_id' => (int) $platform->id,
-            'initiated_by' => (int) $user->id,
-            'mode' => $refresh ? 'refresh' : 'incremental',
-            'status' => SupportBoardSyncRun::STATUS_QUEUED,
-            'candidates' => $this->supportBoardLinkSyncService->countClientsForPlatform($platform, $refresh),
-            'processed' => 0,
-            'matched' => 0,
-            'updated' => 0,
-            'cleared' => 0,
-            'unchanged' => 0,
-            'errors' => 0,
-            'error_details' => [],
-            'reason' => $this->normalizeReason($reason),
-        ]);
-
-        return [
-            'run' => $run->load('initiatedBy:id,name,email'),
-            'reused' => false,
-        ];
+    /**
+     * @return array{run: SupportBoardSyncRun, reused: bool}
+     */
+    public function startAutomatedRun(Platform $platform, bool $refresh = false, ?string $reason = null): array
+    {
+        return $this->startRunInternal(
+            $platform,
+            null,
+            $refresh,
+            $reason ?: 'Scheduled Support Board link sync',
+            'Support Board sync run became stale and was superseded by a new scheduled run.'
+        );
     }
 
     public function markRunning(SupportBoardSyncRun $run): SupportBoardSyncRun
@@ -151,6 +136,32 @@ class SupportBoardSyncRunService
             'last_heartbeat_at' => now(),
             'last_processed_client_id' => (int) ($outcome['client_id'] ?? $run->last_processed_client_id),
             'last_processed_client_name' => $outcome['client_name'] ?? $run->last_processed_client_name,
+        ])->save();
+
+        return $run->refresh()->loadMissing('initiatedBy:id,name,email');
+    }
+
+    public function recordChunkOutcome(SupportBoardSyncRun $run, array $outcome): SupportBoardSyncRun
+    {
+        $details = is_array($run->error_details) ? $run->error_details : [];
+
+        foreach (array_values(is_array($outcome['errors_detail'] ?? null) ? $outcome['errors_detail'] : []) as $errorDetail) {
+            if (is_array($errorDetail) && count($details) < 25) {
+                $details[] = $errorDetail;
+            }
+        }
+
+        $run->forceFill([
+            'processed' => (int) $run->processed + (int) ($outcome['processed'] ?? 0),
+            'matched' => (int) $run->matched + (int) ($outcome['matched'] ?? 0),
+            'updated' => (int) $run->updated + (int) ($outcome['updated'] ?? 0),
+            'cleared' => (int) $run->cleared + (int) ($outcome['cleared'] ?? 0),
+            'unchanged' => (int) $run->unchanged + (int) ($outcome['unchanged'] ?? 0),
+            'errors' => (int) $run->errors + (int) ($outcome['errors'] ?? 0),
+            'error_details' => $details,
+            'last_heartbeat_at' => now(),
+            'last_processed_client_id' => (int) ($outcome['last_processed_client_id'] ?? $run->last_processed_client_id),
+            'last_processed_client_name' => $outcome['last_processed_client_name'] ?? $run->last_processed_client_name,
         ])->save();
 
         return $run->refresh()->loadMissing('initiatedBy:id,name,email');
@@ -220,6 +231,7 @@ class SupportBoardSyncRunService
         return [
             'id' => (int) $run->id,
             'platform_id' => (int) $run->platform_id,
+            'origin' => $run->initiated_by ? 'manual' : 'scheduler',
             'initiated_by' => $run->initiatedBy ? [
                 'id' => (int) $run->initiatedBy->id,
                 'name' => $run->initiatedBy->name,
@@ -254,7 +266,7 @@ class SupportBoardSyncRunService
     {
         $this->auditService->record([
             'platform_id' => (int) $run->platform_id,
-            'actor_id' => (int) $run->initiated_by,
+            'actor_id' => $run->initiated_by ? (int) $run->initiated_by : null,
             'action' => CrmAuditAction::INTEGRATION_SYNC_RUN,
             'entity_type' => 'platform',
             'entity_id' => (int) $run->platform_id,
@@ -330,6 +342,51 @@ class SupportBoardSyncRunService
         $normalized = trim((string) $reason);
 
         return $normalized === '' ? null : $normalized;
+    }
+
+    /**
+     * @return array{run: SupportBoardSyncRun, reused: bool}
+     */
+    private function startRunInternal(
+        Platform $platform,
+        ?User $user,
+        bool $refresh,
+        ?string $reason,
+        string $staleReason,
+    ): array {
+        $activeRun = $this->activeRunForPlatform((int) $platform->id);
+        if ($activeRun && $this->isStale($activeRun)) {
+            $activeRun = $this->markFailed($activeRun, $staleReason);
+            $activeRun = null;
+        }
+
+        if ($activeRun) {
+            return [
+                'run' => $activeRun,
+                'reused' => true,
+            ];
+        }
+
+        $run = SupportBoardSyncRun::query()->create([
+            'platform_id' => (int) $platform->id,
+            'initiated_by' => $user ? (int) $user->id : null,
+            'mode' => $refresh ? 'refresh' : 'incremental',
+            'status' => SupportBoardSyncRun::STATUS_QUEUED,
+            'candidates' => $this->supportBoardLinkSyncService->countClientsForPlatform($platform, $refresh),
+            'processed' => 0,
+            'matched' => 0,
+            'updated' => 0,
+            'cleared' => 0,
+            'unchanged' => 0,
+            'errors' => 0,
+            'error_details' => [],
+            'reason' => $this->normalizeReason($reason),
+        ]);
+
+        return [
+            'run' => $run->load('initiatedBy:id,name,email'),
+            'reused' => false,
+        ];
     }
 
     private function isStale(SupportBoardSyncRun $run): bool

@@ -699,6 +699,7 @@ class SupportBoardIntegrationTest extends TestCase
 
         $response->assertStatus(202)
             ->assertJsonPath('status', 'queued')
+            ->assertJsonPath('run.origin', 'manual')
             ->assertJsonPath('run.mode', 'incremental')
             ->assertJsonPath('run.candidates', 1)
             ->assertJsonPath('run.processed', 0)
@@ -784,6 +785,7 @@ class SupportBoardIntegrationTest extends TestCase
         $this->getJson("/api/crm/settings/integrations/platforms/{$platform->id}/support-board/sync/latest")
             ->assertOk()
             ->assertJsonPath('run.id', $run->id)
+            ->assertJsonPath('run.origin', 'manual')
             ->assertJsonPath('run.status', 'completed')
             ->assertJsonPath('run.progress_percent', 100)
             ->assertJsonPath('run.refresh', true);
@@ -801,22 +803,16 @@ class SupportBoardIntegrationTest extends TestCase
 
         Http::fake(function (ClientRequest $request) {
             $function = $request->data()['function'] ?? null;
-            $value = $request->data()['value'] ?? null;
-
-            if ($function !== 'get-user-by') {
-                return Http::response(['success' => true, 'response' => []]);
-            }
-
-            if (in_array($value, ['+254701234567', '254701234567', '0701234567', 'async-sync@example.test'], true)) {
+            if ($function === 'get-users-with-details') {
                 return Http::response([
                     'success' => true,
                     'response' => [
-                        'id' => 5678,
-                        'first_name' => 'Async',
-                        'last_name' => 'Sync',
-                        'email' => 'async-sync@example.test',
-                        'user_type' => 'lead',
-                        'details' => [],
+                        'phone' => [
+                            ['id' => 5678, 'value' => '+254701234567'],
+                        ],
+                        'email' => [
+                            ['id' => 5678, 'value' => 'async-sync@example.test'],
+                        ],
                     ],
                 ]);
             }
@@ -847,6 +843,75 @@ class SupportBoardIntegrationTest extends TestCase
         $this->assertSame(1, (int) $run->matched);
     }
 
+    public function test_support_board_sync_job_processes_runs_in_bounded_chunks(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $admin = $this->createUser('admin');
+
+        $clients = collect();
+        for ($index = 1; $index <= 101; $index++) {
+            $phone = sprintf('254700%06d', $index);
+
+            $clients->push($this->createClient($platform, [
+                'name' => "Chunk Client {$index}",
+                'phone_normalized' => $phone,
+                'email' => "chunk-{$index}@example.test",
+            ]));
+        }
+
+        Http::fake(function (ClientRequest $request) use ($clients) {
+            $function = $request->data()['function'] ?? null;
+            if ($function === 'get-users-with-details') {
+                return Http::response([
+                    'success' => true,
+                    'response' => [
+                        'phone' => $clients->map(fn ($client, $index) => [
+                            'id' => 7000 + $index + 1,
+                            'value' => '+' . $client->phone_normalized,
+                        ])->all(),
+                        'email' => $clients->map(fn ($client, $index) => [
+                            'id' => 7000 + $index + 1,
+                            'value' => $client->email,
+                        ])->all(),
+                    ],
+                ]);
+            }
+
+            return Http::response(['success' => true, 'response' => []]);
+        });
+
+        $started = app(SupportBoardSyncRunService::class)->startRun(
+            $platform,
+            $admin,
+            false,
+            'Run chunked async sync'
+        );
+
+        Queue::fake();
+
+        (new RunSupportBoardSyncJob((int) $started['run']->id))
+            ->handle(
+                app(SupportBoardSyncRunService::class),
+                app(SupportBoardLinkSyncService::class)
+            );
+
+        $run = SupportBoardSyncRun::query()->findOrFail($started['run']->id);
+        $hundredthClient = $clients->values()[99]->fresh();
+        $lastClient = $clients->last()->fresh();
+
+        $this->assertSame(SupportBoardSyncRun::STATUS_RUNNING, $run->status);
+        $this->assertSame(100, (int) $run->processed);
+        $this->assertSame(100, (int) $run->matched);
+        $this->assertSame((int) $hundredthClient->id, (int) $run->last_processed_client_id);
+        $this->assertNotNull($hundredthClient->sb_user_id);
+        $this->assertNull($lastClient->sb_user_id);
+
+        Queue::assertPushed(RunSupportBoardSyncJob::class, function (RunSupportBoardSyncJob $job) use ($run) {
+            return (int) $job->runId === (int) $run->id;
+        });
+    }
+
     public function test_settings_support_board_sync_endpoint_rejects_sales_role(): void
     {
         $platform = $this->createPlatform();
@@ -860,46 +925,81 @@ class SupportBoardIntegrationTest extends TestCase
         ])->assertStatus(403);
     }
 
-    public function test_support_board_sync_command_updates_unmatched_clients_for_selected_platform(): void
+    public function test_support_board_sync_command_queues_scheduler_owned_run_for_selected_platform(): void
     {
+        config(['queue.default' => 'database']);
         $platform = $this->createPlatform();
+        $otherPlatform = $this->createPlatform([
+            'domain' => 'other-market.test',
+        ]);
         $client = $this->createClient($platform, [
             'phone_normalized' => '254701234567',
             'email' => 'command-sync@example.test',
         ]);
+        $otherClient = $this->createClient($otherPlatform, [
+            'phone_normalized' => '254701111111',
+            'email' => 'other-command-sync@example.test',
+        ]);
 
-        Http::fake(function (ClientRequest $request) {
-            $function = $request->data()['function'] ?? null;
-            $value = $request->data()['value'] ?? null;
-
-            if ($function !== 'get-user-by') {
-                return Http::response(['success' => true, 'response' => []]);
-            }
-
-            if (in_array($value, ['+254701234567', '254701234567', '0701234567', 'command-sync@example.test'], true)) {
-                return Http::response([
-                    'success' => true,
-                    'response' => [
-                        'id' => 5678,
-                        'first_name' => 'Command',
-                        'last_name' => 'Sync',
-                        'email' => 'command-sync@example.test',
-                        'user_type' => 'lead',
-                        'details' => [],
-                    ],
-                ]);
-            }
-
-            return Http::response(['success' => true, 'response' => []]);
-        });
+        Queue::fake();
 
         $this->artisan("crm:sync-sb-users --platform={$platform->id}")
             ->assertExitCode(0);
 
         $client->refresh();
+        $otherClient->refresh();
 
-        $this->assertSame(5678, (int) $client->sb_user_id);
-        $this->assertSame('phone', $client->sb_matched_by);
+        $run = SupportBoardSyncRun::query()->latest('id')->first();
+
+        $this->assertNotNull($run);
+        $this->assertSame((int) $platform->id, (int) $run->platform_id);
+        $this->assertNull($run->initiated_by);
+        $this->assertSame('Scheduled Support Board link sync', $run->reason);
+        $this->assertNull($client->sb_user_id);
+        $this->assertNull($otherClient->sb_user_id);
+
+        Queue::assertPushed(RunSupportBoardSyncJob::class, function (RunSupportBoardSyncJob $job) use ($run) {
+            return (int) $job->runId === (int) $run->id;
+        });
+
+        $serializedRun = app(SupportBoardSyncRunService::class)->serializeRun($run);
+        $this->assertSame('scheduler', $serializedRun['origin']);
+    }
+
+    public function test_support_board_sync_command_reuses_existing_active_scheduler_run(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'command-sync@example.test',
+        ]);
+
+        $run = SupportBoardSyncRun::query()->create([
+            'platform_id' => $platform->id,
+            'initiated_by' => null,
+            'mode' => 'incremental',
+            'status' => SupportBoardSyncRun::STATUS_RUNNING,
+            'candidates' => 1,
+            'processed' => 0,
+            'matched' => 0,
+            'updated' => 0,
+            'cleared' => 0,
+            'unchanged' => 0,
+            'errors' => 0,
+            'started_at' => now()->subMinute(),
+            'last_heartbeat_at' => now()->subSeconds(15),
+            'reason' => 'Scheduled Support Board link sync',
+        ]);
+
+        Queue::fake();
+
+        $this->artisan("crm:sync-sb-users --platform={$platform->id}")
+            ->assertExitCode(0);
+
+        Queue::assertNothingPushed();
+        $this->assertSame(1, SupportBoardSyncRun::query()->count());
+        $this->assertSame((int) $run->id, (int) SupportBoardSyncRun::query()->first()->id);
     }
 
     public function test_support_board_sync_command_skips_duplicate_invocation_when_lock_exists(): void

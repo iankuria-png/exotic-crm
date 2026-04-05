@@ -2,9 +2,12 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\RunSupportBoardSyncJob;
 use App\Services\SupportBoardLinkSyncService;
+use App\Services\SupportBoardSyncRunService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class SyncSupportBoardUsers extends Command
 {
@@ -29,6 +32,8 @@ class SyncSupportBoardUsers extends Command
         try {
             /** @var SupportBoardLinkSyncService $linkSyncService */
             $linkSyncService = app(SupportBoardLinkSyncService::class);
+            /** @var SupportBoardSyncRunService $syncRunService */
+            $syncRunService = app(SupportBoardSyncRunService::class);
 
             $platforms = $linkSyncService->configuredPlatforms($platformId);
 
@@ -40,13 +45,18 @@ class SyncSupportBoardUsers extends Command
                 return self::FAILURE;
             }
 
-            $totals = [
-                'processed' => 0,
-                'matched' => 0,
-                'updated' => 0,
-                'cleared' => 0,
-                'unchanged' => 0,
-                'errors' => 0,
+            $queue = $syncRunService->queueReadiness();
+            if (!($queue['available'] ?? false)) {
+                $this->error($queue['issues'][0] ?? 'Support Board background sync is not available.');
+
+                return self::FAILURE;
+            }
+
+            $summary = [
+                'queued' => 0,
+                'reused' => 0,
+                'skipped' => 0,
+                'failed' => 0,
             ];
 
             foreach ($platforms as $platform) {
@@ -54,58 +64,68 @@ class SyncSupportBoardUsers extends Command
                 $clientCount = $linkSyncService->countClientsForPlatform($platform, $refresh);
 
                 if ($clientCount === 0) {
-                    $this->info("Skipping {$platformLabel}: no clients to process.");
+                    $this->info("Skipping {$platformLabel}: no clients to queue.");
+                    $summary['skipped']++;
                     continue;
                 }
 
-                $this->info(sprintf(
-                    'Processing %d client%s for %s (platform #%d)%s',
-                    $clientCount,
-                    $clientCount === 1 ? '' : 's',
-                    $platformLabel,
-                    $platform->id,
-                    $refresh ? ' with refresh mode enabled' : ''
-                ));
+                try {
+                    $started = $syncRunService->startAutomatedRun(
+                        $platform,
+                        $refresh,
+                        'Scheduled Support Board link sync'
+                    );
+                    $run = $started['run'];
 
-                $progressBar = $this->output->createProgressBar($clientCount);
-                $progressBar->start();
-
-                $result = $linkSyncService->syncPlatformBulk(
-                    $platform,
-                    $refresh,
-                    function () use ($progressBar): void {
-                        $progressBar->advance();
+                    if ($started['reused']) {
+                        $summary['reused']++;
+                        $this->info(sprintf(
+                            'Reusing active Support Board sync run #%d for %s (platform #%d).',
+                            (int) $run->id,
+                            $platformLabel,
+                            $platform->id
+                        ));
+                        continue;
                     }
-                );
 
-                foreach (['processed', 'matched', 'updated', 'cleared', 'unchanged', 'errors'] as $key) {
-                    $totals[$key] += (int) ($result[$key] ?? 0);
-                }
+                    RunSupportBoardSyncJob::dispatch((int) $run->id);
+                    $summary['queued']++;
 
-                $progressBar->finish();
-                $this->newLine(2);
-
-                foreach (($result['errors_detail'] ?? []) as $error) {
-                    $this->warn(sprintf(
-                        'Client #%d failed on platform #%d: %s',
-                        (int) ($error['client_id'] ?? 0),
+                    $this->info(sprintf(
+                        'Queued Support Board sync run #%d for %s (platform #%d, %d candidate%s)%s.',
+                        (int) $run->id,
+                        $platformLabel,
                         $platform->id,
-                        (string) ($error['message'] ?? 'Unknown error')
+                        $clientCount,
+                        $clientCount === 1 ? '' : 's',
+                        $refresh ? ' with refresh mode enabled' : ''
+                    ));
+                } catch (\Throwable $exception) {
+                    $summary['failed']++;
+
+                    Log::error('Failed to queue Support Board sync run.', [
+                        'platform_id' => (int) $platform->id,
+                        'error' => $exception->getMessage(),
+                    ]);
+
+                    $this->error(sprintf(
+                        'Failed to queue Support Board sync for %s (platform #%d): %s',
+                        $platformLabel,
+                        (int) $platform->id,
+                        $exception->getMessage()
                     ));
                 }
             }
 
             $this->info(sprintf(
-                'Support Board sync complete: %d processed, %d matched, %d updated, %d cleared, %d unchanged, %d errors.',
-                $totals['processed'],
-                $totals['matched'],
-                $totals['updated'],
-                $totals['cleared'],
-                $totals['unchanged'],
-                $totals['errors']
+                'Support Board sync dispatch complete: %d queued, %d reused, %d skipped, %d failed to queue.',
+                $summary['queued'],
+                $summary['reused'],
+                $summary['skipped'],
+                $summary['failed']
             ));
 
-            return $totals['errors'] > 0 ? self::FAILURE : self::SUCCESS;
+            return $summary['failed'] > 0 ? self::FAILURE : self::SUCCESS;
         } finally {
             optional($lock)->release();
         }

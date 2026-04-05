@@ -73,68 +73,26 @@ class RunSupportBoardSyncJob implements ShouldQueue
         SupportBoardSyncRunService $supportBoardSyncRunService,
         SupportBoardLinkSyncService $supportBoardLinkSyncService
     ): void {
-        // Use bulk path for fresh runs (no cursor yet) — resolves all clients in 1 API call.
-        if (!$run->last_processed_client_id) {
-            try {
-                $result = $supportBoardLinkSyncService->syncPlatformBulk(
-                    $run->platform,
-                    $run->isRefresh(),
-                    function () use ($run): void {
-                        $run->increment('processed');
-                    }
-                );
-
-                // Record aggregate outcome on the run.
-                $run->update([
-                    'candidates' => (int) ($result['candidates'] ?? 0),
-                    'processed' => (int) ($result['processed'] ?? 0),
-                    'matched' => (int) ($result['matched'] ?? 0),
-                    'updated' => (int) ($result['updated'] ?? 0),
-                    'cleared' => (int) ($result['cleared'] ?? 0),
-                    'unchanged' => (int) ($result['unchanged'] ?? 0),
-                    'errors' => (int) ($result['errors'] ?? 0),
-                ]);
-
-                $supportBoardSyncRunService->markCompleted($run);
-                return;
-            } catch (\Throwable $exception) {
-                Log::warning('Bulk SB sync failed, falling back to per-client chain.', [
-                    'run_id' => $run->id,
-                    'platform_id' => $run->platform_id,
-                    'error' => $exception->getMessage(),
-                ]);
-                // Fall through to per-client chain below.
-            }
-        }
-
-        // Per-client chain: processes one client then re-dispatches.
-        $client = $supportBoardLinkSyncService->nextClientForPlatform(
+        $chunk = $supportBoardLinkSyncService->syncPlatformBulkChunk(
             $run->platform,
             $run->isRefresh(),
-            (int) ($run->last_processed_client_id ?? 0)
+            (int) ($run->last_processed_client_id ?? 0),
+            SupportBoardLinkSyncService::BULK_SYNC_CHUNK_SIZE
         );
 
-        if (!$client) {
-            $supportBoardSyncRunService->markCompleted($run);
-            return;
+        if ((int) ($chunk['processed'] ?? 0) > 0) {
+            $run = $supportBoardSyncRunService->recordChunkOutcome($run, $chunk);
         }
 
-        $outcome = $supportBoardLinkSyncService->syncClient($client);
-        $run = $supportBoardSyncRunService->recordClientOutcome($run, $outcome);
-
-        // Use the refreshed run's cursor for the "has next?" check.
-        $nextClient = $supportBoardLinkSyncService->nextClientForPlatform(
-            $run->platform,
-            $run->isRefresh(),
-            (int) ($run->last_processed_client_id ?? 0)
-        );
-
-        if ($nextClient) {
+        if ((bool) ($chunk['has_more'] ?? false)) {
             self::dispatch($run->id);
             return;
         }
 
-        $supportBoardSyncRunService->markCompleted($run);
+        if ((int) ($run->candidates ?? 0) === 0 || (int) ($chunk['processed'] ?? 0) === 0 || (int) ($run->processed ?? 0) > 0) {
+            $supportBoardSyncRunService->markCompleted($run);
+            return;
+        }
     }
 
     /**
