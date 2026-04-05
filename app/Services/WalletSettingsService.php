@@ -367,6 +367,24 @@ class WalletSettingsService
         return $this->currentPlatformConfig($platform->fresh() ?? $platform, masked: true);
     }
 
+    public function recordWpCredentialSyncAttempt(
+        Platform $platform,
+        string $environment,
+        array $attempt,
+        ?int $updatedBy = null
+    ): array {
+        $environment = $this->normalizeEnvironment($environment);
+        $current = $this->resolvePlatformCredentials($platform);
+        $current['wp_to_crm'][$environment]['sync'] = $this->normalizeWpCredentialSyncState(
+            array_merge(
+                (array) ($current['wp_to_crm'][$environment]['sync'] ?? []),
+                $attempt
+            )
+        );
+
+        return $this->persistPlatformCredentialsSnapshot($platform, $current, $updatedBy);
+    }
+
     public function testProvider(Platform $platform, string $provider, string $environment): array
     {
         $provider = $this->normalizeProvider($provider);
@@ -708,6 +726,7 @@ class WalletSettingsService
                     'bearer_last_rotated_at' => null,
                     'hmac_secret_encrypted' => '',
                     'hmac_last_rotated_at' => null,
+                    'sync' => $this->defaultWpCredentialSyncState(),
                 ],
                 'production' => [
                     'bearer_key_hash' => '',
@@ -715,6 +734,7 @@ class WalletSettingsService
                     'bearer_last_rotated_at' => null,
                     'hmac_secret_encrypted' => '',
                     'hmac_last_rotated_at' => null,
+                    'sync' => $this->defaultWpCredentialSyncState(),
                 ],
             ],
             'pesapal' => [
@@ -959,6 +979,9 @@ class WalletSettingsService
                         $merged['wp_to_crm'][$environment][$key] = $wpToCrm[$key];
                     }
                 }
+                if (array_key_exists('sync', $wpToCrm) && is_array($wpToCrm['sync'])) {
+                    $merged['wp_to_crm'][$environment]['sync'] = $this->normalizeWpCredentialSyncState($wpToCrm['sync']);
+                }
             }
 
             $pesapal = data_get($incoming, "pesapal.{$environment}");
@@ -1112,6 +1135,9 @@ class WalletSettingsService
                 'bearer_last_rotated_at' => $credentials['wp_to_crm'][$environment]['bearer_last_rotated_at'] ?? null,
                 'hmac_configured' => !empty($credentials['wp_to_crm'][$environment]['hmac_secret_encrypted']),
                 'hmac_last_rotated_at' => $credentials['wp_to_crm'][$environment]['hmac_last_rotated_at'] ?? null,
+                'sync' => $this->normalizeWpCredentialSyncState(
+                    (array) ($credentials['wp_to_crm'][$environment]['sync'] ?? [])
+                ),
             ];
 
             $masked['pesapal'][$environment] = [
@@ -1146,6 +1172,9 @@ class WalletSettingsService
                 'bearer_last_rotated_at' => $credentials['wp_to_crm'][$environment]['bearer_last_rotated_at'] ?? null,
                 'hmac_secret' => $this->decryptOrEmpty((string) ($credentials['wp_to_crm'][$environment]['hmac_secret_encrypted'] ?? '')),
                 'hmac_last_rotated_at' => $credentials['wp_to_crm'][$environment]['hmac_last_rotated_at'] ?? null,
+                'sync' => $this->normalizeWpCredentialSyncState(
+                    (array) ($credentials['wp_to_crm'][$environment]['sync'] ?? [])
+                ),
             ];
 
             $runtime['pesapal'][$environment] = [
@@ -1200,6 +1229,34 @@ class WalletSettingsService
     private function shadowReadEnabled(): bool
     {
         return (bool) config('billing.shadow_read.enabled', false);
+    }
+
+    private function defaultWpCredentialSyncState(): array
+    {
+        return [
+            'last_attempt_at' => null,
+            'last_status' => 'unknown',
+            'last_synced_at' => null,
+            'last_reason' => null,
+            'last_error' => null,
+            'last_credential_action' => null,
+            'last_result' => null,
+        ];
+    }
+
+    private function normalizeWpCredentialSyncState(array $state): array
+    {
+        $default = $this->defaultWpCredentialSyncState();
+
+        return [
+            'last_attempt_at' => $state['last_attempt_at'] ?? $default['last_attempt_at'],
+            'last_status' => (string) ($state['last_status'] ?? $default['last_status']),
+            'last_synced_at' => $state['last_synced_at'] ?? $default['last_synced_at'],
+            'last_reason' => $state['last_reason'] ?? $default['last_reason'],
+            'last_error' => $state['last_error'] ?? $default['last_error'],
+            'last_credential_action' => $state['last_credential_action'] ?? $default['last_credential_action'],
+            'last_result' => is_array($state['last_result'] ?? null) ? $state['last_result'] : $default['last_result'],
+        ];
     }
 
     private function testPesapal(array $credentials, string $environment): array

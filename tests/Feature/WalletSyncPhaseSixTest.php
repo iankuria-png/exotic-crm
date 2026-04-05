@@ -279,6 +279,17 @@ class WalletSyncPhaseSixTest extends TestCase
                 && !empty($request['bearer_key'])
                 && !empty($request['hmac_secret']);
         });
+
+        $this->assertSame(
+            'synced',
+            data_get($stored->value, 'wp_to_crm.sandbox.sync.last_status')
+        );
+        $this->assertSame(
+            'generated_and_pushed',
+            data_get($stored->value, 'wp_to_crm.sandbox.sync.last_credential_action')
+        );
+        $this->assertNotNull(data_get($stored->value, 'wp_to_crm.sandbox.sync.last_attempt_at'));
+        $this->assertNotNull(data_get($stored->value, 'wp_to_crm.sandbox.sync.last_synced_at'));
     }
 
     public function test_rotate_active_wp_credentials_does_not_persist_when_wordpress_push_fails(): void
@@ -318,5 +329,60 @@ class WalletSyncPhaseSixTest extends TestCase
 
         $this->assertSame($previousHash, $currentHash);
         $this->assertTrue(Hash::check((string) $seed['revealed']['bearer_key'], $currentHash));
+
+        $this->assertSame(
+            'failed',
+            data_get($storedAfter->value, 'wp_to_crm.sandbox.sync.last_status')
+        );
+        $this->assertSame(
+            'rotation_not_persisted',
+            data_get($storedAfter->value, 'wp_to_crm.sandbox.sync.last_credential_action')
+        );
+        $this->assertStringContainsString(
+            'Push failed',
+            (string) data_get($storedAfter->value, 'wp_to_crm.sandbox.sync.last_error')
+        );
+    }
+
+    public function test_rotate_inactive_environment_credentials_persists_delayed_rotation_state_without_pushing(): void
+    {
+        app(WalletSettingsService::class)->saveSystemConfig([
+            'mode' => 'production',
+        ]);
+
+        $platform = Platform::factory()->create([
+            'wallet_settings' => [
+                'enabled' => true,
+            ],
+        ]);
+
+        Http::fake();
+
+        $result = app(WalletSyncService::class)->rotateWpCredentials($platform, 'sandbox', 'both');
+
+        $this->assertSame('skipped', data_get($result, 'wp_credentials_sync.status'));
+        $this->assertSame('environment_not_active', data_get($result, 'wp_credentials_sync.reason'));
+        $this->assertSame('rotation_persisted_pending_push', data_get($result, 'wp_credentials_sync.credential_action'));
+
+        $stored = IntegrationSetting::query()
+            ->where('key', 'wallet_platform_credentials_' . $platform->id)
+            ->firstOrFail();
+
+        $this->assertNotEmpty(data_get($stored->value, 'wp_to_crm.sandbox.bearer_key_hash'));
+        $this->assertNotEmpty(data_get($stored->value, 'wp_to_crm.sandbox.hmac_secret_encrypted'));
+        $this->assertSame(
+            'skipped',
+            data_get($stored->value, 'wp_to_crm.sandbox.sync.last_status')
+        );
+        $this->assertSame(
+            'environment_not_active',
+            data_get($stored->value, 'wp_to_crm.sandbox.sync.last_reason')
+        );
+        $this->assertSame(
+            'rotation_persisted_pending_push',
+            data_get($stored->value, 'wp_to_crm.sandbox.sync.last_credential_action')
+        );
+
+        Http::assertNothingSent();
     }
 }
