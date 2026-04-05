@@ -153,7 +153,7 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
     return (
         <div className="space-y-4 p-5">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.55fr)]">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,360px)]">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Diagnostics posture</p>
                         <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Billing health signals available to operators</h4>
@@ -163,7 +163,7 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
                             the Payments drawer.
                         </p>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[420px]">
+                    <div className="grid gap-3 sm:grid-cols-3">
                         <DiagnosticsMetricCard label="Healthy" value={healthySignals.length} status="online" />
                         <DiagnosticsMetricCard label="Attention" value={attentionSignals.length} status="attention" />
                         <DiagnosticsMetricCard label="Observed" value={observedSignals.length} status="neutral" />
@@ -233,37 +233,27 @@ function DiagnosticsMetricCard({ label, value, status = 'neutral' }) {
 
     return (
         <div className="rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
-            <div className="flex min-w-0 items-start justify-between gap-3">
-                <p className="min-w-0 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
-                <MetricStatus status={status} ariaLabel={caption} />
-            </div>
-            <div className="mt-5 min-w-0">
-                <p className="text-[2rem] font-semibold leading-none tracking-tight text-slate-950">{value}</p>
-                <p className="mt-2 truncate text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">{caption}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+            <div className="mt-4 flex min-w-0 items-end justify-between gap-3">
+                <p className="text-[2.35rem] font-semibold leading-none tracking-tight text-slate-950">{value}</p>
+                <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                    <span className={`h-2.5 w-2.5 rounded-full ${metricStatusDot(status)}`} />
+                    <span>{caption}</span>
+                </div>
             </div>
         </div>
     );
 }
 
-function MetricStatus({ status, ariaLabel }) {
+function metricStatusDot(status) {
     const tones = {
-        online: { dot: 'bg-emerald-500' },
-        attention: { dot: 'bg-amber-500' },
-        critical: { dot: 'bg-rose-500' },
-        neutral: { dot: 'bg-slate-300' },
+        online: 'bg-emerald-500',
+        attention: 'bg-amber-500',
+        critical: 'bg-rose-500',
+        neutral: 'bg-slate-300',
     };
 
-    const tone = tones[status] || tones.neutral;
-
-    return (
-        <span
-            className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
-            title={ariaLabel}
-            aria-label={ariaLabel}
-        >
-            <span className={`h-2.5 w-2.5 rounded-full ${tone.dot}`} />
-        </span>
-    );
+    return tones[status] || tones.neutral;
 }
 
 function DiagnosticsServiceRow({ card, emphasis = false }) {

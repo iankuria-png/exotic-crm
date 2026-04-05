@@ -59,14 +59,35 @@ export default function BillingSystemTab({
         return Boolean(domains?.[environment] || branding?.[environment]?.business_name || branding?.[environment]?.description);
     });
 
+    const summaryCards = [
+        { label: 'Source of truth', value: source?.source_of_truth || 'wallet_system_config' },
+        { label: 'Default currency', value: system?.default_currency || 'KES' },
+        { label: 'Single wallet cap', value: system?.max_single_topup_default || 'Not configured' },
+        { label: 'Wallet balance cap', value: system?.max_wallet_balance_default || 'Not configured' },
+    ];
+
+    const timingRows = [
+        { label: 'Redirect delay', value: timing?.redirect_delay_seconds ?? 'Not configured', suffix: 's' },
+        { label: 'Wallet refresh rate limit', value: timing?.wallet_refresh_rate_limit_seconds ?? 'Not configured', suffix: 's' },
+        { label: 'Wallet refresh timeout', value: timing?.wallet_refresh_timeout_seconds ?? 'Not configured', suffix: 's' },
+        { label: 'Funding poll interval', value: timing?.topup_poll_interval_seconds ?? 'Not configured', suffix: 's' },
+    ];
+
+    const deliveryRows = [
+        { label: 'SMTP enabled', value: smtp?.enabled ? 'Enabled' : 'Disabled' },
+        { label: 'SMTP host', value: smtp?.host || 'Not configured' },
+        { label: 'SMTP from', value: smtp?.from_address || 'Not configured' },
+        { label: 'Password state', value: smtp?.password_configured ? 'Configured' : 'Not configured' },
+    ];
+
     return (
-        <div className="space-y-4 p-5">
+        <div className="space-y-5 p-5">
             {!liveReadEnabled ? (
                 <BillingStateNotice
                     state="degraded"
                     eyebrow="Billing System"
-                    title="Live reads are still pinned to the legacy wallet settings path"
-                    message="This compatibility view reflects the current wallet system source of truth while the new Billing System settings model remains behind rollout flags."
+                    title="Runtime still reads the legacy billing-system contract"
+                    message="This operational view reflects the live system settings that still govern wallet limits, billing domains, branding, and SMTP posture while the registry model takes over provider execution."
                 />
             ) : null}
 
@@ -79,119 +100,144 @@ export default function BillingSystemTab({
                 />
             ) : null}
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] xl:items-end">
                     <div>
-                        <h4 className="text-sm font-semibold text-slate-900">Billing System Compatibility View</h4>
-                        <p className="mt-2 text-sm text-slate-600">
-                            This view shows the live billing-system posture that still powers wallet limits, billing
-                            domains, branding, and SMTP posture while the registry model takes over market and provider
-                            execution paths.
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Billing system posture</p>
+                        <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                            Global wallet, domain, and delivery controls
+                        </h4>
+                        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+                            This surface shows the live system settings that still power global wallet limits, billing
+                            domains, brand copy, and SMTP posture while market routing and provider execution move onto
+                            the new registry model.
                         </p>
                     </div>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">
-                        {mode}
-                    </span>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        {summaryCards.map((card) => (
+                            <MetricCell key={card.label} label={card.label} value={card.value} />
+                        ))}
+                    </div>
                 </div>
-                <dl className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-lg bg-slate-50 px-3 py-2">
-                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Default Currency</dt>
-                        <dd className="mt-1 text-sm font-semibold text-slate-900">{system?.default_currency || 'KES'}</dd>
-                    </div>
-                    <div className="rounded-lg bg-slate-50 px-3 py-2">
-                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Max Single Wallet Funding</dt>
-                        <dd className="mt-1 text-sm font-semibold text-slate-900">{system?.max_single_topup_default || 'Not configured'}</dd>
-                    </div>
-                    <div className="rounded-lg bg-slate-50 px-3 py-2">
-                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Max Wallet Balance</dt>
-                        <dd className="mt-1 text-sm font-semibold text-slate-900">{system?.max_wallet_balance_default || 'Not configured'}</dd>
-                    </div>
-                    <div className="rounded-lg bg-slate-50 px-3 py-2">
-                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Source of Truth</dt>
-                        <dd className="mt-1 text-sm font-semibold text-slate-900">{source?.source_of_truth || 'wallet_system_config'}</dd>
-                    </div>
-                </dl>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                    <StatusTag label={mode === 'disabled' ? 'System disabled' : formatMode(mode)} tone={mode === 'disabled' ? 'attention' : 'online'} />
+                    <StatusTag
+                        label={liveReadEnabled ? 'Registry live read enabled' : 'Legacy read path active'}
+                        tone={liveReadEnabled ? 'online' : 'neutral'}
+                    />
+                </div>
             </section>
 
             <div className="grid gap-4 xl:grid-cols-2">
                 {environments.map((environment) => (
-                    <section key={environment} className="rounded-xl border border-slate-200 bg-white p-4">
-                        <h5 className="text-sm font-semibold uppercase tracking-[0.08em] text-slate-700">{environment}</h5>
-                        <dl className="mt-4 space-y-3 text-sm text-slate-600">
+                    <section key={environment} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+                        <div className="flex items-center justify-between gap-3">
                             <div>
-                                <dt className="font-medium text-slate-900">Billing domain</dt>
-                                <dd className="mt-1 break-all rounded-lg bg-slate-50 px-3 py-2">
-                                    {domains?.[environment] || 'Not configured'}
-                                </dd>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{environment}</p>
+                                <h5 className="mt-2 text-lg font-semibold text-slate-950">
+                                    {environment === 'sandbox' ? 'Sandbox billing presentation' : 'Production billing presentation'}
+                                </h5>
                             </div>
-                            <div>
-                                <dt className="font-medium text-slate-900">Business name</dt>
-                                <dd className="mt-1 rounded-lg bg-slate-50 px-3 py-2">
-                                    {branding?.[environment]?.business_name || 'Not configured'}
-                                </dd>
-                            </div>
-                            <div>
-                                <dt className="font-medium text-slate-900">Description</dt>
-                                <dd className="mt-1 rounded-lg bg-slate-50 px-3 py-2">
-                                    {branding?.[environment]?.description || 'Not configured'}
-                                </dd>
-                            </div>
+                            <StatusTag
+                                label={domains?.[environment] ? 'Configured' : 'Incomplete'}
+                                tone={domains?.[environment] ? 'online' : 'attention'}
+                            />
+                        </div>
+                        <dl className="mt-5 grid gap-3">
+                            <DataStrip label="Billing domain" value={domains?.[environment] || 'Not configured'} breakAll />
+                            <DataStrip label="Business name" value={branding?.[environment]?.business_name || 'Not configured'} />
+                            <DataStrip label="Description" value={branding?.[environment]?.description || 'Not configured'} />
                         </dl>
                     </section>
                 ))}
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-2">
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
-                    <h5 className="text-sm font-semibold text-slate-900">Timing Controls</h5>
-                    <dl className="mt-4 space-y-3 text-sm text-slate-600">
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">Redirect delay</dt>
-                            <dd>{timing?.redirect_delay_seconds ?? 'Not configured'}s</dd>
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">Wallet refresh rate limit</dt>
-                            <dd>{timing?.wallet_refresh_rate_limit_seconds ?? 'Not configured'}s</dd>
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">Wallet refresh timeout</dt>
-                            <dd>{timing?.wallet_refresh_timeout_seconds ?? 'Not configured'}s</dd>
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">Wallet funding poll interval</dt>
-                            <dd>{timing?.topup_poll_interval_seconds ?? 'Not configured'}s</dd>
-                        </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Runtime timing</p>
+                        <h5 className="mt-2 text-lg font-semibold text-slate-950">Refresh and redirect controls</h5>
+                    </div>
+                    <dl className="mt-5 space-y-3">
+                        {timingRows.map((row) => (
+                            <KeyValueRow
+                                key={row.label}
+                                label={row.label}
+                                value={`${row.value}${typeof row.value === 'number' ? row.suffix || '' : row.value === 'Not configured' ? '' : row.suffix || ''}`}
+                            />
+                        ))}
                     </dl>
                 </section>
 
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
-                    <h5 className="text-sm font-semibold text-slate-900">SMTP & Billing Posture</h5>
-                    <dl className="mt-4 space-y-3 text-sm text-slate-600">
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">SMTP enabled</dt>
-                            <dd>{smtp?.enabled ? 'Enabled' : 'Disabled'}</dd>
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">SMTP host</dt>
-                            <dd>{smtp?.host || 'Not configured'}</dd>
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">SMTP from</dt>
-                            <dd>{smtp?.from_address || 'Not configured'}</dd>
-                        </div>
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                            <dt className="font-medium text-slate-900">SMTP password</dt>
-                            <dd>{smtp?.password_configured ? 'Configured' : 'Not configured'}</dd>
-                        </div>
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Delivery posture</p>
+                        <h5 className="mt-2 text-lg font-semibold text-slate-950">SMTP and outbound billing email</h5>
+                    </div>
+                    <dl className="mt-5 space-y-3">
+                        {deliveryRows.map((row) => (
+                            <KeyValueRow key={row.label} label={row.label} value={row.value} />
+                        ))}
                     </dl>
                 </section>
             </div>
 
-            <section className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
-                Billing System remains the operational source of truth for global posture, while provider profiles and
-                routing rules now move into the Billing workspace. That split is intentional during Phase 5 so runtime
-                cutover stays controlled and reversible.
+            <section className="rounded-lg border border-slate-200 bg-slate-50 px-5 py-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Transition note</p>
+                <p className="mt-3 text-sm leading-6 text-slate-600">
+                    Billing System remains the operational source of truth for global posture, while provider profiles
+                    and market routing now move into the Billing workspace. That split is intentional during Phase 5 so
+                    runtime cutover stays controlled, reviewable, and reversible.
+                </p>
             </section>
+        </div>
+    );
+}
+
+function formatMode(mode) {
+    return String(mode || 'disabled').replace(/_/g, ' ');
+}
+
+function MetricCell({ label, value }) {
+    return (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+            <p className="mt-2 break-words text-base font-semibold text-slate-950">{value}</p>
+        </div>
+    );
+}
+
+function StatusTag({ label, tone = 'neutral' }) {
+    const tones = {
+        online: { dot: 'bg-emerald-500', border: 'border-emerald-200', text: 'text-emerald-700' },
+        attention: { dot: 'bg-amber-500', border: 'border-amber-200', text: 'text-amber-700' },
+        neutral: { dot: 'bg-slate-300', border: 'border-slate-200', text: 'text-slate-600' },
+    };
+
+    const resolved = tones[tone] || tones.neutral;
+
+    return (
+        <span className={`inline-flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${resolved.border} ${resolved.text}`}>
+            <span className={`h-2 w-2 rounded-full ${resolved.dot}`} />
+            {label}
+        </span>
+    );
+}
+
+function DataStrip({ label, value, breakAll = false }) {
+    return (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+            <dt className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</dt>
+            <dd className={`mt-2 text-sm font-medium text-slate-900 ${breakAll ? 'break-all' : 'break-words'}`}>{value}</dd>
+        </div>
+    );
+}
+
+function KeyValueRow({ label, value }) {
+    return (
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+            <dt className="text-sm font-medium text-slate-700">{label}</dt>
+            <dd className="text-sm font-semibold text-slate-950">{value}</dd>
         </div>
     );
 }

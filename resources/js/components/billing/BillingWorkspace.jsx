@@ -143,29 +143,31 @@ export default function BillingWorkspace() {
             </header>
             {headerChips.length > 0 ? (
                 <div className="border-b border-slate-100 bg-slate-50/30 px-5 py-4">
-                    <div className="flex flex-wrap gap-3">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                         {headerChips.map((chip) => (
                             <div
                                 key={chip.key}
-                                className="inline-flex min-w-[180px] flex-1 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-950/[0.02] sm:flex-none"
+                                className="min-w-0 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm shadow-slate-950/[0.02]"
                             >
-                                <div className="min-w-0">
+                                <div className="flex items-center justify-between gap-3">
                                     <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                                         {chip.label}
                                     </p>
-                                    <p className="mt-1 truncate text-sm font-semibold text-slate-900">{chip.value}</p>
-                                </div>
-                                <span
-                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
-                                    title={chip.value}
-                                    aria-label={chip.value}
-                                >
                                     <span
-                                        className={`h-2.5 w-2.5 rounded-full ${
-                                            chip.enabled ? 'bg-emerald-500' : 'bg-slate-300'
-                                        }`}
-                                    />
-                                </span>
+                                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                                        title={chip.value}
+                                        aria-label={chip.value}
+                                    >
+                                        <span
+                                            className={`h-2.5 w-2.5 rounded-full ${
+                                                chip.enabled ? 'bg-emerald-500' : 'bg-slate-300'
+                                            }`}
+                                        />
+                                    </span>
+                                </div>
+                                <p className="mt-3 truncate text-[1.15rem] font-semibold tracking-tight text-slate-950">
+                                    {chip.value}
+                                </p>
                             </div>
                         ))}
                     </div>

@@ -95,7 +95,7 @@ export default function ProvidersTab({ registryEnabled = true }) {
     return (
         <div className="space-y-4 p-5">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)] xl:items-end">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Provider Catalog</p>
                         <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
@@ -107,7 +107,7 @@ export default function ProvidersTab({ registryEnabled = true }) {
                         </p>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[420px]">
+                    <div className="grid gap-3 sm:grid-cols-3">
                         <MetricCard label="Total" value={providers.length} status="neutral" />
                         <MetricCard label="Active" value={statusCounts.active || 0} status="online" />
                         <MetricCard label="Compatibility" value={statusCounts.compatibility || 0} status="attention" />
@@ -224,21 +224,13 @@ function MetricCard({ label, value, status = 'neutral' }) {
 
     return (
         <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
-            <div className="flex min-w-0 items-start justify-between gap-3">
-                <p className="min-w-0 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
-                <span
-                    className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
-                    title={caption}
-                    aria-label={caption}
-                >
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+            <div className="mt-4 flex min-w-0 items-end justify-between gap-3">
+                <p className="text-[2.5rem] font-semibold leading-none tracking-tight text-slate-950">{value}</p>
+                <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
                     <span className={`h-2.5 w-2.5 rounded-full ${metricStatusDot(status)}`} />
-                </span>
-            </div>
-            <div className="mt-5 min-w-0">
-                <p className="text-[2.2rem] font-semibold leading-none tracking-tight text-slate-950">{value}</p>
-                <p className="mt-2 truncate text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
-                    {caption}
-                </p>
+                    <span>{caption}</span>
+                </div>
             </div>
         </div>
     );
