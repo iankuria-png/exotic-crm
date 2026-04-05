@@ -677,7 +677,9 @@ class BillingGatewayService
         ]);
         $provider = 'kopokopo_direct';
         $providerEnvironment = $payment->provider_environment ?: ($context['environment'] ?? null);
-        $kopokopoConfig = $this->kopokopoConfigService->currentConfig(masked: false);
+        $kopokopoConfig = is_array($context['provider_direct_config'] ?? null)
+            ? $context['provider_direct_config']
+            : $this->kopokopoConfigService->currentConfig(masked: false);
         $upstreamUrl = trim((string) ($kopokopoConfig['base_url'] ?? ''));
         $attemptStartedAt = microtime(true);
         $providerResponse = null;
@@ -702,7 +704,8 @@ class BillingGatewayService
                     'client_id' => (int) $payment->client_id,
                     'purpose' => $payment->purpose,
                     'reference_number' => $payment->reference_number,
-                ]
+                ],
+                $kopokopoConfig
             );
             $providerResponse = is_array($result) ? $result : null;
 

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Support\KopoKopoRuntimeResolver;
 use App\Models\Platform;
 use InvalidArgumentException;
 
@@ -11,7 +12,8 @@ class BillingModeService
     public function __construct(
         private readonly WalletSettingsService $walletSettingsService,
         private readonly BillingProviderRegistryContract $providerRegistry,
-        private readonly KopokopoConfigService $kopokopoConfigService
+        private readonly KopokopoConfigService $kopokopoConfigService,
+        private readonly KopoKopoRuntimeResolver $kopokopoRuntimeResolver
     ) {
     }
 
@@ -64,12 +66,27 @@ class BillingModeService
         $environment = $this->resolveProviderEnvironment((string) ($context['environment'] ?? 'sandbox'), $environmentOverride);
         $providerConfig = data_get($wallet, "providers.{$runtimeProvider}", []);
         $providerCredentials = data_get($wallet, "credentials.{$runtimeProvider}.{$environment}", []);
+        $resolvedDirectConfig = null;
+        $resolvedBinding = null;
+        $resolvedProfile = null;
+        $resolvedFrom = null;
+
+        if (
+            $normalizedProvider === 'kopokopo'
+            && strtolower(trim((string) ($providerCredentials['transport'] ?? 'django_proxy'))) === 'direct_provider'
+        ) {
+            $resolved = $this->kopokopoRuntimeResolver->resolveWalletFundingConfig($platform, $environment);
+            $resolvedDirectConfig = $resolved['config'];
+            $resolvedBinding = $resolved['binding'];
+            $resolvedProfile = $resolved['profile'];
+            $resolvedFrom = $resolved['resolved_from'];
+        }
 
         if ($requireEnabled && !(bool) ($providerConfig['enabled'] ?? false)) {
             throw new InvalidArgumentException('Selected provider is disabled for this market.');
         }
 
-        $this->assertCredentialsPresent($runtimeProvider, $providerCredentials);
+        $this->assertCredentialsPresent($runtimeProvider, $providerCredentials, $normalizedProvider, $resolvedDirectConfig);
 
         return array_merge($context, [
             'environment' => $environment,
@@ -78,6 +95,10 @@ class BillingModeService
             'provider_definition' => $providerDefinition,
             'provider_config' => is_array($providerConfig) ? $providerConfig : [],
             'provider_credentials' => is_array($providerCredentials) ? $providerCredentials : [],
+            'provider_direct_config' => is_array($resolvedDirectConfig) ? $resolvedDirectConfig : null,
+            'provider_profile_id' => $resolvedProfile?->id,
+            'chosen_binding_id' => $resolvedBinding?->id,
+            'provider_resolved_from' => $resolvedFrom,
         ]);
     }
 
@@ -107,7 +128,12 @@ class BillingModeService
         return $url;
     }
 
-    private function assertCredentialsPresent(string $provider, array $credentials): void
+    private function assertCredentialsPresent(
+        string $provider,
+        array $credentials,
+        ?string $providerAlias = null,
+        ?array $resolvedDirectConfig = null
+    ): void
     {
         if ($provider === 'paystack') {
             if (trim((string) ($credentials['public_key'] ?? '')) === '' || trim((string) ($credentials['secret_key'] ?? '')) === '') {
@@ -132,7 +158,11 @@ class BillingModeService
         if ($provider === 'mpesa_stk') {
             $transport = trim((string) ($credentials['transport'] ?? 'django_proxy'));
             if ($transport === 'direct_provider') {
-                if (!$this->kopokopoConfigService->credentialsReady()) {
+                $config = $providerAlias === 'kopokopo' && is_array($resolvedDirectConfig)
+                    ? $resolvedDirectConfig
+                    : null;
+
+                if (!$this->kopokopoConfigService->credentialsReady($config)) {
                     throw new InvalidArgumentException('Direct KopoKopo configuration is incomplete.');
                 }
 

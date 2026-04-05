@@ -16,13 +16,13 @@ class KopokopoService
         $this->k2 = null;
     }
 
-    protected function client()
+    protected function client(array $configOverride = [])
     {
-        if ($this->k2 !== null) {
+        if ($configOverride === [] && $this->k2 !== null) {
             return $this->k2;
         }
 
-        $config = $this->configService->currentConfig(masked: false);
+        $config = array_replace($this->configService->currentConfig(masked: false), $configOverride);
         $options = [
             'clientId' => $config['client_id'] ?? null,
             'clientSecret' => $config['client_secret'] ?? null,
@@ -37,15 +37,19 @@ class KopokopoService
             }
         }
 
-        $this->k2 = new K2($options);
+        $client = new K2($options);
 
-        return $this->k2;
+        if ($configOverride === []) {
+            $this->k2 = $client;
+        }
+
+        return $client;
     }
 
-    public function getAccessToken()
+    public function getAccessToken(array $configOverride = [])
     {
         try {
-            $tokenService = $this->client()->TokenService();
+            $tokenService = $this->client($configOverride)->TokenService();
             $result = $tokenService->getToken();
 
             if ($result['status'] === 'success') {
@@ -60,9 +64,9 @@ class KopokopoService
         }
     }
 
-    public function initiateStkPush($phone, $amount, $callbackUrl, $metadata = [])
+    public function initiateStkPush($phone, $amount, $callbackUrl, $metadata = [], array $configOverride = [])
     {
-        $accessToken = $this->getAccessToken();
+        $accessToken = $this->getAccessToken($configOverride);
         
         if (!$accessToken) {
             return [
@@ -72,8 +76,8 @@ class KopokopoService
         }
 
         try {
-            $stkService = $this->client()->StkService();
-            $config = $this->configService->currentConfig(masked: false);
+            $stkService = $this->client($configOverride)->StkService();
+            $config = array_replace($this->configService->currentConfig(masked: false), $configOverride);
             
             $response = $stkService->initiateIncomingPayment([
                 'paymentChannel' => 'M-PESA STK Push',

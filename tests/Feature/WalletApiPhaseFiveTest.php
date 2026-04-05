@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\BillingWalletRule;
+use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingProviderProfile;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
@@ -1065,9 +1067,50 @@ class WalletApiPhaseFiveTest extends TestCase
             'hmac_secret' => $hmacSecret,
         ] = $this->seedWalletContext();
 
-        $this->mock(KopokopoService::class, function (MockInterface $mock) {
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'KopoKopo Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://profile.kopokopo.test',
+                'till_number' => 'K123456',
+                'callback_base_url' => 'https://crm.example.test',
+            ],
+            'secrets_json' => [
+                'client_id' => 'profile-client',
+                'client_secret' => 'profile-secret',
+                'api_key' => 'profile-api-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $expectedPhone = $client->phone_normalized;
+
+        $this->mock(KopokopoService::class, function (MockInterface $mock) use ($expectedPhone) {
             $mock->shouldReceive('initiateStkPush')
                 ->once()
+                ->withArgs(function ($phone, $amount, $callbackUrl, $metadata, $configOverride) use ($expectedPhone) {
+                    return $phone === $expectedPhone
+                        && (float) $amount === 900.0
+                        && str_contains($callbackUrl, '/api/billing/mpesa/callback')
+                        && data_get($metadata, 'purpose') === 'wallet_topup'
+                        && data_get($configOverride, 'base_url') === 'https://profile.kopokopo.test'
+                        && data_get($configOverride, 'client_id') === 'profile-client'
+                        && data_get($configOverride, 'till_number') === 'K123456';
+                })
                 ->andReturn([
                     'status' => 'success',
                     'location' => 'https://sandbox.kopokopo.test/incoming_payments/bridge-001',
@@ -1103,6 +1146,8 @@ class WalletApiPhaseFiveTest extends TestCase
 
         $this->assertNotNull($routingDecision);
         $this->assertSame('kopokopo', $routingDecision->provider_type_key);
+        $this->assertSame($profile->id, $routingDecision->provider_profile_id);
+        $this->assertSame($binding->id, $routingDecision->chosen_binding_id);
         $this->assertSame('mobile_collection', data_get($routingDecision->snapshot_json, 'execution_family'));
 
         $attempt = PaymentAttempt::query()

@@ -73,4 +73,25 @@ class BillingConfigurationRepository
             ->latest('id')
             ->first();
     }
+
+    public function firstActiveBindingForProvider(
+        int $marketId,
+        string $billingSurface,
+        string $providerTypeKey,
+        ?string $environment = null
+    ): ?BillingMarketProviderBinding {
+        return BillingMarketProviderBinding::query()
+            ->with('providerProfile')
+            ->where('market_id', $marketId)
+            ->where('enabled', true)
+            ->where('billing_surface', $billingSurface)
+            ->whereHas('providerProfile', function ($query) use ($providerTypeKey, $environment) {
+                $query->where('provider_type_key', $providerTypeKey)
+                    ->where('active', true)
+                    ->when($environment, fn ($profileQuery) => $profileQuery->where('environment', strtolower(trim($environment))));
+            })
+            ->orderBy('priority')
+            ->orderBy('id')
+            ->first();
+    }
 }
