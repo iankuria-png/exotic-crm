@@ -10,8 +10,9 @@ class KopokopoService
 {
     protected $k2;
 
-    public function __construct()
-    {
+    public function __construct(
+        private readonly KopokopoConfigService $configService
+    ) {
         $this->k2 = null;
     }
 
@@ -21,11 +22,12 @@ class KopokopoService
             return $this->k2;
         }
 
+        $config = $this->configService->currentConfig(masked: false);
         $options = [
-            'clientId' => config('services.kopokopo.client_id'),
-            'clientSecret' => config('services.kopokopo.client_secret'),
-            'apiKey' => config('services.kopokopo.api_key'),
-            'baseUrl' => config('services.kopokopo.base_url'),
+            'clientId' => $config['client_id'] ?? null,
+            'clientSecret' => $config['client_secret'] ?? null,
+            'apiKey' => $config['api_key'] ?? null,
+            'baseUrl' => $config['base_url'] ?? null,
         ];
 
         $requiredKeys = ['clientId', 'clientSecret', 'apiKey', 'baseUrl'];
@@ -71,10 +73,11 @@ class KopokopoService
 
         try {
             $stkService = $this->client()->StkService();
+            $config = $this->configService->currentConfig(masked: false);
             
             $response = $stkService->initiateIncomingPayment([
                 'paymentChannel' => 'M-PESA STK Push',
-                'tillNumber' => config('services.kopokopo.till_number'),
+                'tillNumber' => $config['till_number'] ?? '',
                 'firstName' => 'Customer', // You can customize or get from user profile
                 'lastName' => 'User',
                 'phoneNumber' => $this->normalizePhone($phone),
@@ -94,6 +97,11 @@ class KopokopoService
                 'error' => $e->getMessage()
             ];
         }
+    }
+
+    public function currentConfig(bool $masked = true): array
+    {
+        return $this->configService->currentConfig(masked: $masked);
     }
 
     public function normalizePhone($phone)

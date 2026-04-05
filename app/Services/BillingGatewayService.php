@@ -28,6 +28,7 @@ class BillingGatewayService
         private readonly WalletService $walletService,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly KopokopoService $kopokopoService,
+        private readonly KopokopoConfigService $kopokopoConfigService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
         private readonly BillingProviderTransactionRecorder $billingProviderTransactionRecorder,
@@ -160,7 +161,7 @@ class BillingGatewayService
     public function retryMpesaTopup(Payment $payment, array $options = [], ?Request $request = null): array
     {
         $payment->loadMissing(['client.platform', 'platform', 'client']);
-        if ($payment->purpose !== 'wallet_topup' || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja'], true)) {
+        if ($payment->purpose !== 'wallet_topup' || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja', 'kopokopo'], true)) {
             throw new InvalidArgumentException('Only M-Pesa wallet top-up payments can be retried here.');
         }
 
@@ -446,7 +447,7 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()->findOrFail($paymentId);
-        if ($payment->purpose !== 'wallet_topup' || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja'], true)) {
+        if ($payment->purpose !== 'wallet_topup' || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja', 'kopokopo'], true)) {
             throw new InvalidArgumentException('M-Pesa callback does not target a wallet top-up payment.');
         }
 
@@ -676,7 +677,8 @@ class BillingGatewayService
         ]);
         $provider = 'kopokopo_direct';
         $providerEnvironment = $payment->provider_environment ?: ($context['environment'] ?? null);
-        $upstreamUrl = (string) config('services.kopokopo.base_url', '');
+        $kopokopoConfig = $this->kopokopoConfigService->currentConfig(masked: false);
+        $upstreamUrl = trim((string) ($kopokopoConfig['base_url'] ?? ''));
         $attemptStartedAt = microtime(true);
         $providerResponse = null;
         $paymentAlreadyFailed = false;
@@ -826,7 +828,7 @@ class BillingGatewayService
             return $resume;
         }
 
-        if (in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja'], true)) {
+        if (in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja', 'kopokopo'], true)) {
             return [
                 'type' => 'stk_pending',
                 'message' => 'Payment is still awaiting completion on the phone prompt.',

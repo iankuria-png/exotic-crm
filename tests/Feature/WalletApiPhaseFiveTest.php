@@ -1056,6 +1056,66 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertSame('manual_retry', data_get($providerTransactions[1]->confirmation_state_json, 'reason_code'));
     }
 
+    public function test_kopokopo_provider_key_routes_through_direct_collection_bridge(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+            'bearer_key' => $bearerKey,
+            'hmac_secret' => $hmacSecret,
+        ] = $this->seedWalletContext();
+
+        $this->mock(KopokopoService::class, function (MockInterface $mock) {
+            $mock->shouldReceive('initiateStkPush')
+                ->once()
+                ->andReturn([
+                    'status' => 'success',
+                    'location' => 'https://sandbox.kopokopo.test/incoming_payments/bridge-001',
+                ]);
+        });
+
+        $payload = [
+            'wp_user_id' => $client->wp_user_id,
+            'provider' => 'kopokopo',
+            'amount' => '900.00',
+            'phone' => $client->phone_normalized,
+        ];
+        $headers = $this->walletHeaders(
+            $platform,
+            $bearerKey,
+            $hmacSecret,
+            'POST',
+            '/api/billing/initiate',
+            $payload,
+            'kopokopo-' . Str::uuid()
+        );
+
+        $initiate = $this->withHeaders($headers)->postJson('/api/billing/initiate', $payload);
+        $initiate->assertCreated()
+            ->assertJsonPath('provider', 'kopokopo')
+            ->assertJsonPath('action.type', 'stk_pending');
+
+        $paymentId = (int) $initiate->json('payment.id');
+        $routingDecision = BillingRoutingDecision::query()
+            ->where('payment_id', $paymentId)
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($routingDecision);
+        $this->assertSame('kopokopo', $routingDecision->provider_type_key);
+        $this->assertSame('mobile_collection', data_get($routingDecision->snapshot_json, 'execution_family'));
+
+        $attempt = PaymentAttempt::query()
+            ->where('payment_id', $paymentId)
+            ->where('attempt_type', 'stk_initiate')
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($attempt);
+        $this->assertSame('kopokopo_direct', $attempt->provider);
+        $this->assertSame('wallet_topup_stk', data_get($attempt->request_meta, 'channel'));
+    }
+
     public function test_mpesa_callback_records_attempt(): void
     {
         [

@@ -168,6 +168,52 @@ class ProviderRoutingDispatcherIntegrationTest extends TestCase
     }
 
     /** @test */
+    public function dispatcher_can_route_kopokopo_as_first_class_provider()
+    {
+        $platform = Platform::factory()->create([
+            'currency_code' => 'KES',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'purpose' => 'wallet_topup',
+            'amount' => 100.00,
+            'currency' => 'KES',
+            'phone' => '+254701234567',
+        ]);
+
+        $context = [
+            'provider_key' => 'kopokopo',
+            'provider_config' => [
+                'min_amount' => 10,
+                'max_amount' => 1000,
+            ],
+            'provider_credentials' => [
+                'transport' => 'direct_provider',
+            ],
+            'environment' => 'sandbox',
+            'system' => [
+                'topup_poll_interval_seconds' => 10,
+            ],
+        ];
+
+        $this->assertTrue($this->dispatcher->supports('kopokopo'));
+
+        try {
+            $action = $this->dispatcher->dispatch($payment, $context, [
+                'phone' => '+254701234567',
+            ]);
+            $this->assertIsArray($action);
+        } catch (\Exception $e) {
+            $this->assertNotInstanceOf(\InvalidArgumentException::class, $e);
+        }
+    }
+
+    /** @test */
     public function dispatcher_throws_for_unsupported_provider()
     {
         $platform = Platform::factory()->create();
@@ -196,5 +242,6 @@ class ProviderRoutingDispatcherIntegrationTest extends TestCase
         $this->assertContains('pesapal', $providers);
         $this->assertContains('mpesa_stk', $providers);
         $this->assertContains('daraja', $providers);
+        $this->assertContains('kopokopo', $providers);
     }
 }

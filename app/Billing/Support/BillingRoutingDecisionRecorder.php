@@ -282,8 +282,11 @@ class BillingRoutingDecisionRecorder
         $callbackUrl = trim((string) ($options['callback_url'] ?? ''));
         $transport = trim((string) data_get($context, 'provider_credentials.transport', ''));
 
+        $executionFamily = $this->executionFamilyFor($providerKey, $providerDefinition);
+        $usesWebhookCallback = $executionFamily === 'mobile_collection';
+
         if ($callbackUrl === '') {
-            $callbackUrl = $providerKey === 'mpesa_stk'
+            $callbackUrl = $usesWebhookCallback
                 ? '/api/billing/mpesa/callback'
                 : '/billing/complete?payment=' . urlencode((string) $payment->transaction_uuid);
         }
@@ -296,11 +299,11 @@ class BillingRoutingDecisionRecorder
             'provider_type_key' => $providerDefinition?->key ?? $providerKey,
             'provider_label' => $providerDefinition?->label,
             'provider_family' => $providerDefinition?->family->value,
-            'execution_family' => $this->executionFamilyFor($providerKey, $providerDefinition),
+            'execution_family' => $executionFamily,
             'environment' => $environment,
             'execution_mode' => $executionMode,
             'callback_contract' => [
-                'type' => $providerKey === 'mpesa_stk' ? 'webhook' : 'browser_completion',
+                'type' => $usesWebhookCallback ? 'webhook' : 'browser_completion',
                 'path' => $callbackUrl,
             ],
             'pricing' => [
@@ -330,7 +333,7 @@ class BillingRoutingDecisionRecorder
     {
         $transport = strtolower(trim((string) data_get($context, 'provider_credentials.transport', '')));
 
-        if ($providerKey === 'mpesa_stk') {
+        if (in_array($providerKey, ['mpesa_stk', 'daraja', 'kopokopo'], true)) {
             return $transport === 'direct_provider'
                 ? ExecutionMode::Direct->value
                 : ExecutionMode::Transitional->value;
@@ -345,11 +348,12 @@ class BillingRoutingDecisionRecorder
 
     private function executionFamilyFor(string $providerKey, ?ProviderDefinition $providerDefinition): string
     {
-        if ($providerKey === 'mpesa_stk') {
+        if (in_array($providerKey, ['mpesa_stk', 'daraja', 'kopokopo'], true)) {
             return 'mobile_collection';
         }
 
         return match ($providerDefinition?->family) {
+            ProviderFamily::Daraja, ProviderFamily::Kopokopo => 'mobile_collection',
             ProviderFamily::Nowpayments => 'crypto_invoice',
             default => 'hosted_redirect',
         };

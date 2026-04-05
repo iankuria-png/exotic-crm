@@ -101,16 +101,16 @@ export default function BillingSystemTab({
             ) : null}
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] xl:items-end">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] xl:items-end">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Billing system posture</p>
                         <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                            Global wallet, domain, and delivery controls
+                            Global billing controls still shaping runtime behavior
                         </h4>
                         <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                            This surface shows the live system settings that still power global wallet limits, billing
-                            domains, brand copy, and SMTP posture while market routing and provider execution move onto
-                            the new registry model.
+                            Use this surface to confirm which global wallet limits, domains, timing controls, and
+                            outbound delivery settings are still active while registry-backed profiles take over
+                            provider and market execution.
                         </p>
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -137,6 +137,11 @@ export default function BillingSystemTab({
                                 <h5 className="mt-2 text-lg font-semibold text-slate-950">
                                     {environment === 'sandbox' ? 'Sandbox billing presentation' : 'Production billing presentation'}
                                 </h5>
+                                <p className="mt-2 text-sm leading-6 text-slate-600">
+                                    {environment === 'sandbox'
+                                        ? 'Preview-facing domain and brand copy used for sandbox journeys and QA confirmation.'
+                                        : 'Live-facing domain and operator-visible brand copy used when production billing is active.'}
+                                </p>
                             </div>
                             <StatusTag
                                 label={domains?.[environment] ? 'Configured' : 'Incomplete'}
@@ -157,6 +162,9 @@ export default function BillingSystemTab({
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Runtime timing</p>
                         <h5 className="mt-2 text-lg font-semibold text-slate-950">Refresh and redirect controls</h5>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                            These limits shape wallet polling, redirects, and refresh cadence across billing surfaces.
+                        </p>
                     </div>
                     <dl className="mt-5 space-y-3">
                         {timingRows.map((row) => (
@@ -173,6 +181,9 @@ export default function BillingSystemTab({
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Delivery posture</p>
                         <h5 className="mt-2 text-lg font-semibold text-slate-950">SMTP and outbound billing email</h5>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                            Shows whether billing email delivery can support receipts, notifications, and operator follow-up.
+                        </p>
                     </div>
                     <dl className="mt-5 space-y-3">
                         {deliveryRows.map((row) => (
@@ -183,12 +194,23 @@ export default function BillingSystemTab({
             </div>
 
             <section className="rounded-lg border border-slate-200 bg-slate-50 px-5 py-5">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Transition note</p>
-                <p className="mt-3 text-sm leading-6 text-slate-600">
-                    Billing System remains the operational source of truth for global posture, while provider profiles
-                    and market routing now move into the Billing workspace. That split is intentional during Phase 5 so
-                    runtime cutover stays controlled, reviewable, and reversible.
-                </p>
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_240px] xl:items-start">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Transition note</p>
+                        <p className="mt-3 text-sm leading-6 text-slate-600">
+                            Billing System is still the operational source of truth for global posture, while provider
+                            profiles and market routing now live in the Billing workspace. That split is intentional so
+                            runtime cutover stays controlled, reviewable, and reversible.
+                        </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-4 py-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Transition posture</p>
+                        <p className="mt-2 text-base font-semibold text-slate-950">{liveReadEnabled ? 'Registry live-read enabled' : 'Legacy live-read active'}</p>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                            Global defaults stay here until registry-backed system settings formally take ownership.
+                        </p>
+                    </div>
+                </div>
             </section>
         </div>
     );

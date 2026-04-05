@@ -153,7 +153,7 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
     return (
         <div className="space-y-4 p-5">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,360px)]">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,420px)]">
                     <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Diagnostics posture</p>
                         <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Billing health signals available to operators</h4>
@@ -229,16 +229,15 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
 }
 
 function DiagnosticsMetricCard({ label, value, status = 'neutral' }) {
-    const caption = status === 'online' ? 'Operational' : status === 'attention' ? 'Review' : 'Observed';
-
     return (
-        <div className="rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
-            <div className="mt-4 flex min-w-0 items-end justify-between gap-3">
-                <p className="text-[2.35rem] font-semibold leading-none tracking-tight text-slate-950">{value}</p>
-                <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                    <span className={`h-2.5 w-2.5 rounded-full ${metricStatusDot(status)}`} />
-                    <span>{caption}</span>
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
+            <div className="flex min-h-[104px] flex-col justify-between">
+                <div className="flex items-start justify-between gap-3">
+                    <p className="text-[8px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+                    <span className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${metricStatusDot(status)}`} />
+                </div>
+                <div className="pt-5">
+                    <p className="tabular-nums text-[1.55rem] font-semibold leading-none tracking-[-0.04em] text-slate-950">{value}</p>
                 </div>
             </div>
         </div>

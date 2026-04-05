@@ -10,7 +10,8 @@ class BillingModeService
 {
     public function __construct(
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly BillingProviderRegistryContract $providerRegistry
+        private readonly BillingProviderRegistryContract $providerRegistry,
+        private readonly KopokopoConfigService $kopokopoConfigService
     ) {
     }
 
@@ -131,13 +132,7 @@ class BillingModeService
         if ($provider === 'mpesa_stk') {
             $transport = trim((string) ($credentials['transport'] ?? 'django_proxy'));
             if ($transport === 'direct_provider') {
-                if (
-                    trim((string) config('services.kopokopo.base_url', '')) === ''
-                    || trim((string) config('services.kopokopo.client_id', '')) === ''
-                    || trim((string) config('services.kopokopo.client_secret', '')) === ''
-                    || trim((string) config('services.kopokopo.api_key', '')) === ''
-                    || trim((string) config('services.kopokopo.till_number', '')) === ''
-                ) {
+                if (!$this->kopokopoConfigService->credentialsReady()) {
                     throw new InvalidArgumentException('Direct KopoKopo configuration is incomplete.');
                 }
 
@@ -173,6 +168,7 @@ class BillingModeService
     {
         return match ($provider) {
             'daraja' => 'mpesa_stk',
+            'kopokopo' => 'mpesa_stk',
             default => $provider,
         };
     }

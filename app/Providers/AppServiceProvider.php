@@ -54,7 +54,8 @@ class AppServiceProvider extends ServiceProvider
             $dispatcher->register(
                 $app->make(MpesaStkRoutingExecutor::class),
                 'mpesa_stk',
-                'daraja'
+                'daraja',
+                'kopokopo'
             );
             
             return $dispatcher;

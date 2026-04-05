@@ -26,7 +26,8 @@ class WalletSettingsService
     public function __construct(
         private readonly BillingProviderRegistryContract $providerRegistry,
         private readonly LegacyBillingConfigProjector $legacyBillingConfigProjector,
-        private readonly LegacyBillingSystemProjector $legacyBillingSystemProjector
+        private readonly LegacyBillingSystemProjector $legacyBillingSystemProjector,
+        private readonly KopokopoConfigService $kopokopoConfigService
     ) {
     }
 
@@ -1267,25 +1268,27 @@ class WalletSettingsService
         $callbackBaseUrl = trim((string) ($config['callback_base_url'] ?? ''));
 
         if ($transport === 'direct_provider') {
-            $kopokopoBaseUrl = trim((string) config('services.kopokopo.base_url', ''));
-            $configured = $kopokopoBaseUrl !== ''
-                && trim((string) config('services.kopokopo.client_id', '')) !== ''
-                && trim((string) config('services.kopokopo.client_secret', '')) !== ''
-                && trim((string) config('services.kopokopo.api_key', '')) !== '';
+            $kopokopoConfig = $this->kopokopoConfigService->currentConfig(masked: false);
+            $kopokopoBaseUrl = trim((string) ($kopokopoConfig['base_url'] ?? ''));
+            $configured = $this->kopokopoConfigService->credentialsReady($kopokopoConfig);
+            $status = (string) ($kopokopoConfig['status'] ?? ($configured ? 'success' : 'failed'));
+            $message = $configured
+                ? (($kopokopoConfig['enabled'] ?? true)
+                    ? 'Direct KopoKopo M-Pesa configuration is present.'
+                    : 'Direct KopoKopo M-Pesa configuration is stored but currently disabled.')
+                : 'Direct KopoKopo M-Pesa configuration is incomplete.';
 
             return [
                 'provider' => 'mpesa_stk',
                 'environment' => $environment,
                 'transport' => $transport,
                 'ok' => $configured,
-                'status' => $configured ? 'success' : 'failed',
+                'status' => $status,
                 'http_status' => $configured ? 200 : 422,
-                'message' => $configured
-                    ? 'Direct KopoKopo M-Pesa configuration is present.'
-                    : 'Direct KopoKopo M-Pesa configuration is incomplete.',
+                'message' => $message,
                 'provider_response' => [
                     'base_url' => $kopokopoBaseUrl,
-                    'till_number' => (string) config('services.kopokopo.till_number', ''),
+                    'till_number' => (string) ($kopokopoConfig['till_number'] ?? ''),
                 ],
             ];
         }
