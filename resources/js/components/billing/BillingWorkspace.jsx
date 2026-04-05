@@ -150,7 +150,7 @@ export default function BillingWorkspace() {
                                 className="min-w-0 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm shadow-slate-950/[0.02]"
                             >
                                 <div className="flex items-center justify-between gap-3">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                                    <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                                         {chip.label}
                                     </p>
                                     <span
@@ -159,13 +159,13 @@ export default function BillingWorkspace() {
                                         aria-label={chip.value}
                                     >
                                         <span
-                                            className={`h-2.5 w-2.5 rounded-full ${
+                                            className={`h-2 w-2 rounded-full ${
                                                 chip.enabled ? 'bg-emerald-500' : 'bg-slate-300'
                                             }`}
                                         />
                                     </span>
                                 </div>
-                                <p className="mt-3 truncate text-[1.15rem] font-semibold tracking-tight text-slate-950">
+                                <p className="mt-3 truncate text-[1.05rem] font-semibold tracking-tight text-slate-950">
                                     {chip.value}
                                 </p>
                             </div>

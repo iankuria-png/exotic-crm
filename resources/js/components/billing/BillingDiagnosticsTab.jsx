@@ -231,18 +231,18 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
 function DiagnosticsMetricCard({ label, value, status = 'neutral' }) {
     return (
         <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
-            <div className="relative flex min-h-[108px] flex-col justify-between overflow-hidden">
-                <div className="pr-8">
-                    <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+            <div className="flex min-h-[100px] flex-col justify-between">
+                <div className="flex items-center justify-between gap-3">
+                    <p className="min-w-0 text-[8px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+                    <span
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                        aria-hidden="true"
+                    >
+                        <span className={`h-2 w-2 rounded-full ${metricStatusDot(status)}`} />
+                    </span>
                 </div>
-                <span
-                    className="absolute right-0 top-0 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
-                    aria-hidden="true"
-                >
-                    <span className={`h-2.5 w-2.5 rounded-full ${metricStatusDot(status)}`} />
-                </span>
-                <div className="pt-4">
-                    <p className="tabular-nums text-[2.2rem] font-semibold leading-none tracking-[-0.05em] text-slate-950">
+                <div className="pt-5">
+                    <p className="tabular-nums text-[1.95rem] font-semibold leading-none tracking-[-0.045em] text-slate-950">
                         {value}
                     </p>
                 </div>
