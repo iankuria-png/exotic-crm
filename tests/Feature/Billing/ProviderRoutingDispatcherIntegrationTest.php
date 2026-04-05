@@ -7,6 +7,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Services\Routing\ProviderRoutingDispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class ProviderRoutingDispatcherIntegrationTest extends TestCase
@@ -214,6 +215,58 @@ class ProviderRoutingDispatcherIntegrationTest extends TestCase
     }
 
     /** @test */
+    public function dispatcher_can_route_pawapay_as_profile_backed_hosted_checkout()
+    {
+        Http::fake([
+            'https://api.sandbox.pawapay.io/v2/paymentpage' => Http::response([
+                'depositId' => 'f4401bd2-1568-4140-bf2d-eb77d2b2b639',
+                'redirectUrl' => 'https://sandbox.paywith.pawapay.io/session/test-001',
+            ], 200),
+        ]);
+
+        $platform = Platform::factory()->create([
+            'currency_code' => 'KES',
+            'country' => 'KE',
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'purpose' => 'wallet_topup',
+            'amount' => 100.00,
+            'currency' => 'KES',
+            'phone' => '+254701234567',
+            'transaction_uuid' => 'f4401bd2-1568-4140-bf2d-eb77d2b2b639',
+        ]);
+
+        $context = [
+            'provider_key' => 'pawapay',
+            'provider_config' => [
+                'enabled' => true,
+                'min_amount' => 10,
+                'max_amount' => 1000,
+            ],
+            'provider_credentials' => [
+                'api_key' => 'pawapay-sandbox-key',
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'environment' => 'sandbox',
+        ];
+
+        $this->assertTrue($this->dispatcher->supports('pawapay'));
+
+        $action = $this->dispatcher->dispatch($payment, $context, []);
+
+        $this->assertSame('redirect', $action['type']);
+        $this->assertSame('https://sandbox.paywith.pawapay.io/session/test-001', $action['url']);
+        $this->assertSame('f4401bd2-1568-4140-bf2d-eb77d2b2b639', $action['provider_reference']);
+    }
+
+    /** @test */
     public function dispatcher_throws_for_unsupported_provider()
     {
         $platform = Platform::factory()->create();
@@ -243,5 +296,6 @@ class ProviderRoutingDispatcherIntegrationTest extends TestCase
         $this->assertContains('mpesa_stk', $providers);
         $this->assertContains('daraja', $providers);
         $this->assertContains('kopokopo', $providers);
+        $this->assertContains('pawapay', $providers);
     }
 }

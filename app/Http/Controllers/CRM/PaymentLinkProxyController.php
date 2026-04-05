@@ -4,6 +4,8 @@ namespace App\Http\Controllers\CRM;
 
 use App\Billing\Support\BillingProxyLifecycleService;
 use App\Http\Controllers\Controller;
+use App\Models\BillingProviderProfile;
+use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
 use App\Services\BillingModeService;
 use App\Services\Routing\HostedCheckoutRoutingExecutor;
@@ -63,21 +65,32 @@ class PaymentLinkProxyController extends Controller
         $redirectUrl = trim((string) ($linkProxy['redirect_url'] ?? ''));
         if ($redirectUrl === '') {
             try {
-                $context = $this->billingModeService->providerContext(
-                    $platform,
-                    $providerKey,
-                    requireEnabled: false,
-                    environmentOverride: $environment
-                );
+                $decision = $this->latestPinnedDecision($payment);
+                $profile = $decision?->providerProfile;
+
+                if (!$profile && $decision?->provider_profile_id) {
+                    $profile = BillingProviderProfile::query()->find($decision->provider_profile_id);
+                }
+
+                $context = $profile
+                    ? $this->billingModeService->profileBackedProviderContext(
+                        $platform,
+                        $profile,
+                        $decision?->chosen_binding_id,
+                        requireEnabled: false,
+                        environmentOverride: $environment
+                    )
+                    : $this->billingModeService->providerContext(
+                        $platform,
+                        $providerKey,
+                        requireEnabled: false,
+                        environmentOverride: $environment
+                    );
                 $context['provider_key'] = $providerKey;
+                $callbackUrl = $this->resolveHostedCheckoutCallbackUrl($platform, $context, $payment, $environment);
                 
                 $action = $this->hostedCheckoutExecutor->execute($payment, $context, [
-                    'callback_url' => $this->billingModeService->buildAbsoluteUrl(
-                        $platform,
-                        '/billing/complete',
-                        ['payment' => $payment->transaction_uuid],
-                        $environment
-                    ),
+                    'callback_url' => $callbackUrl,
                     'metadata' => [
                         'channel' => 'payment_link',
                         'provider_config_key' => $linkProxy['provider_config_key'] ?? null,
@@ -119,5 +132,31 @@ class PaymentLinkProxyController extends Controller
         }
 
         return redirect()->away($redirectUrl);
+    }
+
+    private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
+    {
+        return BillingRoutingDecision::query()
+            ->with('providerProfile')
+            ->where('payment_id', (int) $payment->id)
+            ->where('immutable_until_terminal_state', true)
+            ->latest('id')
+            ->first();
+    }
+
+    private function resolveHostedCheckoutCallbackUrl($platform, array $context, Payment $payment, string $environment): string
+    {
+        $callbackBaseUrl = trim((string) data_get($context, 'provider_credentials.callback_base_url', ''));
+
+        if ($callbackBaseUrl !== '') {
+            return rtrim($callbackBaseUrl, '/') . '/billing/complete?payment=' . urlencode((string) $payment->transaction_uuid);
+        }
+
+        return $this->billingModeService->buildAbsoluteUrl(
+            $platform,
+            '/billing/complete',
+            ['payment' => $payment->transaction_uuid],
+            $environment
+        );
     }
 }

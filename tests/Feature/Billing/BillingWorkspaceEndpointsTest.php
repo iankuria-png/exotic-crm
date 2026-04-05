@@ -152,7 +152,9 @@ class BillingWorkspaceEndpointsTest extends TestCase
         $this->getJson('/api/crm/settings/billing/provider-profiles')
             ->assertOk()
             ->assertJsonPath('profiles.0.profile_name', 'Kenya Live')
-            ->assertJsonPath('profiles.0.secrets_json.api_key', '••••••••');
+            ->assertJsonPath('profiles.0.secrets_json.api_key', '••••••••')
+            ->assertJsonFragment(['key' => 'daraja'])
+            ->assertJsonFragment(['key' => 'mpesa_stk']);
 
         $this->getJson("/api/crm/settings/billing/routing-rules/{$platform->id}")
             ->assertOk()

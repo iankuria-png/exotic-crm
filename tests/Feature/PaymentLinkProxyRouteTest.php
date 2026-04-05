@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\BillingProxySession;
+use App\Models\BillingProviderProfile;
+use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingRoutingDecision;
 use App\Models\Client;
 use App\Models\Payment;
@@ -86,6 +88,196 @@ class PaymentLinkProxyRouteTest extends TestCase
         $this->assertSame('pesapal', $payment->provider_key);
         $this->assertSame('sandbox', $payment->provider_environment);
         $this->assertSame('PESAPAL-TRACK-001', data_get($payment->payment_data, 'link_proxy.provider_reference'));
+    }
+
+    public function test_proxy_route_redirects_to_pawapay_checkout_using_subscription_link_profile_context(): void
+    {
+        ['payment' => $payment, 'platform' => $platform] = $this->seedProxyContext('pawapay');
+        $payment->forceFill([
+            'transaction_uuid' => 'link_18_' . now()->timestamp,
+        ])->save();
+        $paymentUrl = $this->sendProxyLink($payment);
+        $token = $this->extractToken($paymentUrl);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing-sandbox.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'subscription_link',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => false,
+            'execution_mode' => 'direct',
+            'priority' => 10,
+            'fallback_group' => 'subscription-link',
+            'restriction_json' => [],
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => (int) $payment->id,
+            'market_id' => (int) $platform->id,
+            'billing_surface' => 'subscription_link',
+            'chosen_binding_id' => $binding->id,
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'sandbox',
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'shadow_diff_json' => null,
+            'surface_cutover_flag' => null,
+            'snapshot_json' => [
+                'provider_key' => 'pawapay_checkout',
+                'provider_type_key' => 'pawapay',
+                'environment' => 'sandbox',
+                'execution_family' => 'subscription_link',
+            ],
+            'immutable_until_terminal_state' => true,
+            'decision_json' => [
+                'source' => 'payment_link_send',
+            ],
+            'created_at' => now(),
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) use ($payment) {
+                $payload = json_decode($request->body(), true);
+                $depositId = (string) ($payload['depositId'] ?? '');
+
+                TestCase::assertMatchesRegularExpression(
+                    '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
+                    $depositId
+                );
+                TestCase::assertSame(
+                    'https://billing-sandbox.example.test/billing/complete?payment=' . urlencode((string) $payment->transaction_uuid),
+                    $payload['returnUrl'] ?? null
+                );
+
+                return Http::response([
+                    'depositId' => $depositId,
+                    'redirectUrl' => 'https://checkout.pawapay.test/redirect',
+                ], 200);
+            },
+        ]);
+
+        $response = $this->get('/api/payments/link/' . $token);
+        $response->assertRedirect('https://checkout.pawapay.test/redirect');
+
+        $payment->refresh();
+        $this->assertSame('pending', $payment->status);
+        $this->assertSame('pawapay', $payment->provider_key);
+        $this->assertSame('sandbox', $payment->provider_environment);
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
+            (string) data_get($payment->payment_data, 'link_proxy.provider_reference')
+        );
+        $this->assertSame(
+            data_get($payment->payment_data, 'link_proxy.provider_reference'),
+            data_get($payment->payment_data, 'pawapay.deposit_id')
+        );
+        $this->assertSame('https://checkout.pawapay.test/redirect', data_get($payment->payment_data, 'link_proxy.redirect_url'));
+    }
+
+    public function test_proxy_route_persists_long_pawapay_redirect_urls_without_requiring_wide_session_column(): void
+    {
+        ['payment' => $payment, 'platform' => $platform] = $this->seedProxyContext('pawapay');
+        $payment->forceFill([
+            'transaction_uuid' => 'link_18_' . now()->timestamp,
+        ])->save();
+        $paymentUrl = $this->sendProxyLink($payment);
+        $token = $this->extractToken($paymentUrl);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing-sandbox.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'subscription_link',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => false,
+            'execution_mode' => 'direct',
+            'priority' => 10,
+            'fallback_group' => 'subscription-link',
+            'restriction_json' => [],
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => (int) $payment->id,
+            'market_id' => (int) $platform->id,
+            'billing_surface' => 'subscription_link',
+            'chosen_binding_id' => $binding->id,
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'sandbox',
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'shadow_diff_json' => null,
+            'surface_cutover_flag' => null,
+            'snapshot_json' => [
+                'provider_key' => 'pawapay_checkout',
+                'provider_type_key' => 'pawapay',
+                'environment' => 'sandbox',
+                'execution_family' => 'subscription_link',
+            ],
+            'immutable_until_terminal_state' => true,
+            'decision_json' => [
+                'source' => 'payment_link_send',
+            ],
+            'created_at' => now(),
+        ]);
+
+        $longRedirectUrl = 'https://sandbox.paywith.pawapay.io/v2?' . str_repeat('token=abc1234567890&', 90);
+
+        Http::fake([
+            'https://api.sandbox.pawapay.io/v2/paymentpage' => Http::response([
+                'depositId' => (string) \Illuminate\Support\Str::uuid(),
+                'redirectUrl' => $longRedirectUrl,
+            ], 200),
+        ]);
+
+        $response = $this->get('/api/payments/link/' . $token);
+        $response->assertRedirect($longRedirectUrl);
+
+        $payment->refresh();
+        $session = BillingProxySession::query()->where('payment_id', $payment->id)->first();
+
+        $this->assertSame($longRedirectUrl, data_get($payment->payment_data, 'link_proxy.redirect_url'));
+        $this->assertNotNull($session);
+        $this->assertNull($session->redirect_url);
+        $this->assertSame($longRedirectUrl, data_get($session->legacy_meta_json, 'redirect_url'));
     }
 
     public function test_proxy_route_returns_gone_for_expired_tokens(): void
@@ -319,6 +511,7 @@ class PaymentLinkProxyRouteTest extends TestCase
                     ],
                 ],
             ],
+            default => [],
         });
 
         return [

@@ -221,19 +221,19 @@ function CapabilityRow({ label, values }) {
 
 function MetricCard({ label, value, status = 'neutral' }) {
     return (
-        <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white px-3.5 py-3.5 shadow-sm shadow-slate-950/[0.02]">
+        <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-3.5 shadow-sm shadow-slate-950/[0.02]">
             <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-[7px] font-semibold uppercase tracking-[0.18em] text-slate-400">{label}</p>
+                <p className="truncate text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-400">{label}</p>
                 <span
-                    className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50/80"
                     aria-hidden="true"
                 >
-                    <span className={`h-1.5 w-1.5 rounded-full ${metricStatusDot(status)}`} />
+                    <span className={`h-2.5 w-2.5 rounded-full ${metricStatusDot(status)}`} />
                 </span>
             </div>
 
-            <div className="mt-5 min-h-[52px]">
-                <p className="tabular-nums text-[1.75rem] font-semibold leading-none tracking-[-0.05em] text-slate-950">
+            <div className="mt-5 min-h-[44px]">
+                <p className="tabular-nums text-[2.15rem] font-semibold leading-none tracking-[-0.04em] text-slate-950">
                     {value}
                 </p>
             </div>

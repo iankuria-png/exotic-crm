@@ -275,4 +275,65 @@ class LegacyBillingConfigProjectorTest extends TestCase
             ->assertJsonPath('platforms.0.payment_link_providers.providers.paystack_checkout.self_checkout_fx_currency', 'KES')
             ->assertJsonPath('platforms.0.payment_link_providers.providers.paystack_checkout.self_checkout_fx_rate', 11.25);
     }
+
+    public function test_payment_link_providers_project_subscription_link_bindings_when_legacy_config_is_missing(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'KES',
+            'payment_link_providers' => null,
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'subscription_link',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => false,
+            'execution_mode' => 'direct',
+            'priority' => 10,
+            'fallback_group' => 'subscription-link',
+            'restriction_json' => [],
+        ]);
+
+        BillingRoutingRule::query()->create([
+            'market_id' => $platform->id,
+            'billing_surface' => 'subscription_link',
+            'primary_binding_id' => $binding->id,
+            'fallback_strategy_json' => ['providers' => []],
+            'risk_policy_json' => ['mode' => 'direct'],
+            'active' => true,
+        ]);
+
+        config(['billing.shadow_read.enabled' => false]);
+
+        $projected = app(WalletSettingsService::class)->currentPaymentLinkProviders($platform->fresh());
+
+        $this->assertSame('pawapay_checkout', data_get($projected, 'active_provider'));
+        $this->assertSame('proxy_hosted_checkout', data_get($projected, 'providers.pawapay_checkout.mode'));
+        $this->assertSame('pawapay', data_get($projected, 'providers.pawapay_checkout.wallet_provider_key'));
+        $this->assertSame('subscription_link', data_get($projected, 'providers.pawapay_checkout.billing_surface'));
+        $this->assertSame('direct', data_get($projected, 'providers.pawapay_checkout.execution_mode'));
+        $this->assertSame($profile->id, data_get($projected, 'providers.pawapay_checkout.provider_profile_id'));
+        $this->assertSame($binding->id, data_get($projected, 'providers.pawapay_checkout.chosen_binding_id'));
+    }
 }

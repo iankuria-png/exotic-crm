@@ -3,18 +3,25 @@
 namespace App\Services;
 
 use App\Billing\Providers\KopoKopo\KopoKopoCompatibilityAdapter;
+use App\Billing\Providers\PawaPay\PawaPayCompatibilityAdapter;
 use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Billing\Support\BillingProviderTransactionRecorder;
 use App\Billing\Support\CanonicalPaymentStateReducer;
+use App\Models\BillingWebhookEvent;
 use App\Models\BillingRoutingDecision;
+use App\Models\BillingProviderProfile;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Services\Routing\ProviderRoutingDispatcher;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use phpseclib3\Crypt\EC;
+use phpseclib3\Crypt\PublicKeyLoader;
+use phpseclib3\Crypt\RSA;
 use RuntimeException;
 use Throwable;
 
@@ -25,6 +32,7 @@ class BillingGatewayService
         private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly PesapalCompatibilityAdapter $pesapalCompatibilityAdapter,
         private readonly KopoKopoCompatibilityAdapter $kopokopoCompatibilityAdapter,
+        private readonly PawaPayCompatibilityAdapter $pawaPayCompatibilityAdapter,
         private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator,
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly WalletService $walletService,
@@ -155,6 +163,7 @@ class BillingGatewayService
         return match ($context['provider_key'] ?? $payment->provider_key) {
             'paystack' => $this->initiatePaystack($payment, $context, $request),
             'pesapal' => $this->initiatePesapal($payment, $context, $options, $request),
+            'pawapay' => $this->initiatePawaPay($payment, $context, $options, $request),
             default => throw new InvalidArgumentException('Unsupported hosted checkout billing provider.'),
         };
     }
@@ -490,6 +499,169 @@ class BillingGatewayService
         ]);
     }
 
+    public function handlePawaPayCallback(string $rawBody, array $payload, array $headers = [], array $requestContext = []): array
+    {
+        $depositId = trim((string) ($payload['depositId'] ?? ''));
+        if ($depositId === '') {
+            throw new InvalidArgumentException('pawaPay callback payload is missing the deposit id.');
+        }
+
+        $callbackStatus = strtoupper(trim((string) ($payload['status'] ?? 'UNKNOWN')));
+        $payment = $this->resolveHostedCheckoutPaymentByProviderReference('pawapay', $depositId);
+        $payment->loadMissing(['client.platform', 'platform', 'routingDecisions', 'providerTransactions']);
+
+        $decision = $this->latestPinnedDecision($payment);
+        $profile = $this->resolvePawaPayProfile($payment, $decision);
+        $providerTransaction = $payment->providerTransactions
+            ->where('provider_type_key', 'pawapay')
+            ->first(function ($transaction) use ($depositId) {
+                return $transaction->provider_transaction_id === $depositId
+                    || $transaction->compatibility_reference === $depositId;
+            });
+
+        $dedupeKey = hash('sha256', implode('|', ['pawapay', $depositId, $callbackStatus]));
+        $event = BillingWebhookEvent::query()
+            ->where('dedupe_key', $dedupeKey)
+            ->first();
+
+        if ($event && $event->processing_status === 'processed') {
+            $freshPayment = $payment->fresh() ?? $payment;
+
+            return [
+                'payment' => $freshPayment,
+                'status' => (string) ($freshPayment->status ?? $payment->status),
+                'duplicate' => true,
+            ];
+        }
+
+        $security = $this->pawaPayCallbackSecurityAssessment($rawBody, $headers, $requestContext, $profile);
+
+        if (!$event) {
+            $event = BillingWebhookEvent::query()->create([
+                'provider_type_key' => 'pawapay',
+                'provider_profile_id' => $decision?->provider_profile_id,
+                'market_id' => (int) $payment->platform_id,
+                'provider_event_id' => $depositId,
+                'dedupe_key' => $dedupeKey,
+                'headers_json' => $headers,
+                'raw_body' => $rawBody,
+                'payload_json' => $payload,
+                'signature_status' => $security['signature_status'],
+                'verification_meta_json' => $security['meta'],
+                'processing_status' => 'pending',
+                'retry_count' => 0,
+                'last_error' => null,
+                'billing_provider_transaction_id' => $providerTransaction?->id,
+                'payment_id' => (int) $payment->id,
+                'received_at' => now(),
+            ]);
+        } else {
+            $event->forceFill([
+                'provider_profile_id' => $decision?->provider_profile_id,
+                'market_id' => (int) $payment->platform_id,
+                'provider_event_id' => $depositId,
+                'headers_json' => $headers,
+                'raw_body' => $rawBody,
+                'payload_json' => $payload,
+                'signature_status' => $security['signature_status'],
+                'verification_meta_json' => $security['meta'],
+                'processing_status' => 'pending',
+                'retry_count' => ((int) $event->retry_count) + 1,
+                'last_error' => null,
+                'billing_provider_transaction_id' => $providerTransaction?->id,
+                'payment_id' => (int) $payment->id,
+                'processed_at' => null,
+            ])->save();
+        }
+
+        try {
+            $verification = $this->providerStatusQueryOrchestrator->verify($payment, [
+                'deposit_id' => $depositId,
+                'provider_reference' => $depositId,
+            ]);
+            $decisionResult = $this->providerStatusQueryOrchestrator->decideMutation($payment, $verification, [
+                'deposit_id' => $depositId,
+                'provider_reference' => $depositId,
+            ]);
+            $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
+
+            if (($decisionResult['decision'] ?? null) === 'apply_failed') {
+                $failed = $this->failPayment(
+                    $payment,
+                    (string) ($decisionResult['message'] ?? $verification['message'] ?? 'pawaPay transaction did not complete successfully.'),
+                    $verifiedData
+                );
+                $this->recordBillingCallbackAttempt($failed, 'pawapay_callback', 'failed', [
+                    'error_message' => (string) ($decisionResult['message'] ?? $verification['message'] ?? 'pawaPay transaction did not complete successfully.'),
+                    'response_meta' => [
+                        'deposit_id' => $depositId,
+                        'callback_status' => $callbackStatus,
+                        'provider_status' => $verifiedData['status'] ?? null,
+                        'verification_status' => $verification['status'] ?? null,
+                        'decision' => $decisionResult,
+                    ],
+                ]);
+
+                $this->markBillingWebhookEventProcessed($event, $failed, $security['meta'], $verification, $decisionResult);
+
+                return [
+                    'payment' => $failed,
+                    'status' => 'failed',
+                ];
+            }
+
+            if (($decisionResult['decision'] ?? null) === 'apply_completed') {
+                $completed = $this->completeVerifiedPayment($payment, $verifiedData, [
+                    'transaction_reference' => $depositId,
+                ]);
+                $this->recordBillingCallbackAttempt($completed['payment'], 'pawapay_callback', 'success', [
+                    'response_meta' => [
+                        'deposit_id' => $depositId,
+                        'callback_status' => $callbackStatus,
+                        'provider_status' => $verifiedData['status'] ?? null,
+                        'provider_transaction_id' => $verifiedData['providerTransactionId'] ?? null,
+                        'verification_status' => $verification['status'] ?? null,
+                        'decision' => $decisionResult,
+                    ],
+                ]);
+
+                $this->markBillingWebhookEventProcessed($event, $completed['payment'], $security['meta'], $verification, $decisionResult);
+
+                return array_merge($completed, [
+                    'status' => 'completed',
+                ]);
+            }
+
+            $freshPayment = $payment->fresh() ?? $payment;
+            $this->recordBillingCallbackAttempt($freshPayment, 'pawapay_callback', 'success', [
+                'response_meta' => [
+                    'deposit_id' => $depositId,
+                    'callback_status' => $callbackStatus,
+                    'provider_status' => $verifiedData['status'] ?? null,
+                    'provider_transaction_id' => $verifiedData['providerTransactionId'] ?? null,
+                    'verification_status' => $verification['status'] ?? null,
+                    'decision' => $decisionResult,
+                ],
+            ]);
+
+            $this->markBillingWebhookEventProcessed($event, $freshPayment, $security['meta'], $verification, $decisionResult);
+
+            return [
+                'payment' => $freshPayment,
+                'status' => (string) ($decisionResult['winning_status'] ?? $payment->status),
+            ];
+        } catch (Throwable $exception) {
+            $event->forceFill([
+                'signature_status' => $security['signature_status'],
+                'verification_meta_json' => $security['meta'],
+                'processing_status' => 'failed',
+                'last_error' => mb_substr($exception->getMessage(), 0, 65535),
+            ])->save();
+
+            throw $exception;
+        }
+    }
+
     public function paymentPayload(Payment $payment): array
     {
         return [
@@ -608,6 +780,63 @@ class BillingGatewayService
 
         $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
             'provider' => 'pesapal',
+            'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+            'request_meta' => $requestMeta,
+            'response_meta' => [
+                'billing_surface' => 'wallet_topup',
+                'provider_reference' => $action['provider_reference'] ?? null,
+                'checkout_url' => $action['url'] ?? null,
+            ],
+        ]);
+
+        unset($action['provider_payload']);
+
+        return $action;
+    }
+
+    private function initiatePawaPay(Payment $payment, array $context, array $options = [], ?Request $request = null): array
+    {
+        $requestMeta = $this->hostedCheckoutRequestMeta($payment, $request);
+        $attemptStartedAt = microtime(true);
+
+        try {
+            $action = $this->pawaPayCompatibilityAdapter->initialize($payment, $context, $options);
+        } catch (RuntimeException $exception) {
+            $this->failPayment($payment, $exception->getMessage());
+            $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
+                'provider' => 'pawapay',
+                'error_code' => 'hosted_checkout_init_failed',
+                'error_message' => $exception->getMessage(),
+                'http_status' => 422,
+                'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
+                'request_meta' => $requestMeta,
+                'response_meta' => [
+                    'billing_surface' => 'wallet_topup',
+                ],
+            ]);
+            throw $exception;
+        }
+
+        $storedAction = $action;
+        unset($storedAction['provider_payload']);
+
+        $payment->forceFill([
+            'status' => 'pending',
+            'transaction_reference' => $action['provider_reference'] !== '' ? $action['provider_reference'] : $payment->transaction_reference,
+            'raw_payload' => array_merge($payment->raw_payload ?? [], [
+                'pawapay' => $action['provider_payload'] ?? null,
+            ]),
+            'payment_data' => array_merge($payment->payment_data ?? [], [
+                'resume' => $storedAction,
+            ]),
+        ])->save();
+
+        $this->billingProviderTransactionRecorder->recordInitiation($payment, $context, $action, [
+            'reason_code' => 'initial_initiation',
+        ]);
+
+        $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
+            'provider' => 'pawapay',
             'latency_ms' => (int) round((microtime(true) - $attemptStartedAt) * 1000),
             'request_meta' => $requestMeta,
             'response_meta' => [
@@ -868,6 +1097,27 @@ class BillingGatewayService
             ->firstOrFail();
     }
 
+    private function resolveHostedCheckoutPaymentByProviderReference(string $providerTypeKey, string $providerReference): Payment
+    {
+        return Payment::query()
+            ->where(function ($query) use ($providerReference) {
+                $query->where('transaction_reference', $providerReference)
+                    ->orWhereHas('providerTransactions', function ($transactionQuery) use ($providerReference) {
+                        $transactionQuery->where('provider_transaction_id', $providerReference)
+                            ->orWhere('compatibility_reference', $providerReference);
+                    });
+            })
+            ->where(function ($query) use ($providerTypeKey) {
+                $query->where('provider_key', $providerTypeKey)
+                    ->orWhereHas('routingDecisions', function ($decisionQuery) use ($providerTypeKey) {
+                        $decisionQuery->where('immutable_until_terminal_state', true)
+                            ->where('provider_type_key', $providerTypeKey);
+                    });
+            })
+            ->latest('id')
+            ->firstOrFail();
+    }
+
     private function resolvedProviderType(Payment $payment): string
     {
         return strtolower(trim((string) (
@@ -920,6 +1170,337 @@ class BillingGatewayService
             'error_message' => $attributes['error_message'] ?? null,
             'response_meta' => is_array($attributes['response_meta'] ?? null) ? $attributes['response_meta'] : null,
         ]);
+    }
+
+    private function markBillingWebhookEventProcessed(
+        BillingWebhookEvent $event,
+        Payment $payment,
+        array $securityMeta,
+        array $verification,
+        array $decision
+    ): void {
+        $providerTransaction = $this->billingProviderTransactionRecorder->latestAttempt($payment, 'pawapay');
+
+        $event->forceFill([
+            'billing_provider_transaction_id' => $providerTransaction?->id,
+            'payment_id' => (int) $payment->id,
+            'verification_meta_json' => array_merge($securityMeta, [
+                'verification' => [
+                    'status' => $verification['status'] ?? null,
+                    'provider_reference' => $verification['provider_reference'] ?? null,
+                    'checked_at' => $verification['checked_at'] ?? null,
+                ],
+                'decision' => $decision,
+            ]),
+            'processing_status' => 'processed',
+            'processed_at' => now(),
+            'last_error' => null,
+        ])->save();
+    }
+
+    private function pawaPayCallbackSecurityAssessment(
+        string $rawBody,
+        array $headers,
+        array $requestContext = [],
+        ?BillingProviderProfile $profile = null
+    ): array
+    {
+        $signature = $this->firstHeaderValue($headers, 'Signature');
+        $signatureInput = $this->firstHeaderValue($headers, 'Signature-Input');
+        $signatureDate = $this->firstHeaderValue($headers, 'Signature-Date');
+        $contentDigest = $this->firstHeaderValue($headers, 'Content-Digest');
+        $signed = $signature !== '' || $signatureInput !== '';
+
+        $meta = [
+            'signed_callback' => $signed,
+            'signature_present' => $signature !== '',
+            'signature_input_present' => $signatureInput !== '',
+            'signature_date' => $signatureDate !== '' ? $signatureDate : null,
+            'content_digest_present' => $contentDigest !== '',
+        ];
+
+        if ($signed && ($signature === '' || $signatureInput === '')) {
+            throw new RuntimeException('pawaPay callback signature headers are incomplete.');
+        }
+
+        if ($contentDigest === '') {
+            if ($signed) {
+                throw new RuntimeException('pawaPay callback content digest is missing.');
+            }
+
+            return [
+                'signature_status' => 'unsigned',
+                'meta' => array_merge($meta, [
+                    'content_digest_status' => 'missing',
+                ]),
+            ];
+        }
+
+        if (!preg_match('/^\s*(sha-256|sha-512)=:([^:]+):\s*$/i', $contentDigest, $matches)) {
+            throw new RuntimeException('pawaPay callback content digest format is not supported.');
+        }
+
+        $algorithm = strtolower($matches[1]);
+        $expectedDigest = trim((string) $matches[2]);
+        $computedDigest = base64_encode(hash(str_replace('-', '', $algorithm), $rawBody, true));
+
+        if (!hash_equals($expectedDigest, $computedDigest)) {
+            throw new RuntimeException('pawaPay callback content digest mismatch.');
+        }
+
+        $baseMeta = array_merge($meta, [
+            'content_digest_status' => 'valid',
+            'content_digest_algorithm' => $algorithm,
+        ]);
+
+        if (!$signed) {
+            return [
+                'signature_status' => 'unsigned',
+                'meta' => $baseMeta,
+            ];
+        }
+
+        $parsedSignature = $this->parsePawaPaySignatureHeader($signature);
+        $parsedInput = $this->parsePawaPaySignatureInput($signatureInput);
+
+        if ($parsedSignature['label'] !== $parsedInput['label']) {
+            throw new RuntimeException('pawaPay callback signature headers do not reference the same signature label.');
+        }
+
+        $signatureBase = $this->buildPawaPaySignatureBase($parsedInput, $headers, $requestContext);
+        $publicKey = $this->resolvePawaPayCallbackPublicKey($profile, (string) ($parsedInput['params']['keyid'] ?? ''));
+
+        if (!$this->verifyPawaPayCallbackSignature(
+            $signatureBase,
+            $parsedSignature['signature'],
+            $publicKey['key'],
+            (string) ($parsedInput['params']['alg'] ?? '')
+        )) {
+            throw new RuntimeException('pawaPay callback signature is invalid.');
+        }
+
+        return [
+            'signature_status' => 'verified',
+            'meta' => array_merge($baseMeta, [
+                'signature_label' => $parsedInput['label'],
+                'signature_algorithm' => $parsedInput['params']['alg'] ?? null,
+                'signature_key_id' => $parsedInput['params']['keyid'] ?? null,
+                'signature_components' => $parsedInput['components'],
+                'signature_base' => $signatureBase,
+                'public_key_id' => $publicKey['id'],
+            ]),
+        ];
+    }
+
+    private function resolvePawaPayProfile(Payment $payment, ?BillingRoutingDecision $decision): ?BillingProviderProfile
+    {
+        $profileId = $decision?->provider_profile_id;
+        if ($profileId) {
+            return BillingProviderProfile::query()->find($profileId);
+        }
+
+        return BillingProviderProfile::query()
+            ->where('provider_type_key', 'pawapay')
+            ->where('market_id', (int) $payment->platform_id)
+            ->where('active', true)
+            ->first();
+    }
+
+    private function parsePawaPaySignatureHeader(string $signature): array
+    {
+        if (!preg_match('/^\s*([A-Za-z0-9_-]+)\s*=\s*:([^:]+):\s*$/', $signature, $matches)) {
+            throw new RuntimeException('pawaPay callback signature header format is not supported.');
+        }
+
+        $decoded = base64_decode(trim((string) $matches[2]), true);
+        if ($decoded === false) {
+            throw new RuntimeException('pawaPay callback signature is not valid base64.');
+        }
+
+        return [
+            'label' => trim((string) $matches[1]),
+            'signature' => $decoded,
+        ];
+    }
+
+    private function parsePawaPaySignatureInput(string $signatureInput): array
+    {
+        if (!preg_match('/^\s*([A-Za-z0-9_-]+)\s*=\s*(\([^)]*\))(.*)$/', $signatureInput, $matches)) {
+            throw new RuntimeException('pawaPay callback signature input format is not supported.');
+        }
+
+        preg_match_all('/"([^"]+)"/', $matches[2], $components);
+        $componentList = array_values(array_filter($components[1] ?? [], fn ($component) => trim((string) $component) !== ''));
+        if ($componentList === []) {
+            throw new RuntimeException('pawaPay callback signature input does not list any signed components.');
+        }
+
+        $params = [];
+        if (preg_match_all('/;\s*([A-Za-z0-9_-]+)=("([^"]*)"|([0-9]+))/', $matches[3], $paramMatches, PREG_SET_ORDER)) {
+            foreach ($paramMatches as $paramMatch) {
+                $params[strtolower(trim((string) $paramMatch[1]))] = $paramMatch[3] !== ''
+                    ? $paramMatch[3]
+                    : $paramMatch[4];
+            }
+        }
+
+        return [
+            'label' => trim((string) $matches[1]),
+            'components' => $componentList,
+            'params' => $params,
+            'signature_params' => trim((string) ($matches[2] . $matches[3])),
+        ];
+    }
+
+    private function buildPawaPaySignatureBase(array $signatureInput, array $headers, array $requestContext): string
+    {
+        $lines = [];
+
+        foreach ($signatureInput['components'] as $component) {
+            $lowerComponent = strtolower(trim((string) $component));
+
+            if (str_starts_with($lowerComponent, '@')) {
+                $value = match ($lowerComponent) {
+                    '@method' => strtoupper(trim((string) ($requestContext['method'] ?? ''))),
+                    '@authority' => trim((string) ($requestContext['authority'] ?? $this->firstHeaderValue($headers, 'Host'))),
+                    '@path' => (string) ($requestContext['path'] ?? ''),
+                    default => '',
+                };
+
+                if ($value === '') {
+                    throw new RuntimeException(sprintf('pawaPay callback signature requires unsupported or missing derived component [%s].', $component));
+                }
+
+                $lines[] = sprintf('"%s": %s', $lowerComponent, $value);
+
+                continue;
+            }
+
+            $headerValue = $this->firstHeaderValue($headers, $component);
+            if ($headerValue === '') {
+                throw new RuntimeException(sprintf('pawaPay callback signature is missing signed header [%s].', $component));
+            }
+
+            $lines[] = sprintf('"%s": %s', $lowerComponent, $headerValue);
+        }
+
+        $lines[] = sprintf('"@signature-params": %s', (string) $signatureInput['signature_params']);
+
+        return implode("\n", $lines);
+    }
+
+    private function resolvePawaPayCallbackPublicKey(?BillingProviderProfile $profile, string $keyId): array
+    {
+        if ($profile === null) {
+            throw new RuntimeException('pawaPay callback verification could not resolve the active provider profile.');
+        }
+
+        $keyId = trim($keyId);
+        if ($keyId === '') {
+            throw new RuntimeException('pawaPay callback signature is missing the key id.');
+        }
+
+        $apiKey = trim((string) data_get($profile->secrets_json, 'api_key', ''));
+        if ($apiKey === '') {
+            throw new RuntimeException('pawaPay callback verification credentials are incomplete.');
+        }
+
+        $baseUrl = trim((string) data_get($profile->config_json, 'base_url', ''));
+        if ($baseUrl === '') {
+            $baseUrl = strtolower(trim((string) $profile->environment)) === 'production'
+                ? 'https://api.pawapay.io'
+                : 'https://api.sandbox.pawapay.io';
+        }
+
+        $response = Http::timeout(20)
+            ->withToken($apiKey)
+            ->acceptJson()
+            ->get(rtrim($baseUrl, '/') . '/v2/public-key/http');
+
+        if (!$response->successful()) {
+            throw new RuntimeException('Could not fetch the pawaPay callback public keys.');
+        }
+
+        foreach ((array) $response->json() as $entry) {
+            if (trim((string) ($entry['id'] ?? '')) !== $keyId) {
+                continue;
+            }
+
+            $publicKey = trim((string) ($entry['key'] ?? ''));
+            if ($publicKey === '') {
+                break;
+            }
+
+            return [
+                'id' => $keyId,
+                'key' => $publicKey,
+            ];
+        }
+
+        throw new RuntimeException('The pawaPay callback key id is not available from the public keys endpoint.');
+    }
+
+    private function verifyPawaPayCallbackSignature(
+        string $signatureBase,
+        string $signature,
+        string $publicKey,
+        string $algorithm
+    ): bool {
+        $algorithm = strtolower(trim($algorithm));
+        $loadedKey = PublicKeyLoader::load($publicKey);
+
+        if ($loadedKey instanceof EC) {
+            $hash = match ($algorithm) {
+                'ecdsa-p256-sha256' => 'sha256',
+                'ecdsa-p384-sha384' => 'sha384',
+                default => null,
+            };
+
+            if ($hash === null) {
+                throw new RuntimeException('Unsupported pawaPay callback signature algorithm.');
+            }
+
+            return $loadedKey
+                ->withHash($hash)
+                ->verify($signatureBase, $signature);
+        }
+
+        if ($loadedKey instanceof RSA) {
+            $key = match ($algorithm) {
+                'rsa-v1_5-sha256' => $loadedKey
+                    ->withHash('sha256')
+                    ->withPadding(RSA::SIGNATURE_PKCS1),
+                'rsa-pss-sha512' => $loadedKey
+                    ->withHash('sha512')
+                    ->withPadding(RSA::SIGNATURE_PSS),
+                default => null,
+            };
+
+            if ($key === null) {
+                throw new RuntimeException('Unsupported pawaPay callback signature algorithm.');
+            }
+
+            return $key->verify($signatureBase, $signature);
+        }
+
+        throw new RuntimeException('Unsupported pawaPay callback public key type.');
+    }
+
+    private function firstHeaderValue(array $headers, string $name): string
+    {
+        foreach ($headers as $key => $value) {
+            if (strcasecmp((string) $key, $name) !== 0) {
+                continue;
+            }
+
+            if (is_array($value)) {
+                return trim((string) ($value[0] ?? ''));
+            }
+
+            return trim((string) $value);
+        }
+
+        return '';
     }
 
     private function topupReference(int $platformId, int $clientId, string $provider, string $idempotencyKey): string

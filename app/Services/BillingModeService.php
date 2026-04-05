@@ -3,7 +3,10 @@
 namespace App\Services;
 
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Repositories\BillingConfigurationRepository;
+use App\Billing\Support\BillingSurface;
 use App\Billing\Support\KopoKopoRuntimeResolver;
+use App\Models\BillingProviderProfile;
 use App\Models\Platform;
 use InvalidArgumentException;
 
@@ -12,6 +15,7 @@ class BillingModeService
     public function __construct(
         private readonly WalletSettingsService $walletSettingsService,
         private readonly BillingProviderRegistryContract $providerRegistry,
+        private readonly BillingConfigurationRepository $billingConfigurationRepository,
         private readonly KopokopoConfigService $kopokopoConfigService,
         private readonly KopoKopoRuntimeResolver $kopokopoRuntimeResolver
     ) {
@@ -49,13 +53,12 @@ class BillingModeService
     ): array
     {
         $normalizedProvider = strtolower(trim($provider));
-        $providerDefinition = $this->providerRegistry->find($normalizedProvider)?->definition();
+        $providerAdapter = $this->providerRegistry->find($normalizedProvider);
+        $providerDefinition = $providerAdapter?->definition();
         $runtimeProvider = $this->runtimeProviderKey($normalizedProvider);
+        $legacyWalletProviders = $this->providerRegistry->legacyWalletProviderKeys();
 
-        if (
-            !$providerDefinition
-            || (!in_array($normalizedProvider, $this->providerRegistry->legacyWalletProviderKeys(), true) && $runtimeProvider === $normalizedProvider)
-        ) {
+        if (!$providerDefinition || !$providerDefinition->capabilities->supportsSurface(BillingSurface::WalletFunding)) {
             throw new InvalidArgumentException('Unsupported wallet billing provider.');
         }
 
@@ -70,6 +73,20 @@ class BillingModeService
         $resolvedBinding = null;
         $resolvedProfile = null;
         $resolvedFrom = null;
+        $resolvedProfileCredentials = null;
+
+        if (!in_array($normalizedProvider, $legacyWalletProviders, true) && $runtimeProvider === $normalizedProvider) {
+            $resolved = $this->resolveProfileBackedProvider($platform, $normalizedProvider, $environment);
+            $resolvedBinding = $resolved['binding'];
+            $resolvedProfile = $resolved['profile'];
+            $resolvedProfileCredentials = $resolved['credentials'];
+            $resolvedFrom = $resolved['resolved_from'];
+            $providerConfig = array_merge(
+                is_array($providerConfig) ? $providerConfig : [],
+                ['enabled' => $resolvedBinding !== null]
+            );
+            $providerCredentials = $resolvedProfileCredentials;
+        }
 
         if (
             $normalizedProvider === 'kopokopo'
@@ -128,6 +145,46 @@ class BillingModeService
         return $url;
     }
 
+    public function profileBackedProviderContext(
+        Platform $platform,
+        BillingProviderProfile $profile,
+        ?int $chosenBindingId = null,
+        bool $requireEnabled = false,
+        ?string $environmentOverride = null
+    ): array {
+        $provider = strtolower(trim((string) $profile->provider_type_key));
+        $providerAdapter = $this->providerRegistry->find($provider);
+        $providerDefinition = $providerAdapter?->definition();
+
+        if (!$providerDefinition || !$providerDefinition->capabilities->supportsSurface(BillingSurface::SubscriptionLink)) {
+            throw new InvalidArgumentException('Unsupported subscription link billing provider.');
+        }
+
+        $context = $requireEnabled
+            ? $this->assertWalletAvailable($platform)
+            : $this->walletContext($platform);
+        $environment = $this->resolveProviderEnvironment(
+            $this->resolveEnvironment((string) ($profile->environment ?: data_get($context, 'environment', 'sandbox'))),
+            $environmentOverride
+        );
+        $providerCredentials = array_merge((array) ($profile->config_json ?? []), (array) ($profile->secrets_json ?? []));
+
+        $this->assertCredentialsPresent($provider, $providerCredentials, $provider);
+
+        return array_merge($context, [
+            'environment' => $environment,
+            'provider' => $provider,
+            'provider_runtime_key' => $provider,
+            'provider_definition' => $providerDefinition,
+            'provider_config' => ['enabled' => (bool) $profile->active],
+            'provider_credentials' => $providerCredentials,
+            'provider_direct_config' => null,
+            'provider_profile_id' => $profile->id,
+            'chosen_binding_id' => $chosenBindingId,
+            'provider_resolved_from' => 'provider_profile',
+        ]);
+    }
+
     private function assertCredentialsPresent(
         string $provider,
         array $credentials,
@@ -150,6 +207,14 @@ class BillingModeService
                 || trim((string) ($credentials['ipn_id'] ?? '')) === ''
             ) {
                 throw new InvalidArgumentException('Pesapal credentials are incomplete for the active environment.');
+            }
+
+            return;
+        }
+
+        if ($provider === 'pawapay') {
+            if (trim((string) ($credentials['api_key'] ?? '')) === '') {
+                throw new InvalidArgumentException('pawaPay credentials are incomplete for the active environment.');
             }
 
             return;
@@ -201,5 +266,29 @@ class BillingModeService
             'kopokopo' => 'mpesa_stk',
             default => $provider,
         };
+    }
+
+    /**
+     * @return array{binding: mixed, profile: mixed, credentials: array<string, mixed>, resolved_from: string}
+     */
+    private function resolveProfileBackedProvider(Platform $platform, string $providerTypeKey, string $environment): array
+    {
+        $binding = $this->billingConfigurationRepository->firstActiveBindingForProvider(
+            (int) $platform->id,
+            BillingSurface::WalletFunding->value,
+            $providerTypeKey,
+            $environment
+        );
+
+        $profile = $binding?->providerProfile;
+
+        return [
+            'binding' => $binding,
+            'profile' => $profile,
+            'credentials' => $profile
+                ? array_merge((array) ($profile->config_json ?? []), (array) ($profile->secrets_json ?? []))
+                : [],
+            'resolved_from' => $profile ? 'provider_profile' : null,
+        ];
     }
 }

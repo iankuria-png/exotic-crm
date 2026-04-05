@@ -378,6 +378,7 @@ Route::post('/payment/notification', [PaymentController::class, 'handleNotificat
 Route::post('/billing/paystack/webhook', [BillingController::class, 'paystackWebhook']);
 Route::match(['get', 'post'], '/billing/pesapal/ipn', [BillingController::class, 'pesapalIpn']);
 Route::post('/billing/mpesa/callback', [BillingController::class, 'mpesaCallback']);
+Route::post('/billing/pawapay/callback', [BillingController::class, 'pawaPayCallback']);
 
 // SMS logs (public)
 Route::get('/sms-logs', [SmsLogController::class, 'messages']);

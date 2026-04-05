@@ -20,7 +20,7 @@ class ReconcilePendingPayments extends Command
         {--delay-ms=1000 : Delay between provider API calls in milliseconds}
         {--include-sandbox : Include sandbox/test payments in this reconciliation run}';
 
-    protected $description = 'Verify stale pending Paystack/Pesapal payments and reconcile missed callbacks.';
+    protected $description = 'Verify stale pending hosted-checkout payments and reconcile missed callbacks.';
 
     public function __construct(
         private readonly PaymentCompletionService $paymentCompletionService,
@@ -49,10 +49,10 @@ class ReconcilePendingPayments extends Command
             ])
             ->where('status', 'pending')
             ->where(function ($query) {
-                $query->whereIn('provider_key', ['paystack', 'pesapal'])
+                $query->whereIn('provider_key', ['paystack', 'pesapal', 'pawapay'])
                     ->orWhereHas('routingDecisions', function ($decisionQuery) {
                         $decisionQuery->where('immutable_until_terminal_state', true)
-                            ->whereIn('provider_type_key', ['paystack', 'pesapal']);
+                            ->whereIn('provider_type_key', ['paystack', 'pesapal', 'pawapay']);
                     });
             })
             ->whereIn('purpose', ['wallet_topup', 'subscription'])

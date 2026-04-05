@@ -644,10 +644,10 @@ class SettingsController extends Controller
         // Return profiles with provider definitions for context
         return response()->json([
             'profiles' => $profiles,
-            'providers' => array_map(
+            'providers' => array_values(array_map(
                 fn ($definition) => $definition->toArray(),
                 $this->billingProviderRegistry->definitions()
-            ),
+            )),
             'schemas' => $this->serializeProviderSchemas(),
             'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
             'count' => count($profiles),

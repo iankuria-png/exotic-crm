@@ -2,6 +2,7 @@
 
 namespace Tests\Unit\Billing;
 
+use App\Billing\Providers\PawaPay\PawaPayCompatibilityAdapter;
 use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
@@ -156,7 +157,8 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
         $orchestrator = new ProviderStatusQueryOrchestrator(
             $billingModeService,
             Mockery::mock(HostedCheckoutService::class),
-            $pesapalAdapter
+            $pesapalAdapter,
+            Mockery::mock(PawaPayCompatibilityAdapter::class)
         );
 
         $verification = $orchestrator->verify($payment);
@@ -166,12 +168,66 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
         $this->assertSame('TRACK-123', $verification['provider_reference']);
     }
 
+    public function test_verify_uses_pawapay_compatibility_adapter_for_pawapay_payments(): void
+    {
+        $platform = Platform::factory()->create();
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'provider_key' => 'pawapay',
+            'provider_environment' => 'sandbox',
+            'reference_number' => 'WTU-PAWA-001',
+            'transaction_reference' => '6f3ae557-334e-48bb-bd73-ff04767b224f',
+        ]);
+
+        $billingModeService = Mockery::mock(BillingModeService::class);
+        $billingModeService->shouldReceive('providerContext')
+            ->once()
+            ->with(
+                Mockery::on(fn ($resolvedPlatform) => $resolvedPlatform instanceof Platform && $resolvedPlatform->is($platform)),
+                'pawapay',
+                false,
+                'sandbox'
+            )
+            ->andReturn([
+                'environment' => 'sandbox',
+                'provider_credentials' => ['api_key' => 'pawapay-key'],
+            ]);
+
+        $pawaPayAdapter = Mockery::mock(PawaPayCompatibilityAdapter::class);
+        $pawaPayAdapter->shouldReceive('verify')
+            ->once()
+            ->with(
+                Mockery::on(fn (Payment $resolved) => $resolved->is($payment)),
+                Mockery::type('array'),
+                '6f3ae557-334e-48bb-bd73-ff04767b224f'
+            )
+            ->andReturn([
+                'status' => 'completed',
+                'message' => 'Completed',
+                'data' => ['depositId' => '6f3ae557-334e-48bb-bd73-ff04767b224f'],
+            ]);
+
+        $orchestrator = new ProviderStatusQueryOrchestrator(
+            $billingModeService,
+            Mockery::mock(HostedCheckoutService::class),
+            Mockery::mock(PesapalCompatibilityAdapter::class),
+            $pawaPayAdapter
+        );
+
+        $verification = $orchestrator->verify($payment);
+
+        $this->assertSame('pawapay', $verification['provider']);
+        $this->assertSame('completed', $verification['status']);
+        $this->assertSame('6f3ae557-334e-48bb-bd73-ff04767b224f', $verification['provider_reference']);
+    }
+
     private function makeOrchestrator(): ProviderStatusQueryOrchestrator
     {
         return new ProviderStatusQueryOrchestrator(
             Mockery::mock(BillingModeService::class),
             Mockery::mock(HostedCheckoutService::class),
-            Mockery::mock(PesapalCompatibilityAdapter::class)
+            Mockery::mock(PesapalCompatibilityAdapter::class),
+            Mockery::mock(PawaPayCompatibilityAdapter::class)
         );
     }
 

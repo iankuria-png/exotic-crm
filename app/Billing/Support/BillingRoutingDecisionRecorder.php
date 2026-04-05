@@ -50,31 +50,30 @@ class BillingRoutingDecisionRecorder
 
     public function recordPaymentLink(Payment $payment, array $resolvedProvider, string $paymentUrl, array $options = []): BillingRoutingDecision
     {
-        if ($existing = $this->existingPinnedDecision($payment)) {
-            return $existing;
-        }
-
         $providerKey = strtolower(trim((string) ($resolvedProvider['key'] ?? $payment->provider_key ?? 'payment_link')));
         $providerConfig = is_array($resolvedProvider['config'] ?? null) ? $resolvedProvider['config'] : [];
         $providerTypeKey = strtolower(trim((string) ($providerConfig['wallet_provider_key'] ?? $providerKey)));
         $mode = strtolower(trim((string) ($providerConfig['mode'] ?? PaymentLinkService::MODE_STATIC_URL)));
         $environment = strtolower(trim((string) ($providerConfig['environment'] ?? $payment->provider_environment ?? 'production')));
-        $surface = $mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
-            ? BillingSurface::ProxyHostedCheckout
-            : BillingSurface::SubscriptionLink;
-        $executionMode = $mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
-            ? ExecutionMode::Proxy->value
-            : ExecutionMode::Direct->value;
-        $executionFamily = $mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
-            ? 'hosted_redirect'
-            : 'subscription_link';
-
-        return BillingRoutingDecision::query()->create([
+        $surface = BillingSurface::tryFrom((string) ($providerConfig['billing_surface'] ?? ''))
+            ?? ($mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
+                ? BillingSurface::ProxyHostedCheckout
+                : BillingSurface::SubscriptionLink);
+        $executionMode = strtolower(trim((string) ($providerConfig['execution_mode'] ?? ''))) ?: (
+            $mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
+                ? ExecutionMode::Proxy->value
+                : ExecutionMode::Direct->value
+        );
+        $executionFamily = $surface === BillingSurface::SubscriptionLink
+            ? 'subscription_link'
+            : ($mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT ? 'hosted_redirect' : 'subscription_link');
+        $providerFamily = $mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT ? 'hosted_checkout' : 'static_link';
+        $payload = [
             'payment_id' => (int) $payment->id,
             'market_id' => (int) $payment->platform_id,
             'billing_surface' => $surface->value,
-            'chosen_binding_id' => null,
-            'provider_profile_id' => null,
+            'chosen_binding_id' => $providerConfig['chosen_binding_id'] ?? null,
+            'provider_profile_id' => $providerConfig['provider_profile_id'] ?? null,
             'provider_type_key' => $providerTypeKey,
             'execution_mode' => $executionMode,
             'environment' => $environment,
@@ -89,7 +88,7 @@ class BillingRoutingDecisionRecorder
                 'provider_key' => $providerKey,
                 'provider_type_key' => $providerTypeKey,
                 'provider_label' => (string) ($providerConfig['label'] ?? $providerKey),
-                'provider_family' => $mode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT ? 'hosted_checkout' : 'static_link',
+                'provider_family' => $providerFamily,
                 'execution_family' => $executionFamily,
                 'environment' => $environment,
                 'execution_mode' => $executionMode,
@@ -115,9 +114,20 @@ class BillingRoutingDecisionRecorder
                 'provider_key' => $providerKey,
                 'requested_provider' => $options['requested_provider'] ?? $providerKey,
                 'notification_purpose' => $options['notification_purpose'] ?? null,
+                'provider_profile_id' => $providerConfig['provider_profile_id'] ?? null,
+                'chosen_binding_id' => $providerConfig['chosen_binding_id'] ?? null,
             ],
+        ];
+
+        if ($existing = $this->existingPinnedDecision($payment)) {
+            $existing->forceFill($payload)->save();
+
+            return $existing->fresh();
+        }
+
+        return BillingRoutingDecision::query()->create(array_merge($payload, [
             'created_at' => now(),
-        ]);
+        ]));
     }
 
     public function recordSelfCheckout(

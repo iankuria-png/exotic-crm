@@ -183,6 +183,41 @@ class BillingController extends Controller
         ]);
     }
 
+    public function pawaPayCallback(Request $request)
+    {
+        $rawBody = (string) $request->getContent();
+        $payload = $request->json()->all();
+
+        try {
+            $result = $this->billingGatewayService->handlePawaPayCallback(
+                $rawBody,
+                $payload,
+                $request->headers->all(),
+                [
+                    'method' => strtoupper($request->getMethod()),
+                    'authority' => $request->getHttpHost(),
+                    'path' => $request->getPathInfo(),
+                ]
+            );
+        } catch (RuntimeException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'error_code' => 'webhook_verification_failed',
+            ], 401);
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'error_code' => 'webhook_invalid_payload',
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => 'pawaPay callback processed.',
+            'status' => $result['status'],
+            'payment' => $this->billingGatewayService->paymentPayload($result['payment']),
+        ]);
+    }
+
     public function complete(Request $request)
     {
         $payment = $this->resolveBrowserPayment(

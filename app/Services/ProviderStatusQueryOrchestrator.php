@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Providers\PawaPay\PawaPayCompatibilityAdapter;
 use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
@@ -13,7 +14,8 @@ class ProviderStatusQueryOrchestrator
     public function __construct(
         private readonly BillingModeService $billingModeService,
         private readonly HostedCheckoutService $hostedCheckoutService,
-        private readonly PesapalCompatibilityAdapter $pesapalCompatibilityAdapter
+        private readonly PesapalCompatibilityAdapter $pesapalCompatibilityAdapter,
+        private readonly PawaPayCompatibilityAdapter $pawaPayCompatibilityAdapter
     ) {
     }
 
@@ -22,8 +24,8 @@ class ProviderStatusQueryOrchestrator
         $payment->loadMissing(['platform']);
 
         $provider = $this->resolveProviderType($payment);
-        if (!in_array($provider, ['paystack', 'pesapal'], true)) {
-            throw new InvalidArgumentException('Live provider checks are available only for Paystack and Pesapal payments.');
+        if (!in_array($provider, ['paystack', 'pesapal', 'pawapay'], true)) {
+            throw new InvalidArgumentException('Live provider checks are available only for Paystack, Pesapal, and pawaPay payments.');
         }
 
         $context = $this->billingModeService->providerContext(
@@ -44,11 +46,18 @@ class ProviderStatusQueryOrchestrator
                 $context,
                 $this->resolvePesapalTrackingId($payment, $options)
             ),
+            'pawapay' => $this->pawaPayCompatibilityAdapter->verify(
+                $payment,
+                $context,
+                $this->resolvePawaPayDepositId($payment, $options)
+            ),
         };
 
-        $providerReference = $provider === 'pesapal'
-            ? $this->resolvePesapalTrackingId($payment, $options)
-            : (string) ($options['reference'] ?? $payment->transaction_reference ?: $payment->reference_number);
+        $providerReference = match ($provider) {
+            'pesapal' => $this->resolvePesapalTrackingId($payment, $options),
+            'pawapay' => $this->resolvePawaPayDepositId($payment, $options),
+            default => (string) ($options['reference'] ?? $payment->transaction_reference ?: $payment->reference_number),
+        };
 
         return [
             'payment_id' => (int) $payment->id,
@@ -244,6 +253,26 @@ class ProviderStatusQueryOrchestrator
         return $trackingId;
     }
 
+    public function resolvePawaPayDepositId(Payment $payment, array $options = []): string
+    {
+        $depositId = trim((string) (
+            $options['deposit_id'] ?? null
+            ?? $options['provider_reference'] ?? null
+            ?? $options['reference'] ?? null
+            ?? $payment->transaction_reference
+            ?? data_get($payment->payment_data, 'pawapay.deposit_id')
+            ?? data_get($payment->raw_payload, 'pawapay.depositId')
+            ?? $payment->transaction_uuid
+            ?? ''
+        ));
+
+        if ($depositId === '') {
+            throw new RuntimeException('pawaPay payment is missing a deposit id for reconciliation.');
+        }
+
+        return $depositId;
+    }
+
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
     {
         if ($payment->relationLoaded('routingDecisions')) {
@@ -267,6 +296,13 @@ class ProviderStatusQueryOrchestrator
                 $payment->transaction_reference
                 ?? data_get($payment->raw_payload, 'pesapal.order_tracking_id')
                 ?? data_get($payment->payment_data, 'link_proxy.provider_reference')
+                ?? ''
+            )),
+            'pawapay' => trim((string) (
+                $payment->transaction_reference
+                ?? data_get($payment->payment_data, 'pawapay.deposit_id')
+                ?? data_get($payment->raw_payload, 'pawapay.depositId')
+                ?? $payment->transaction_uuid
                 ?? ''
             )),
             default => trim((string) ($payment->reference_number ?: $payment->transaction_reference ?: '')),

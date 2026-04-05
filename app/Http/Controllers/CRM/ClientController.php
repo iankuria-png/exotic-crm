@@ -24,6 +24,7 @@ use App\Services\ClientSyncService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
 use App\Services\SupportBoardService;
+use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
@@ -44,7 +45,8 @@ class ClientController extends Controller
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
         private readonly ClientDeletionService $clientDeletionService,
         private readonly DealPaymentService $dealPaymentService,
-        private readonly PaymentLinkService $paymentLinkService
+        private readonly PaymentLinkService $paymentLinkService,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -317,8 +319,21 @@ class ClientController extends Controller
             'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
             'activeDeal.product',
         ]);
+        $this->hydrateBillingPlatformState($client);
 
         return response()->json($client);
+    }
+
+    private function hydrateBillingPlatformState(Client $client): void
+    {
+        if (!$client->platform) {
+            return;
+        }
+
+        $client->platform->setAttribute(
+            'payment_link_providers',
+            $this->walletSettingsService->currentPaymentLinkProviders($client->platform)
+        );
     }
 
     public function deletePreview(Request $request, Client $client)

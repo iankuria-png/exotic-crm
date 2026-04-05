@@ -168,4 +168,53 @@ class BillingModeServiceDarajaTest extends TestCase
         $this->assertSame('https://profile.kopokopo.test', data_get($context, 'provider_direct_config.base_url'));
         $this->assertSame('PROFILE123', data_get($context, 'provider_direct_config.till_number'));
     }
+
+    public function test_provider_context_resolves_pawapay_from_active_profile_binding(): void
+    {
+        $platform = Platform::factory()->create([
+            'currency_code' => 'KES',
+            'wallet_settings' => [
+                'mode_override' => 'sandbox',
+            ],
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $context = app(BillingModeService::class)->providerContext($platform->fresh(), 'pawapay', false, 'sandbox');
+
+        $this->assertSame('pawapay', $context['provider']);
+        $this->assertSame('pawapay', $context['provider_runtime_key']);
+        $this->assertSame('provider_profile', $context['provider_resolved_from']);
+        $this->assertSame($profile->id, $context['provider_profile_id']);
+        $this->assertSame($binding->id, $context['chosen_binding_id']);
+        $this->assertTrue((bool) data_get($context, 'provider_config.enabled'));
+        $this->assertSame('https://api.sandbox.pawapay.io', data_get($context, 'provider_credentials.base_url'));
+        $this->assertSame('https://billing.example.test', data_get($context, 'provider_credentials.callback_base_url'));
+        $this->assertSame('pawapay-sandbox-key', data_get($context, 'provider_credentials.api_key'));
+    }
 }

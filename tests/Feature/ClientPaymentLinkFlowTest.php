@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\AuditLog;
+use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingProviderProfile;
+use App\Models\BillingRoutingRule;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -244,6 +247,65 @@ class ClientPaymentLinkFlowTest extends TestCase
         $this->assertSame('paystack_checkout', data_get($audit->before_state, 'requested_provider'));
         $this->assertTrue((bool) data_get($audit->after_state, 'provider_override_denied'));
         $this->assertFalse((bool) data_get($audit->after_state, 'provider_override_applied'));
+    }
+
+    public function test_client_detail_payload_exposes_projected_subscription_link_providers_when_legacy_config_is_missing(): void
+    {
+        $platform = $this->createPlatform();
+        $platform->forceFill([
+            'payment_link_providers' => null,
+        ])->save();
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'subscription_link',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => false,
+            'execution_mode' => 'direct',
+            'priority' => 10,
+            'fallback_group' => 'subscription-link',
+            'restriction_json' => [],
+        ]);
+
+        BillingRoutingRule::query()->create([
+            'market_id' => $platform->id,
+            'billing_surface' => 'subscription_link',
+            'primary_binding_id' => $binding->id,
+            'fallback_strategy_json' => ['providers' => []],
+            'risk_policy_json' => ['mode' => 'direct'],
+            'active' => true,
+        ]);
+
+        $client = $this->createClient($platform, 9106);
+        $user = $this->createUser($platform);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/clients/{$client->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('platform.payment_link_providers.active_provider', 'pawapay_checkout')
+            ->assertJsonPath('platform.payment_link_providers.providers.pawapay_checkout.wallet_provider_key', 'pawapay')
+            ->assertJsonPath('platform.payment_link_providers.providers.pawapay_checkout.billing_surface', 'subscription_link');
     }
 
     private function createPlatform(): Platform

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\BillingWalletRule;
 use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingWebhookEvent;
 use App\Models\BillingProviderProfile;
 use App\Models\Client;
 use App\Models\Payment;
@@ -1161,6 +1162,629 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertSame('wallet_topup_stk', data_get($attempt->request_meta, 'channel'));
     }
 
+    public function test_pawapay_provider_key_routes_through_profile_backed_payment_page_bridge(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+            'bearer_key' => $bearerKey,
+            'hmac_secret' => $hmacSecret,
+        ] = $this->seedWalletContext();
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) use ($client) {
+                $payload = json_decode($request->body(), true);
+
+                TestCase::assertSame('Bearer pawapay-sandbox-key', $request->header('Authorization')[0] ?? null);
+                TestCase::assertSame('254700000111', $payload['phoneNumber'] ?? null);
+                TestCase::assertSame('KEN', $payload['country'] ?? null);
+                TestCase::assertStringContainsString('/billing/complete?payment=', $payload['returnUrl'] ?? '');
+                TestCase::assertSame('900.00', data_get($payload, 'amountDetails.amount'));
+                TestCase::assertSame('KES', data_get($payload, 'amountDetails.currency'));
+                TestCase::assertSame((string) $client->id, data_get($payload, 'metadata.3.clientId'));
+
+                return Http::response([
+                    'depositId' => $payload['depositId'] ?? null,
+                    'redirectUrl' => 'https://sandbox.paywith.pawapay.io/session/bridge-001',
+                ], 200);
+            },
+        ]);
+
+        $payload = [
+            'wp_user_id' => $client->wp_user_id,
+            'provider' => 'pawapay',
+            'amount' => '900.00',
+            'phone' => $client->phone_normalized,
+        ];
+        $headers = $this->walletHeaders(
+            $platform,
+            $bearerKey,
+            $hmacSecret,
+            'POST',
+            '/api/billing/initiate',
+            $payload,
+            'pawapay-' . Str::uuid()
+        );
+
+        $initiate = $this->withHeaders($headers)->postJson('/api/billing/initiate', $payload);
+        $initiate->assertCreated()
+            ->assertJsonPath('provider', 'pawapay')
+            ->assertJsonPath('action.type', 'redirect')
+            ->assertJsonPath('action.url', 'https://sandbox.paywith.pawapay.io/session/bridge-001');
+
+        $paymentId = (int) $initiate->json('payment.id');
+        $payment = Payment::query()->findOrFail($paymentId);
+        $routingDecision = BillingRoutingDecision::query()
+            ->where('payment_id', $paymentId)
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($routingDecision);
+        $this->assertSame('pawapay', $routingDecision->provider_type_key);
+        $this->assertSame($profile->id, $routingDecision->provider_profile_id);
+        $this->assertSame($binding->id, $routingDecision->chosen_binding_id);
+        $this->assertSame('hosted_redirect', data_get($routingDecision->snapshot_json, 'execution_family'));
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
+            (string) $payment->transaction_reference
+        );
+
+        $attempt = PaymentAttempt::query()
+            ->where('payment_id', $paymentId)
+            ->where('attempt_type', 'hosted_checkout_init')
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($attempt);
+        $this->assertSame('pawapay', $attempt->provider);
+        $this->assertSame('hosted_checkout', data_get($attempt->request_meta, 'channel'));
+    }
+
+    public function test_pawapay_callback_completes_wallet_topup_and_records_webhook_event(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => [
+                'base_url' => 'https://api.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-live-key',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'pawapay',
+            'provider_environment' => 'production',
+            'amount' => 900,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-PAWAPAY-CB-001',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'deposit-callback-001',
+            'status' => 'pending',
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_funding',
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'production',
+            'decision_version' => 1,
+            'snapshot_json' => [
+                'provider_key' => 'pawapay',
+                'provider_family' => 'pawapay',
+                'execution_family' => 'hosted_redirect',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'provider_profile_id' => $profile->id,
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => 'deposit-callback-001',
+            'provider_status' => 'initiated',
+            'requested_amount' => $payment->amount,
+            'requested_currency' => $payment->currency,
+            'charge_amount' => $payment->amount,
+            'charge_currency' => $payment->currency,
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:pawapay',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => 'deposit-callback-001',
+            'state_version' => 1,
+            'raw_state_json' => ['recorded_at' => now()->toIso8601String()],
+            'last_status_at' => now(),
+        ]);
+
+        Http::fake([
+            'https://api.pawapay.io/v2/deposits/*' => Http::response([
+                'depositId' => 'deposit-callback-001',
+                'status' => 'COMPLETED',
+                'requestedAmount' => '900.00',
+                'amount' => '900.00',
+                'currency' => 'KES',
+                'providerTransactionId' => 'provider-transaction-001',
+            ], 200),
+        ]);
+
+        $payload = [
+            'depositId' => 'deposit-callback-001',
+            'status' => 'COMPLETED',
+            'providerTransactionId' => 'provider-transaction-001',
+        ];
+        $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
+
+        $response = $this->call('POST', '/api/billing/pawapay/callback', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+        ], $rawBody);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+            'status' => 'completed',
+        ]);
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'pawapay_callback',
+            'status' => 'success',
+        ]);
+        $this->assertDatabaseHas('billing_webhook_events', [
+            'provider_type_key' => 'pawapay',
+            'provider_profile_id' => $profile->id,
+            'payment_id' => $payment->id,
+            'provider_event_id' => 'deposit-callback-001',
+            'signature_status' => 'unsigned',
+            'processing_status' => 'processed',
+        ]);
+        $this->assertSame('1300.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        $this->assertDatabaseCount('wallet_transactions', 1);
+    }
+
+    public function test_pawapay_callback_verifies_signed_callbacks_against_public_keys(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => [
+                'base_url' => 'https://api.pawapay.io',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-live-key',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'pawapay',
+            'provider_environment' => 'production',
+            'amount' => 900,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-PAWAPAY-SIGNED-001',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'deposit-signed-001',
+            'status' => 'pending',
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_funding',
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'production',
+            'decision_version' => 1,
+            'snapshot_json' => [
+                'provider_key' => 'pawapay',
+                'provider_family' => 'pawapay',
+                'execution_family' => 'hosted_redirect',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'provider_profile_id' => $profile->id,
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => 'deposit-signed-001',
+            'provider_status' => 'initiated',
+            'requested_amount' => $payment->amount,
+            'requested_currency' => $payment->currency,
+            'charge_amount' => $payment->amount,
+            'charge_currency' => $payment->currency,
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:pawapay',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => 'deposit-signed-001',
+            'state_version' => 1,
+            'raw_state_json' => ['recorded_at' => now()->toIso8601String()],
+            'last_status_at' => now(),
+        ]);
+
+        $payload = [
+            'depositId' => 'deposit-signed-001',
+            'status' => 'COMPLETED',
+            'providerTransactionId' => 'provider-transaction-signed-001',
+        ];
+        $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        $signed = $this->signedPawaPayCallbackRequest($rawBody, '/api/billing/pawapay/callback', 'localhost:8000');
+
+        Http::fake([
+            'https://api.pawapay.io/v2/public-key/http' => Http::response([
+                [
+                    'id' => $signed['key_id'],
+                    'key' => $signed['public_key'],
+                ],
+            ], 200),
+            'https://api.pawapay.io/v2/deposits/*' => Http::response([
+                'depositId' => 'deposit-signed-001',
+                'status' => 'COMPLETED',
+                'requestedAmount' => '900.00',
+                'amount' => '900.00',
+                'currency' => 'KES',
+                'providerTransactionId' => 'provider-transaction-signed-001',
+            ], 200),
+        ]);
+
+        $response = $this->call('POST', '/api/billing/pawapay/callback', [], [], [], array_merge([
+            'CONTENT_TYPE' => 'application/json',
+        ], $signed['server']), $rawBody);
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $this->assertDatabaseHas('billing_webhook_events', [
+            'provider_type_key' => 'pawapay',
+            'payment_id' => $payment->id,
+            'provider_event_id' => 'deposit-signed-001',
+            'signature_status' => 'verified',
+            'processing_status' => 'processed',
+        ]);
+        Http::assertSent(fn ($request) => $request->url() === 'https://api.pawapay.io/v2/public-key/http');
+        $this->assertSame('1300.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+    }
+
+    public function test_pawapay_callback_rejects_invalid_signed_callbacks(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => [
+                'base_url' => 'https://api.pawapay.io',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-live-key',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'pawapay',
+            'provider_environment' => 'production',
+            'amount' => 900,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-PAWAPAY-BADSIG-001',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'deposit-badsig-001',
+            'status' => 'pending',
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_funding',
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'production',
+            'decision_version' => 1,
+            'snapshot_json' => [
+                'provider_key' => 'pawapay',
+                'provider_family' => 'pawapay',
+                'execution_family' => 'hosted_redirect',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'provider_profile_id' => $profile->id,
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => 'deposit-badsig-001',
+            'provider_status' => 'initiated',
+            'requested_amount' => $payment->amount,
+            'requested_currency' => $payment->currency,
+            'charge_amount' => $payment->amount,
+            'charge_currency' => $payment->currency,
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:pawapay',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => 'deposit-badsig-001',
+            'state_version' => 1,
+            'raw_state_json' => ['recorded_at' => now()->toIso8601String()],
+            'last_status_at' => now(),
+        ]);
+
+        $payload = [
+            'depositId' => 'deposit-badsig-001',
+            'status' => 'COMPLETED',
+            'providerTransactionId' => 'provider-transaction-badsig-001',
+        ];
+        $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        $signed = $this->signedPawaPayCallbackRequest($rawBody, '/api/billing/pawapay/callback', 'localhost:8000');
+        $tamperedServer = $signed['server'];
+        preg_match('/^sig-pp=:([^:]+):$/', $tamperedServer['HTTP_SIGNATURE'], $signatureParts);
+        $tamperedSignature = $signatureParts[1] ?? '';
+        $tamperedSignature = substr_replace($tamperedSignature, $tamperedSignature[5] === 'A' ? 'B' : 'A', 5, 1);
+        $tamperedServer['HTTP_SIGNATURE'] = 'sig-pp=:' . $tamperedSignature . ':';
+
+        Http::fake([
+            'https://api.pawapay.io/v2/public-key/http' => Http::response([
+                [
+                    'id' => $signed['key_id'],
+                    'key' => $signed['public_key'],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->call('POST', '/api/billing/pawapay/callback', [], [], [], array_merge([
+            'CONTENT_TYPE' => 'application/json',
+        ], $tamperedServer), $rawBody);
+
+        $response->assertStatus(401)
+            ->assertJsonPath('error_code', 'webhook_verification_failed');
+
+        $this->assertDatabaseMissing('billing_webhook_events', [
+            'provider_type_key' => 'pawapay',
+            'provider_event_id' => 'deposit-badsig-001',
+        ]);
+        $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        Http::assertSentCount(1);
+    }
+
+    public function test_pawapay_callback_dedupes_processed_events_and_does_not_double_credit_wallet(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'pawapay',
+            'provider_environment' => 'sandbox',
+            'amount' => 900,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-PAWAPAY-DUPE-001',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'deposit-dedupe-001',
+            'status' => 'completed',
+            'completed_at' => now(),
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_funding',
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'sandbox',
+            'decision_version' => 1,
+            'snapshot_json' => [
+                'provider_key' => 'pawapay',
+                'provider_family' => 'pawapay',
+                'execution_family' => 'hosted_redirect',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        BillingWebhookEvent::query()->create([
+            'provider_type_key' => 'pawapay',
+            'provider_profile_id' => $profile->id,
+            'market_id' => $platform->id,
+            'provider_event_id' => 'deposit-dedupe-001',
+            'dedupe_key' => hash('sha256', 'pawapay|deposit-dedupe-001|COMPLETED'),
+            'headers_json' => [],
+            'raw_body' => '{"depositId":"deposit-dedupe-001","status":"COMPLETED"}',
+            'payload_json' => [
+                'depositId' => 'deposit-dedupe-001',
+                'status' => 'COMPLETED',
+            ],
+            'signature_status' => 'unsigned',
+            'verification_meta_json' => [
+                'content_digest_status' => 'missing',
+            ],
+            'processing_status' => 'processed',
+            'payment_id' => $payment->id,
+            'received_at' => now(),
+            'processed_at' => now(),
+        ]);
+
+        $payload = [
+            'depositId' => 'deposit-dedupe-001',
+            'status' => 'COMPLETED',
+        ];
+        $rawBody = json_encode($payload, JSON_UNESCAPED_SLASHES);
+
+        $response = $this->call('POST', '/api/billing/pawapay/callback', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+        ], $rawBody);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $this->assertDatabaseCount('billing_webhook_events', 1);
+        $this->assertDatabaseMissing('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'pawapay_callback',
+        ]);
+        $this->assertSame('400.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        $this->assertDatabaseCount('wallet_transactions', 0);
+    }
+
     public function test_mpesa_callback_records_attempt(): void
     {
         [
@@ -1437,6 +2061,58 @@ class WalletApiPhaseFiveTest extends TestCase
         }
 
         return $headers;
+    }
+
+    private function signedPawaPayCallbackRequest(string $rawBody, string $path, string $authority): array
+    {
+        $key = openssl_pkey_new([
+            'private_key_type' => OPENSSL_KEYTYPE_EC,
+            'curve_name' => 'prime256v1',
+        ]);
+
+        if ($key === false) {
+            $this->fail('Could not generate an EC keypair for the pawaPay callback test.');
+        }
+
+        openssl_pkey_export($key, $privateKeyPem);
+        $details = openssl_pkey_get_details($key);
+        $publicKeyPem = (string) ($details['key'] ?? '');
+        $signatureDate = now()->utc()->format('Y-m-d\TH:i:s\Z');
+        $created = now()->utc()->timestamp;
+        $expires = $created + 60;
+        $contentDigest = 'sha-256=:' . base64_encode(hash('sha256', $rawBody, true)) . ':';
+        $keyId = 'HTTP_EC_P256_KEY:1';
+        $signatureInput = sprintf(
+            'sig-pp=("@method" "@authority" "@path" "signature-date" "content-digest" "content-type");alg="ecdsa-p256-sha256";keyid="%s";created=%d;expires=%d',
+            $keyId,
+            $created,
+            $expires
+        );
+        $signatureBase = implode("\n", [
+            '"@method": POST',
+            sprintf('"@authority": %s', $authority),
+            sprintf('"@path": %s', $path),
+            sprintf('"signature-date": %s', $signatureDate),
+            sprintf('"content-digest": %s', $contentDigest),
+            '"content-type": application/json',
+            sprintf('"@signature-params": %s', substr($signatureInput, strlen('sig-pp='))),
+        ]);
+
+        $signed = openssl_sign($signatureBase, $signature, $privateKeyPem, OPENSSL_ALGO_SHA256);
+        if ($signed !== true) {
+            $this->fail('Could not sign the pawaPay callback test payload.');
+        }
+
+        return [
+            'key_id' => $keyId,
+            'public_key' => $publicKeyPem,
+            'server' => [
+                'HTTP_SIGNATURE' => 'sig-pp=:' . base64_encode($signature) . ':',
+                'HTTP_SIGNATURE_INPUT' => $signatureInput,
+                'HTTP_SIGNATURE_DATE' => $signatureDate,
+                'HTTP_CONTENT_DIGEST' => $contentDigest,
+            ],
+        ];
     }
 
     private function fakeProvisioningApis(Platform $platform, Client $client, array $profileOverrides = []): void

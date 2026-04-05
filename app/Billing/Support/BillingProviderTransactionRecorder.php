@@ -5,6 +5,7 @@ namespace App\Billing\Support;
 use App\Models\BillingProviderTransaction;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
+use Illuminate\Support\Facades\Schema;
 
 class BillingProviderTransactionRecorder
 {
@@ -16,7 +17,7 @@ class BillingProviderTransactionRecorder
         $attemptSequence = $this->nextAttemptSequence($payment, $attemptGroupKey);
         $providerReference = trim((string) ($action['provider_reference'] ?? ''));
 
-        return BillingProviderTransaction::query()->create([
+        return BillingProviderTransaction::query()->create($this->filterPersistableAttributes([
             'payment_id' => (int) $payment->id,
             'provider_type_key' => $providerTypeKey,
             'provider_profile_id' => $decision?->provider_profile_id,
@@ -55,7 +56,7 @@ class BillingProviderTransactionRecorder
                 'recorded_at' => now()->toIso8601String(),
             ],
             'last_status_at' => now(),
-        ]);
+        ]));
     }
 
     public function latestAttempt(Payment $payment, ?string $providerTypeKey = null): ?BillingProviderTransaction
@@ -173,5 +174,20 @@ class BillingProviderTransactionRecorder
         }
 
         return 'completed';
+    }
+
+    private function filterPersistableAttributes(array $attributes): array
+    {
+        static $columns = null;
+
+        if ($columns === null) {
+            $columns = array_flip(Schema::getColumnListing('billing_provider_transactions'));
+        }
+
+        return array_filter(
+            $attributes,
+            static fn (string $key): bool => isset($columns[$key]),
+            ARRAY_FILTER_USE_KEY
+        );
     }
 }

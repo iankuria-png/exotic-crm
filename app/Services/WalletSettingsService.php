@@ -262,7 +262,7 @@ class WalletSettingsService
             ? $platform->payment_link_providers
             : null;
 
-        if (!$this->shadowReadEnabled()) {
+        if (!$this->shadowReadEnabled() && $legacy !== null) {
             return $legacy;
         }
 

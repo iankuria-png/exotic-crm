@@ -3,6 +3,7 @@
 namespace App\Billing\Support;
 
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Providers\ProviderDefinition;
 use App\Billing\Repositories\BillingConfigurationRepository;
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingProviderProfile;
@@ -141,38 +142,16 @@ class LegacyBillingConfigProjector
     public function projectPaymentLinkProviders(Platform $platform, ?array $fallback = null): ?array
     {
         $projected = $this->normalizePaymentLinkProviders($fallback);
-        $bindings = $this->configurationRepository->activeBindingsForMarket((int) $platform->id, BillingSurface::ProxyHostedCheckout->value);
-        $routingRule = $this->configurationRepository->routingRuleForMarket((int) $platform->id, BillingSurface::ProxyHostedCheckout->value);
-        $bindingKeys = [];
-
-        foreach ($bindings as $binding) {
-            $profile = $binding->providerProfile;
-            $definition = $profile ? $this->providerRegistry->find($profile->provider_type_key)?->definition() : null;
-
-            if ($profile === null || $definition === null || !$definition->supportsSurface(BillingSurface::ProxyHostedCheckout)) {
-                continue;
-            }
-
-            $providerKey = $this->proxyProviderKey($profile, $binding, array_values($bindingKeys));
-            $bindingKeys[(int) $binding->id] = $providerKey;
-
-            $projected['providers'][$providerKey] = array_filter([
-                'label' => trim((string) ($profile->profile_name ?: $definition->label . ' Checkout')),
-                'mode' => 'proxy_hosted_checkout',
-                'enabled' => (bool) $binding->enabled,
-                'wallet_provider_key' => $definition->key,
-                'environment' => $this->normalizeEnvironment($profile->environment),
-                'self_checkout_fx_enabled' => $this->bindingFxEnabled($binding),
-                'self_checkout_fx_currency' => $this->bindingRestrictionValue($binding, 'self_checkout_fx_currency'),
-                'self_checkout_fx_rate' => $this->bindingRestrictionValue($binding, 'self_checkout_fx_rate'),
-            ], static fn ($value) => $value !== null);
-        }
-
-        if ($routingRule !== null && isset($bindingKeys[(int) $routingRule->primary_binding_id])) {
-            $projected['active_provider'] = $bindingKeys[(int) $routingRule->primary_binding_id];
-        } elseif (($projected['active_provider'] ?? '') === '' && $bindingKeys !== []) {
-            $projected['active_provider'] = reset($bindingKeys) ?: '';
-        }
+        $projected = $this->overlayProjectedPaymentLinkBindings(
+            $platform,
+            $projected,
+            BillingSurface::ProxyHostedCheckout
+        );
+        $projected = $this->overlayProjectedPaymentLinkBindings(
+            $platform,
+            $projected,
+            BillingSurface::SubscriptionLink
+        );
 
         return $projected['providers'] === [] ? null : $projected;
     }
@@ -244,6 +223,70 @@ class LegacyBillingConfigProjector
         $enabled = data_get($binding->restriction_json, 'self_checkout_fx_enabled', data_get($binding->restriction_json, 'self_checkout_fx.enabled'));
 
         return $enabled === null ? null : (bool) $enabled;
+    }
+
+    /**
+     * @param  array<string, mixed>  $projected
+     * @return array<string, mixed>
+     */
+    private function overlayProjectedPaymentLinkBindings(
+        Platform $platform,
+        array $projected,
+        BillingSurface $surface
+    ): array {
+        $bindings = $this->configurationRepository->activeBindingsForMarket((int) $platform->id, $surface->value);
+        $routingRule = $this->configurationRepository->routingRuleForMarket((int) $platform->id, $surface->value);
+        $bindingKeys = [];
+
+        foreach ($bindings as $binding) {
+            $profile = $binding->providerProfile;
+            $definition = $profile ? $this->providerRegistry->find($profile->provider_type_key)?->definition() : null;
+
+            if ($profile === null || $definition === null || !$this->supportsProjectedPaymentLinkSurface($definition, $surface)) {
+                continue;
+            }
+
+            $providerKey = $this->proxyProviderKey($profile, $binding, array_values($bindingKeys));
+            $bindingKeys[(int) $binding->id] = $providerKey;
+
+            $projected['providers'][$providerKey] = array_filter([
+                'label' => trim((string) ($profile->profile_name ?: $definition->label . ' Checkout')),
+                'mode' => 'proxy_hosted_checkout',
+                'enabled' => (bool) $binding->enabled,
+                'wallet_provider_key' => $definition->key,
+                'environment' => $this->normalizeEnvironment($profile->environment),
+                'provider_profile_id' => (int) $profile->id,
+                'chosen_binding_id' => (int) $binding->id,
+                'billing_surface' => $surface->value,
+                'execution_mode' => trim((string) ($binding->execution_mode ?: 'direct')) ?: 'direct',
+                'operator_enabled' => (bool) $binding->operator_enabled,
+                'self_service_enabled' => (bool) $binding->self_service_enabled,
+                'self_checkout_fx_enabled' => $this->bindingFxEnabled($binding),
+                'self_checkout_fx_currency' => $this->bindingRestrictionValue($binding, 'self_checkout_fx_currency'),
+                'self_checkout_fx_rate' => $this->bindingRestrictionValue($binding, 'self_checkout_fx_rate'),
+            ], static fn ($value) => $value !== null);
+        }
+
+        if ($routingRule !== null && isset($bindingKeys[(int) $routingRule->primary_binding_id])) {
+            $projected['active_provider'] = $bindingKeys[(int) $routingRule->primary_binding_id];
+        } elseif (($projected['active_provider'] ?? '') === '' && $bindingKeys !== []) {
+            $projected['active_provider'] = reset($bindingKeys) ?: '';
+        }
+
+        return $projected;
+    }
+
+    private function supportsProjectedPaymentLinkSurface(ProviderDefinition $definition, BillingSurface $surface): bool
+    {
+        if ($surface === BillingSurface::ProxyHostedCheckout) {
+            return $definition->supportsSurface(BillingSurface::ProxyHostedCheckout);
+        }
+
+        return $surface === BillingSurface::SubscriptionLink
+            && (
+                $definition->supportsSurface(BillingSurface::ProxyHostedCheckout)
+                || $definition->key === 'pawapay'
+            );
     }
 
     private function overlayPesapalCredentials(array &$projected, BillingProviderProfile $profile, string $environment): void

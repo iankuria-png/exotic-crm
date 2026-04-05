@@ -259,6 +259,49 @@ class DealControllerTest extends TestCase
         $this->assertSame('paystack_checkout', data_get($decision->snapshot_json, 'provider_key'));
     }
 
+    public function test_deal_link_activation_uses_projected_subscription_link_provider_when_legacy_link_config_is_missing(): void
+    {
+        $platform = $this->createLinkPlatform();
+        $platform->forceFill([
+            'payment_link_providers' => null,
+        ])->save();
+
+        $this->createProjectedSubscriptionLinkForPlatform($platform, 'pawapay', 'pawaPay Kenya Sandbox', 'sandbox');
+
+        $product = $this->createProductForPlatform($platform);
+        $client = $this->createClientForPlatform($platform, 9205);
+        $user = $this->createAuthorizedUser('sales', [$platform->id]);
+        $deal = $this->createPendingDeal($platform, $product, $client, $user);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'reason' => 'Route payment through pawaPay subscription link binding',
+            'payment_method' => 'link',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('deal.id', $deal->id);
+
+        $payment = Deal::query()->findOrFail($deal->id)->payment()->firstOrFail();
+        $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->latest('id')->firstOrFail();
+
+        $this->assertSame('pawapay_checkout', $payment->provider_key);
+        $this->assertSame('pawapay_checkout', data_get($payment->raw_payload, 'payment_link_provider'));
+        $this->assertSame('pawapay_checkout', data_get($payment->raw_payload, 'resolved_provider'));
+        $this->assertSame('pawapay_checkout', $attempt->provider);
+        $this->assertSame('pawapay_checkout', data_get($attempt->request_meta, 'requested_provider'));
+        $this->assertNotEmpty(data_get($payment->payment_data, 'link_proxy.token_hash'));
+        $this->assertSame('pawapay', data_get($payment->payment_data, 'link_proxy.provider_key'));
+
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();
+        $this->assertNotNull($decision);
+        $this->assertSame('subscription_link', $decision->billing_surface);
+        $this->assertSame('pawapay', $decision->provider_type_key);
+        $this->assertSame('direct', $decision->execution_mode);
+        $this->assertSame('subscription_link', data_get($decision->snapshot_json, 'execution_family'));
+    }
+
     public function test_deal_free_trial_activation_accepts_configured_pin_and_ignores_legacy_approved_by(): void
     {
         $platform = $this->createProvisioningPlatform();
@@ -581,6 +624,52 @@ class DealControllerTest extends TestCase
             'primary_binding_id' => $binding->id,
             'fallback_strategy_json' => ['providers' => []],
             'risk_policy_json' => ['mode' => 'proxy_preferred'],
+            'active' => true,
+        ]);
+    }
+
+    private function createProjectedSubscriptionLinkForPlatform(
+        Platform $platform,
+        string $providerTypeKey,
+        string $profileName,
+        string $environment
+    ): void {
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => $providerTypeKey,
+            'profile_name' => $profileName,
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'merchant_scope_json' => ['scope' => 'market'],
+            'environment' => $environment,
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'subscription_link',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => false,
+            'execution_mode' => 'direct',
+            'priority' => 10,
+            'fallback_group' => 'subscription-link',
+            'restriction_json' => [],
+        ]);
+
+        BillingRoutingRule::query()->create([
+            'market_id' => $platform->id,
+            'billing_surface' => 'subscription_link',
+            'primary_binding_id' => $binding->id,
+            'fallback_strategy_json' => ['providers' => []],
+            'risk_policy_json' => ['mode' => 'direct'],
             'active' => true,
         ]);
     }

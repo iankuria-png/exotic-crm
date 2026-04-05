@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Payment;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 class HostedCheckoutService
@@ -98,6 +99,80 @@ class HostedCheckoutService
         ];
     }
 
+    public function initializePawaPay(Payment $payment, array $context, array $options = []): array
+    {
+        $apiKey = trim((string) data_get($context, 'provider_credentials.api_key', ''));
+        if ($apiKey === '') {
+            throw new RuntimeException('pawaPay credentials are incomplete for the active environment.');
+        }
+
+        $depositId = $this->ensurePawaPayDepositId($payment);
+
+        $reason = trim((string) ($options['description'] ?? 'Wallet top-up'));
+        if ($reason === '') {
+            $reason = 'Wallet top-up';
+        }
+
+        $payload = [
+            'depositId' => $depositId,
+            'returnUrl' => $this->pawaPayReturnUrl($payment, $context, $options),
+            'amountDetails' => [
+                'amount' => number_format((float) $payment->amount, 2, '.', ''),
+                'currency' => strtoupper((string) ($payment->currency ?: 'KES')),
+            ],
+            'language' => 'EN',
+            'reason' => mb_substr($reason, 0, 50),
+            'metadata' => [
+                ['paymentId' => (string) $payment->id],
+                ['referenceNumber' => (string) $payment->reference_number],
+                ['platformId' => (string) $payment->platform_id],
+                ['clientId' => (string) $payment->client_id],
+            ],
+        ];
+
+        $phoneNumber = preg_replace('/\D+/', '', (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')));
+        if (is_string($phoneNumber) && $phoneNumber !== '') {
+            $payload['phoneNumber'] = $phoneNumber;
+        }
+
+        $countryCode = $this->pawaPayCountryCode((string) ($payment->platform?->country ?? ''));
+        if ($countryCode !== null) {
+            $payload['country'] = $countryCode;
+        }
+
+        $response = Http::timeout(20)
+            ->withToken($apiKey)
+            ->post($this->pawaPayBaseUrl($context) . '/v2/paymentpage', $payload);
+
+        if (!$response->successful()) {
+            throw new RuntimeException(
+                (string) (
+                    $response->json('failureReason.failureMessage')
+                    ?? $response->json('message')
+                    ?? 'pawaPay payment page initialization failed.'
+                )
+            );
+        }
+
+        $redirectUrl = trim((string) $response->json('redirectUrl', ''));
+        if ($redirectUrl === '') {
+            throw new RuntimeException(
+                (string) (
+                    $response->json('failureReason.failureMessage')
+                    ?? $response->json('message')
+                    ?? 'pawaPay did not return a payment page URL.'
+                )
+            );
+        }
+
+        return [
+            'type' => 'redirect',
+            'url' => $redirectUrl,
+            'provider_reference' => (string) $response->json('depositId', $depositId),
+            'provider_payload' => $response->json(),
+        ];
+    }
+
     public function verifyPaystackTransaction(Payment $payment, array $context, string $reference): array
     {
         $secretKey = (string) data_get($context, 'provider_credentials.secret_key', '');
@@ -144,6 +219,39 @@ class HostedCheckoutService
         return [
             'status' => $normalizedStatus,
             'message' => (string) ($verified['payment_status_description'] ?? 'Pesapal transaction status unavailable.'),
+            'data' => $verified,
+        ];
+    }
+
+    public function verifyPawaPayDeposit(Payment $payment, array $context, string $depositId): array
+    {
+        $apiKey = trim((string) data_get($context, 'provider_credentials.api_key', ''));
+        if ($apiKey === '') {
+            throw new RuntimeException('pawaPay credentials are incomplete for the active environment.');
+        }
+
+        $response = Http::timeout(20)
+            ->withToken($apiKey)
+            ->get($this->pawaPayBaseUrl($context) . '/v2/deposits/' . urlencode($depositId));
+
+        if (!$response->successful()) {
+            throw new RuntimeException('Could not verify the pawaPay deposit status.');
+        }
+
+        $verified = $response->json();
+        $providerStatus = strtoupper(trim((string) ($verified['status'] ?? '')));
+        $normalizedStatus = match ($providerStatus) {
+            'COMPLETED' => 'completed',
+            'FAILED', 'REJECTED', 'NOT_FOUND', 'EXPIRED' => 'failed',
+            default => 'pending',
+        };
+
+        return [
+            'status' => $normalizedStatus,
+            'message' => (string) (
+                data_get($verified, 'failureReason.failureMessage')
+                ?? ($providerStatus !== '' ? $providerStatus : 'pawaPay transaction status unavailable.')
+            ),
             'data' => $verified,
         ];
     }
@@ -199,5 +307,92 @@ class HostedCheckoutService
         return $environment === 'production'
             ? 'https://pay.pesapal.com/v3/api'
             : 'https://cybqa.pesapal.com/pesapalv3/api';
+    }
+
+    private function pawaPayBaseUrl(array $context): string
+    {
+        $configured = trim((string) data_get($context, 'provider_credentials.base_url', ''));
+
+        if ($configured !== '') {
+            return rtrim($configured, '/');
+        }
+
+        return (string) ($context['environment'] ?? 'sandbox') === 'production'
+            ? 'https://api.pawapay.io'
+            : 'https://api.sandbox.pawapay.io';
+    }
+
+    private function ensurePawaPayDepositId(Payment $payment): string
+    {
+        $existing = trim((string) (
+            data_get($payment->payment_data, 'pawapay.deposit_id')
+            ?? data_get($payment->raw_payload, 'pawapay.depositId')
+            ?? $payment->transaction_reference
+            ?? $payment->transaction_uuid
+            ?? ''
+        ));
+
+        if ($this->isUuidV4($existing)) {
+            return $existing;
+        }
+
+        $depositId = (string) Str::uuid();
+        $paymentData = is_array($payment->payment_data) ? $payment->payment_data : [];
+        $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
+
+        data_set($paymentData, 'pawapay.deposit_id', $depositId);
+        data_set($rawPayload, 'pawapay.depositId', $depositId);
+
+        $payment->forceFill([
+            'payment_data' => $paymentData,
+            'raw_payload' => $rawPayload,
+        ])->save();
+
+        return $depositId;
+    }
+
+    private function pawaPayReturnUrl(Payment $payment, array $context, array $options): string
+    {
+        $configured = trim((string) ($options['callback_url'] ?? ''));
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        $callbackBaseUrl = trim((string) data_get($context, 'provider_credentials.callback_base_url', ''));
+        if ($callbackBaseUrl !== '') {
+            return rtrim($callbackBaseUrl, '/') . '/billing/complete?payment=' . urlencode((string) $payment->transaction_uuid);
+        }
+
+        return $this->callbackUrl($payment, $context, $options);
+    }
+
+    private function pawaPayCountryCode(string $country): ?string
+    {
+        return match (strtoupper(trim($country))) {
+            'GHANA' => 'GHA',
+            'GH', 'GHA' => 'GHA',
+            'KENYA' => 'KEN',
+            'KE', 'KEN' => 'KEN',
+            'MALAWI' => 'MWI',
+            'MW', 'MWI' => 'MWI',
+            'MOZAMBIQUE' => 'MOZ',
+            'MZ', 'MOZ' => 'MOZ',
+            'TANZANIA' => 'TZA',
+            'TZ', 'TZA' => 'TZA',
+            'UGANDA' => 'UGA',
+            'UG', 'UGA' => 'UGA',
+            'ZAMBIA' => 'ZMB',
+            'ZM', 'ZMB' => 'ZMB',
+            default => null,
+        };
+    }
+
+    private function isUuidV4(string $value): bool
+    {
+        return $value !== ''
+            && preg_match(
+                '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
+                $value
+            ) === 1;
     }
 }

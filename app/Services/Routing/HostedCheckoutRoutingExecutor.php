@@ -19,7 +19,7 @@ use Illuminate\Http\Request;
  */
 class HostedCheckoutRoutingExecutor implements ProviderRoutingExecutor
 {
-    private const SUPPORTED_PROVIDERS = ['paystack', 'pesapal'];
+    private const SUPPORTED_PROVIDERS = ['paystack', 'pesapal', 'pawapay'];
 
     public function __construct(
         private readonly BillingGatewayService $billingGatewayService

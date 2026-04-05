@@ -24,6 +24,10 @@ export default function ProviderProfileEditorModal({
 }) {
     const [form, setForm] = useState(() => buildInitialState(profile, providers, markets));
 
+    const normalizedSchemas = useMemo(() => {
+        return Array.isArray(schemas) ? schemas : Object.values(schemas || {});
+    }, [schemas]);
+
     useEffect(() => {
         if (!open) {
             return;
@@ -40,9 +44,25 @@ export default function ProviderProfileEditorModal({
         });
     }, [open, profile, providers, markets]);
 
+    useEffect(() => {
+        if (!open || form.provider_type_key || providers.length === 0) {
+            return;
+        }
+
+        setForm((current) => ({
+            ...current,
+            provider_type_key: providers[0]?.key || '',
+        }));
+    }, [open, form.provider_type_key, providers]);
+
     const schema = useMemo(
-        () => schemas.find((entry) => entry.provider_key === form.provider_type_key) || null,
-        [schemas, form.provider_type_key]
+        () =>
+            normalizedSchemas.find(
+                (entry) =>
+                    entry.provider_key === form.provider_type_key ||
+                    entry.key === form.provider_type_key
+            ) || null,
+        [normalizedSchemas, form.provider_type_key]
     );
 
     const selectedProvider = useMemo(
@@ -132,6 +152,7 @@ export default function ProviderProfileEditorModal({
                                     className="crm-select w-full"
                                     disabled={editing || isSaving}
                                 >
+                                    <option value="">Select a provider family</option>
                                     {providers.map((provider) => (
                                         <option key={provider.key} value={provider.key}>
                                             {provider.label}
@@ -248,9 +269,13 @@ export default function ProviderProfileEditorModal({
                                 </p>
                             </div>
 
-                            {!schema ? (
+                            {!form.provider_type_key ? (
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                                    Select a provider family to load its credential fields and environment options.
+                                </div>
+                            ) : !schema ? (
                                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                                    CRM could not resolve a credential schema for the selected provider.
+                                    CRM could not resolve a credential schema for the selected provider. Refresh the provider catalog or verify the schema registry mapping.
                                 </div>
                             ) : (
                                 <div className="grid gap-4 md:grid-cols-2">

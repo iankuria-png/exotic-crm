@@ -47,7 +47,8 @@ class AppServiceProvider extends ServiceProvider
             $dispatcher->register(
                 $app->make(HostedCheckoutRoutingExecutor::class),
                 'paystack',
-                'pesapal'
+                'pesapal',
+                'pawapay'
             );
             
             // Register M-Pesa STK executor
