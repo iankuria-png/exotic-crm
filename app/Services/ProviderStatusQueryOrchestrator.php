@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
 use InvalidArgumentException;
@@ -11,7 +12,8 @@ class ProviderStatusQueryOrchestrator
 {
     public function __construct(
         private readonly BillingModeService $billingModeService,
-        private readonly HostedCheckoutService $hostedCheckoutService
+        private readonly HostedCheckoutService $hostedCheckoutService,
+        private readonly PesapalCompatibilityAdapter $pesapalCompatibilityAdapter
     ) {
     }
 
@@ -37,7 +39,7 @@ class ProviderStatusQueryOrchestrator
                 $context,
                 (string) ($options['reference'] ?? $payment->reference_number)
             ),
-            'pesapal' => $this->hostedCheckoutService->verifyPesapalTransaction(
+            'pesapal' => $this->pesapalCompatibilityAdapter->verify(
                 $payment,
                 $context,
                 $this->resolvePesapalTrackingId($payment, $options)

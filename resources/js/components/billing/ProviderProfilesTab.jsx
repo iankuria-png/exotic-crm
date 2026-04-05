@@ -24,18 +24,6 @@ function formatKey(value) {
         .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function providerTone(status) {
-    if (status === 'compatibility') {
-        return 'border-amber-200 bg-amber-50 text-amber-800';
-    }
-
-    if (status === 'deferred' || status === 'legacy') {
-        return 'border-slate-200 bg-slate-100 text-slate-700';
-    }
-
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
-}
-
 export default function ProviderProfilesTab({ registryEnabled = true, markets = [] }) {
     const toast = useToast();
     const queryClient = useQueryClient();
@@ -70,6 +58,27 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
         },
     });
 
+    const data = profilesQuery.data || {};
+    const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+    const providers = Array.isArray(data.providers) ? data.providers : [];
+    const schemas = Array.isArray(data.schemas) ? data.schemas : Object.values(data.schemas || {});
+    const editable = Boolean(data.editable);
+
+    const countsByProvider = useMemo(() => {
+        return profiles.reduce((carry, profile) => {
+            carry[profile.provider_type_key] = (carry[profile.provider_type_key] || 0) + 1;
+            return carry;
+        }, {});
+    }, [profiles]);
+
+    const filteredProfiles = useMemo(() => {
+        if (activeProvider === 'all') {
+            return profiles;
+        }
+
+        return profiles.filter((profile) => profile.provider_type_key === activeProvider);
+    }, [activeProvider, profiles]);
+
     if (!registryEnabled) {
         return (
             <div className="space-y-4 p-5">
@@ -86,11 +95,10 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
     if (profilesQuery.isLoading) {
         return (
             <div className="space-y-4 p-5 animate-pulse">
-                <div className="h-28 rounded-2xl border border-slate-200 bg-white" />
-                <div className="grid gap-4 xl:grid-cols-3">
-                    <div className="h-56 rounded-2xl border border-slate-200 bg-white" />
-                    <div className="h-56 rounded-2xl border border-slate-200 bg-white" />
-                    <div className="h-56 rounded-2xl border border-slate-200 bg-white" />
+                <div className="h-28 rounded-xl border border-slate-200 bg-white" />
+                <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="h-64 rounded-xl border border-slate-200 bg-white" />
+                    <div className="h-64 rounded-xl border border-slate-200 bg-white" />
                 </div>
             </div>
         );
@@ -122,47 +130,21 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
         );
     }
 
-    const data = profilesQuery.data || {};
-    const profiles = Array.isArray(data.profiles) ? data.profiles : [];
-    const providers = Array.isArray(data.providers) ? data.providers : [];
-    const schemas = Array.isArray(data.schemas) ? data.schemas : Object.values(data.schemas || {});
-    const editable = Boolean(data.editable);
-
-    const countsByProvider = useMemo(() => {
-        return profiles.reduce((carry, profile) => {
-            carry[profile.provider_type_key] = (carry[profile.provider_type_key] || 0) + 1;
-            return carry;
-        }, {});
-    }, [profiles]);
-
-    const filteredProfiles = useMemo(() => {
-        if (activeProvider === 'all') {
-            return profiles;
-        }
-
-        return profiles.filter((profile) => profile.provider_type_key === activeProvider);
-    }, [activeProvider, profiles]);
-
     const activeCount = profiles.filter((profile) => profile.active).length;
     const testedCount = profiles.filter((profile) => profile.tested_at).length;
     const providerFamiliesConfigured = Object.keys(countsByProvider).length;
 
     return (
         <div className="space-y-5 p-5">
-            <section className="rounded-2xl border border-slate-200 bg-white p-5">
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                     <div className="space-y-3">
                         <div>
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                                Provider Profiles
-                            </p>
-                            <h4 className="mt-2 text-xl font-semibold text-slate-950">
-                                Credential sets that route real money flows
-                            </h4>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Provider Profiles</p>
+                            <h4 className="mt-2 text-xl font-semibold text-slate-950">Credential sets that route real money flows</h4>
                             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                                Each profile binds a provider family to an environment, market, and credential set. Use
-                                multiple profiles per country when you need controlled fallback, merchant separation, or
-                                sandbox validation.
+                                Bind each provider family to an environment, market, and credential set. Use multiple
+                                profiles per country when you need controlled fallback, merchant separation, or sandbox validation.
                             </p>
                         </div>
 
@@ -184,10 +166,10 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
                     </div>
 
                     <div className="flex flex-col gap-3 xl:min-w-[320px]">
-                        <div className="grid grid-cols-3 gap-3">
-                            <MetricCard label="Active" value={activeCount} tone="emerald" />
-                            <MetricCard label="Verified" value={testedCount} tone="sky" />
-                            <MetricCard label="Families" value={providerFamiliesConfigured} tone="slate" />
+                        <div className="grid gap-3 sm:grid-cols-3">
+                            <MetricCard label="Active" value={activeCount} status="online" />
+                            <MetricCard label="Verified" value={testedCount} status="verified" />
+                            <MetricCard label="Families" value={providerFamiliesConfigured} status="neutral" />
                         </div>
                         {editable ? (
                             <button
@@ -201,7 +183,7 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
                                 Add provider profile
                             </button>
                         ) : (
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                                 Provider profiles are visible here, but only admin users can create or update them.
                             </div>
                         )}
@@ -263,17 +245,14 @@ export default function ProviderProfilesTab({ registryEnabled = true, markets = 
     );
 }
 
-function MetricCard({ label, value, tone = 'slate' }) {
-    const tones = {
-        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-        sky: 'border-sky-200 bg-sky-50 text-sky-900',
-        slate: 'border-slate-200 bg-slate-50 text-slate-900',
-    };
-
+function MetricCard({ label, value, status = 'neutral' }) {
     return (
-        <div className={`rounded-2xl border px-4 py-3 ${tones[tone] || tones.slate}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] opacity-70">{label}</p>
-            <p className="mt-2 text-2xl font-semibold">{value}</p>
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-950/[0.02]">
+            <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+                <StatusDot status={status} />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-slate-950">{value}</p>
         </div>
     );
 }
@@ -283,7 +262,7 @@ function FilterPill({ active, label, onClick }) {
         <button
             type="button"
             onClick={onClick}
-            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
                 active
                     ? 'border-slate-900 bg-slate-900 text-white'
                     : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
@@ -301,25 +280,15 @@ function ProfileCard({ profile, markets, onEdit }) {
     const status = profile.provider_status || 'active';
 
     return (
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-600">
                             {formatKey(profile.provider_family || profile.provider_type_key)}
                         </span>
-                        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${providerTone(status)}`}>
-                            {status}
-                        </span>
-                        <span
-                            className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${
-                                profile.active
-                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                    : 'border-slate-200 bg-slate-50 text-slate-600'
-                            }`}
-                        >
-                            {profile.active ? 'Active' : 'Disabled'}
-                        </span>
+                        <StatusBadge status={status} />
+                        <StatusBadge status={profile.active ? 'active' : 'disabled'} />
                     </div>
                     <div>
                         <h5 className="text-lg font-semibold text-slate-950">{profile.profile_name}</h5>
@@ -331,11 +300,7 @@ function ProfileCard({ profile, markets, onEdit }) {
                 </div>
 
                 {onEdit ? (
-                    <button
-                        type="button"
-                        onClick={onEdit}
-                        className="crm-btn-secondary px-3 py-2 text-sm"
-                    >
+                    <button type="button" onClick={onEdit} className="crm-btn-secondary px-3 py-2 text-sm">
                         Edit profile
                     </button>
                 ) : null}
@@ -355,7 +320,7 @@ function ProfileCard({ profile, markets, onEdit }) {
                         {Object.entries(profile.config_json || {}).map(([key, value]) => (
                             <span
                                 key={key}
-                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700"
+                                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700"
                             >
                                 <span className="font-semibold text-slate-900">{formatKey(key)}:</span>{' '}
                                 {String(value || 'Not configured')}
@@ -370,9 +335,40 @@ function ProfileCard({ profile, markets, onEdit }) {
 
 function SummaryChip({ label, value }) {
     return (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
             <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
         </div>
+    );
+}
+
+function StatusDot({ status = 'neutral' }) {
+    const tones = {
+        online: 'bg-emerald-500',
+        verified: 'bg-sky-500',
+        neutral: 'bg-slate-300',
+    };
+
+    return <span className={`h-2 w-2 rounded-full ${tones[status] || tones.neutral}`} />;
+}
+
+function StatusBadge({ status }) {
+    const normalized = String(status || 'unknown');
+
+    const mapping = {
+        active: { border: 'border-emerald-200', text: 'text-emerald-700', dot: 'bg-emerald-500', label: 'Active' },
+        disabled: { border: 'border-slate-200', text: 'text-slate-600', dot: 'bg-slate-300', label: 'Disabled' },
+        compatibility: { border: 'border-amber-200', text: 'text-amber-700', dot: 'bg-amber-500', label: 'Compatibility' },
+        deferred: { border: 'border-slate-200', text: 'text-slate-600', dot: 'bg-slate-300', label: 'Deferred' },
+        legacy: { border: 'border-slate-200', text: 'text-slate-600', dot: 'bg-slate-300', label: 'Legacy' },
+    };
+
+    const tone = mapping[normalized] || mapping.active;
+
+    return (
+        <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${tone.border} ${tone.text}`}>
+            <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
+            {tone.label}
+        </span>
     );
 }

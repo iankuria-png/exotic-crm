@@ -4,20 +4,13 @@ import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
 import { isForbiddenQueryError } from './queryState';
 
-export default function ProvidersTab({ registryEnabled = true }) {
-    if (!registryEnabled) {
-        return (
-            <div className="space-y-4 p-5">
-                <BillingStateNotice
-                    state="forbidden"
-                    eyebrow="Provider Catalog"
-                    title="Provider registry is still locked"
-                    message="Enable the billing registry rollout before exposing the full provider-family catalog in this workspace."
-                />
-            </div>
-        );
-    }
+function formatKey(value) {
+    return String(value || '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
+export default function ProvidersTab({ registryEnabled = true }) {
     const providersQuery = useQuery({
         queryKey: ['billing-providers-catalog'],
         queryFn: () => api.get('/crm/settings/billing/providers-catalog').then((response) => response.data),
@@ -34,13 +27,26 @@ export default function ProvidersTab({ registryEnabled = true }) {
         }, {});
     }, [providers]);
 
+    if (!registryEnabled) {
+        return (
+            <div className="space-y-4 p-5">
+                <BillingStateNotice
+                    state="forbidden"
+                    eyebrow="Provider Catalog"
+                    title="Provider registry is still locked"
+                    message="Enable the billing registry rollout before exposing the full provider-family catalog in this workspace."
+                />
+            </div>
+        );
+    }
+
     if (providersQuery.isLoading) {
         return (
             <div className="space-y-4 p-5 animate-pulse">
-                <div className="h-32 rounded-2xl border border-slate-200 bg-white" />
+                <div className="h-32 rounded-xl border border-slate-200 bg-white" />
                 <div className="grid gap-4 xl:grid-cols-3">
                     {[...Array(6)].map((_, index) => (
-                        <div key={index} className="h-64 rounded-2xl border border-slate-200 bg-white" />
+                        <div key={index} className="h-64 rounded-xl border border-slate-200 bg-white" />
                     ))}
                 </div>
             </div>
@@ -88,12 +94,10 @@ export default function ProvidersTab({ registryEnabled = true }) {
 
     return (
         <div className="space-y-4 p-5">
-            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
                 <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
                     <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                            Provider Catalog
-                        </p>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Provider Catalog</p>
                         <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
                             Billing providers available to the CRM registry
                         </h4>
@@ -103,10 +107,10 @@ export default function ProvidersTab({ registryEnabled = true }) {
                         </p>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3 xl:min-w-[380px]">
-                        <MetricCard label="Total" value={providers.length} tone="slate" />
-                        <MetricCard label="Active" value={statusCounts.active || 0} tone="emerald" />
-                        <MetricCard label="Compatibility" value={statusCounts.compatibility || 0} tone="amber" />
+                    <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[420px]">
+                        <MetricCard label="Total" value={providers.length} status="neutral" />
+                        <MetricCard label="Active" value={statusCounts.active || 0} status="online" />
+                        <MetricCard label="Compatibility" value={statusCounts.compatibility || 0} status="attention" />
                     </div>
                 </div>
             </section>
@@ -142,19 +146,15 @@ function ProviderCard({ provider }) {
     const status = meta.status || 'active';
 
     return (
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md hover:shadow-slate-950/[0.05]">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02] transition hover:border-slate-300 hover:shadow-md hover:shadow-slate-950/[0.04]">
             <div className="flex items-start justify-between gap-3">
                 <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                        {formatKey(family)}
-                    </p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{formatKey(family)}</p>
                     <h5 className="mt-2 text-lg font-semibold text-slate-950">{label}</h5>
                     <p className="mt-1 text-xs font-mono text-slate-500">{key}</p>
                 </div>
 
-                <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.09em] ${providerStatusTone(status)}`}>
-                    {status}
-                </span>
+                <StatusBadge status={status} />
             </div>
 
             <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -170,18 +170,10 @@ function ProviderCard({ provider }) {
 
             {(surfaces.length > 0 || rails.length > 0 || transportModes.length > 0 || flags.length > 0) ? (
                 <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
-                    {surfaces.length > 0 ? (
-                        <CapabilityRow label="Surfaces" values={surfaces} />
-                    ) : null}
-                    {rails.length > 0 ? (
-                        <CapabilityRow label="Rails" values={rails} />
-                    ) : null}
-                    {transportModes.length > 0 ? (
-                        <CapabilityRow label="Transport" values={transportModes} />
-                    ) : null}
-                    {flags.length > 0 ? (
-                        <CapabilityRow label="Features" values={flags} />
-                    ) : null}
+                    {surfaces.length > 0 ? <CapabilityRow label="Surfaces" values={surfaces} /> : null}
+                    {rails.length > 0 ? <CapabilityRow label="Rails" values={rails} /> : null}
+                    {transportModes.length > 0 ? <CapabilityRow label="Transport" values={transportModes} /> : null}
+                    {flags.length > 0 ? <CapabilityRow label="Features" values={flags} /> : null}
                 </div>
             ) : null}
 
@@ -192,7 +184,7 @@ function ProviderCard({ provider }) {
                         {aliases.map((alias) => (
                             <span
                                 key={alias}
-                                className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600"
+                                className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600"
                             >
                                 {alias}
                             </span>
@@ -212,13 +204,13 @@ function CapabilityRow({ label, values }) {
                 {values.slice(0, 5).map((value) => (
                     <span
                         key={value}
-                        className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700"
+                        className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700"
                     >
                         {formatKey(value)}
                     </span>
                 ))}
                 {values.length > 5 ? (
-                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
+                    <span className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
                         +{values.length - 5}
                     </span>
                 ) : null}
@@ -227,19 +219,26 @@ function CapabilityRow({ label, values }) {
     );
 }
 
-function MetricCard({ label, value, tone = 'slate' }) {
-    const tones = {
-        emerald: 'border-emerald-200 bg-[linear-gradient(180deg,rgba(236,253,245,0.95)_0%,rgba(255,255,255,1)_100%)] text-emerald-950',
-        amber: 'border-amber-200 bg-[linear-gradient(180deg,rgba(255,251,235,0.95)_0%,rgba(255,255,255,1)_100%)] text-amber-950',
-        slate: 'border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.95)_0%,rgba(255,255,255,1)_100%)] text-slate-950',
-    };
+function MetricCard({ label, value, status = 'neutral' }) {
+    const caption = status === 'attention' ? 'Legacy' : status === 'online' ? 'Active' : 'Catalog';
 
     return (
-        <div className={`rounded-2xl border px-4 py-4 shadow-sm shadow-slate-950/[0.03] ${tones[tone] || tones.slate}`}>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] opacity-65">{label}</p>
-            <div className="mt-3 flex items-end justify-between">
-                <p className="text-4xl font-semibold tracking-tight">{value}</p>
-                <span className="text-[11px] font-medium uppercase tracking-[0.08em] opacity-60">Providers</span>
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+                <p className="min-w-0 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+                <span
+                    className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                    title={caption}
+                    aria-label={caption}
+                >
+                    <span className={`h-2.5 w-2.5 rounded-full ${metricStatusDot(status)}`} />
+                </span>
+            </div>
+            <div className="mt-5 min-w-0">
+                <p className="text-[2.2rem] font-semibold leading-none tracking-tight text-slate-950">{value}</p>
+                <p className="mt-2 truncate text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400">
+                    {caption}
+                </p>
             </div>
         </div>
     );
@@ -247,27 +246,38 @@ function MetricCard({ label, value, tone = 'slate' }) {
 
 function SummaryCell({ label, value }) {
     return (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
             <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
         </div>
     );
 }
 
-function providerStatusTone(status) {
-    if (status === 'compatibility') {
-        return 'border-amber-200 bg-amber-50 text-amber-700';
-    }
+function StatusBadge({ status }) {
+    const tone = statusTone(status);
 
-    if (status === 'deferred' || status === 'legacy' || status === 'inactive') {
-        return 'border-slate-200 bg-slate-100 text-slate-600';
-    }
-
-    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    return (
+        <span className={`inline-flex items-center gap-2 rounded-full border bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.09em] ${tone.border} ${tone.text}`}>
+            <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
+            {tone.label}
+        </span>
+    );
 }
 
-function formatKey(value) {
-    return String(value || '')
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, (char) => char.toUpperCase());
+function statusTone(status) {
+    if (status === 'compatibility') {
+        return { border: 'border-amber-200', text: 'text-amber-700', dot: 'bg-amber-500', label: 'Compatibility' };
+    }
+
+    if (status === 'deferred' || status === 'legacy') {
+        return { border: 'border-slate-200', text: 'text-slate-600', dot: 'bg-slate-300', label: formatKey(status) };
+    }
+
+    return { border: 'border-emerald-200', text: 'text-emerald-700', dot: 'bg-emerald-500', label: 'Active' };
+}
+
+function metricStatusDot(status) {
+    if (status === 'online') return 'bg-emerald-500';
+    if (status === 'attention') return 'bg-amber-500';
+    return 'bg-slate-300';
 }

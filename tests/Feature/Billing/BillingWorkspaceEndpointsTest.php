@@ -164,7 +164,9 @@ class BillingWorkspaceEndpointsTest extends TestCase
 
         $this->getJson("/api/crm/settings/billing/subscription-rules/{$platform->id}")
             ->assertOk()
-            ->assertJsonPath('subscription_rule.activation_method_json.payment_link', true);
+            ->assertJsonPath('subscription_rule.activation_method_json.payment_link', true)
+            ->assertJsonPath('editable', false)
+            ->assertJsonPath('market.id', $platform->id);
     }
 
     public function test_admin_can_create_provider_profile_with_schema_fields(): void
@@ -467,6 +469,63 @@ class BillingWorkspaceEndpointsTest extends TestCase
             'enabled' => true,
             'currency_code' => 'KES',
             'topup_preset_json' => ['500.00'],
+        ])->assertForbidden();
+    }
+
+    public function test_admin_can_store_subscription_rules_for_a_market(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin');
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->putJson("/api/crm/settings/billing/subscription-rules/{$platform->id}", [
+            'activation_method_json' => [
+                'methods' => ['manual', 'payment_link', 'stk_push'],
+            ],
+            'renewal_method_json' => [
+                'methods' => ['wallet_balance', 'payment_link'],
+                'wallet_auto_renew' => true,
+            ],
+            'free_trial_json' => [
+                'enabled' => true,
+                'duration_days' => 14,
+            ],
+            'discount_json' => [
+                'enabled' => true,
+                'max_percent' => 25,
+                'requires_pin' => true,
+            ],
+            'expiry_policy_json' => [
+                'grace_period_days' => 7,
+                'suspend_after_days' => 30,
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('editable', true)
+            ->assertJsonPath('subscription_rule.activation_method_json.methods.0', 'manual')
+            ->assertJsonPath('subscription_rule.renewal_method_json.wallet_auto_renew', true)
+            ->assertJsonPath('subscription_rule.free_trial_json.duration_days', 14)
+            ->assertJsonPath('subscription_rule.discount_json.max_percent', 25)
+            ->assertJsonPath('subscription_rule.expiry_policy_json.grace_period_days', 7);
+
+        $this->assertDatabaseHas('billing_subscription_rules', [
+            'market_id' => $platform->id,
+        ]);
+    }
+
+    public function test_sub_admin_cannot_store_subscription_rules(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $subAdmin = $this->createUser('sub_admin', [$platform->id]);
+
+        Sanctum::actingAs($subAdmin);
+
+        $this->putJson("/api/crm/settings/billing/subscription-rules/{$platform->id}", [
+            'activation_method_json' => [
+                'methods' => ['payment_link'],
+            ],
         ])->assertForbidden();
     }
 

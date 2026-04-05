@@ -58,11 +58,31 @@ export default function BillingWorkspace() {
 
     const headerChips = useMemo(
         () => [
-            features.registry ? 'Registry active' : null,
-            features.workspace ? 'Workspace visible' : null,
-            features.diagnostics_v2 ? 'Diagnostics online' : null,
-            features.wallet_auto_renew ? 'Auto-renew policy' : null,
-        ].filter(Boolean),
+            {
+                key: 'registry',
+                label: 'Registry',
+                value: features.registry ? 'Active' : 'Deferred',
+                enabled: Boolean(features.registry),
+            },
+            {
+                key: 'workspace',
+                label: 'Workspace',
+                value: features.workspace ? 'Visible' : 'Hidden',
+                enabled: Boolean(features.workspace),
+            },
+            {
+                key: 'diagnostics',
+                label: 'Diagnostics',
+                value: features.diagnostics_v2 ? 'Online' : 'Deferred',
+                enabled: Boolean(features.diagnostics_v2),
+            },
+            {
+                key: 'renewal',
+                label: 'Auto-renew',
+                value: features.wallet_auto_renew ? 'Policy ready' : 'Deferred',
+                enabled: Boolean(features.wallet_auto_renew),
+            },
+        ],
         [features.diagnostics_v2, features.registry, features.wallet_auto_renew, features.workspace]
     );
 
@@ -122,16 +142,32 @@ export default function BillingWorkspace() {
                 </div>
             </header>
             {headerChips.length > 0 ? (
-                <div className="border-b border-slate-100 bg-slate-50/40 px-5 py-4">
-                    <div className="flex flex-wrap gap-2">
-                    {headerChips.map((chip) => (
-                        <span
-                            key={chip}
-                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 shadow-sm shadow-slate-950/[0.03]"
-                        >
-                            {chip}
-                        </span>
-                    ))}
+                <div className="border-b border-slate-100 bg-slate-50/30 px-5 py-4">
+                    <div className="flex flex-wrap gap-3">
+                        {headerChips.map((chip) => (
+                            <div
+                                key={chip.key}
+                                className="inline-flex min-w-[180px] flex-1 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-950/[0.02] sm:flex-none"
+                            >
+                                <div className="min-w-0">
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                                        {chip.label}
+                                    </p>
+                                    <p className="mt-1 truncate text-sm font-semibold text-slate-900">{chip.value}</p>
+                                </div>
+                                <span
+                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                                    title={chip.value}
+                                    aria-label={chip.value}
+                                >
+                                    <span
+                                        className={`h-2.5 w-2.5 rounded-full ${
+                                            chip.enabled ? 'bg-emerald-500' : 'bg-slate-300'
+                                        }`}
+                                    />
+                                </span>
+                            </div>
+                        ))}
                     </div>
                 </div>
             ) : null}

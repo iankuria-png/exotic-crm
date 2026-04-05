@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Billing\Support\BillingProviderTransactionRecorder;
 use App\Billing\Support\CanonicalPaymentStateReducer;
@@ -21,6 +22,7 @@ class BillingGatewayService
     public function __construct(
         private readonly BillingModeService $billingModeService,
         private readonly HostedCheckoutService $hostedCheckoutService,
+        private readonly PesapalCompatibilityAdapter $pesapalCompatibilityAdapter,
         private readonly ProviderStatusQueryOrchestrator $providerStatusQueryOrchestrator,
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly WalletService $walletService,
@@ -158,7 +160,7 @@ class BillingGatewayService
     public function retryMpesaTopup(Payment $payment, array $options = [], ?Request $request = null): array
     {
         $payment->loadMissing(['client.platform', 'platform', 'client']);
-        if ($payment->purpose !== 'wallet_topup' || $payment->provider_key !== 'mpesa_stk') {
+        if ($payment->purpose !== 'wallet_topup' || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja'], true)) {
             throw new InvalidArgumentException('Only M-Pesa wallet top-up payments can be retried here.');
         }
 
@@ -176,7 +178,10 @@ class BillingGatewayService
             throw new InvalidArgumentException('Please wait before requesting another STK push.');
         }
 
-        $context = $this->billingModeService->providerContext($payment->platform, 'mpesa_stk');
+        $context = $this->billingModeService->providerContext(
+            $payment->platform,
+            $this->resolvedProviderType($payment) ?: 'mpesa_stk'
+        );
         $action = $this->dispatchMpesaStk($payment, $context, [
             'phone' => $options['phone'] ?? $payment->phone,
             'retry' => true,
@@ -194,7 +199,10 @@ class BillingGatewayService
             ]),
         ])->save();
 
-        $retryOf = $this->billingProviderTransactionRecorder->latestAttempt($payment, 'mpesa_stk');
+        $retryOf = $this->billingProviderTransactionRecorder->latestAttempt(
+            $payment,
+            $context['provider_key'] ?? $this->resolvedProviderType($payment)
+        );
         $this->billingProviderTransactionRecorder->recordInitiation($payment, $context, $action, [
             'reason_code' => 'manual_retry',
             'retry_of_provider_transaction_id' => $retryOf?->id,
@@ -438,7 +446,7 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()->findOrFail($paymentId);
-        if ($payment->purpose !== 'wallet_topup' || $this->resolvedProviderType($payment) !== 'mpesa_stk') {
+        if ($payment->purpose !== 'wallet_topup' || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja'], true)) {
             throw new InvalidArgumentException('M-Pesa callback does not target a wallet top-up payment.');
         }
 
@@ -561,7 +569,7 @@ class BillingGatewayService
         $attemptStartedAt = microtime(true);
 
         try {
-            $action = $this->hostedCheckoutService->initializePesapal($payment, $context, $options);
+            $action = $this->pesapalCompatibilityAdapter->initialize($payment, $context, $options);
         } catch (RuntimeException $exception) {
             $this->failPayment($payment, $exception->getMessage());
             $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
@@ -818,7 +826,7 @@ class BillingGatewayService
             return $resume;
         }
 
-        if ($payment->provider_key === 'mpesa_stk') {
+        if (in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja'], true)) {
             return [
                 'type' => 'stk_pending',
                 'message' => 'Payment is still awaiting completion on the phone prompt.',

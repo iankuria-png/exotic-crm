@@ -1026,6 +1026,8 @@ class SettingsController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
+        $market = Platform::query()->select(['id', 'name', 'country', 'currency_code'])->findOrFail($marketId);
+
         $rule = BillingSubscriptionRule::query()
             ->with(["market:id,name,country"])
             ->where("market_id", $marketId)
@@ -1048,8 +1050,90 @@ class SettingsController extends Controller
         }
 
         return response()->json([
+            'market' => $market,
             "subscription_rule" => $rule,
+            'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
         ]);
+    }
+
+    public function storeBillingSubscriptionRules(Request $request, int $marketId)
+    {
+        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $market = Platform::query()->findOrFail($marketId);
+
+        $activationMethods = ['manual', 'payment_link', 'stk_push', 'wallet_balance'];
+        $renewalMethods = ['wallet_balance', 'payment_link', 'manual'];
+
+        $validated = $request->validate([
+            'activation_method_json' => ['nullable', 'array'],
+            'activation_method_json.methods' => ['nullable', 'array'],
+            'activation_method_json.methods.*' => ['string', Rule::in($activationMethods)],
+            'renewal_method_json' => ['nullable', 'array'],
+            'renewal_method_json.methods' => ['nullable', 'array'],
+            'renewal_method_json.methods.*' => ['string', Rule::in($renewalMethods)],
+            'renewal_method_json.wallet_auto_renew' => ['nullable', 'boolean'],
+            'free_trial_json' => ['nullable', 'array'],
+            'free_trial_json.enabled' => ['nullable', 'boolean'],
+            'free_trial_json.duration_days' => ['nullable', 'integer', 'min:1', 'max:365'],
+            'discount_json' => ['nullable', 'array'],
+            'discount_json.enabled' => ['nullable', 'boolean'],
+            'discount_json.max_percent' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'discount_json.requires_pin' => ['nullable', 'boolean'],
+            'expiry_policy_json' => ['nullable', 'array'],
+            'expiry_policy_json.grace_period_days' => ['nullable', 'integer', 'min:0', 'max:365'],
+            'expiry_policy_json.suspend_after_days' => ['nullable', 'integer', 'min:0', 'max:3650'],
+        ]);
+
+        $activationJson = [
+            'methods' => collect(data_get($validated, 'activation_method_json.methods', []))
+                ->map(fn ($value) => strtolower(trim((string) $value)))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
+        ];
+
+        $renewalJson = [
+            'methods' => collect(data_get($validated, 'renewal_method_json.methods', []))
+                ->map(fn ($value) => strtolower(trim((string) $value)))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
+            'wallet_auto_renew' => (bool) data_get($validated, 'renewal_method_json.wallet_auto_renew', false),
+        ];
+
+        $freeTrialJson = [
+            'enabled' => (bool) data_get($validated, 'free_trial_json.enabled', false),
+            'duration_days' => data_get($validated, 'free_trial_json.duration_days'),
+        ];
+
+        $discountJson = [
+            'enabled' => (bool) data_get($validated, 'discount_json.enabled', false),
+            'max_percent' => data_get($validated, 'discount_json.max_percent'),
+            'requires_pin' => (bool) data_get($validated, 'discount_json.requires_pin', false),
+        ];
+
+        $expiryPolicyJson = [
+            'grace_period_days' => data_get($validated, 'expiry_policy_json.grace_period_days'),
+            'suspend_after_days' => data_get($validated, 'expiry_policy_json.suspend_after_days'),
+        ];
+
+        BillingSubscriptionRule::query()->updateOrCreate(
+            ['market_id' => $market->id],
+            [
+                'activation_method_json' => $activationJson,
+                'renewal_method_json' => $renewalJson,
+                'free_trial_json' => $freeTrialJson,
+                'discount_json' => $discountJson,
+                'expiry_policy_json' => $expiryPolicyJson,
+            ]
+        );
+
+        return $this->billingSubscriptionRules($marketId);
     }
 
     private function serializeRoutingRule(BillingRoutingRule $rule): array

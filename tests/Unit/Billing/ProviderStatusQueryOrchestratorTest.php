@@ -2,6 +2,7 @@
 
 namespace Tests\Unit\Billing;
 
+use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -117,11 +118,60 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
         $this->assertSame('pending', $decision['winning_status']);
     }
 
+    public function test_verify_uses_pesapal_compatibility_adapter_for_pesapal_payments(): void
+    {
+        $platform = Platform::factory()->create();
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'provider_key' => 'pesapal',
+            'provider_environment' => 'production',
+            'reference_number' => 'PESAPAL-001',
+            'transaction_reference' => 'TRACK-123',
+        ]);
+
+        $billingModeService = Mockery::mock(BillingModeService::class);
+        $billingModeService->shouldReceive('providerContext')
+            ->once()
+            ->with(
+                Mockery::on(fn ($resolvedPlatform) => $resolvedPlatform instanceof Platform && $resolvedPlatform->is($platform)),
+                'pesapal',
+                false,
+                'production'
+            )
+            ->andReturn([
+                'environment' => 'production',
+                'provider_credentials' => ['consumer_key' => 'key', 'consumer_secret' => 'secret'],
+            ]);
+
+        $pesapalAdapter = Mockery::mock(PesapalCompatibilityAdapter::class);
+        $pesapalAdapter->shouldReceive('verify')
+            ->once()
+            ->with(Mockery::on(fn (Payment $resolved) => $resolved->is($payment)), Mockery::type('array'), 'TRACK-123')
+            ->andReturn([
+                'status' => 'completed',
+                'message' => 'Completed',
+                'data' => ['tracking_id' => 'TRACK-123'],
+            ]);
+
+        $orchestrator = new ProviderStatusQueryOrchestrator(
+            $billingModeService,
+            Mockery::mock(HostedCheckoutService::class),
+            $pesapalAdapter
+        );
+
+        $verification = $orchestrator->verify($payment);
+
+        $this->assertSame('pesapal', $verification['provider']);
+        $this->assertSame('completed', $verification['status']);
+        $this->assertSame('TRACK-123', $verification['provider_reference']);
+    }
+
     private function makeOrchestrator(): ProviderStatusQueryOrchestrator
     {
         return new ProviderStatusQueryOrchestrator(
             Mockery::mock(BillingModeService::class),
-            Mockery::mock(HostedCheckoutService::class)
+            Mockery::mock(HostedCheckoutService::class),
+            Mockery::mock(PesapalCompatibilityAdapter::class)
         );
     }
 

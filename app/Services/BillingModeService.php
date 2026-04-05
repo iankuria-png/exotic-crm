@@ -46,29 +46,34 @@ class BillingModeService
     ): array
     {
         $normalizedProvider = strtolower(trim($provider));
-        if (!in_array($normalizedProvider, $this->providerRegistry->legacyWalletProviderKeys(), true)) {
+        $providerDefinition = $this->providerRegistry->find($normalizedProvider)?->definition();
+        $runtimeProvider = $this->runtimeProviderKey($normalizedProvider);
+
+        if (
+            !$providerDefinition
+            || (!in_array($normalizedProvider, $this->providerRegistry->legacyWalletProviderKeys(), true) && $runtimeProvider === $normalizedProvider)
+        ) {
             throw new InvalidArgumentException('Unsupported wallet billing provider.');
         }
-
-        $providerDefinition = $this->providerRegistry->find($normalizedProvider)?->definition();
 
         $context = $requireEnabled
             ? $this->assertWalletAvailable($platform)
             : $this->walletContext($platform);
         $wallet = $context['wallet'];
         $environment = $this->resolveProviderEnvironment((string) ($context['environment'] ?? 'sandbox'), $environmentOverride);
-        $providerConfig = data_get($wallet, "providers.{$normalizedProvider}", []);
-        $providerCredentials = data_get($wallet, "credentials.{$normalizedProvider}.{$environment}", []);
+        $providerConfig = data_get($wallet, "providers.{$runtimeProvider}", []);
+        $providerCredentials = data_get($wallet, "credentials.{$runtimeProvider}.{$environment}", []);
 
         if ($requireEnabled && !(bool) ($providerConfig['enabled'] ?? false)) {
             throw new InvalidArgumentException('Selected provider is disabled for this market.');
         }
 
-        $this->assertCredentialsPresent($normalizedProvider, $providerCredentials);
+        $this->assertCredentialsPresent($runtimeProvider, $providerCredentials);
 
         return array_merge($context, [
             'environment' => $environment,
             'provider' => $normalizedProvider,
+            'provider_runtime_key' => $runtimeProvider,
             'provider_definition' => $providerDefinition,
             'provider_config' => is_array($providerConfig) ? $providerConfig : [],
             'provider_credentials' => is_array($providerCredentials) ? $providerCredentials : [],
@@ -162,5 +167,13 @@ class BillingModeService
         }
 
         return $this->resolveEnvironment($defaultEnvironment);
+    }
+
+    private function runtimeProviderKey(string $provider): string
+    {
+        return match ($provider) {
+            'daraja' => 'mpesa_stk',
+            default => $provider,
+        };
     }
 }

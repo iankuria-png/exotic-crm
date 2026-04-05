@@ -20,7 +20,7 @@ use InvalidArgumentException;
  */
 class MpesaStkRoutingExecutor implements ProviderRoutingExecutor
 {
-    private const SUPPORTED_PROVIDERS = ['mpesa_stk'];
+    private const SUPPORTED_PROVIDERS = ['mpesa_stk', 'daraja'];
 
     public function __construct(
         private readonly BillingGatewayService $billingGatewayService

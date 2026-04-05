@@ -1,11 +1,152 @@
-import React, { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
+import { useToast } from '../ToastProvider';
 import BillingStateNotice from './BillingStateNotice';
 import { isForbiddenQueryError } from './queryState';
 
+const ACTIVATION_OPTIONS = [
+    { key: 'manual', label: 'Manual activation', hint: 'Operators can provision subscriptions directly from the CRM.' },
+    { key: 'payment_link', label: 'Payment link', hint: 'Customers can activate through hosted payment links.' },
+    { key: 'stk_push', label: 'STK push', hint: 'Customers can start activation using mobile-money prompts.' },
+    { key: 'wallet_balance', label: 'Wallet balance', hint: 'Customers can activate using funded wallet balance.' },
+];
+
+const RENEWAL_OPTIONS = [
+    { key: 'wallet_balance', label: 'Wallet balance', hint: 'Use stored wallet balance during renewals.' },
+    { key: 'payment_link', label: 'Payment link', hint: 'Send renewal links when wallet charging is not available.' },
+    { key: 'manual', label: 'Manual recovery', hint: 'Allow operators to intervene with manual renewal handling.' },
+];
+
+function normalizeMethods(input, mapLegacyKey) {
+    if (Array.isArray(input)) {
+        return input
+            .map((value) => mapLegacyKey(value))
+            .filter(Boolean)
+            .filter((value, index, array) => array.indexOf(value) === index);
+    }
+
+    if (input && Array.isArray(input.methods)) {
+        return input.methods
+            .map((value) => mapLegacyKey(value))
+            .filter(Boolean)
+            .filter((value, index, array) => array.indexOf(value) === index);
+    }
+
+    if (input && typeof input === 'object') {
+        return Object.entries(input)
+            .filter(([, value]) => value === true || (value && typeof value === 'object' && value.enabled === true))
+            .map(([key]) => mapLegacyKey(key))
+            .filter(Boolean)
+            .filter((value, index, array) => array.indexOf(value) === index);
+    }
+
+    return [];
+}
+
+function normalizeActivationMethod(key) {
+    const normalized = String(key || '').trim().toLowerCase();
+
+    const map = {
+        link: 'payment_link',
+        payment_link: 'payment_link',
+        stk: 'stk_push',
+        stk_push: 'stk_push',
+        wallet: 'wallet_balance',
+        wallet_balance: 'wallet_balance',
+        manual: 'manual',
+    };
+
+    return map[normalized] || null;
+}
+
+function normalizeRenewalMethod(key) {
+    const normalized = String(key || '').trim().toLowerCase();
+
+    const map = {
+        link: 'payment_link',
+        payment_link: 'payment_link',
+        wallet: 'wallet_balance',
+        wallet_balance: 'wallet_balance',
+        manual: 'manual',
+    };
+
+    return map[normalized] || null;
+}
+
+function normalizeRule(rule) {
+    return {
+        activationMethods: normalizeMethods(rule?.activation_method_json, normalizeActivationMethod),
+        renewalMethods: normalizeMethods(rule?.renewal_method_json, normalizeRenewalMethod),
+        walletAutoRenew:
+            Boolean(rule?.renewal_method_json?.wallet_auto_renew) ||
+            Boolean(rule?.renewal_method_json?.wallet?.enabled),
+        freeTrialEnabled: Boolean(rule?.free_trial_json?.enabled),
+        freeTrialDays:
+            rule?.free_trial_json?.duration_days ??
+            rule?.free_trial_json?.days ??
+            '',
+        discountEnabled: Boolean(rule?.discount_json?.enabled),
+        discountPercent:
+            rule?.discount_json?.max_percent ??
+            rule?.discount_json?.percent ??
+            '',
+        discountRequiresPin:
+            Boolean(rule?.discount_json?.requires_pin) ||
+            Boolean(rule?.discount_json?.pin_required),
+        gracePeriodDays:
+            rule?.expiry_policy_json?.grace_period_days ??
+            rule?.expiry_policy_json?.grace_days ??
+            '',
+        suspendAfterDays:
+            rule?.expiry_policy_json?.suspend_after_days ??
+            rule?.expiry_policy_json?.cleanup_after_days ??
+            '',
+    };
+}
+
+function buildPayload(form) {
+    return {
+        activation_method_json: {
+            methods: form.activationMethods,
+        },
+        renewal_method_json: {
+            methods: form.renewalMethods,
+            wallet_auto_renew: Boolean(form.walletAutoRenew),
+        },
+        free_trial_json: {
+            enabled: Boolean(form.freeTrialEnabled),
+            duration_days: form.freeTrialDays === '' ? null : Number(form.freeTrialDays),
+        },
+        discount_json: {
+            enabled: Boolean(form.discountEnabled),
+            max_percent: form.discountPercent === '' ? null : Number(form.discountPercent),
+            requires_pin: Boolean(form.discountRequiresPin),
+        },
+        expiry_policy_json: {
+            grace_period_days: form.gracePeriodDays === '' ? null : Number(form.gracePeriodDays),
+            suspend_after_days: form.suspendAfterDays === '' ? null : Number(form.suspendAfterDays),
+        },
+    };
+}
+
+function firstErrorMessage(error) {
+    const validation = error?.response?.data?.errors;
+    if (validation && typeof validation === 'object') {
+        const first = Object.values(validation).flat()[0];
+        if (first) {
+            return String(first);
+        }
+    }
+
+    return error?.response?.data?.message || 'CRM could not save subscription rules.';
+}
+
 export default function SubscriptionRulesTab({ platforms = [] }) {
+    const toast = useToast();
+    const queryClient = useQueryClient();
     const [selectedMarket, setSelectedMarket] = useState(null);
+    const [form, setForm] = useState(null);
 
     const marketId = selectedMarket?.id;
 
@@ -17,10 +158,37 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
         staleTime: 10 * 60 * 1000,
     });
 
-    const { data = {} } = subscriptionRulesQuery;
-    const subscriptionRules = useMemo(() => data.subscription_rule || null, [data.subscription_rule]);
+    const saveMutation = useMutation({
+        mutationFn: (payload) =>
+            api.put(`/crm/settings/billing/subscription-rules/${marketId}`, payload).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['billing-subscription-rules', marketId] });
+            toast.success('Subscription policy updated.');
+        },
+        onError: (error) => {
+            toast.error(firstErrorMessage(error), {
+                title: 'Subscription policy save failed',
+            });
+        },
+    });
 
-    // Handle empty state
+    const data = subscriptionRulesQuery.data || {};
+    const subscriptionRule = data.subscription_rule || null;
+    const editable = Boolean(data.editable);
+    const market = data.market || selectedMarket;
+
+    useEffect(() => {
+        if (!subscriptionRule) {
+            setForm(null);
+            return;
+        }
+
+        setForm(normalizeRule(subscriptionRule));
+    }, [subscriptionRule]);
+
+    const selectedActivationMethods = useMemo(() => new Set(form?.activationMethods || []), [form?.activationMethods]);
+    const selectedRenewalMethods = useMemo(() => new Set(form?.renewalMethods || []), [form?.renewalMethods]);
+
     if (!selectedMarket && platforms.length === 0) {
         return (
             <div className="space-y-4 p-5">
@@ -28,50 +196,59 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                     state="empty"
                     eyebrow="Subscription Rules"
                     title="No markets available"
-                    message="Create or enable markets in Platform settings before configuring subscription rules."
+                    message="Create or enable markets before configuring subscription activation and renewal policy."
                 />
             </div>
         );
     }
 
-    // Market selection view
     if (!selectedMarket) {
         return (
-            <div className="space-y-4 p-5">
-                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                        Subscription Rules
-                    </p>
-                    <h4 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                        Choose a market to review subscription policy
+            <div className="space-y-5 p-5">
+                <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-950/[0.02]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Subscription Rules</p>
+                    <h4 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                        Choose a market to author subscription policy
                     </h4>
                     <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                        Review activation methods, renewal posture, free trials, and discount policy by
-                        market. This gives operators a reliable policy view while registry-backed editing
-                        is being wired into the same workspace.
+                        Control how subscriptions are activated, renewed, discounted, and expired for each market.
+                        This is the policy layer operators rely on before routing and diagnostics decisions kick in.
                     </p>
                 </section>
 
                 <div className="grid gap-4 xl:grid-cols-3">
                     {platforms.map((platform) => (
-                        <MarketCard
+                        <button
                             key={platform.id}
-                            platform={platform}
-                            onSelect={() => setSelectedMarket(platform)}
-                        />
+                            type="button"
+                            onClick={() => setSelectedMarket(platform)}
+                            className="rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm shadow-slate-950/[0.02] transition hover:border-slate-300 hover:shadow-md hover:shadow-slate-950/[0.04]"
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Market</p>
+                                    <h5 className="mt-2 text-lg font-semibold text-slate-950">{platform.name}</h5>
+                                </div>
+                                <div className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                            </div>
+                            {platform.country ? (
+                                <p className="mt-3 text-sm text-slate-600">{platform.country}</p>
+                            ) : null}
+                            <p className="mt-5 text-sm font-medium text-slate-900">Open policy workspace</p>
+                        </button>
                     ))}
                 </div>
             </div>
         );
     }
 
-    if (subscriptionRulesQuery.isLoading) {
+    if (subscriptionRulesQuery.isLoading || !form) {
         return (
             <div className="space-y-4 p-5 animate-pulse">
-                <div className="space-y-4">
-                    {[...Array(3)].map((_, i) => (
-                        <div key={i} className="h-40 rounded-xl border border-slate-200 bg-white" />
-                    ))}
+                <div className="h-28 rounded-xl border border-slate-200 bg-white" />
+                <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="h-64 rounded-xl border border-slate-200 bg-white" />
+                    <div className="h-64 rounded-xl border border-slate-200 bg-white" />
                 </div>
             </div>
         );
@@ -85,15 +262,9 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                         state="forbidden"
                         eyebrow="Subscription Rules"
                         title="Subscription policy access is restricted"
-                        message="This role cannot inspect subscription activation and wallet-paid renewal policy for the selected market."
+                        message="This role cannot inspect or author subscription policy for the selected market."
                     />
-                    <button
-                        type="button"
-                        onClick={() => setSelectedMarket(null)}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                        Back to Markets
-                    </button>
+                    <BackButton onClick={() => setSelectedMarket(null)} />
                 </div>
             );
         }
@@ -104,206 +275,329 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                     state="degraded"
                     eyebrow="Subscription Rules"
                     title="Subscription rules unavailable"
-                    message="CRM could not load subscription rules for this market. Refresh the page to retry."
+                    message="CRM could not load subscription policy for this market. Refresh the page to retry."
                 />
-                <button
-                    type="button"
-                    onClick={() => setSelectedMarket(null)}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                    Back to Markets
-                </button>
-            </div>
-        );
-    }
-
-    if (!subscriptionRules) {
-        return (
-            <div className="space-y-4 p-5">
-                <BillingStateNotice
-                    state="empty"
-                    eyebrow={`Subscription Rules - ${selectedMarket?.name}`}
-                    title="No subscription rules configured"
-                    message="This market does not yet have a registry-backed subscription policy. Once authoring is enabled here, this panel will hold the live activation and renewal rule set."
-                />
-                <button
-                    type="button"
-                    onClick={() => setSelectedMarket(null)}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                    Back to Markets
-                </button>
+                <BackButton onClick={() => setSelectedMarket(null)} />
             </div>
         );
     }
 
     return (
-        <div className="space-y-4 p-5">
-            <section className="flex items-center justify-between rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
-                <div className="flex-1">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                        Subscription Policy
-                    </p>
-                    <h4 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{selectedMarket?.name} Subscription Rules</h4>
-                    <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                        Subscription configuration rules for this market including activation methods, renewal
-                        policies, and free trial settings.
-                    </p>
+        <div className="space-y-5 p-5">
+            <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-950/[0.02]">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                    <div className="space-y-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Subscription Policy</p>
+                        <h4 className="text-2xl font-semibold tracking-tight text-slate-950">
+                            {market?.name || selectedMarket?.name} subscription rules
+                        </h4>
+                        <p className="max-w-3xl text-sm leading-6 text-slate-600">
+                            Define how this market activates subscriptions, recovers renewals, handles free trials,
+                            and applies discount or expiry posture. These controls should read clearly to operators and
+                            finance admins alike.
+                        </p>
+                    </div>
+                    <div className="flex flex-col items-stretch gap-3 xl:min-w-[240px]">
+                        <button
+                            type="button"
+                            onClick={() => saveMutation.mutate(buildPayload(form))}
+                            disabled={!editable || saveMutation.isPending}
+                            className="crm-btn-primary justify-center px-4 py-3 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {saveMutation.isPending ? 'Saving policy…' : 'Save subscription rules'}
+                        </button>
+                        <BackButton onClick={() => setSelectedMarket(null)} />
+                    </div>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => setSelectedMarket(null)}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            </section>
+
+            {!editable ? (
+                <BillingStateNotice
+                    state="forbidden"
+                    eyebrow="Read-only access"
+                    title="You can review policy but not change it"
+                    message="Only admin users can update subscription activation, renewal, and expiry rules."
+                />
+            ) : null}
+
+            <div className="grid gap-4 xl:grid-cols-2">
+                <PolicyPanel
+                    eyebrow="Activation"
+                    title="How customers start a subscription"
+                    description="Choose the customer entry points that should stay available in this market."
                 >
-                    Back
-                </button>
-            </section>
+                    <OptionGrid
+                        options={ACTIVATION_OPTIONS}
+                        selected={selectedActivationMethods}
+                        disabled={!editable}
+                        onToggle={(key) =>
+                            setForm((current) => ({
+                                ...current,
+                                activationMethods: toggleItem(current.activationMethods, key),
+                            }))
+                        }
+                    />
+                </PolicyPanel>
 
-            {subscriptionRules.activation_method_json && Object.keys(subscriptionRules.activation_method_json).length > 0 && (
-                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
-                    <h5 className="text-sm font-semibold text-slate-900">Activation Methods</h5>
-                    <p className="mt-1 text-xs text-slate-600">Subscription types enabled for this market</p>
-                    <dl className="mt-3 space-y-2">
-                        {Object.entries(subscriptionRules.activation_method_json).map(([method, enabled], idx) => (
-                            <div
-                                key={`activation-${subscriptionRules.id}-${idx}`}
-                                className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
-                            >
-                                <dt className="text-xs font-medium text-slate-700">{method}</dt>
-                                <dd>
-                                    <span
-                                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${
-                                            enabled
-                                                ? 'bg-emerald-100 text-emerald-700'
-                                                : 'bg-slate-100 text-slate-700'
-                                        }`}
-                                    >
-                                        {enabled ? 'Enabled' : 'Disabled'}
-                                    </span>
-                                </dd>
-                            </div>
-                        ))}
-                    </dl>
-                </section>
-            )}
+                <PolicyPanel
+                    eyebrow="Renewal"
+                    title="How subscriptions recover and renew"
+                    description="Define the fallback posture when customers reach expiry or a balance top-up is required."
+                >
+                    <OptionGrid
+                        options={RENEWAL_OPTIONS}
+                        selected={selectedRenewalMethods}
+                        disabled={!editable}
+                        onToggle={(key) =>
+                            setForm((current) => ({
+                                ...current,
+                                renewalMethods: toggleItem(current.renewalMethods, key),
+                            }))
+                        }
+                    />
+                    <ToggleRow
+                        className="mt-4"
+                        label="Wallet auto-renew"
+                        description="Attempt renewal from wallet balance before falling back to manual or link recovery."
+                        checked={Boolean(form.walletAutoRenew)}
+                        disabled={!editable}
+                        onChange={(value) =>
+                            setForm((current) => ({
+                                ...current,
+                                walletAutoRenew: value,
+                            }))
+                        }
+                    />
+                </PolicyPanel>
 
-            {subscriptionRules.renewal_method_json && Object.keys(subscriptionRules.renewal_method_json).length > 0 && (
-                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
-                    <h5 className="text-sm font-semibold text-slate-900">Renewal Methods</h5>
-                    <p className="mt-1 text-xs text-slate-600">Subscription renewal and wallet-paid renewal policies</p>
-                    <dl className="mt-3 space-y-2">
-                        {Object.entries(subscriptionRules.renewal_method_json).map(([method, config], idx) => (
-                            <div
-                                key={`renewal-${subscriptionRules.id}-${idx}`}
-                                className="rounded-lg border border-slate-100 bg-slate-50 p-3"
-                            >
-                                <dt className="text-xs font-semibold text-slate-900">{method}</dt>
-                                {typeof config === 'object' && config !== null ? (
-                                    <dl className="mt-2 space-y-1 text-xs text-slate-600">
-                                        {Object.entries(config).map(([key, value], subIdx) => (
-                                            <div key={`${method}-${subIdx}`} className="flex justify-between">
-                                                <dt className="font-medium text-slate-700">{key}</dt>
-                                                <dd>{String(value)}</dd>
-                                            </div>
-                                        ))}
-                                    </dl>
-                                ) : (
-                                    <dd className="mt-2 text-xs font-medium text-slate-900">{String(config)}</dd>
-                                )}
-                            </div>
-                        ))}
-                    </dl>
-                </section>
-            )}
+                <PolicyPanel
+                    eyebrow="Free Trial"
+                    title="Introductory access posture"
+                    description="Control whether this market offers free trial access and for how long."
+                >
+                    <ToggleRow
+                        label="Enable free trial"
+                        description="Allow customers in this market to start with a free trial period."
+                        checked={Boolean(form.freeTrialEnabled)}
+                        disabled={!editable}
+                        onChange={(value) =>
+                            setForm((current) => ({
+                                ...current,
+                                freeTrialEnabled: value,
+                            }))
+                        }
+                    />
+                    <NumberField
+                        className="mt-4"
+                        label="Trial duration"
+                        suffix="days"
+                        value={form.freeTrialDays}
+                        disabled={!editable || !form.freeTrialEnabled}
+                        onChange={(value) =>
+                            setForm((current) => ({
+                                ...current,
+                                freeTrialDays: value,
+                            }))
+                        }
+                    />
+                </PolicyPanel>
 
-            {subscriptionRules.free_trial_json && Object.keys(subscriptionRules.free_trial_json).length > 0 && (
-                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
-                    <h5 className="text-sm font-semibold text-slate-900">Free Trial Settings</h5>
-                    <p className="mt-1 text-xs text-slate-600">Free trial policies and duration</p>
-                    <dl className="mt-3 space-y-2">
-                        {Object.entries(subscriptionRules.free_trial_json).map(([key, value], idx) => (
-                            <div
-                                key={`freetrial-${subscriptionRules.id}-${idx}`}
-                                className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
-                            >
-                                <dt className="text-xs font-medium text-slate-700">{key}</dt>
-                                <dd className="font-mono text-sm font-semibold text-slate-900">{String(value)}</dd>
-                            </div>
-                        ))}
-                    </dl>
-                </section>
-            )}
+                <PolicyPanel
+                    eyebrow="Discounts"
+                    title="Discount control and approval"
+                    description="Define discount guardrails so operators know how far they can go without violating policy."
+                >
+                    <ToggleRow
+                        label="Enable discounts"
+                        description="Allow discounted subscription offers for this market."
+                        checked={Boolean(form.discountEnabled)}
+                        disabled={!editable}
+                        onChange={(value) =>
+                            setForm((current) => ({
+                                ...current,
+                                discountEnabled: value,
+                            }))
+                        }
+                    />
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <NumberField
+                            label="Maximum discount"
+                            suffix="%"
+                            value={form.discountPercent}
+                            disabled={!editable || !form.discountEnabled}
+                            onChange={(value) =>
+                                setForm((current) => ({
+                                    ...current,
+                                    discountPercent: value,
+                                }))
+                            }
+                        />
+                        <ToggleRow
+                            compact
+                            label="Require PIN approval"
+                            description="Enforce PIN approval for discounted subscription actions."
+                            checked={Boolean(form.discountRequiresPin)}
+                            disabled={!editable || !form.discountEnabled}
+                            onChange={(value) =>
+                                setForm((current) => ({
+                                    ...current,
+                                    discountRequiresPin: value,
+                                }))
+                            }
+                        />
+                    </div>
+                </PolicyPanel>
+            </div>
 
-            {subscriptionRules.discount_json && Object.keys(subscriptionRules.discount_json).length > 0 && (
-                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
-                    <h5 className="text-sm font-semibold text-slate-900">Discount Policies</h5>
-                    <p className="mt-1 text-xs text-slate-600">Subscription discount rules</p>
-                    <dl className="mt-3 space-y-2">
-                        {Object.entries(subscriptionRules.discount_json).map(([key, value], idx) => (
-                            <div
-                                key={`discount-${subscriptionRules.id}-${idx}`}
-                                className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
-                            >
-                                <dt className="text-xs font-medium text-slate-700">{key}</dt>
-                                <dd className="font-mono text-sm font-semibold text-slate-900">{String(value)}</dd>
-                            </div>
-                        ))}
-                    </dl>
-                </section>
-            )}
-
-            {/* Expiry Policies */}
-            {subscriptionRules.expiry_policy_json && Object.keys(subscriptionRules.expiry_policy_json).length > 0 && (
-                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
-                    <h5 className="text-sm font-semibold text-slate-900">Expiry Policies</h5>
-                    <p className="mt-1 text-xs text-slate-600">Subscription expiry and cleanup policies</p>
-                    <dl className="mt-3 space-y-2">
-                        {Object.entries(subscriptionRules.expiry_policy_json).map(([key, value], idx) => (
-                            <div
-                                key={`expiry-${subscriptionRules.id}-${idx}`}
-                                className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
-                            >
-                                <dt className="text-xs font-medium text-slate-700">{key}</dt>
-                                <dd className="font-mono text-sm font-semibold text-slate-900">{String(value)}</dd>
-                            </div>
-                        ))}
-                    </dl>
-                </section>
-            )}
-
-            <section className="rounded-3xl border border-slate-200 bg-slate-50/80 p-5">
-                <h4 className="text-sm font-semibold text-slate-900">Editing posture</h4>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                    Subscription rule authoring is being connected to the registry-backed billing model.
-                    Use this panel to confirm activation, renewal, and expiry posture before enabling
-                    direct edits for operators.
-                </p>
-            </section>
+            <PolicyPanel
+                eyebrow="Expiry posture"
+                title="Grace period and suspension behavior"
+                description="Keep operators aligned on what happens after expiry, and when a suspended account should stop waiting for recovery."
+            >
+                <div className="grid gap-4 md:grid-cols-2">
+                    <NumberField
+                        label="Grace period"
+                        suffix="days"
+                        value={form.gracePeriodDays}
+                        disabled={!editable}
+                        onChange={(value) =>
+                            setForm((current) => ({
+                                ...current,
+                                gracePeriodDays: value,
+                            }))
+                        }
+                    />
+                    <NumberField
+                        label="Suspend after"
+                        suffix="days"
+                        value={form.suspendAfterDays}
+                        disabled={!editable}
+                        onChange={(value) =>
+                            setForm((current) => ({
+                                ...current,
+                                suspendAfterDays: value,
+                            }))
+                        }
+                    />
+                </div>
+            </PolicyPanel>
         </div>
     );
 }
 
-/**
- * MarketCard displays a single market for selection.
- */
-function MarketCard({ platform, onSelect }) {
+function PolicyPanel({ eyebrow, title, description, children }) {
+    return (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{eyebrow}</p>
+            <h5 className="mt-2 text-lg font-semibold text-slate-950">{title}</h5>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+            <div className="mt-5">{children}</div>
+        </section>
+    );
+}
+
+function OptionGrid({ options, selected, disabled, onToggle }) {
+    return (
+        <div className="grid gap-3 md:grid-cols-2">
+            {options.map((option) => {
+                const active = selected.has(option.key);
+
+                return (
+                    <button
+                        key={option.key}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => onToggle(option.key)}
+                        className={`rounded-xl border px-4 py-4 text-left transition ${
+                            active
+                                ? 'border-slate-900 bg-slate-950 text-white shadow-lg shadow-slate-950/[0.08]'
+                                : 'border-slate-200 bg-white text-slate-900 hover:border-slate-300'
+                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                        <div className="flex items-center justify-between gap-3">
+                            <span className={`text-sm font-semibold ${active ? 'text-white' : 'text-slate-900'}`}>{option.label}</span>
+                            <span
+                                className={`h-2.5 w-2.5 rounded-full ${
+                                    active ? 'bg-emerald-300' : 'bg-slate-300'
+                                }`}
+                            />
+                        </div>
+                        <p className={`mt-2 text-sm leading-6 ${active ? 'text-slate-100' : 'text-slate-600'}`}>{option.hint}</p>
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+function ToggleRow({ label, description, checked, disabled, onChange, compact = false, className = '' }) {
+    return (
+        <div className={`rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-4 ${className}`}>
+            <div className={`flex ${compact ? 'items-start' : 'items-center'} justify-between gap-4`}>
+                <div>
+                    <p className="text-sm font-semibold text-slate-900">{label}</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
+                </div>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={checked}
+                    disabled={disabled}
+                    onClick={() => onChange(!checked)}
+                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition ${
+                        checked ? 'bg-slate-950' : 'bg-slate-300'
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                    <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
+                            checked ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                    />
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function NumberField({ label, suffix, value, disabled, onChange, className = '' }) {
+    return (
+        <label className={`block ${className}`}>
+            <span className="text-sm font-semibold text-slate-900">{label}</span>
+            <div className="mt-2 flex items-center rounded-xl border border-slate-200 bg-white px-4">
+                <input
+                    type="number"
+                    min="0"
+                    value={value}
+                    disabled={disabled}
+                    onChange={(event) => onChange(event.target.value)}
+                    className="w-full bg-transparent py-3 text-sm text-slate-900 outline-none disabled:cursor-not-allowed disabled:text-slate-400"
+                />
+                <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">{suffix}</span>
+            </div>
+        </label>
+    );
+}
+
+function BackButton({ onClick }) {
     return (
         <button
             type="button"
-            onClick={onSelect}
-            className="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-300 hover:shadow-sm"
+            onClick={onClick}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
         >
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Market</p>
-            <h5 className="mt-1 text-sm font-semibold text-slate-900">{platform.name}</h5>
-            {platform.country && (
-                <p className="mt-1 text-xs text-slate-600">Country: {platform.country}</p>
-            )}
-            <div className="mt-3 flex items-center gap-2 pt-3 text-[11px] text-slate-500">
-                <svg className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                </svg>
-                View Subscription Rules
-            </div>
+            Back to markets
         </button>
     );
+}
+
+function toggleItem(items, key) {
+    const next = new Set(items || []);
+
+    if (next.has(key)) {
+        next.delete(key);
+    } else {
+        next.add(key);
+    }
+
+    return Array.from(next);
 }

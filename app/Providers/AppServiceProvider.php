@@ -53,7 +53,8 @@ class AppServiceProvider extends ServiceProvider
             // Register M-Pesa STK executor
             $dispatcher->register(
                 $app->make(MpesaStkRoutingExecutor::class),
-                'mpesa_stk'
+                'mpesa_stk',
+                'daraja'
             );
             
             return $dispatcher;

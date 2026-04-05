@@ -2,22 +2,25 @@ import React from 'react';
 
 const tones = {
     empty: {
-        wrapper: 'border-slate-200 bg-slate-50',
+        wrapper: 'border-slate-200 bg-white',
         title: 'text-slate-900',
         body: 'text-slate-600',
-        badge: 'bg-slate-200 text-slate-700',
+        badge: 'border-slate-200 text-slate-600',
+        dot: 'bg-slate-400',
     },
     degraded: {
-        wrapper: 'border-amber-200 bg-amber-50',
+        wrapper: 'border-amber-200 bg-white',
         title: 'text-amber-900',
         body: 'text-amber-800',
-        badge: 'bg-amber-100 text-amber-700',
+        badge: 'border-amber-200 text-amber-700',
+        dot: 'bg-amber-500',
     },
     forbidden: {
-        wrapper: 'border-rose-200 bg-rose-50',
+        wrapper: 'border-rose-200 bg-white',
         title: 'text-rose-900',
         body: 'text-rose-700',
-        badge: 'bg-rose-100 text-rose-700',
+        badge: 'border-rose-200 text-rose-700',
+        dot: 'bg-rose-500',
     },
 };
 
@@ -30,13 +33,14 @@ export default function BillingStateNotice({
     const tone = tones[state] || tones.empty;
 
     return (
-        <section className={`rounded-2xl border p-5 ${tone.wrapper}`}>
+        <section className={`rounded-lg border p-5 shadow-sm shadow-slate-950/[0.02] ${tone.wrapper}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <p className={`text-[11px] font-semibold uppercase tracking-[0.08em] ${tone.body}`}>{eyebrow}</p>
                     <h4 className={`mt-2 text-base font-semibold ${tone.title}`}>{title}</h4>
                 </div>
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${tone.badge}`}>
+                <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${tone.badge}`}>
+                    <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
                     {state}
                 </span>
             </div>
