@@ -163,7 +163,7 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
                             the Payments drawer.
                         </p>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[420px]">
+                    <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[372px]">
                         <DiagnosticsMetricCard label="Healthy" value={healthySignals.length} status="online" />
                         <DiagnosticsMetricCard label="Review" value={attentionSignals.length} status="attention" />
                         <DiagnosticsMetricCard label="Observed" value={observedSignals.length} status="neutral" />
@@ -231,18 +231,18 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
 function DiagnosticsMetricCard({ label, value, status = 'neutral' }) {
     return (
         <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm shadow-slate-950/[0.02]">
-            <div className="grid min-h-[108px] grid-rows-[auto_1fr] gap-5">
+            <div className="grid min-h-[96px] grid-rows-[auto_1fr] gap-4">
                 <div className="flex items-start justify-between gap-3">
-                    <p className="min-w-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+                    <p className="min-w-0 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
                     <span
-                        className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
+                        className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
                         aria-hidden="true"
                     >
-                        <span className={`h-2 w-2 rounded-full ${metricStatusDot(status)}`} />
+                        <span className={`h-1.5 w-1.5 rounded-full ${metricStatusDot(status)}`} />
                     </span>
                 </div>
                 <div className="flex items-end">
-                    <p className="tabular-nums text-[1.8rem] font-semibold leading-none tracking-[-0.04em] text-slate-950">
+                    <p className="tabular-nums text-[1.55rem] font-semibold leading-none tracking-[-0.04em] text-slate-950">
                         {value}
                     </p>
                 </div>
