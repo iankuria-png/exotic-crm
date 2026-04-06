@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Billing\Support\MarketBillingMethodPolicy;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -12,6 +13,10 @@ use App\Helpers\LogHelper;
 
 class PlatformController extends Controller
 {
+    public function __construct(
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
+    ) {
+    }
 
     // Create a platform (Admin only)
     public function store(Request $request)
@@ -46,7 +51,7 @@ class PlatformController extends Controller
             return response()->json([
                 'status' => 201,
                 'message' => 'Platform created successfully',
-                'platform' => $platform
+                'platform' => $this->decoratePlatform($platform)
             ], 201);
 
         } catch (ValidationException $e) {
@@ -104,7 +109,7 @@ class PlatformController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Platforms retrieved successfully',
-                'platforms' => $platforms
+                'platforms' => $platforms->map(fn (Platform $platform) => $this->decoratePlatform($platform))->values()
             ], 200);
     
         } catch (\Exception $e) {
@@ -143,7 +148,7 @@ class PlatformController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Platform retrieved for editing',
-                'platform' => $platform
+                'platform' => $this->decoratePlatform($platform)
             ], 200);
     
         } catch (\Exception $e) {
@@ -200,7 +205,7 @@ class PlatformController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Platform updated successfully',
-                'platform' => $platform
+                'platform' => $this->decoratePlatform($platform)
             ], 200);
     
         } catch (ValidationException $e) {
@@ -288,5 +293,13 @@ class PlatformController extends Controller
                 'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
+    }
+
+    private function decoratePlatform(Platform $platform): array
+    {
+        $payload = $platform->toArray();
+        $payload['billing_method_policy'] = $this->marketBillingMethodPolicy->contract($platform);
+
+        return $payload;
     }
 }

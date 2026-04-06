@@ -6,6 +6,7 @@ use App\Models\BillingWalletRule;
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingWebhookEvent;
 use App\Models\BillingProviderProfile;
+use App\Models\BillingSubscriptionRule;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
@@ -385,6 +386,15 @@ class WalletApiPhaseFiveTest extends TestCase
             'hmac_secret' => $hmacSecret,
         ] = $this->seedWalletContext();
 
+        BillingSubscriptionRule::query()->create([
+            'market_id' => $platform->id,
+            'activation_method_json' => ['methods' => ['manual', 'payment_link']],
+            'renewal_method_json' => ['methods' => ['wallet_balance', 'payment_link'], 'wallet_auto_renew' => true],
+            'free_trial_json' => ['enabled' => false],
+            'discount_json' => ['enabled' => true],
+            'expiry_policy_json' => ['grace_period_days' => 7],
+        ]);
+
         Http::fake([
             'https://api.paystack.co/transaction/initialize' => Http::response([
                 'status' => true,
@@ -423,7 +433,11 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('provider', 'paystack')
             ->assertJsonPath('action.type', 'redirect')
             ->assertJsonPath('action.url', 'https://checkout.paystack.test/redirect')
-            ->assertJsonPath('payment.purpose', 'wallet_topup');
+            ->assertJsonPath('payment.purpose', 'wallet_topup')
+            ->assertJsonPath('billing_method_policy.version', '2026-04-06')
+            ->assertJsonPath('billing_method_policy.activation.methods', ['manual', 'payment_link'])
+            ->assertJsonPath('billing_method_policy.renewal.methods', ['wallet_balance', 'payment_link'])
+            ->assertJsonPath('billing_method_policy.renewal.wallet_auto_renew', false);
 
         $paymentId = (int) $response->json('payment.id');
         $attempt = PaymentAttempt::query()

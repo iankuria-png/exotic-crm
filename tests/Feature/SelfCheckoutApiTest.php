@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BillingSubscriptionRule;
 use App\Models\Client;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
@@ -79,6 +80,14 @@ class SelfCheckoutApiTest extends TestCase
         ]);
 
         $this->seedWalletBillingContext($platform);
+        BillingSubscriptionRule::query()->create([
+            'market_id' => $platform->id,
+            'activation_method_json' => ['methods' => ['manual', 'payment_link']],
+            'renewal_method_json' => ['methods' => ['wallet_balance', 'payment_link'], 'wallet_auto_renew' => true],
+            'free_trial_json' => ['enabled' => false],
+            'discount_json' => ['enabled' => true],
+            'expiry_policy_json' => ['grace_period_days' => 7],
+        ]);
 
         Http::fake([
             'https://api.paystack.co/transaction/initialize' => Http::response([
@@ -112,7 +121,10 @@ class SelfCheckoutApiTest extends TestCase
             ->assertJsonPath('status', true)
             ->assertJsonPath('provider', 'paystack')
             ->assertJsonPath('provider_config_key', 'primary')
-            ->assertJsonPath('checkout_url', 'https://checkout.paystack.test/redirect');
+            ->assertJsonPath('checkout_url', 'https://checkout.paystack.test/redirect')
+            ->assertJsonPath('billing_method_policy.version', '2026-04-06')
+            ->assertJsonPath('billing_method_policy.activation.methods', ['manual', 'payment_link'])
+            ->assertJsonPath('billing_method_policy.renewal.methods', ['wallet_balance', 'payment_link']);
 
         $payment = Payment::query()->firstOrFail();
         $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->latest('id')->first();

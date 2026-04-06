@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Billing\Support\MarketBillingMethodPolicy;
 use App\Http\Controllers\Controller;
 use App\Models\BillingRoutingDecision;
 use App\Models\Client;
@@ -18,7 +19,8 @@ class BillingController extends Controller
 {
     public function __construct(
         private readonly BillingGatewayService $billingGatewayService,
-        private readonly BillingModeService $billingModeService
+        private readonly BillingModeService $billingModeService,
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
     ) {
     }
 
@@ -68,6 +70,7 @@ class BillingController extends Controller
             'replayed' => (bool) $result['replayed'],
             'mode' => $context['mode'],
             'provider' => $provider,
+            'billing_method_policy' => $this->marketBillingMethodPolicy->contract($platform),
             'payment' => $this->billingGatewayService->paymentPayload($payment),
             'action' => $result['action'],
         ], $result['replayed'] ? 200 : 201);
@@ -100,6 +103,7 @@ class BillingController extends Controller
 
         return response()->json([
             'message' => 'STK retry dispatched.',
+            'billing_method_policy' => $this->marketBillingMethodPolicy->contract($client->platform),
             'payment' => $this->billingGatewayService->paymentPayload($result['payment']),
             'action' => $result['action'],
         ]);

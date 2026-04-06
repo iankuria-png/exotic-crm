@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Billing\Support\MarketBillingMethodPolicy;
+use App\Billing\Support\WalletAutoRenewPolicy;
 use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\Deal;
@@ -25,7 +27,10 @@ class RenewalService
     public function __construct(
         private readonly NotificationService $notificationService,
         private readonly TemplateService $templateService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
+        private readonly WalletAutoRenewPolicy $walletAutoRenewPolicy,
+        private readonly WalletCheckoutService $walletCheckoutService
     ) {
     }
 
@@ -168,9 +173,17 @@ class RenewalService
                     'reminders_sent_count' => 0,
                     'reminders_failed_count' => 0,
                     'last_renewal_reminder_at' => null,
+                    'wallet_auto_renew_state' => null,
                 ]);
 
                 $record = $client->toArray();
+                if (is_array(data_get($record, 'platform'))) {
+                    data_set(
+                        $record,
+                        'platform.billing_method_policy',
+                        $this->marketBillingMethodPolicy->forPlatform($client->platform)
+                    );
+                }
                 $inferredPlanType = null;
                 $inferredProductName = null;
                 $platformProductCatalog = $activeProductCatalogByPlatform->get((int) $client->platform_id, collect());
@@ -230,6 +243,7 @@ class RenewalService
                     'reminders_sent_count' => (int) $telemetry['reminders_sent_count'],
                     'reminders_failed_count' => (int) $telemetry['reminders_failed_count'],
                     'last_renewal_reminder_at' => $telemetry['last_renewal_reminder_at'],
+                    'wallet_auto_renew_state' => $telemetry['wallet_auto_renew_state'],
                     'reminders_paused' => $remindersPaused,
                     'renewal_paused_until' => $client->activeDeal ? optional($client->activeDeal->renewal_paused_until)->toDateTimeString() : null,
                     'renewal_pause_reason' => $client->activeDeal ? $client->activeDeal->renewal_pause_reason : null,
@@ -585,6 +599,60 @@ class RenewalService
             'totals' => $totals,
             'dry_run' => (bool) ($options['dry_run'] ?? false),
         ];
+    }
+
+    public function runAutomatedRenewals(?int $actorId = null, ?array $platformIds = null, array $options = []): array
+    {
+        $deals = !empty($options['targets']) && is_array($options['targets'])
+            ? $this->targetWalletAutoRenewDealsFromTargets(collect($options['targets']), $platformIds)
+            : $this->targetDealsForWalletAutoRenew($platformIds);
+
+        if ($deals->isEmpty()) {
+            return [
+                'total_targeted' => 0,
+                'attempted_count' => 0,
+                'succeeded_count' => 0,
+                'failed_count' => 0,
+                'fallback_count' => 0,
+                'escalated_count' => 0,
+                'skipped_count' => 0,
+                'results' => [],
+            ];
+        }
+
+        $results = [];
+        $totals = [
+            'total_targeted' => $deals->count(),
+            'attempted_count' => 0,
+            'succeeded_count' => 0,
+            'failed_count' => 0,
+            'fallback_count' => 0,
+            'escalated_count' => 0,
+            'skipped_count' => 0,
+        ];
+
+        foreach ($deals as $deal) {
+            $outcome = $this->handleWalletAutoRenewDeal($deal, $actorId);
+            $results[] = $outcome;
+
+            if (!empty($outcome['attempted_charge'])) {
+                $totals['attempted_count']++;
+            }
+
+            $bucket = match ($outcome['status'] ?? 'skipped') {
+                'succeeded' => 'succeeded_count',
+                'failed' => 'failed_count',
+                'fallback_sent' => 'fallback_count',
+                'escalated' => 'escalated_count',
+                default => 'skipped_count',
+            };
+
+            $totals[$bucket]++;
+        }
+
+        return array_merge($totals, [
+            'results' => $results,
+        ]);
     }
 
     public function sendManualReminder(Deal $deal, ?int $templateId = null, ?int $actorId = null): array
@@ -1111,13 +1179,6 @@ class RenewalService
         }
 
         $rows = TimelineEvent::query()
-            ->selectRaw(
-                "entity_type,
-                 entity_id,
-                 SUM(CASE WHEN event_type = 'renewal_sms_sent' THEN 1 ELSE 0 END) as reminders_sent_count,
-                 SUM(CASE WHEN event_type = 'renewal_sms_failed' THEN 1 ELSE 0 END) as reminders_failed_count,
-                 MAX(created_at) as last_renewal_reminder_at"
-            )
             ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed'])
             ->where(function ($query) use ($dealIds, $clientIds) {
                 if ($dealIds->isNotEmpty()) {
@@ -1134,18 +1195,67 @@ class RenewalService
                     });
                 }
             })
-            ->groupBy('entity_type', 'entity_id')
-            ->get();
+            ->get(['id', 'entity_type', 'entity_id', 'event_type', 'content', 'created_at']);
 
-        return $rows->mapWithKeys(function ($row) {
-            return [
-                $row->entity_type . '_' . $row->entity_id => [
-                    'reminders_sent_count' => (int) $row->reminders_sent_count,
-                    'reminders_failed_count' => (int) $row->reminders_failed_count,
-                    'last_renewal_reminder_at' => $row->last_renewal_reminder_at,
-                ],
-            ];
-        });
+        $walletRows = TimelineEvent::query()
+            ->whereIn('event_type', [
+                'wallet_auto_renew_attempted',
+                'wallet_auto_renew_succeeded',
+                'wallet_auto_renew_failed',
+                'wallet_auto_renew_fallback_sent',
+                'wallet_auto_renew_escalated',
+            ])
+            ->where(function ($query) use ($dealIds, $clientIds) {
+                if ($dealIds->isNotEmpty()) {
+                    $query->where(function ($dealScope) use ($dealIds) {
+                        $dealScope->where('entity_type', 'deal')
+                            ->whereIn('entity_id', $dealIds);
+                    });
+                }
+
+                if ($clientIds->isNotEmpty()) {
+                    $query->orWhere(function ($clientScope) use ($clientIds) {
+                        $clientScope->where('entity_type', 'client')
+                            ->whereIn('entity_id', $clientIds);
+                    });
+                }
+            })
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get(['id', 'entity_type', 'entity_id', 'event_type', 'content', 'created_at']);
+
+        $groupedRows = $rows->groupBy(fn ($row) => $row->entity_type . '_' . $row->entity_id);
+        $walletStates = $walletRows
+            ->groupBy(fn ($row) => $row->entity_type . '_' . $row->entity_id)
+            ->map(fn (Collection $events) => $this->serializeWalletAutoRenewState($events->first()));
+
+        return $groupedRows
+            ->mapWithKeys(function (Collection $events, string $key) use ($walletStates) {
+                $lastReminder = $events
+                    ->sortByDesc(fn ($event) => optional($event->created_at)->getTimestamp() ?? 0)
+                    ->first();
+
+                return [
+                    $key => [
+                        'reminders_sent_count' => $events->where('event_type', 'renewal_sms_sent')->count(),
+                        'reminders_failed_count' => $events->where('event_type', 'renewal_sms_failed')->count(),
+                        'last_renewal_reminder_at' => optional($lastReminder?->created_at)->toDateTimeString(),
+                        'wallet_auto_renew_state' => $walletStates->get($key),
+                    ],
+                ];
+            })
+            ->union(
+                $walletStates
+                    ->reject(fn ($state, $key) => $groupedRows->has($key))
+                    ->mapWithKeys(fn ($state, $key) => [
+                        $key => [
+                            'reminders_sent_count' => 0,
+                            'reminders_failed_count' => 0,
+                            'last_renewal_reminder_at' => null,
+                            'wallet_auto_renew_state' => $state,
+                        ],
+                    ])
+            );
     }
 
     private function resolveExpiryDate($dealExpiry, $clientExpiry, $premiumExpiry = null, $featuredExpiry = null): ?Carbon
@@ -1486,5 +1596,318 @@ class RenewalService
         }
 
         throw new \RuntimeException('No users available to set renewal run owner.');
+    }
+
+    private function targetDealsForWalletAutoRenew(?array $platformIds = null): Collection
+    {
+        $start = now()->copy()->subDays(3)->startOfDay();
+        $end = now()->copy()->endOfDay();
+
+        return Deal::query()
+            ->where('status', 'active')
+            ->whereBetween('expires_at', [$start, $end])
+            ->where(function (Builder $builder) {
+                $builder->where('renewal_reminders_paused', false)
+                    ->orWhere(function (Builder $pausedBuilder) {
+                        $pausedBuilder->where('renewal_reminders_paused', true)
+                            ->whereNotNull('renewal_paused_until')
+                            ->where('renewal_paused_until', '<', now());
+                    });
+            })
+            ->when(
+                is_array($platformIds),
+                fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds)
+            )
+            ->with(['client.platform', 'product'])
+            ->orderBy('expires_at')
+            ->get();
+    }
+
+    private function targetWalletAutoRenewDealsFromTargets(Collection $targets, ?array $platformIds = null): Collection
+    {
+        $windowStart = now()->copy()->subDays(3)->startOfDay();
+        $windowEnd = now()->copy()->endOfDay();
+
+        return $this->targetDealsFromOverviewTargets($targets, $platformIds)
+            ->filter(fn ($deal) => $deal instanceof Deal && $deal->id)
+            ->filter(fn (Deal $deal) => (string) $deal->status === 'active')
+            ->filter(function (Deal $deal) use ($windowStart, $windowEnd) {
+                if (!$deal->expires_at) {
+                    return false;
+                }
+
+                $expiry = $deal->expires_at instanceof Carbon
+                    ? $deal->expires_at
+                    : Carbon::parse($deal->expires_at);
+
+                return $expiry->betweenIncluded($windowStart, $windowEnd);
+            })
+            ->values();
+    }
+
+    private function handleWalletAutoRenewDeal(Deal $deal, ?int $actorId = null): array
+    {
+        $deal->loadMissing(['client.platform', 'product']);
+        $cycleExpiresAt = $deal->expires_at instanceof Carbon
+            ? $deal->expires_at->copy()
+            : ($deal->expires_at ? Carbon::parse($deal->expires_at) : null);
+
+        if (!$cycleExpiresAt) {
+            return [
+                'deal_id' => (int) $deal->id,
+                'client_id' => (int) ($deal->client_id ?? 0),
+                'status' => 'escalated',
+                'reason_code' => 'missing_expiry',
+                'reason' => 'Subscription expiry is missing.',
+            ];
+        }
+
+        if ($this->walletAutoRenewAlreadyHandled($deal, $cycleExpiresAt)) {
+            return [
+                'deal_id' => (int) $deal->id,
+                'client_id' => (int) ($deal->client_id ?? 0),
+                'status' => 'skipped',
+                'reason_code' => 'already_handled',
+                'reason' => 'Wallet auto-renew already handled this renewal cycle.',
+            ];
+        }
+
+        $decision = $this->walletAutoRenewPolicy->forDeal($deal);
+        $result = [
+            'deal_id' => (int) $deal->id,
+            'client_id' => (int) ($deal->client_id ?? 0),
+            'status' => 'skipped',
+            'attempted_charge' => false,
+            'reason_code' => (string) ($decision['reason_code'] ?? 'skipped'),
+            'reason' => (string) ($decision['reason'] ?? 'Wallet auto-renew was skipped.'),
+            'fallback_method' => $decision['fallback_method'] ?? null,
+            'policy' => $decision,
+        ];
+
+        if (($decision['action'] ?? 'skip') === 'skip') {
+            return $result;
+        }
+
+        if (($decision['action'] ?? null) === 'escalate') {
+            $this->recordWalletAutoRenewEvent($deal, 'wallet_auto_renew_escalated', $actorId, [
+                'reason_code' => $decision['reason_code'] ?? null,
+                'reason' => $decision['reason'] ?? null,
+                'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+                'fallback_method' => $decision['fallback_method'] ?? null,
+            ]);
+
+            return array_merge($result, [
+                'status' => 'escalated',
+            ]);
+        }
+
+        if (($decision['action'] ?? null) === 'send_fallback') {
+            $this->recordWalletAutoRenewEvent($deal, 'wallet_auto_renew_failed', $actorId, [
+                'reason_code' => $decision['reason_code'] ?? null,
+                'reason' => $decision['reason'] ?? null,
+                'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+                'fallback_method' => $decision['fallback_method'] ?? null,
+            ]);
+
+            return $this->sendWalletAutoRenewFallback($deal, $decision, $cycleExpiresAt, $actorId);
+        }
+
+        $idempotencyKey = $this->walletAutoRenewIdempotencyKey($deal, $cycleExpiresAt);
+        $this->recordWalletAutoRenewEvent($deal, 'wallet_auto_renew_attempted', $actorId, [
+            'reason_code' => $decision['reason_code'] ?? null,
+            'reason' => $decision['reason'] ?? null,
+            'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+            'fallback_method' => $decision['fallback_method'] ?? null,
+            'idempotency_key' => $idempotencyKey,
+            'pricing' => $decision['pricing'] ?? null,
+        ]);
+
+        try {
+            $checkout = $this->walletCheckoutService->autoRenewDealFromWallet($deal, $idempotencyKey, [
+                'origin' => 'wallet_auto_subscribe',
+                'environment' => 'production',
+                'actor_id' => $actorId,
+            ]);
+
+            $freshDeal = $checkout['deal'] ?? $deal->fresh(['client.platform', 'product']);
+            $payment = $checkout['payment'] ?? null;
+
+            $this->recordWalletAutoRenewEvent($freshDeal instanceof Deal ? $freshDeal : $deal, 'wallet_auto_renew_succeeded', $actorId, [
+                'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+                'previous_expires_at' => $checkout['previous_expires_at'] ?? $cycleExpiresAt->toDateTimeString(),
+                'new_expires_at' => optional($freshDeal?->expires_at)->toDateTimeString(),
+                'payment_id' => $payment?->id,
+                'payment_reference' => $payment?->transaction_reference,
+                'amount' => $payment?->amount,
+                'currency' => $payment?->currency,
+                'replayed' => (bool) ($checkout['replayed'] ?? false),
+            ]);
+
+            $this->auditService->record([
+                'platform_id' => (int) $deal->platform_id,
+                'actor_id' => $this->resolveActorId($actorId),
+                'action' => 'deal_auto_renew',
+                'entity_type' => 'deal',
+                'entity_id' => (int) $deal->id,
+                'before_state' => [
+                    'expires_at' => $cycleExpiresAt->toDateTimeString(),
+                ],
+                'after_state' => [
+                    'expires_at' => optional($freshDeal?->expires_at)->toDateTimeString(),
+                    'payment_id' => $payment?->id,
+                    'replayed' => (bool) ($checkout['replayed'] ?? false),
+                ],
+                'reason' => 'Wallet auto-renew completed successfully.',
+            ]);
+
+            return array_merge($result, [
+                'status' => 'succeeded',
+                'attempted_charge' => true,
+                'payment_id' => $payment?->id,
+                'new_expires_at' => optional($freshDeal?->expires_at)->toDateTimeString(),
+                'replayed' => (bool) ($checkout['replayed'] ?? false),
+            ]);
+        } catch (\Throwable $exception) {
+            $this->recordWalletAutoRenewEvent($deal, 'wallet_auto_renew_failed', $actorId, [
+                'reason_code' => 'wallet_execution_failed',
+                'reason' => $exception->getMessage(),
+                'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+                'fallback_method' => $decision['fallback_method'] ?? null,
+                'idempotency_key' => $idempotencyKey,
+            ]);
+
+            if (!empty($decision['fallback_method'])) {
+                return $this->sendWalletAutoRenewFallback(
+                    $deal,
+                    array_merge($decision, [
+                        'reason_code' => 'wallet_execution_failed',
+                        'reason' => $exception->getMessage(),
+                    ]),
+                    $cycleExpiresAt,
+                    $actorId
+                );
+            }
+
+            $this->recordWalletAutoRenewEvent($deal, 'wallet_auto_renew_escalated', $actorId, [
+                'reason_code' => 'wallet_execution_failed',
+                'reason' => $exception->getMessage(),
+                'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+            ]);
+
+            return array_merge($result, [
+                'status' => 'escalated',
+                'attempted_charge' => true,
+                'reason_code' => 'wallet_execution_failed',
+                'reason' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    private function sendWalletAutoRenewFallback(Deal $deal, array $decision, Carbon $cycleExpiresAt, ?int $actorId = null): array
+    {
+        $fallbackResult = $this->sendManualReminder($deal, null, $actorId);
+        $fallbackSent = (bool) ($fallbackResult['success'] ?? false);
+
+        if ($fallbackSent) {
+            $this->recordWalletAutoRenewEvent($deal, 'wallet_auto_renew_fallback_sent', $actorId, [
+                'reason_code' => $decision['reason_code'] ?? null,
+                'reason' => $decision['reason'] ?? null,
+                'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+                'fallback_method' => $decision['fallback_method'] ?? null,
+                'template_id' => $fallbackResult['template_id'] ?? null,
+                'delivery_status' => $fallbackResult['status'] ?? null,
+            ]);
+
+            return [
+                'deal_id' => (int) $deal->id,
+                'client_id' => (int) ($deal->client_id ?? 0),
+                'status' => 'fallback_sent',
+                'reason_code' => (string) ($decision['reason_code'] ?? 'fallback_sent'),
+                'reason' => (string) ($decision['reason'] ?? 'Fallback renewal handling was sent.'),
+                'fallback_method' => $decision['fallback_method'] ?? null,
+            ];
+        }
+
+        $this->recordWalletAutoRenewEvent($deal, 'wallet_auto_renew_escalated', $actorId, [
+            'reason_code' => 'fallback_delivery_failed',
+            'reason' => $fallbackResult['reason'] ?? 'Fallback reminder failed to send.',
+            'cycle_expires_at' => $cycleExpiresAt->toDateTimeString(),
+            'fallback_method' => $decision['fallback_method'] ?? null,
+        ]);
+
+        return [
+            'deal_id' => (int) $deal->id,
+            'client_id' => (int) ($deal->client_id ?? 0),
+            'status' => 'escalated',
+            'reason_code' => 'fallback_delivery_failed',
+            'reason' => (string) ($fallbackResult['reason'] ?? 'Fallback reminder failed to send.'),
+            'fallback_method' => $decision['fallback_method'] ?? null,
+        ];
+    }
+
+    private function walletAutoRenewAlreadyHandled(Deal $deal, Carbon $cycleExpiresAt): bool
+    {
+        return TimelineEvent::query()
+            ->where('entity_type', 'deal')
+            ->where('entity_id', (int) $deal->id)
+            ->whereIn('event_type', [
+                'wallet_auto_renew_succeeded',
+                'wallet_auto_renew_fallback_sent',
+                'wallet_auto_renew_escalated',
+            ])
+            ->get(['content'])
+            ->contains(function (TimelineEvent $event) use ($cycleExpiresAt) {
+                return (string) data_get($event->content, 'cycle_expires_at') === $cycleExpiresAt->toDateTimeString();
+            });
+    }
+
+    private function walletAutoRenewIdempotencyKey(Deal $deal, Carbon $cycleExpiresAt): string
+    {
+        return 'wallet-auto-renew:' . $deal->id . ':' . $cycleExpiresAt->format('YmdHis');
+    }
+
+    private function recordWalletAutoRenewEvent(Deal $deal, string $eventType, ?int $actorId = null, array $content = []): void
+    {
+        TimelineEvent::create([
+            'platform_id' => (int) $deal->platform_id,
+            'entity_type' => 'deal',
+            'entity_id' => (int) $deal->id,
+            'event_type' => $eventType,
+            'actor_id' => $actorId,
+            'content' => $content,
+            'created_at' => now(),
+        ]);
+    }
+
+    private function serializeWalletAutoRenewState(?TimelineEvent $event): ?array
+    {
+        if (!$event) {
+            return null;
+        }
+
+        $status = match ((string) $event->event_type) {
+            'wallet_auto_renew_attempted' => 'attempted',
+            'wallet_auto_renew_succeeded' => 'succeeded',
+            'wallet_auto_renew_failed' => 'failed',
+            'wallet_auto_renew_fallback_sent' => 'fallback_sent',
+            'wallet_auto_renew_escalated' => 'escalated',
+            default => null,
+        };
+
+        if ($status === null) {
+            return null;
+        }
+
+        return [
+            'status' => $status,
+            'event_type' => (string) $event->event_type,
+            'at' => optional($event->created_at)->toDateTimeString(),
+            'reason' => data_get($event->content, 'reason'),
+            'reason_code' => data_get($event->content, 'reason_code'),
+            'payment_id' => data_get($event->content, 'payment_id'),
+            'fallback_method' => data_get($event->content, 'fallback_method'),
+            'cycle_expires_at' => data_get($event->content, 'cycle_expires_at'),
+            'new_expires_at' => data_get($event->content, 'new_expires_at'),
+        ];
     }
 }

@@ -4,12 +4,15 @@ namespace Tests\Feature;
 
 use App\Models\BillingProviderTransaction;
 use App\Models\BillingRoutingDecision;
+use App\Models\BillingWebhookEvent;
 use App\Models\Client;
+use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\TimelineEvent;
 use App\Models\User;
+use App\Models\WalletTransaction;
 use App\Services\PaymentLinkService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
@@ -549,6 +552,126 @@ class PaymentDiagnosticsTest extends TestCase
             ->assertJsonPath('browser_meta.origin_url', 'https://www.exoticghana.com')
             ->assertJsonPath('browser_meta.referrer', 'https://www.exoticghana.com/escort/test-pm/?wallet=1')
             ->assertJsonPath('attempts.0.attempt_type', 'hosted_checkout_init');
+    }
+
+    public function test_diagnostics_endpoint_exposes_shared_structured_diagnostics_sections(): void
+    {
+        ['payment' => $payment, 'client' => $client, 'platform' => $platform, 'user' => $user] = $this->seedProxyPayment('paystack');
+
+        $deal = Deal::factory()->create([
+            'client_id' => $client->id,
+            'platform_id' => $platform->id,
+            'payment_id' => $payment->id,
+            'status' => 'active',
+            'expires_at' => now()->addDays(30),
+        ]);
+
+        $payment->forceFill([
+            'deal_id' => $deal->id,
+            'wallet_transaction_id' => null,
+            'payment_data' => [
+                'origin' => 'wallet_auto_subscribe',
+                'canonical_state' => [
+                    'provisioning_status' => 'completed',
+                ],
+            ],
+        ])->save();
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_auto_renew',
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'sandbox',
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'surface_cutover_flag' => 'billing.diagnostics_v2',
+            'snapshot_json' => ['wallet_policy' => ['origin' => 'wallet_auto_subscribe']],
+            'decision_json' => ['source' => 'test'],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now()->subMinutes(5),
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'paystack',
+            'normalized_status' => 'completed',
+            'provider_transaction_id' => 'PSTK-TXN-001',
+            'provider_status' => 'success',
+            'requested_amount' => '1500.00',
+            'requested_currency' => 'KES',
+            'charge_amount' => '1500.00',
+            'charge_currency' => 'KES',
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:paystack',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => 'AUTO-RENEW-REF-001',
+            'state_version' => 1,
+            'last_status_at' => now()->subMinutes(4),
+        ]);
+
+        BillingWebhookEvent::query()->create([
+            'provider_type_key' => 'paystack',
+            'market_id' => $platform->id,
+            'provider_event_id' => 'evt_test_001',
+            'dedupe_key' => 'evt_test_001',
+            'raw_body' => '{"event":"charge.success"}',
+            'payload_json' => ['event' => 'charge.success'],
+            'signature_status' => 'verified',
+            'processing_status' => 'processed',
+            'retry_count' => 0,
+            'payment_id' => $payment->id,
+            'received_at' => now()->subMinutes(3),
+            'processed_at' => now()->subMinutes(3),
+        ]);
+
+        $walletTransaction = WalletTransaction::query()->create([
+            'client_id' => $client->id,
+            'platform_id' => $platform->id,
+            'type' => 'debit',
+            'currency_code' => 'KES',
+            'amount' => '1500.00',
+            'balance_after' => '2500.00',
+            'reference_type' => 'wallet_auto_renew',
+            'reference_id' => $deal->id,
+            'payment_id' => $payment->id,
+            'deal_id' => $deal->id,
+            'idempotency_key' => 'wallet-auto-renew:test',
+            'description' => 'Wallet auto-renew debit',
+            'wp_synced_at' => now()->subMinutes(2),
+        ]);
+
+        $payment->forceFill([
+            'wallet_transaction_id' => $walletTransaction->id,
+        ])->save();
+
+        TimelineEvent::query()->create([
+            'platform_id' => $platform->id,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'event_type' => 'wallet_auto_renew_succeeded',
+            'actor_id' => $user->id,
+            'content' => [
+                'payment_id' => $payment->id,
+            ],
+            'created_at' => now()->subMinute(),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $response->assertOk()
+            ->assertJsonPath('structured_diagnostics.source', 'shared_diagnostics_backend_v1')
+            ->assertJsonPath('structured_diagnostics.meta.legacy_composed', false)
+            ->assertJsonPath('structured_diagnostics.sections.0.key', 'routing')
+            ->assertJsonPath('structured_diagnostics.sections.0.entries.0.label', 'Provider profile')
+            ->assertJsonPath('structured_diagnostics.sections.1.key', 'provider_transactions')
+            ->assertJsonPath('structured_diagnostics.sections.2.key', 'webhooks')
+            ->assertJsonPath('structured_diagnostics.sections.3.key', 'wallet')
+            ->assertJsonPath('structured_diagnostics.sections.3.entries.0.value', 'Wallet Auto Subscribe')
+            ->assertJsonPath('structured_diagnostics.sections.4.key', 'provisioning')
+            ->assertJsonPath('structured_diagnostics.sections.4.entries.0.value', 'completed');
     }
 
     public function test_mpesa_reversal_populates_failure_diagnostics(): void

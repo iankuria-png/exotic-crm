@@ -221,6 +221,7 @@ export default function BillingWorkspace() {
                     isError={diagnosticsQuery.isError}
                     diagnosticsEnabled={Boolean(features.diagnostics_v2)}
                     services={diagnosticsQuery.data?.services || {}}
+                    diagnostics={diagnosticsQuery.data?.diagnostics || null}
                     error={diagnosticsQuery.error}
                 />
             ) : null}

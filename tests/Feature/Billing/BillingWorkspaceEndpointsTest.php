@@ -5,9 +5,12 @@ namespace Tests\Feature\Billing;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingRoutingRule;
+use App\Models\BillingRoutingDecision;
 use App\Models\BillingSubscriptionRule;
 use App\Models\BillingSystemSetting;
 use App\Models\BillingWalletRule;
+use App\Models\BillingWebhookEvent;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -28,6 +31,17 @@ class BillingWorkspaceEndpointsTest extends TestCase
                 'mode_override' => 'production',
             ],
         ])->save();
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'paystack',
+            'profile_name' => 'Kenya Paystack Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => ['callback_base_url' => 'https://billing.example.test'],
+            'secrets_json' => ['secret_key' => 'secret'],
+            'active' => true,
+        ]);
 
         $admin = $this->createUser('admin');
         Sanctum::actingAs($admin);
@@ -55,6 +69,65 @@ class BillingWorkspaceEndpointsTest extends TestCase
             'discount_policy_json' => [],
         ]);
 
+        BillingWalletRule::query()->create([
+            'market_id' => $platform->id,
+            'enabled' => true,
+            'currency_code' => 'KES',
+            'topup_preset_json' => [500, 1000],
+            'limit_json' => ['max_single_topup' => 50000],
+            'auto_renew_json' => ['enabled' => true],
+            'ui_json' => ['wallet_funding_label' => 'Wallet funding'],
+        ]);
+
+        BillingSubscriptionRule::query()->create([
+            'market_id' => $platform->id,
+            'activation_method_json' => ['methods' => ['manual', 'payment_link']],
+            'renewal_method_json' => ['methods' => ['wallet_balance', 'payment_link'], 'wallet_auto_renew' => true],
+            'free_trial_json' => ['enabled' => false],
+            'discount_json' => ['enabled' => true],
+            'expiry_policy_json' => ['grace_period_days' => 7],
+        ]);
+
+        $failedPayment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'status' => 'failed',
+            'provider_key' => 'paystack',
+            'failure_reason' => 'Provider timeout',
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $failedPayment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'subscription_link',
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'paystack',
+            'execution_mode' => 'proxy',
+            'environment' => 'sandbox',
+            'fallback_taken' => false,
+            'decision_version' => 1,
+            'surface_cutover_flag' => 'billing.diagnostics_v2',
+            'snapshot_json' => ['provider_family' => 'hosted_checkout'],
+            'decision_json' => ['source' => 'test'],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now()->subMinutes(5),
+        ]);
+
+        BillingWebhookEvent::query()->create([
+            'provider_type_key' => 'paystack',
+            'provider_profile_id' => $profile->id,
+            'market_id' => $platform->id,
+            'provider_event_id' => 'evt_settings_diag_001',
+            'dedupe_key' => 'evt_settings_diag_001',
+            'raw_body' => '{"event":"charge.failed"}',
+            'payload_json' => ['event' => 'charge.failed'],
+            'signature_status' => 'verified',
+            'processing_status' => 'processed',
+            'retry_count' => 0,
+            'payment_id' => $failedPayment->id,
+            'received_at' => now()->subMinutes(4),
+            'processed_at' => now()->subMinutes(4),
+        ]);
+
         $system = $this->getJson('/api/crm/settings/billing/system');
         $system->assertOk()
             ->assertJsonStructure([
@@ -79,7 +152,18 @@ class BillingWorkspaceEndpointsTest extends TestCase
                     'payment_service',
                     'sendgrid',
                 ],
+                'diagnostics' => [
+                    'source',
+                    'sections',
+                    'meta',
+                ],
             ]);
+        $diagnostics->assertJsonPath('diagnostics.source', 'shared_diagnostics_backend_v1')
+            ->assertJsonPath('diagnostics.sections.0.key', 'readiness')
+            ->assertJsonPath('diagnostics.sections.1.key', 'route_health')
+            ->assertJsonPath('diagnostics.sections.2.key', 'webhook_posture')
+            ->assertJsonPath('diagnostics.sections.3.key', 'fallback_posture')
+            ->assertJsonPath('diagnostics.sections.5.key', 'wp_contract_health');
     }
 
     public function test_sales_is_blocked_from_billing_workspace_api_endpoints(): void

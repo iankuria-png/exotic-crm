@@ -204,7 +204,7 @@ class DealController extends Controller
         $this->authorizeDealAccess($request, $deal);
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
-            'payment_method' => 'required|in:manual,stk,link,free_trial',
+            'payment_method' => 'required|string|max:50',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
@@ -228,6 +228,9 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'activation', $paymentMethod)) {
+            return $methodGuard;
+        }
         $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
         if ($discountGuard = $this->discountPermissionResponse(
             $request,
@@ -597,7 +600,7 @@ class DealController extends Controller
         $validated = $request->validate([
             'additional_days' => 'required|integer|min:1|max:365',
             'reason' => 'required|string|max:500',
-            'payment_method' => 'required|in:manual,stk,link,free_trial',
+            'payment_method' => 'required|string|max:50',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
@@ -616,6 +619,9 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'renewal', $paymentMethod)) {
+            return $methodGuard;
+        }
         $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
         if ($discountGuard = $this->discountPermissionResponse(
             $request,
@@ -778,7 +784,7 @@ class DealController extends Controller
         $validated = $request->validate([
             'additional_days' => 'required|integer|min:1|max:365',
             'reason' => 'required|string|max:500',
-            'payment_method' => 'required|in:manual,stk,link,free_trial',
+            'payment_method' => 'required|string|max:50',
             'payment_reference' => 'required_if:payment_method,manual|nullable|string|max:255',
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
@@ -803,6 +809,9 @@ class DealController extends Controller
         }
 
         $paymentMethod = (string) $validated['payment_method'];
+        if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'renewal', $paymentMethod)) {
+            return $methodGuard;
+        }
         $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
         if ($discountGuard = $this->discountPermissionResponse(
             $request,
@@ -1182,6 +1191,23 @@ class DealController extends Controller
             (int) $deal->platform_id,
             'You do not have access to this deal market.'
         );
+    }
+
+    private function disallowedPaymentMethodResponse(int $platformId, string $surface, string $paymentMethod): ?\Illuminate\Http\JsonResponse
+    {
+        $normalizedMethod = strtolower(trim($paymentMethod));
+        $policy = $this->dealPaymentService->marketBillingMethodPolicy($platformId);
+        $allowedMethods = data_get($policy, $surface . '.crm_methods', []);
+
+        if (in_array($normalizedMethod, $allowedMethods, true)) {
+            return null;
+        }
+
+        return response()->json([
+            'message' => 'This payment method is not allowed for this market.',
+            'allowed_methods' => $allowedMethods,
+            'policy' => $policy,
+        ], 422);
     }
 
     private function normalizedDiscountPercentage(mixed $value): ?float

@@ -3,9 +3,11 @@
 namespace App\Services;
 
 use App\Billing\BillingPermissions;
+use App\Billing\Support\MarketBillingMethodPolicy;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
+use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\TimelineEvent;
@@ -22,8 +24,16 @@ class DealPaymentService
         private readonly AuditService $auditService,
         private readonly LegacyStkService $legacyStkService,
         private readonly PaymentLinkService $paymentLinkService,
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
     ) {
+    }
+
+    public function marketBillingMethodPolicy(Client|Platform|int|null $scope): array
+    {
+        $platform = $scope instanceof Client ? $scope->platform : $scope;
+
+        return $this->marketBillingMethodPolicy->forPlatform($platform);
     }
 
     public function createPendingDealFromCatalog(

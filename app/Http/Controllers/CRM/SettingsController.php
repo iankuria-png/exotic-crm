@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Billing\Contracts\BillingDiagnosticsAssembler as BillingDiagnosticsAssemblerContract;
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
 use App\Billing\Support\BillingSurface;
@@ -62,6 +63,7 @@ class SettingsController extends Controller
         private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService,
+        private readonly BillingDiagnosticsAssemblerContract $billingDiagnosticsAssembler,
         private readonly BillingProviderRegistryContract $billingProviderRegistry,
         private readonly ProviderCredentialSchemaRegistryContract $providerCredentialSchemaRegistry,
         private readonly ProviderProfileManager $providerProfileManager
@@ -262,9 +264,12 @@ class SettingsController extends Controller
         }
 
         [, $platformStatuses] = $this->accessiblePlatformsAndStatuses($request);
+        $marketId = $request->filled('market_id') ? (int) $request->input('market_id') : null;
+        $providerKey = $request->filled('provider_key') ? (string) $request->input('provider_key') : null;
 
         return response()->json([
             'services' => $this->billingDiagnosticsServices($request, $platformStatuses),
+            'diagnostics' => $this->billingDiagnosticsAssembler->assembleBilling($marketId, $providerKey),
             'last_checked_at' => now()->toDateTimeString(),
         ]);
     }

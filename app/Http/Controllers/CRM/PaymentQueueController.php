@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Billing\Contracts\BillingDiagnosticsAssembler as BillingDiagnosticsAssemblerContract;
 use App\Billing\Support\LegacyBillingOperationsCatalog;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
@@ -50,6 +51,7 @@ class PaymentQueueController extends Controller
         private readonly LegacyStkService $legacyStkService,
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly LegacyBillingOperationsCatalog $legacyBillingOperationsCatalog,
+        private readonly BillingDiagnosticsAssemblerContract $billingDiagnosticsAssembler,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
@@ -946,6 +948,7 @@ class PaymentQueueController extends Controller
             })->values(),
             'legacy_operations' => $this->legacyBillingOperationsCatalog->paymentsWorkspaceCatalog(),
             'legacy_operations_summary' => $this->legacyBillingOperationsCatalog->workspaceSummary(),
+            'structured_diagnostics' => $this->billingDiagnosticsAssembler->assemblePayment((int) $payment->id),
         ]);
     }
 

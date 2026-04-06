@@ -12,6 +12,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
 import { platformOptionsWithFlags } from '../utils/flags';
+import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../utils/billingMethodPolicy';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -167,6 +168,18 @@ export default function Deals() {
         () => getEnabledPaymentLinkProviders(selectedClientData?.platform),
         [selectedClientData?.platform],
     );
+    const billingPolicySource = selectedClientData?.platform || selectedDeal?.client?.platform || selectedDeal;
+    const activationPaymentMethods = useMemo(
+        () => getAllowedCrmPaymentMethods(billingPolicySource, 'activation'),
+        [billingPolicySource],
+    );
+    const renewalPaymentMethods = useMemo(
+        () => getAllowedCrmPaymentMethods(billingPolicySource, 'renewal'),
+        [billingPolicySource],
+    );
+    const availableDialogPaymentMethods = dialog.type === 'activate'
+        ? activationPaymentMethods
+        : renewalPaymentMethods;
     const defaultPaymentLinkProvider = useMemo(
         () => getDefaultPaymentLinkProviderKey(selectedClientData?.platform),
         [selectedClientData?.platform],
@@ -200,7 +213,7 @@ export default function Deals() {
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
             setActivateReason('Activated from subscriptions page');
-            setPaymentMethod('manual');
+            setPaymentMethod(activationPaymentMethods[0] || '');
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -250,7 +263,7 @@ export default function Deals() {
             setDialog({ type: null, deal: null });
             setExtendDays('7');
             setExtendReason('Extended from subscriptions page');
-            setPaymentMethod('manual');
+            setPaymentMethod(renewalPaymentMethods[0] || '');
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -277,7 +290,7 @@ export default function Deals() {
             setDialog({ type: null, deal: null });
             setRenewDays('30');
             setRenewReason('Renewed from subscriptions page');
-            setPaymentMethod('manual');
+            setPaymentMethod(renewalPaymentMethods[0] || '');
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -423,7 +436,8 @@ export default function Deals() {
     const openDialog = (type, deal, event) => {
         event?.stopPropagation();
         setDialog({ type, deal });
-        setPaymentMethod('manual');
+        const nextMethods = type === 'activate' ? activationPaymentMethods : renewalPaymentMethods;
+        setPaymentMethod(nextMethods[0] || '');
         setPaymentReference('');
         setFreeTrialPin('');
         setPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -576,6 +590,27 @@ export default function Deals() {
                     <span className={`text-xs font-medium ${isExpired ? 'text-rose-700' : 'text-slate-600'}`}>
                         {date.toLocaleDateString()}
                     </span>
+                );
+            },
+        },
+        {
+            key: 'wallet_auto_renew_state',
+            label: 'Renewal',
+            render: (row) => {
+                const renewalState = getWalletAutoRenewPresentation(row);
+
+                if (!renewalState) {
+                    return <span className="text-xs text-slate-400">—</span>;
+                }
+
+                return (
+                    <div className="space-y-1">
+                        <StatusBadge status={renewalState.status} label={renewalState.label} tone={renewalState.tone} />
+                        <p className="max-w-[220px] text-[11px] leading-4 text-slate-500">
+                            {renewalState.detail}
+                            {renewalState.updatedAt ? ` • ${new Date(renewalState.updatedAt).toLocaleString()}` : ''}
+                        </p>
+                    </div>
                 );
             },
         },
@@ -832,10 +867,14 @@ export default function Deals() {
     }, [mpesaReviewData?.data]);
 
     useEffect(() => {
-        if (dialog.type === 'extend' && !['manual', 'stk', 'link', 'free_trial'].includes(paymentMethod)) {
-            setPaymentMethod('manual');
+        if (!['activate', 'extend', 'renew'].includes(dialog.type || '')) {
+            return;
         }
-    }, [dialog.type, paymentMethod]);
+
+        if (!availableDialogPaymentMethods.includes(paymentMethod)) {
+            setPaymentMethod(availableDialogPaymentMethods[0] || '');
+        }
+    }, [availableDialogPaymentMethods, dialog.type, paymentMethod]);
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -867,7 +906,8 @@ export default function Deals() {
 
     const needsPaymentVerification = ['activate', 'extend', 'renew'].includes(dialog.type || '');
     const paymentReady = !needsPaymentVerification
-        || ((!paymentRequiresReference || paymentReference.trim() !== '')
+        || (availableDialogPaymentMethods.length > 0
+            && (!paymentRequiresReference || paymentReference.trim() !== '')
             && (!paymentRequiresFreeTrialPin || freeTrialPin.trim().length >= 4)
             && (!paymentRequiresProvider || paymentLinkProvider !== ''));
 
@@ -1101,10 +1141,7 @@ export default function Deals() {
                                 <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
                                     <p className="text-sm font-semibold text-slate-800">Payment Method</p>
                                     <div className="grid gap-2 sm:grid-cols-2">
-                                        {(dialog.type === 'extend'
-                                            ? ['manual', 'stk', 'link', 'free_trial']
-                                            : ['manual', 'stk', 'link', 'free_trial']
-                                        ).map((method) => (
+                                        {availableDialogPaymentMethods.map((method) => (
                                             <button
                                                 key={method}
                                                 type="button"
@@ -1121,10 +1158,15 @@ export default function Deals() {
                                                         ? 'STK Push'
                                                         : method === 'link'
                                                             ? 'Payment Link'
-                                                            : 'Free Trial'}
+                                                    : 'Free Trial'}
                                             </button>
                                         ))}
                                     </div>
+                                    {availableDialogPaymentMethods.length === 0 ? (
+                                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                            No CRM payment methods are enabled for this market on this subscription action.
+                                        </div>
+                                    ) : null}
 
                                     {paymentMethod === 'manual' ? (
                                         <div>

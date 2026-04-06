@@ -275,6 +275,74 @@ function describeTimelineContent(content) {
     return 'Structured event data recorded.';
 }
 
+function structuredDiagnosticsTone(status) {
+    const normalized = String(status || '').toLowerCase();
+
+    if (['healthy', 'online'].includes(normalized)) {
+        return 'active';
+    }
+
+    if (['attention', 'pending', 'legacy_composed'].includes(normalized)) {
+        return 'manual_review';
+    }
+
+    if (['degraded', 'failed', 'critical'].includes(normalized)) {
+        return 'failed';
+    }
+
+    return 'sandbox';
+}
+
+function StructuredDiagnosticsSection({ section }) {
+    const entries = Array.isArray(section?.entries) ? section.entries : [];
+    const items = Array.isArray(section?.items) ? section.items : [];
+
+    return (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-semibold text-slate-900">{section?.title || 'Diagnostics'}</h4>
+                        <StatusBadge
+                            status={section?.status}
+                            label={titleize(section?.status || 'unknown')}
+                            tone={structuredDiagnosticsTone(section?.status)}
+                        />
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">{section?.summary || 'No structured summary available.'}</p>
+                </div>
+            </div>
+
+            {entries.length > 0 ? (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {entries.map((entry) => (
+                        <p key={`${section?.key}-${entry.label}`} className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                            <span className="font-semibold text-slate-800">{entry.label}:</span> {entry.value || '—'}
+                        </p>
+                    ))}
+                </div>
+            ) : null}
+
+            {items.length > 0 ? (
+                <div className="mt-4 space-y-2">
+                    {items.map((item, index) => (
+                        <article key={`${section?.key}-item-${index}`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-xs font-semibold text-slate-900">{item.label || 'Signal'}</p>
+                                {item?.meta?.created_at ? <span className="text-[11px] text-slate-500">{item.meta.created_at}</span> : null}
+                            </div>
+                            <p className="mt-1 text-xs text-slate-600">{item.value || 'No detail available.'}</p>
+                            {item?.meta?.provider_key ? (
+                                <p className="mt-1 text-[11px] text-slate-500">Provider: {item.meta.provider_key}</p>
+                            ) : null}
+                        </article>
+                    ))}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
 export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'initiated', 'pending', 'failed', 'recovery_queue']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
@@ -859,6 +927,8 @@ export default function Payments() {
 
     const diagnosticsPayment = diagnosticsData?.payment || diagnosticsDrawer.payment;
     const linkProxyData = diagnosticsData?.link_proxy || null;
+    const structuredDiagnostics = diagnosticsData?.structured_diagnostics || null;
+    const structuredDiagnosticsSections = Array.isArray(structuredDiagnostics?.sections) ? structuredDiagnostics.sections : [];
     const providerStatusDisplay = providerStatusSnapshot || linkProxyData?.last_provider_check || null;
     const diagnosticsRecommendations = diagnosticsData?.recommendations || [];
     const providerCheckEligible = ['paystack', 'pesapal'].includes(String(diagnosticsPayment?.provider_key || '').toLowerCase())
@@ -1752,6 +1822,14 @@ export default function Payments() {
                                     </section>
 
                                     <section id="payment-diagnostics-telemetry" className="space-y-4">
+                                        {structuredDiagnosticsSections.length > 0 ? (
+                                            <section className="space-y-4">
+                                                {structuredDiagnosticsSections.map((section) => (
+                                                    <StructuredDiagnosticsSection key={section.key || section.title} section={section} />
+                                                ))}
+                                            </section>
+                                        ) : null}
+
                                         {linkProxyData ? (
                                             <section className="rounded-xl border border-slate-200 bg-white p-4">
                                                 <div className="flex flex-wrap items-start justify-between gap-3">

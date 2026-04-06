@@ -2,11 +2,17 @@
 
 namespace App\Services;
 
+use App\Billing\Support\MarketBillingMethodPolicy;
 use App\Models\Client;
 use App\Models\Platform;
 
 class WalletPayloadService
 {
+    public function __construct(
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
+    ) {
+    }
+
     public function config(Platform $platform, array $context): array
     {
         $wallet = $context['wallet'];
@@ -55,6 +61,7 @@ class WalletPayloadService
             'sandbox_badge' => ($context['mode'] ?? 'disabled') === 'sandbox',
             'business_name' => data_get($system, 'billing_branding.' . $context['environment'] . '.business_name'),
             'description' => data_get($system, 'billing_branding.' . $context['environment'] . '.description'),
+            'billing_method_policy' => $this->marketBillingMethodPolicy->contract($platform),
         ];
     }
 

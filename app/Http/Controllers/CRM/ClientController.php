@@ -331,6 +331,10 @@ class ClientController extends Controller
         }
 
         $client->platform->setAttribute(
+            'billing_method_policy',
+            $this->dealPaymentService->marketBillingMethodPolicy($client->platform)
+        );
+        $client->platform->setAttribute(
             'payment_link_providers',
             $this->walletSettingsService->currentPaymentLinkProviders($client->platform)
         );

@@ -216,6 +216,214 @@ class WalletCheckoutService
         }
     }
 
+    public function resolveDealRenewalPricing(Deal $deal): array
+    {
+        $deal->loadMissing('product');
+
+        if (!$deal->product) {
+            throw new InvalidArgumentException('The active subscription has no linked product for wallet renewal.');
+        }
+
+        return $this->resolveSubscriptionPricing(
+            $deal->product,
+            (string) ($deal->duration ?: 'monthly')
+        );
+    }
+
+    public function autoRenewDealFromWallet(
+        Deal $deal,
+        string $idempotencyKey,
+        array $options = []
+    ): array {
+        $idempotencyKey = trim($idempotencyKey);
+        if ($idempotencyKey === '') {
+            throw new InvalidArgumentException('Wallet auto-renew idempotency key is required.');
+        }
+
+        $deal->loadMissing(['client.platform', 'product']);
+        if (!$deal->client) {
+            throw new InvalidArgumentException('Deal has no linked client for wallet auto-renew.');
+        }
+
+        $pricing = $this->resolveDealRenewalPricing($deal);
+        $referenceNumber = $this->walletReference('WREN', [
+            $deal->platform_id,
+            $deal->client_id,
+            $deal->id,
+            $pricing['duration_key'],
+            $idempotencyKey,
+        ]);
+
+        $result = DB::transaction(function () use ($deal, $pricing, $idempotencyKey, $options, $referenceNumber) {
+            $lockedDeal = Deal::query()
+                ->with(['client.platform', 'product'])
+                ->lockForUpdate()
+                ->findOrFail((int) $deal->id);
+
+            if ((string) $lockedDeal->status !== 'active') {
+                throw new RuntimeException('Only active subscriptions can be auto-renewed from wallet.');
+            }
+
+            $lockedClient = $lockedDeal->client;
+            if (!$lockedClient) {
+                throw new RuntimeException('Wallet auto-renew requires a linked client.');
+            }
+
+            $existingTransaction = $lockedClient->walletTransactions()
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+
+            if ($existingTransaction) {
+                $payment = $existingTransaction->payment;
+
+                return [
+                    'client' => $lockedClient->fresh(['platform']),
+                    'transaction' => $existingTransaction,
+                    'payment' => $payment,
+                    'deal' => $lockedDeal,
+                    'pricing' => $pricing,
+                    'previous_expires_at' => optional($lockedDeal->expires_at)->toDateTimeString(),
+                    'replayed' => true,
+                ];
+            }
+
+            $currentBalance = round((float) ($lockedClient->wallet_balance ?? 0), 2);
+            $amount = round((float) $pricing['amount'], 2);
+
+            if ($currentBalance < $amount) {
+                throw new RuntimeException('Insufficient wallet balance.');
+            }
+
+            $payment = Payment::query()->create([
+                'user_id' => $lockedClient->wp_user_id,
+                'escort_post_id' => $lockedClient->wp_post_id,
+                'platform_id' => (int) $lockedDeal->platform_id,
+                'product_id' => (int) $lockedDeal->product_id,
+                'client_id' => (int) $lockedClient->id,
+                'deal_id' => (int) $lockedDeal->id,
+                'phone' => $lockedClient->phone_normalized,
+                'amount' => $pricing['amount'],
+                'currency' => $pricing['currency'],
+                'transaction_uuid' => (string) Str::uuid(),
+                'transaction_reference' => $referenceNumber,
+                'reference_number' => $referenceNumber,
+                'status' => 'completed',
+                'purpose' => 'subscription',
+                'source' => 'wallet',
+                'provider_key' => 'wallet',
+                'provider_environment' => $options['environment'] ?? null,
+                'duration' => $lockedDeal->duration,
+                'completed_at' => now(),
+                'raw_payload' => [
+                    'method' => 'wallet',
+                    'wallet_auto_renew' => true,
+                ],
+                'payment_data' => [
+                    'duration_key' => $pricing['duration_key'],
+                    'duration_days' => $pricing['duration_days'],
+                    'duration_label' => $pricing['duration_label'],
+                    'idempotency_key' => $idempotencyKey,
+                    'origin' => $options['origin'] ?? 'wallet_auto_subscribe',
+                    'renewal_mode' => 'auto_renew',
+                    'renewed_deal_id' => (int) $lockedDeal->id,
+                    'cycle_expires_at' => optional($lockedDeal->expires_at)->toDateTimeString(),
+                ],
+            ]);
+
+            $this->billingRoutingDecisionRecorder->recordWalletSubscription($payment, $pricing, [
+                'environment' => $options['environment'] ?? null,
+                'origin' => $options['origin'] ?? 'wallet_auto_subscribe',
+                'idempotency_key' => $idempotencyKey,
+                'topup_payment_id' => $options['topup_payment_id'] ?? null,
+            ]);
+
+            $debit = $this->walletService->debit($lockedClient, $amount, [
+                'payment' => $payment,
+                'deal_id' => (int) $lockedDeal->id,
+                'reference_type' => 'wallet_auto_renew',
+                'reference_id' => (int) $payment->id,
+                'idempotency_key' => $idempotencyKey,
+                'description' => sprintf(
+                    'Wallet auto-renew for %s (%s)',
+                    $lockedDeal->product?->display_name ?: $lockedDeal->product?->name ?: 'subscription',
+                    $pricing['duration_label']
+                ),
+                'metadata' => [
+                    'deal_id' => (int) $lockedDeal->id,
+                    'product_id' => (int) $lockedDeal->product_id,
+                    'duration_key' => $pricing['duration_key'],
+                    'duration_days' => $pricing['duration_days'],
+                    'cycle_expires_at' => optional($lockedDeal->expires_at)->toDateTimeString(),
+                ],
+            ]);
+
+            $wpPostId = (int) ($lockedClient->wp_post_id ?? 0);
+            if ($wpPostId <= 0) {
+                throw new RuntimeException('Client is not linked to a WordPress profile.');
+            }
+
+            $previousExpiry = $lockedDeal->expires_at ? $lockedDeal->expires_at->copy() : null;
+            $baseExpiry = $previousExpiry && $previousExpiry->isFuture()
+                ? $previousExpiry->copy()
+                : now();
+            $newExpiry = $baseExpiry->copy()->addDays((int) $pricing['duration_days']);
+
+            $wpSync = WpSyncService::forPlatform((int) $lockedDeal->platform_id);
+            $wpSync->extendClient($wpPostId, (int) $pricing['duration_days']);
+
+            $lockedDeal->forceFill([
+                'expires_at' => $newExpiry,
+                'payment_id' => (int) $payment->id,
+                'payment_reference' => $payment->transaction_reference,
+                'is_free_trial' => false,
+                'free_trial_approved_by' => null,
+            ])->save();
+
+            $payment->forceFill([
+                'start_date' => now(),
+                'end_date' => $newExpiry,
+                'completed_at' => $payment->completed_at ?? now(),
+                'client_id' => (int) $lockedClient->id,
+                'deal_id' => (int) $lockedDeal->id,
+                'reconciliation_confidence' => 'high',
+                'reconciliation_state' => 'resolved',
+                'match_confidence' => 'manual',
+            ])->save();
+
+            return [
+                'client' => $debit['client'],
+                'transaction' => $debit['transaction'],
+                'payment' => $payment->fresh(['client', 'deal', 'platform', 'product']),
+                'deal' => $lockedDeal->fresh(['client', 'product', 'platform']),
+                'pricing' => $pricing,
+                'previous_expires_at' => optional($previousExpiry)->toDateTimeString(),
+                'replayed' => false,
+            ];
+        }, 3);
+
+        $client = $deal->client;
+        if ($client) {
+            app(WalletSyncService::class)->syncClientBalance($client);
+        }
+
+        $freshDeal = ($result['deal'] instanceof Deal ? $result['deal'] : null)?->fresh(['client.platform', 'product', 'platform']);
+        if ($freshDeal?->client?->wp_post_id) {
+            $syncedClient = (new ClientSyncService($freshDeal->platform))->syncOne((int) $freshDeal->client->wp_post_id);
+            $freshDeal->setRelation('client', $syncedClient);
+            $result['client'] = $syncedClient->fresh(['platform']);
+        }
+
+        return [
+            'client' => ($result['client'] instanceof Client ? $result['client'] : null)?->fresh(['platform']),
+            'transaction' => $result['transaction'],
+            'payment' => ($result['payment'] instanceof Payment ? $result['payment'] : null)?->fresh(['client', 'deal', 'platform', 'product']),
+            'deal' => $freshDeal,
+            'pricing' => $result['pricing'],
+            'previous_expires_at' => $result['previous_expires_at'] ?? null,
+            'replayed' => (bool) ($result['replayed'] ?? false),
+        ];
+    }
+
     private function compensateFailedCheckout(Client $client, Payment $payment, $debitTransaction, Throwable $exception): void
     {
         DB::transaction(function () use ($client, $payment, $debitTransaction, $exception) {

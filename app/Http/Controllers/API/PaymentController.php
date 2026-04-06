@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
+use App\Billing\Support\MarketBillingMethodPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use App\Models\Client;
@@ -39,7 +40,8 @@ class PaymentController extends Controller
         private readonly BillingModeService $billingModeService,
         private readonly WalletCheckoutService $walletCheckoutService,
         private readonly PaymentAttemptService $paymentAttemptService,
-        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
     ) {
     }
 
@@ -2530,6 +2532,7 @@ class PaymentController extends Controller
                 'message' => 'Hosted checkout initialized successfully.',
                 'provider' => $providerKey,
                 'provider_config_key' => $providerConfigKey,
+                'billing_method_policy' => $this->marketBillingMethodPolicy->contract($platform),
                 'payment_id' => $payment->id,
                 'transaction_uuid' => $payment->transaction_uuid,
                 'reference_number' => $payment->reference_number,

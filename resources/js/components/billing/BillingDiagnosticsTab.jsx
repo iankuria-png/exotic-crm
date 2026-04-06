@@ -42,19 +42,22 @@ function statusDescriptor(status) {
         return { tone: 'online', label: 'Connected' };
     }
 
-    if (['configured_disabled', 'partial', 'degraded', 'pending', 'queued', 'running'].includes(status)) {
+    if (['configured_disabled', 'partial', 'degraded', 'pending', 'queued', 'running', 'attention', 'legacy_composed'].includes(status)) {
         return { tone: 'attention', label: formatStatus(status) };
     }
 
-    if (['deferred', 'unknown'].includes(status)) {
+    if (['deferred', 'unknown', 'neutral', 'unavailable'].includes(status)) {
         return { tone: 'neutral', label: formatStatus(status) };
     }
 
     return { tone: 'critical', label: formatStatus(status) };
 }
 
-export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsEnabled = false, services, error = null }) {
+export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsEnabled = false, services, diagnostics = null, error = null }) {
     const cards = normalizeServices(services);
+    const structuredSections = Array.isArray(diagnostics?.sections)
+        ? diagnostics.sections
+        : [];
 
     if (isLoading) {
         return (
@@ -224,6 +227,24 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
                     </div>
                 </section>
             </div>
+
+            {structuredSections.length > 0 ? (
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Shared backend</p>
+                            <h5 className="mt-2 text-lg font-semibold text-slate-950">Structured diagnostics sections</h5>
+                        </div>
+                        <CountBadge value={structuredSections.length} label="sections" />
+                    </div>
+
+                    <div className="mt-5 space-y-4">
+                        {structuredSections.map((section) => (
+                            <StructuredDiagnosticsSection key={section.key || section.title} section={section} />
+                        ))}
+                    </div>
+                </section>
+            ) : null}
         </div>
     );
 }
@@ -319,5 +340,49 @@ function CountBadge({ value, label }) {
             <span className="text-slate-900">{value}</span>
             {label}
         </span>
+    );
+}
+
+function StructuredDiagnosticsSection({ section }) {
+    const descriptor = statusDescriptor(section?.status);
+    const entries = Array.isArray(section?.entries) ? section.entries : [];
+    const items = Array.isArray(section?.items) ? section.items : [];
+
+    return (
+        <section className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h6 className="text-base font-semibold text-slate-950">{section?.title || 'Diagnostics section'}</h6>
+                        <StatusPill status={descriptor.tone} label={descriptor.label} compact />
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">{section?.summary || 'No structured summary available.'}</p>
+                </div>
+            </div>
+
+            {entries.length > 0 ? (
+                <div className="mt-4 grid gap-2 md:grid-cols-2">
+                    {entries.map((entry) => (
+                        <p key={`${section?.key}-${entry.label}`} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                            <span className="font-semibold text-slate-800">{entry.label}:</span> {entry.value || '—'}
+                        </p>
+                    ))}
+                </div>
+            ) : null}
+
+            {items.length > 0 ? (
+                <div className="mt-4 space-y-2">
+                    {items.map((item, index) => (
+                        <article key={`${section?.key}-item-${index}`} className="rounded-md border border-slate-200 bg-white px-3 py-3">
+                            <p className="text-xs font-semibold text-slate-900">{item.label || 'Signal'}</p>
+                            <p className="mt-1 text-xs text-slate-600">{item.value || 'No detail available.'}</p>
+                            {item?.meta?.provider_key ? (
+                                <p className="mt-1 text-[11px] text-slate-500">Provider: {item.meta.provider_key}</p>
+                            ) : null}
+                        </article>
+                    ))}
+                </div>
+            ) : null}
+        </section>
     );
 }
