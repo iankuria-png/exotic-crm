@@ -11,6 +11,7 @@ use App\Billing\Support\CanonicalPaymentStateReducer;
 use App\Models\BillingWebhookEvent;
 use App\Models\BillingRoutingDecision;
 use App\Models\BillingProviderProfile;
+use App\Models\BillingProxySession;
 use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -573,6 +574,12 @@ class BillingGatewayService
                 'processed_at' => null,
             ])->save();
         }
+
+        BillingProxySession::query()
+            ->where('payment_id', $payment->id)
+            ->where('provider_reference', $depositId)
+            ->whereNull('callback_at')
+            ->update(['callback_at' => now()]);
 
         try {
             $verification = $this->providerStatusQueryOrchestrator->verify($payment, [
