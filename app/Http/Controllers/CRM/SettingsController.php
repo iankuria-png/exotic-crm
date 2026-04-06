@@ -46,6 +46,7 @@ use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -1083,6 +1084,17 @@ class SettingsController extends Controller
                 );
             }
         });
+
+        // Push updated provider config to WordPress so changes are reflected
+        // immediately on the site (e.g. PawaPay appearing in the top-up modal).
+        try {
+            $this->walletSyncService->syncPlatformConfig($market);
+        } catch (\Throwable $e) {
+            Log::warning('Wallet config sync after routing rules update failed', [
+                'market_id' => $marketId,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return $this->billingRoutingRules($marketId);
     }

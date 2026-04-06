@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Billing\Repositories\BillingConfigurationRepository;
+use App\Billing\Support\BillingSurface;
 use App\Billing\Support\MarketBillingMethodPolicy;
 use App\Models\Client;
 use App\Models\Platform;
@@ -9,7 +11,8 @@ use App\Models\Platform;
 class WalletPayloadService
 {
     public function __construct(
-        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
+        private readonly BillingConfigurationRepository $billingConfigurationRepository
     ) {
     }
 
@@ -44,6 +47,31 @@ class WalletPayloadService
                 return $payload;
             })
             ->all();
+
+        // Merge in any profile-backed wallet_funding bindings (e.g. PawaPay) that
+        // are marked self_service_enabled. These are not stored in legacy config so
+        // they would otherwise be invisible to WordPress.
+        $bindings = $this->billingConfigurationRepository->activeBindingsForMarket(
+            (int) $platform->id,
+            BillingSurface::WalletFunding->value
+        );
+
+        foreach ($bindings as $binding) {
+            if (!(bool) ($binding->self_service_enabled ?? false)) {
+                continue;
+            }
+
+            $providerKey = strtolower(trim((string) ($binding->providerProfile?->provider_type_key ?? '')));
+            if ($providerKey === '' || isset($providers[$providerKey])) {
+                continue;
+            }
+
+            $providers[$providerKey] = [
+                'enabled' => true,
+                'min_amount' => $binding->restriction_json['min_amount'] ?? null,
+                'max_amount' => $binding->restriction_json['max_amount'] ?? null,
+            ];
+        }
 
         return [
             'market' => [
