@@ -32,7 +32,8 @@ class ProviderStatusQueryOrchestrator
             $payment->platform,
             $provider,
             requireEnabled: false,
-            environmentOverride: $this->resolveEnvironment($payment)
+            environmentOverride: $this->resolveEnvironment($payment),
+            surface: $this->resolveSurface($payment)
         );
 
         $verification = match ($provider) {
@@ -271,6 +272,19 @@ class ProviderStatusQueryOrchestrator
         }
 
         return $depositId;
+    }
+
+    public function resolveSurface(Payment $payment): string
+    {
+        $pinnedSurface = $this->latestPinnedDecision($payment)?->billing_surface;
+        if ($pinnedSurface) {
+            return (string) $pinnedSurface;
+        }
+
+        return match ((string) $payment->purpose) {
+            'subscription' => 'subscription_link',
+            default => 'wallet_funding',
+        };
     }
 
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision

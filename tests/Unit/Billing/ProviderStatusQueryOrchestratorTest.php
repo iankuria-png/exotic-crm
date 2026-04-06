@@ -137,7 +137,8 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
                 Mockery::on(fn ($resolvedPlatform) => $resolvedPlatform instanceof Platform && $resolvedPlatform->is($platform)),
                 'pesapal',
                 false,
-                'production'
+                'production',
+                'subscription_link'
             )
             ->andReturn([
                 'environment' => 'production',
@@ -186,7 +187,8 @@ class ProviderStatusQueryOrchestratorTest extends TestCase
                 Mockery::on(fn ($resolvedPlatform) => $resolvedPlatform instanceof Platform && $resolvedPlatform->is($platform)),
                 'pawapay',
                 false,
-                'sandbox'
+                'sandbox',
+                'subscription_link'
             )
             ->andReturn([
                 'environment' => 'sandbox',

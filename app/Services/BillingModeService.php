@@ -49,7 +49,8 @@ class BillingModeService
         Platform $platform,
         string $provider,
         bool $requireEnabled = true,
-        ?string $environmentOverride = null
+        ?string $environmentOverride = null,
+        ?string $surface = null
     ): array
     {
         $normalizedProvider = strtolower(trim($provider));
@@ -58,8 +59,10 @@ class BillingModeService
         $runtimeProvider = $this->runtimeProviderKey($normalizedProvider);
         $legacyWalletProviders = $this->providerRegistry->legacyWalletProviderKeys();
 
-        if (!$providerDefinition || !$providerDefinition->capabilities->supportsSurface(BillingSurface::WalletFunding)) {
-            throw new InvalidArgumentException('Unsupported wallet billing provider.');
+        $resolvedSurface = $surface ? BillingSurface::from($surface) : BillingSurface::WalletFunding;
+
+        if (!$providerDefinition || !$providerDefinition->capabilities->supportsSurface($resolvedSurface)) {
+            throw new InvalidArgumentException("Unsupported " . $resolvedSurface->value . " billing provider.");
         }
 
         $context = $requireEnabled
@@ -76,7 +79,7 @@ class BillingModeService
         $resolvedProfileCredentials = null;
 
         if (!in_array($normalizedProvider, $legacyWalletProviders, true) && $runtimeProvider === $normalizedProvider) {
-            $resolved = $this->resolveProfileBackedProvider($platform, $normalizedProvider, $environment);
+            $resolved = $this->resolveProfileBackedProvider($platform, $normalizedProvider, $environment, $resolvedSurface->value);
             $resolvedBinding = $resolved['binding'];
             $resolvedProfile = $resolved['profile'];
             $resolvedProfileCredentials = $resolved['credentials'];
@@ -271,11 +274,13 @@ class BillingModeService
     /**
      * @return array{binding: mixed, profile: mixed, credentials: array<string, mixed>, resolved_from: string}
      */
-    private function resolveProfileBackedProvider(Platform $platform, string $providerTypeKey, string $environment): array
+    private function resolveProfileBackedProvider(Platform $platform, string $providerTypeKey, string $environment, ?string $surface = null): array
     {
+        $surface = $surface ?: BillingSurface::WalletFunding->value;
+
         $binding = $this->billingConfigurationRepository->firstActiveBindingForProvider(
             (int) $platform->id,
-            BillingSurface::WalletFunding->value,
+            $surface,
             $providerTypeKey,
             $environment
         );
