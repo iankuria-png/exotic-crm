@@ -239,20 +239,33 @@ class HostedCheckoutService
         }
 
         $verified = $response->json();
-        $providerStatus = strtoupper(trim((string) ($verified['status'] ?? '')));
+
+        // PawaPay wraps deposit lookups: root "status" is the search result ("FOUND" / "NOT_FOUND"),
+        // while the actual deposit state lives in "data.status".
+        $searchStatus = strtoupper(trim((string) ($verified['status'] ?? '')));
+        if ($searchStatus === 'NOT_FOUND') {
+            return [
+                'status' => 'failed',
+                'message' => 'Deposit not found on pawaPay.',
+                'data' => [],
+            ];
+        }
+
+        $depositData = is_array($verified['data'] ?? null) ? $verified['data'] : $verified;
+        $providerStatus = strtoupper(trim((string) ($depositData['status'] ?? '')));
         $normalizedStatus = match ($providerStatus) {
             'COMPLETED' => 'completed',
-            'FAILED', 'REJECTED', 'NOT_FOUND', 'EXPIRED' => 'failed',
-            default => 'pending',
+            'FAILED' => 'failed',
+            default => 'pending', // ACCEPTED, PROCESSING, IN_RECONCILIATION, etc.
         };
 
         return [
             'status' => $normalizedStatus,
             'message' => (string) (
-                data_get($verified, 'failureReason.failureMessage')
+                data_get($depositData, 'failureReason.failureMessage')
                 ?? ($providerStatus !== '' ? $providerStatus : 'pawaPay transaction status unavailable.')
             ),
-            'data' => $verified,
+            'data' => $depositData,
         ];
     }
 
