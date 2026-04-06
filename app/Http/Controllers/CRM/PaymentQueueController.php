@@ -204,9 +204,6 @@ class PaymentQueueController extends Controller
         $payload['environment_filter'] = $environmentFilter !== '' ? $environmentFilter : null;
         $payload['stats_scope'] = $environmentFilter === 'sandbox' ? 'sandbox' : 'live';
         $payload['baseline_cutoff'] = $baselineCutoff?->toDateString();
-        $payload['legacy_operations'] = $this->legacyBillingOperationsCatalog->paymentsWorkspaceCatalog();
-        $payload['legacy_operations_summary'] = $this->legacyBillingOperationsCatalog->workspaceSummary();
-
         return response()->json($payload);
     }
 

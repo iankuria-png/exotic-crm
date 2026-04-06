@@ -12,7 +12,7 @@ class PaymentsWorkspaceLegacyOperationsTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_payments_index_includes_legacy_operations_catalog(): void
+    public function test_payments_index_no_longer_includes_legacy_operations_catalog(): void
     {
         $platform = Platform::factory()->create();
         $user = User::factory()->create([
@@ -26,21 +26,8 @@ class PaymentsWorkspaceLegacyOperationsTest extends TestCase
         $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
 
         $response->assertOk()
-            ->assertJsonPath('legacy_operations_summary.preserved', 7)
-            ->assertJsonPath('legacy_operations_summary.migrated', 1)
-            ->assertJsonPath('legacy_operations_summary.retired', 2)
-            ->assertJsonFragment([
-                'key' => 'manual_match',
-                'disposition' => 'preserved',
-            ])
-            ->assertJsonFragment([
-                'key' => 'send_link',
-                'disposition' => 'migrated',
-            ])
-            ->assertJsonFragment([
-                'key' => 'direct_operator_provider_override',
-                'disposition' => 'retired',
-            ]);
+            ->assertJsonMissingPath('legacy_operations')
+            ->assertJsonMissingPath('legacy_operations_summary');
     }
 
     public function test_payment_diagnostics_includes_legacy_operations_catalog(): void
