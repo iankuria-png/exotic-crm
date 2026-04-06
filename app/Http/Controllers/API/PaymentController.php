@@ -2349,6 +2349,13 @@ class PaymentController extends Controller
             $providerKey = trim((string) ($resolvedProvider['config']['wallet_provider_key'] ?? $providerConfigKey));
             $providerMode = trim((string) ($resolvedProvider['config']['mode'] ?? ''));
             $environment = trim((string) ($resolvedProvider['config']['environment'] ?? ''));
+
+            // Normalise pawapay_checkout (legacy config key) → pawapay (registry key)
+            // so that providerContext() and the match expression below resolve correctly.
+            if (str_starts_with($providerKey, 'pawapay')) {
+                $providerKey = 'pawapay';
+            }
+
             $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider);
             $attemptProvider = $providerKey !== '' ? $providerKey : $providerConfigKey;
 
@@ -2356,7 +2363,7 @@ class PaymentController extends Controller
                 throw new \InvalidArgumentException('This market is not configured for hosted checkout.');
             }
 
-            if (!in_array($providerKey, ['paystack', 'pesapal'], true)) {
+            if (!in_array($providerKey, ['paystack', 'pesapal', 'pawapay'], true)) {
                 throw new \InvalidArgumentException('The active provider does not support hosted card checkout.');
             }
 
@@ -2487,6 +2494,10 @@ class PaymentController extends Controller
                     ],
                 ]),
                 'pesapal' => $this->hostedCheckoutService->initializePesapal($payment, $context, [
+                    'callback_url' => $checkoutCompletionUrl,
+                    'description' => 'Subscription payment',
+                ]),
+                'pawapay' => $this->hostedCheckoutService->initializePawaPay($payment, $context, [
                     'callback_url' => $checkoutCompletionUrl,
                     'description' => 'Subscription payment',
                 ]),
