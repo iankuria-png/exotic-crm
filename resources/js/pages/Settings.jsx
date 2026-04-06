@@ -45,7 +45,7 @@ const paymentLinkModeOptions = [
     { value: 'static_url', label: 'Static URL' },
     { value: 'proxy_hosted_checkout', label: 'CRM Proxy Checkout' },
 ];
-const paymentLinkProxyWalletProviders = ['paystack', 'pesapal'];
+const paymentLinkProxyWalletProviders = ['paystack', 'pesapal', 'pawapay'];
 
 function statusChip(status) {
     if (['connected', 'healthy', 'success'].includes(status)) return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
@@ -452,7 +452,9 @@ function paymentLinkReadinessState(provider, selectedPlatform, walletSystemConfi
         ? Boolean(credentials.public_key_configured && credentials.secret_key_configured)
         : walletProviderKey === 'pesapal'
             ? Boolean(credentials.consumer_key_configured && credentials.consumer_secret_configured)
-            : false;
+            : walletProviderKey === 'pawapay'
+                ? true  // PawaPay credentials are managed via Billing Profiles, not legacy wallet config
+                : false;
     const billingReady = billingDomain !== '';
 
     if (credentialsReady && billingReady) {
