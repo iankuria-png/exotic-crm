@@ -10,6 +10,26 @@ class PulseAccessTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_admin_can_open_pulse_dashboard_after_crm_login(): void
+    {
+        $password = 'secret-password';
+
+        $user = User::factory()->create([
+            'email' => 'admin@example.com',
+            'password' => bcrypt($password),
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $this->postJson('/api/crm/login', [
+            'email' => $user->email,
+            'password' => $password,
+        ])->assertOk();
+
+        $this->get('/pulse')
+            ->assertOk();
+    }
+
     public function test_admin_can_open_pulse_dashboard(): void
     {
         $user = User::factory()->create([

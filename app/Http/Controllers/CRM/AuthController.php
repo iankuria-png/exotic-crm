@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Services\TeamActivityService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use App\Models\User;
 
@@ -31,6 +32,9 @@ class AuthController extends Controller
         if (($user->status ?? 'active') !== 'active') {
             return response()->json(['message' => 'Account is inactive. Contact your administrator.'], 403);
         }
+
+        Auth::guard('web')->login($user);
+        $request->session()->regenerate();
 
         $token = $user->createToken('crm-session')->plainTextToken;
 
@@ -75,6 +79,9 @@ class AuthController extends Controller
         }
 
         $request->user()->currentAccessToken()->delete();
+        Auth::guard('web')->logout();
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
 
         return response()->json(['message' => 'Logged out']);
     }
