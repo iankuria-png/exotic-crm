@@ -559,6 +559,17 @@ export default function ClientDetail() {
         enabled: dealActionDialog.type === 'deactivate',
     });
     const smsTemplates = (deactivateTemplatesData?.templates || []).filter((t) => t.channel === 'sms');
+    const activationDeal = client?.deals?.find((deal) => deal.id === activationDialog.dealId) || null;
+    const activationPolicySource = client?.platform || activationDeal || client;
+    const activationPaymentMethods = useMemo(
+        () => getAllowedCrmPaymentMethods(activationPolicySource, 'activation'),
+        [activationPolicySource],
+    );
+    const dealActionPolicySource = dealActionDialog.deal?.client?.platform || client?.platform || dealActionDialog.deal;
+    const dealActionPaymentMethods = useMemo(
+        () => getAllowedCrmPaymentMethods(dealActionPolicySource, 'renewal'),
+        [dealActionPolicySource],
+    );
 
     const addNoteMutation = useMutation({
         mutationFn: (note) =>
@@ -1114,17 +1125,6 @@ export default function ClientDetail() {
     const dealPaymentRequiresFreeTrialPin = dealPaymentMethod === 'free_trial';
     const dealPaymentRequiresProvider = dealPaymentMethod === 'link';
     const dealDiscountAllowed = dealPaymentMethod !== 'free_trial';
-    const activationDeal = client.deals?.find((deal) => deal.id === activationDialog.dealId) || null;
-    const activationPolicySource = client?.platform || activationDeal || client;
-    const activationPaymentMethods = useMemo(
-        () => getAllowedCrmPaymentMethods(activationPolicySource, 'activation'),
-        [activationPolicySource],
-    );
-    const dealActionPolicySource = dealActionDialog.deal?.client?.platform || client?.platform || dealActionDialog.deal;
-    const dealActionPaymentMethods = useMemo(
-        () => getAllowedCrmPaymentMethods(dealActionPolicySource, 'renewal'),
-        [dealActionPolicySource],
-    );
     const activationBaseAmount = Number(activationDeal?.original_amount ?? activationDeal?.amount ?? 0);
     const activationDiscountValue = activationApplyDiscount ? normalizeDiscountPercentage(activationDiscountPercentage) : 0;
     const activationDiscountedTotal = discountedAmount(activationBaseAmount, activationDiscountValue);

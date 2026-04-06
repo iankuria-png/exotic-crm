@@ -31,6 +31,7 @@ use App\Services\LegacyStkService;
 use App\Models\IntegrationSetting;
 use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
+use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use App\Models\BillingRoutingDecision;
@@ -57,7 +58,8 @@ class PaymentQueueController extends Controller
         private readonly BillingDiagnosticsAssemblerContract $billingDiagnosticsAssembler,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly BillingProviderRegistryContract $billingProviderRegistry,
-        private readonly PaymentDiagnosticsPayloadPresenter $paymentDiagnosticsPayloadPresenter
+        private readonly PaymentDiagnosticsPayloadPresenter $paymentDiagnosticsPayloadPresenter,
+        private readonly WalletSettingsService $walletSettingsService
     ) {
     }
 
@@ -198,6 +200,17 @@ class PaymentQueueController extends Controller
 
         $payments = $query->orderBy('created_at', 'desc')
             ->paginate($request->get('per_page', 25));
+
+        $payments->getCollection()->transform(function (Payment $payment) {
+            if ($payment->platform) {
+                $payment->platform->setAttribute(
+                    'payment_link_providers',
+                    $this->walletSettingsService->currentPaymentLinkProviders($payment->platform)
+                );
+            }
+
+            return $payment;
+        });
 
         $payload = $payments->toArray();
         $payload['stats'] = $stats;
