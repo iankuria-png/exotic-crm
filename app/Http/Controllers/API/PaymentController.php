@@ -1301,10 +1301,20 @@ class PaymentController extends Controller
     
     public function handlePendingTimeouts()
     {
+        // Exclude hosted-checkout providers (PawaPay, Pesapal, Paystack) — those have
+        // their own reconciliation via crm:reconcile-pending-payments and can legitimately
+        // stay pending for longer than 5 minutes while the customer completes the payment page.
+        $hostedCheckoutProviders = ['pawapay', 'pesapal', 'paystack'];
+
         $timeoutPayments = Payment::where('status', 'pending')
                                  ->where('created_at', '<', now()->subMinutes(5))
+                                 ->whereNotIn('provider_key', $hostedCheckoutProviders)
+                                 ->whereDoesntHave('routingDecisions', function ($q) use ($hostedCheckoutProviders) {
+                                     $q->where('immutable_until_terminal_state', true)
+                                       ->whereIn('provider_type_key', $hostedCheckoutProviders);
+                                 })
                                  ->get();
-    
+
         foreach ($timeoutPayments as $payment) {
             $payment->update(['status' => 'failed']);
             

@@ -586,6 +586,18 @@ class BillingGatewayService
                 'deposit_id' => $depositId,
                 'provider_reference' => $depositId,
             ]);
+
+            // PawaPay sometimes sends the callback before their verify API reflects COMPLETED.
+            // If the callback explicitly says COMPLETED but verify still returns pending,
+            // wait briefly and retry once to allow propagation.
+            if ($callbackStatus === 'COMPLETED' && ($verification['status'] ?? 'pending') === 'pending') {
+                sleep(3);
+                $verification = $this->providerStatusQueryOrchestrator->verify($payment, [
+                    'deposit_id' => $depositId,
+                    'provider_reference' => $depositId,
+                ]);
+            }
+
             $decisionResult = $this->providerStatusQueryOrchestrator->decideMutation($payment, $verification, [
                 'deposit_id' => $depositId,
                 'provider_reference' => $depositId,
