@@ -6,9 +6,15 @@ use App\Billing\Providers\ProviderDefinition;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
 use App\Services\PaymentLinkService;
+use App\Services\WalletSettingsService;
 
 class BillingRoutingDecisionRecorder
 {
+    public function __construct(
+        private readonly WalletSettingsService $walletSettingsService
+    ) {
+    }
+
     public function recordWalletFunding(Payment $payment, array $context, array $options = []): BillingRoutingDecision
     {
         if ($existing = $this->existingPinnedDecision($payment)) {
@@ -20,6 +26,9 @@ class BillingRoutingDecisionRecorder
         $environment = strtolower(trim((string) ($context['environment'] ?? $payment->provider_environment ?? 'sandbox')));
         $executionMode = $this->executionModeFor($providerKey, $context, $providerDefinition);
         $snapshot = $this->walletFundingSnapshot($payment, $context, $options, $providerDefinition, $providerKey, $environment, $executionMode);
+        $shadowDiff = $payment->platform
+            ? $this->walletSettingsService->computeWalletSettingsDiff($payment->platform)
+            : null;
 
         return BillingRoutingDecision::query()->create([
             'payment_id' => (int) $payment->id,
@@ -32,7 +41,7 @@ class BillingRoutingDecisionRecorder
             'environment' => $environment,
             'fallback_taken' => false,
             'decision_version' => 1,
-            'shadow_diff_json' => null,
+            'shadow_diff_json' => $shadowDiff,
             'surface_cutover_flag' => null,
             'snapshot_json' => $snapshot,
             'immutable_until_terminal_state' => true,

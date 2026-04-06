@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
+import api from '../../services/api';
 import BillingStateNotice from './BillingStateNotice';
 import { isForbiddenQueryError } from './queryState';
 
@@ -53,11 +55,71 @@ function statusDescriptor(status) {
     return { tone: 'critical', label: formatStatus(status) };
 }
 
-export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsEnabled = false, services, diagnostics = null, error = null }) {
+export default function BillingDiagnosticsTab({
+    isLoading,
+    isError,
+    diagnosticsEnabled = false,
+    services,
+    diagnostics = null,
+    markets = [],
+    providerOptions = [],
+    filters = { marketId: '', providerKey: '' },
+    onFiltersChange = () => {},
+    error = null,
+}) {
     const cards = normalizeServices(services);
     const structuredSections = Array.isArray(diagnostics?.sections)
         ? diagnostics.sections
         : [];
+    const permissions = diagnostics?.meta?.permissions || {};
+    const marketOptions = useMemo(
+        () => (Array.isArray(markets) ? markets.map((market) => ({
+            value: String(market.id),
+            label: market.name,
+        })) : []),
+        [markets],
+    );
+    const normalizedProviderOptions = useMemo(
+        () => (Array.isArray(providerOptions) ? providerOptions.map((option) => ({
+            value: option.key,
+            label: option.label,
+        })) : []),
+        [providerOptions],
+    );
+    const [routeSimulatorForm, setRouteSimulatorForm] = useState({
+        marketId: '',
+        surface: 'subscription_link',
+        providerKey: '',
+    });
+    const [routeSimulationResult, setRouteSimulationResult] = useState(null);
+
+    useEffect(() => {
+        setRouteSimulatorForm((current) => ({
+            ...current,
+            marketId: current.marketId || filters.marketId || String(markets?.[0]?.id || ''),
+            providerKey: current.providerKey || filters.providerKey || '',
+        }));
+    }, [filters.marketId, filters.providerKey, markets]);
+
+    const routeSimulatorMutation = useMutation({
+        mutationFn: (payload) => api.get('/crm/settings/billing/diagnostics-route-simulator', {
+            params: {
+                market_id: Number(payload.marketId),
+                surface: payload.surface,
+                ...(payload.providerKey ? { provider_key: payload.providerKey } : {}),
+            },
+        }).then((response) => response.data),
+        onSuccess: (result) => {
+            setRouteSimulationResult(result);
+        },
+    });
+
+    const handleDiagnosticsFilterChange = (patch) => {
+        onFiltersChange((current) => ({
+            ...current,
+            ...patch,
+        }));
+    };
 
     if (isLoading) {
         return (
@@ -174,6 +236,56 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
                 </div>
             </section>
 
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Scope</p>
+                        <h5 className="mt-2 text-lg font-semibold text-slate-950">Market and provider diagnostics scope</h5>
+                    </div>
+                    <CountBadge value={structuredSections.length} label="visible sections" />
+                </div>
+
+                <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <label className="flex flex-col gap-2 text-sm text-slate-600">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Market</span>
+                        <select
+                            value={filters.marketId || ''}
+                            onChange={(event) => handleDiagnosticsFilterChange({ marketId: event.target.value })}
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                        >
+                            <option value="">All accessible markets</option>
+                            {marketOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
+                    </label>
+
+                    <label className="flex flex-col gap-2 text-sm text-slate-600">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Provider</span>
+                        <select
+                            value={filters.providerKey || ''}
+                            onChange={(event) => handleDiagnosticsFilterChange({ providerKey: event.target.value })}
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                        >
+                            <option value="">All providers in scope</option>
+                            {normalizedProviderOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
+                    </label>
+
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Permissions</p>
+                        <p className="mt-2">
+                            Cross-market drill-through: {permissions.cross_market_drillthrough ? 'Enabled' : 'Scoped'}
+                        </p>
+                        <p className="mt-1">
+                            Route simulator: {permissions.route_simulator ? 'Enabled' : 'Admin only'}
+                        </p>
+                    </div>
+                </div>
+            </section>
+
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
                     <div className="flex items-center justify-between gap-3">
@@ -243,6 +355,107 @@ export default function BillingDiagnosticsTab({ isLoading, isError, diagnosticsE
                             <StructuredDiagnosticsSection key={section.key || section.title} section={section} />
                         ))}
                     </div>
+                </section>
+            ) : null}
+
+            {permissions.route_simulator ? (
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Route simulator</p>
+                            <h5 className="mt-2 text-lg font-semibold text-slate-950">Policy-gated routing preview</h5>
+                        </div>
+                    </div>
+
+                    <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                        <label className="flex flex-col gap-2 text-sm text-slate-600">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Market</span>
+                            <select
+                                value={routeSimulatorForm.marketId}
+                                onChange={(event) => setRouteSimulatorForm((current) => ({ ...current, marketId: event.target.value }))}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                            >
+                                {marketOptions.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="flex flex-col gap-2 text-sm text-slate-600">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Surface</span>
+                            <select
+                                value={routeSimulatorForm.surface}
+                                onChange={(event) => setRouteSimulatorForm((current) => ({ ...current, surface: event.target.value }))}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                            >
+                                <option value="subscription_link">Subscription link</option>
+                                <option value="wallet_funding">Wallet funding</option>
+                                <option value="wallet_auto_renew">Wallet auto-renew</option>
+                                <option value="self_checkout">Self-checkout</option>
+                            </select>
+                        </label>
+
+                        <label className="flex flex-col gap-2 text-sm text-slate-600">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Provider</span>
+                            <select
+                                value={routeSimulatorForm.providerKey}
+                                onChange={(event) => setRouteSimulatorForm((current) => ({ ...current, providerKey: event.target.value }))}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                            >
+                                <option value="">All eligible providers</option>
+                                {normalizedProviderOptions.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <div className="flex items-end">
+                            <button
+                                type="button"
+                                onClick={() => routeSimulatorMutation.mutate(routeSimulatorForm)}
+                                disabled={!routeSimulatorForm.marketId || routeSimulatorMutation.isPending}
+                                className="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {routeSimulatorMutation.isPending ? 'Simulating…' : 'Run simulation'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {routeSimulatorMutation.isError ? (
+                        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                            {routeSimulatorMutation.error?.response?.data?.message || 'Route simulation failed.'}
+                        </div>
+                    ) : null}
+
+                    {routeSimulationResult?.results?.length ? (
+                        <div className="mt-5 grid gap-3">
+                            {routeSimulationResult.results.map((result) => (
+                                <article key={result.provider_key} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">{result.label}</p>
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                {result.provider_key} • {result.eligible ? 'Eligible' : 'Needs configuration'}
+                                            </p>
+                                        </div>
+                                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                            result.eligible ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'
+                                        }`}>
+                                            {result.eligible ? 'Eligible' : 'Review'}
+                                        </span>
+                                    </div>
+
+                                    <p className="mt-3 text-sm text-slate-600">{result.reason}</p>
+                                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                                        <p className="rounded-md bg-white px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Profiles:</span> {result.profiles_active}</p>
+                                        <p className="rounded-md bg-white px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Environments:</span> {result.environments?.join(', ') || '—'}</p>
+                                        <p className="rounded-md bg-white px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Status queries:</span> {result.status_queries ? 'Yes' : 'No'}</p>
+                                        <p className="rounded-md bg-white px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Sandbox:</span> {result.sandbox_available ? 'Yes' : 'No'}</p>
+                                    </div>
+                                </article>
+                            ))}
+                        </div>
+                    ) : null}
                 </section>
             ) : null}
         </div>

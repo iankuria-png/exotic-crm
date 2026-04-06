@@ -79,6 +79,8 @@ function normalizeDraftMap(value) {
                 operator_enabled: entry.operator_enabled !== false,
                 self_service_enabled: Boolean(entry.self_service_enabled),
                 notes: String(entry.notes || '').trim(),
+                min_amount: String(entry.min_amount || '').trim(),
+                max_amount: String(entry.max_amount || '').trim(),
             };
 
             return carry;
@@ -116,6 +118,8 @@ function buildDraftMap(payload) {
             self_service_enabled:
                 primaryBinding?.self_service_enabled ?? rule?.risk_policy_json?.self_service_enabled ?? false,
             notes: primaryBinding?.notes || '',
+            min_amount: primaryBinding?.restriction_json?.min_amount != null ? String(primaryBinding.restriction_json.min_amount) : '',
+            max_amount: primaryBinding?.restriction_json?.max_amount != null ? String(primaryBinding.restriction_json.max_amount) : '',
         };
 
         return carry;
@@ -371,6 +375,8 @@ export default function MarketRoutingTab({ platforms = [] }) {
                         operator_enabled: true,
                         self_service_enabled: false,
                         notes: '',
+                        min_amount: '',
+                        max_amount: '',
                     };
 
                     const eligibleProfiles = profiles.filter((profile) => {
@@ -576,19 +582,56 @@ function RoutingSurfaceCard({
             </div>
 
             <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.7fr)]">
-                <label className="block space-y-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                        Routing notes
-                    </span>
-                    <textarea
-                        value={entry.notes || ''}
-                        disabled={!editable || saving}
-                        onChange={(event) => onChange({ ...entry, notes: event.target.value })}
-                        rows={3}
-                        className="crm-input min-h-[104px] resize-y"
-                        placeholder="Describe why this route exists, what should trigger fallback, or any merchant/risk constraints."
-                    />
-                </label>
+                <div className="space-y-4">
+                    <label className="block space-y-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                            Routing notes
+                        </span>
+                        <textarea
+                            value={entry.notes || ''}
+                            disabled={!editable || saving}
+                            onChange={(event) => onChange({ ...entry, notes: event.target.value })}
+                            rows={3}
+                            className="crm-input min-h-[104px] resize-y"
+                            placeholder="Describe why this route exists, what should trigger fallback, or any merchant/risk constraints."
+                        />
+                    </label>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <label className="block space-y-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                Min amount (optional)
+                            </span>
+                            <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={entry.min_amount || ''}
+                                disabled={!editable || saving}
+                                placeholder="e.g. 100"
+                                onChange={(event) => onChange({ ...entry, min_amount: event.target.value })}
+                                className="crm-input"
+                            />
+                        </label>
+                        <label className="block space-y-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                Max amount (optional)
+                            </span>
+                            <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={entry.max_amount || ''}
+                                disabled={!editable || saving}
+                                placeholder="e.g. 50000"
+                                onChange={(event) => onChange({ ...entry, max_amount: event.target.value })}
+                                className="crm-input"
+                            />
+                        </label>
+                    </div>
+                    <p className="text-xs leading-5 text-slate-500">
+                        Thresholds restrict which amounts this binding handles. Leave blank to allow all amounts.
+                    </p>
+                </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Current route summary</p>

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\BillingProviderTransaction;
 use App\Models\BillingRoutingDecision;
 use App\Models\BillingWebhookEvent;
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -672,6 +673,95 @@ class PaymentDiagnosticsTest extends TestCase
             ->assertJsonPath('structured_diagnostics.sections.3.entries.0.value', 'Wallet Auto Subscribe')
             ->assertJsonPath('structured_diagnostics.sections.4.key', 'provisioning')
             ->assertJsonPath('structured_diagnostics.sections.4.entries.0.value', 'completed');
+    }
+
+    public function test_sales_payment_diagnostics_redact_provider_payloads_but_admin_keeps_raw_contract(): void
+    {
+        ['payment' => $payment, 'platform' => $platform, 'user' => $sales] = $this->seedProxyPayment('paystack');
+
+        PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'provider_status_check',
+            'provider' => 'paystack',
+            'status' => 'completed',
+            'request_meta' => [
+                'provider_environment' => 'sandbox',
+                'request_id' => 'req-diag-001',
+                'context_type' => 'browser',
+            ],
+            'response_meta' => [
+                'provider_status' => 'completed',
+                'provider_message' => 'Approved',
+                'provider_payload' => [
+                    'secret' => 'top-secret',
+                ],
+            ],
+            'created_by' => $sales->id,
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'paystack',
+            'normalized_status' => 'completed',
+            'provider_transaction_id' => 'pstk_txn_123456',
+            'provider_session_id' => 'pstk_session_123456',
+            'provider_invoice_id' => 'pstk_invoice_123456',
+            'provider_status' => 'success',
+            'requested_amount' => 1500,
+            'requested_currency' => 'KES',
+            'compatibility_reference' => 'compat-123456',
+            'confirmation_state_json' => ['status' => 'confirmed'],
+            'upstream_reference_json' => ['reference' => 'provider-reference'],
+            'attempt_group_key' => 'group-1',
+            'attempt_sequence' => 1,
+            'state_version' => 1,
+            'last_status_at' => now(),
+        ]);
+
+        AuditLog::query()->create([
+            'platform_id' => $platform->id,
+            'actor_id' => $sales->id,
+            'action' => CrmAuditAction::PAYMENT_SEND_LINK,
+            'entity_type' => 'payment',
+            'entity_id' => $payment->id,
+            'before_state' => ['secret' => 'before-secret'],
+            'after_state' => ['secret' => 'after-secret'],
+            'reason' => 'Diagnostics redaction check',
+            'ip_address' => '127.0.0.1',
+            'created_at' => now(),
+        ]);
+
+        Sanctum::actingAs($sales);
+
+        $salesResponse = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $salesResponse->assertOk()
+            ->assertJsonPath('permissions.view_raw_payloads', false)
+            ->assertJsonPath('attempts.0.request_meta.request_id', null)
+            ->assertJsonPath('attempts.0.response_meta.provider_payload', '[redacted]')
+            ->assertJsonPath('audit_trail.0.before_state.redacted', true)
+            ->assertJsonPath('browser_meta.origin_url', null)
+            ->assertJsonPath('structured_diagnostics.meta.redaction_profile', 'operator');
+
+        $admin = User::query()->create([
+            'name' => 'Admin Diagnostics',
+            'email' => 'admin-diagnostics@example.test',
+            'password' => bcrypt('password'),
+            'role' => 'admin',
+            'status' => 'active',
+            'assigned_market_ids' => [],
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $adminResponse = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+
+        $adminResponse->assertOk()
+            ->assertJsonPath('permissions.view_raw_payloads', true)
+            ->assertJsonPath('attempts.0.request_meta.request_id', 'req-diag-001')
+            ->assertJsonPath('attempts.0.response_meta.provider_payload.secret', 'top-secret')
+            ->assertJsonPath('audit_trail.0.before_state.secret', 'before-secret')
+            ->assertJsonPath('structured_diagnostics.meta.redaction_profile', 'manager');
     }
 
     public function test_mpesa_reversal_populates_failure_diagnostics(): void

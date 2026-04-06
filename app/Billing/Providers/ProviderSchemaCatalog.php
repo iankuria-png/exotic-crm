@@ -12,6 +12,7 @@ use App\Billing\Providers\Schemas\PawaPaySchema;
 use App\Billing\Providers\Schemas\PaypalSchema;
 use App\Billing\Providers\Schemas\PaystackSchema;
 use App\Billing\Providers\Schemas\PesapalSchema;
+use App\Billing\Providers\Schemas\StaticPaymentLinkSchema;
 
 final class ProviderSchemaCatalog
 {
@@ -31,6 +32,7 @@ final class ProviderSchemaCatalog
             new DusuPaySchema(),
             new NowPaymentsSchema(),
             new PaypalSchema(),
+            new StaticPaymentLinkSchema(),
         ];
     }
 }

@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Billing\Contracts\BillingDiagnosticsAssembler as BillingDiagnosticsAssemblerContract;
+use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Diagnostics\PaymentDiagnosticsPayloadPresenter;
 use App\Billing\Support\LegacyBillingOperationsCatalog;
+use App\Billing\Support\ProviderCapability;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Deal;
@@ -52,7 +55,9 @@ class PaymentQueueController extends Controller
         private readonly PaymentCompletionService $paymentCompletionService,
         private readonly LegacyBillingOperationsCatalog $legacyBillingOperationsCatalog,
         private readonly BillingDiagnosticsAssemblerContract $billingDiagnosticsAssembler,
-        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly BillingProviderRegistryContract $billingProviderRegistry,
+        private readonly PaymentDiagnosticsPayloadPresenter $paymentDiagnosticsPayloadPresenter
     ) {
     }
 
@@ -824,8 +829,10 @@ class PaymentQueueController extends Controller
         $failureReason = $latestFailedAttempt?->error_message
             ?? (is_array($rawPayload['failure_data'] ?? null) ? ($rawPayload['failure_data']['message'] ?? null) : null)
             ?? (is_array($manualCloseMeta) ? ($manualCloseMeta['reason'] ?? null) : null);
+        $canCheckProviderStatus = $this->canCheckProviderStatus($payment, $linkProxy);
+        $canSandboxReconcile = $this->canSandboxReconcile($payment, $linkProxy);
 
-        return response()->json([
+        $payload = [
             'payment' => $payment,
             'failure' => [
                 'status' => $payment->status,
@@ -851,6 +858,10 @@ class PaymentQueueController extends Controller
                 'request_id' => $requestMeta['request_id'] ?? null,
             ],
             'recommendations' => $this->buildRecommendations($payment, $linkProxy),
+            'action_capabilities' => [
+                'check_provider_status' => $canCheckProviderStatus,
+                'sandbox_reconcile' => $canSandboxReconcile,
+            ],
             'link_proxy' => $linkProxy,
             'attempts' => $attempts->map(function ($attempt) {
                 return [
@@ -949,7 +960,11 @@ class PaymentQueueController extends Controller
             'legacy_operations' => $this->legacyBillingOperationsCatalog->paymentsWorkspaceCatalog(),
             'legacy_operations_summary' => $this->legacyBillingOperationsCatalog->workspaceSummary(),
             'structured_diagnostics' => $this->billingDiagnosticsAssembler->assemblePayment((int) $payment->id),
-        ]);
+        ];
+
+        return response()->json(
+            $this->paymentDiagnosticsPayloadPresenter->present($payload, $request->user())
+        );
     }
 
     public function checkProviderStatus(Request $request, Payment $payment)
@@ -1584,13 +1599,8 @@ class PaymentQueueController extends Controller
             ? now()->diffInHours($payment->created_at)
             : 0;
         $sandboxPayment = $this->isSandboxPayment($payment);
-        $resolvedProvider = $this->resolvedProviderType($payment);
-        $canCheckProviderStatus = is_array($linkProxy)
-            && ($linkProxy['mode'] ?? null) === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
-            && $ageHours >= 1
-            && in_array((string) $payment->status, ['initiated', 'pending'], true)
-            && in_array($resolvedProvider, ['paystack', 'pesapal'], true)
-            && (!empty($linkProxy['initialized_at']) || !empty($linkProxy['provider_reference']));
+        $canCheckProviderStatus = $this->canCheckProviderStatus($payment, $linkProxy)
+            && $ageHours >= 1;
         $providerRecoveryRecommendation = $canCheckProviderStatus
             ? ($sandboxPayment
                 ? [
@@ -1838,8 +1848,8 @@ class PaymentQueueController extends Controller
             throw new InvalidArgumentException('Sandbox reconcile is available only for sandbox payments.');
         }
 
-        if (!in_array($this->resolvedProviderType($payment), ['paystack', 'pesapal'], true)) {
-            throw new InvalidArgumentException('Sandbox reconcile is available only for Paystack and Pesapal hosted checkout payments.');
+        if (!$this->canSandboxReconcile($payment, is_array(data_get($payment->payment_data, 'link_proxy')) ? data_get($payment->payment_data, 'link_proxy') : null)) {
+            throw new InvalidArgumentException('Sandbox reconcile is available only for hosted-checkout providers that advertise sandbox status checks.');
         }
 
         if (!in_array((string) $payment->status, ['initiated', 'pending'], true) && !$this->isSandboxReconcileTerminal($payment)) {
@@ -1892,6 +1902,38 @@ class PaymentQueueController extends Controller
         $legacy = strtolower(trim((string) $payment->provider_environment));
 
         return $legacy !== '' ? $legacy : null;
+    }
+
+    private function canCheckProviderStatus(Payment $payment, ?array $linkProxy = null): bool
+    {
+        $definition = $this->billingProviderRegistry->find($this->resolvedProviderType($payment))?->definition();
+
+        if (!$definition || !$definition->capabilities->has(ProviderCapability::StatusQueries)) {
+            return false;
+        }
+
+        if (!in_array((string) $payment->status, ['initiated', 'pending'], true)) {
+            return false;
+        }
+
+        if (!is_array($linkProxy) || ($linkProxy['mode'] ?? null) !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
+            return false;
+        }
+
+        return !empty($linkProxy['initialized_at']) || !empty($linkProxy['provider_reference']);
+    }
+
+    private function canSandboxReconcile(Payment $payment, ?array $linkProxy = null): bool
+    {
+        $definition = $this->billingProviderRegistry->find($this->resolvedProviderType($payment))?->definition();
+
+        if (!$definition || !$definition->capabilities->has(ProviderCapability::SandboxAvailable)) {
+            return false;
+        }
+
+        return strtolower(trim((string) $payment->source)) === 'gateway'
+            && $this->isSandboxPayment($payment)
+            && ($this->isSandboxReconcileTerminal($payment) || $this->canCheckProviderStatus($payment, $linkProxy));
     }
 
     private function sandboxReconcileState(Payment $payment): array

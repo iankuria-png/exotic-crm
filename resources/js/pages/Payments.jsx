@@ -929,14 +929,12 @@ export default function Payments() {
     const linkProxyData = diagnosticsData?.link_proxy || null;
     const structuredDiagnostics = diagnosticsData?.structured_diagnostics || null;
     const structuredDiagnosticsSections = Array.isArray(structuredDiagnostics?.sections) ? structuredDiagnostics.sections : [];
+    const actionCapabilities = diagnosticsData?.action_capabilities || {};
     const providerStatusDisplay = providerStatusSnapshot || linkProxyData?.last_provider_check || null;
     const diagnosticsRecommendations = diagnosticsData?.recommendations || [];
-    const providerCheckEligible = ['paystack', 'pesapal'].includes(String(diagnosticsPayment?.provider_key || '').toLowerCase())
-        && ['initiated', 'pending'].includes(diagnosticsPayment?.status);
+    const providerCheckEligible = Boolean(actionCapabilities.check_provider_status);
     const providerCheckReady = providerCheckEligible && (!linkProxyData || !!linkProxyData.initialized_at || !!linkProxyData.provider_reference);
-    const sandboxReconcileEligible = providerCheckReady
-        && String(diagnosticsPayment?.source || '').toLowerCase() === 'gateway'
-        && String(diagnosticsPayment?.provider_environment || '').toLowerCase() === 'sandbox';
+    const sandboxReconcileEligible = Boolean(actionCapabilities.sandbox_reconcile);
     const providerReference = providerStatusSnapshot?.provider_reference
         || linkProxyData?.provider_reference
         || diagnosticsPayment?.transaction_reference
@@ -1760,8 +1758,8 @@ export default function Payments() {
                                                         <h4 className="text-sm font-semibold text-slate-900">Live Provider Status</h4>
                                                         <p className="mt-1 text-xs text-slate-500">
                                                             {sandboxReconcileEligible
-                                                                ? 'Read-only verification plus sandbox-safe reconcile for hosted checkout tests.'
-                                                                : 'Read-only verification against the current Paystack or Pesapal session.'}
+                                                                ? 'Read-only verification plus sandbox-safe reconcile for supported hosted-checkout test flows.'
+                                                                : 'Read-only verification against the current provider session when diagnostics capabilities allow it.'}
                                                         </p>
                                                     </div>
                                                     <div className="flex flex-wrap items-center gap-2">

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Billing;
 
+use App\Models\IntegrationSetting;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingRoutingRule;
@@ -13,6 +14,7 @@ use App\Models\BillingWebhookEvent;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
+use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -140,8 +142,22 @@ class BillingWorkspaceEndpointsTest extends TestCase
                     'smtp',
                     'discount_config',
                 ],
-                'source' => ['live_read_enabled', 'source_of_truth'],
+                'source' => [
+                    'editable',
+                    'live_read_enabled',
+                    'source_of_truth',
+                    'rollout' => [
+                        'precedence_state',
+                        'shadow_read_enabled',
+                        'dual_write_enabled',
+                        'workspace_enabled',
+                        'diagnostics_v2_enabled',
+                        'market_surface_cutover_count',
+                        'rollback_scope',
+                    ],
+                ],
             ]);
+        $system->assertJsonPath('source.editable', true);
 
         $diagnostics = $this->getJson('/api/crm/settings/billing/diagnostics-summary');
         $diagnostics->assertOk()
@@ -163,7 +179,9 @@ class BillingWorkspaceEndpointsTest extends TestCase
             ->assertJsonPath('diagnostics.sections.1.key', 'route_health')
             ->assertJsonPath('diagnostics.sections.2.key', 'webhook_posture')
             ->assertJsonPath('diagnostics.sections.3.key', 'fallback_posture')
-            ->assertJsonPath('diagnostics.sections.5.key', 'wp_contract_health');
+            ->assertJsonPath('diagnostics.sections.5.key', 'provider_matrix')
+            ->assertJsonPath('diagnostics.sections.6.key', 'wp_contract_health')
+            ->assertJsonPath('diagnostics.meta.permissions.route_simulator', true);
     }
 
     public function test_sales_is_blocked_from_billing_workspace_api_endpoints(): void
@@ -181,6 +199,105 @@ class BillingWorkspaceEndpointsTest extends TestCase
         ] as $endpoint) {
             $this->getJson($endpoint)->assertForbidden();
         }
+    }
+
+    public function test_billing_system_includes_kill_switches(): void
+    {
+        IntegrationSetting::query()->create([
+            'key' => WalletSettingsService::KILL_SWITCHES_KEY,
+            'value' => [
+                'market_ids' => [2, 4],
+                'surfaces' => ['wallet_funding', 'subscription_link'],
+            ],
+        ]);
+
+        Sanctum::actingAs($this->createUser('admin'));
+
+        $this->getJson('/api/crm/settings/billing/system')
+            ->assertOk()
+            ->assertJsonPath('source.rollout.kill_switches.market_ids.0', 2)
+            ->assertJsonPath('source.rollout.kill_switches.market_ids.1', 4)
+            ->assertJsonPath('source.rollout.kill_switches.surfaces.0', 'wallet_funding')
+            ->assertJsonPath('source.rollout.kill_switches.surfaces.1', 'subscription_link');
+    }
+
+    public function test_update_kill_switches_requires_admin(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        Sanctum::actingAs($this->createUser('sub_admin', [$platform->id]));
+
+        $this->patchJson('/api/crm/settings/billing/system/kill-switches', [
+            'market_ids' => [$platform->id],
+            'surfaces' => ['wallet_funding'],
+        ])->assertForbidden();
+    }
+
+    public function test_update_kill_switches_persists_and_returns(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        Sanctum::actingAs($this->createUser('admin'));
+
+        $this->patchJson('/api/crm/settings/billing/system/kill-switches', [
+            'market_ids' => [$platform->id],
+            'surfaces' => ['wallet_funding'],
+        ])
+            ->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('kill_switches.market_ids.0', $platform->id)
+            ->assertJsonPath('kill_switches.surfaces.0', 'wallet_funding');
+
+        $this->assertDatabaseHas('integration_settings', [
+            'key' => WalletSettingsService::KILL_SWITCHES_KEY,
+        ]);
+
+        $stored = IntegrationSetting::query()
+            ->where('key', WalletSettingsService::KILL_SWITCHES_KEY)
+            ->value('value');
+
+        $this->assertSame([$platform->id], data_get($stored, 'market_ids'));
+        $this->assertSame(['wallet_funding'], data_get($stored, 'surfaces'));
+    }
+
+    public function test_kill_switch_prevents_shadow_read_for_market(): void
+    {
+        config(['billing.shadow_read.enabled' => true]);
+
+        $platform = $this->createPlatform('Kenya');
+        $platform->forceFill([
+            'wallet_settings' => [
+                'enabled' => true,
+                'max_single_topup' => '500.00',
+                'max_wallet_balance' => '1000.00',
+            ],
+        ])->save();
+
+        BillingWalletRule::query()->create([
+            'market_id' => $platform->id,
+            'enabled' => true,
+            'currency_code' => 'KES',
+            'topup_preset_json' => [500, 1000],
+            'limit_json' => [
+                'max_single_topup' => '900.00',
+                'max_wallet_balance' => '1500.00',
+            ],
+            'auto_renew_json' => ['enabled' => true],
+            'ui_json' => ['wallet_funding_label' => 'Wallet funding'],
+        ]);
+
+        /** @var WalletSettingsService $service */
+        $service = $this->app->make(WalletSettingsService::class);
+
+        $projected = $service->currentPlatformConfig($platform->fresh(), masked: false);
+        $this->assertSame('900.00', data_get($projected, 'max_single_topup'));
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => WalletSettingsService::KILL_SWITCHES_KEY],
+            ['value' => ['market_ids' => [$platform->id], 'surfaces' => []]]
+        );
+
+        $legacy = $service->currentPlatformConfig($platform->fresh(), masked: false);
+        $this->assertSame('500.00', data_get($legacy, 'max_single_topup'));
+        $this->assertSame('1000.00', data_get($legacy, 'max_wallet_balance'));
     }
 
     public function test_sub_admin_can_fetch_phase_three_billing_endpoints_in_scope(): void
@@ -253,6 +370,92 @@ class BillingWorkspaceEndpointsTest extends TestCase
             ->assertJsonPath('subscription_rule.activation_method_json.payment_link', true)
             ->assertJsonPath('editable', false)
             ->assertJsonPath('market.id', $platform->id);
+    }
+
+    public function test_sub_admin_billing_diagnostics_are_scoped_and_route_simulator_stays_admin_only(): void
+    {
+        $allowedMarket = $this->createPlatform('Kenya');
+        $blockedMarket = $this->createPlatform('Uganda');
+
+        BillingProviderProfile::query()->create([
+            'provider_type_key' => 'paystack',
+            'profile_name' => 'Scoped Paystack Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $allowedMarket->id,
+            'environment' => 'sandbox',
+            'config_json' => ['callback_base_url' => 'https://billing.example.test'],
+            'secrets_json' => ['secret_key' => 'secret'],
+            'active' => true,
+        ]);
+
+        BillingProviderProfile::query()->create([
+            'provider_type_key' => 'paystack',
+            'profile_name' => 'Blocked Paystack Sandbox',
+            'country_code' => 'UG',
+            'market_id' => $blockedMarket->id,
+            'environment' => 'sandbox',
+            'config_json' => ['callback_base_url' => 'https://billing.example.test'],
+            'secrets_json' => ['secret_key' => 'secret'],
+            'active' => true,
+        ]);
+
+        $subAdmin = $this->createUser('sub_admin', [$allowedMarket->id]);
+        Sanctum::actingAs($subAdmin);
+
+        $this->getJson('/api/crm/settings/billing/diagnostics-summary')
+            ->assertOk()
+            ->assertJsonPath('diagnostics.meta.viewer.market_scope', 'restricted')
+            ->assertJsonPath('diagnostics.meta.viewer.visible_market_ids.0', $allowedMarket->id)
+            ->assertJsonPath('diagnostics.meta.permissions.route_simulator', false)
+            ->assertJsonPath('diagnostics.sections.0.entries.2.value', '1');
+
+        $this->getJson("/api/crm/settings/billing/diagnostics-summary?market_id={$blockedMarket->id}")
+            ->assertForbidden();
+
+        $this->getJson("/api/crm/settings/billing/diagnostics-route-simulator?market_id={$allowedMarket->id}&surface=subscription_link")
+            ->assertForbidden();
+    }
+
+    public function test_admin_can_run_billing_route_simulator_for_accessible_market(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+
+        BillingProviderProfile::query()->create([
+            'provider_type_key' => 'paystack',
+            'profile_name' => 'Route Sim Paystack Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => ['callback_base_url' => 'https://billing.example.test'],
+            'secrets_json' => ['secret_key' => 'secret'],
+            'active' => true,
+        ]);
+
+        $platform->forceFill([
+            'payment_link_providers' => [
+                'active_provider' => 'paystack_checkout',
+                'providers' => [
+                    'paystack_checkout' => [
+                        'label' => 'Paystack Checkout',
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'paystack',
+                        'environment' => 'sandbox',
+                    ],
+                ],
+            ],
+        ])->save();
+
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $this->getJson("/api/crm/settings/billing/diagnostics-route-simulator?market_id={$platform->id}&surface=subscription_link&provider_key=paystack")
+            ->assertOk()
+            ->assertJsonPath('market.id', $platform->id)
+            ->assertJsonPath('surface', 'subscription_link')
+            ->assertJsonPath('results.0.provider_key', 'paystack')
+            ->assertJsonPath('results.0.eligible', true)
+            ->assertJsonPath('results.0.status_queries', true);
     }
 
     public function test_admin_can_create_provider_profile_with_schema_fields(): void

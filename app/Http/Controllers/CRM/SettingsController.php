@@ -5,7 +5,9 @@ namespace App\Http\Controllers\CRM;
 use App\Billing\Contracts\BillingDiagnosticsAssembler as BillingDiagnosticsAssemblerContract;
 use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
 use App\Billing\Contracts\ProviderCredentialSchemaRegistry as ProviderCredentialSchemaRegistryContract;
+use App\Billing\Diagnostics\BillingDiagnosticsPresenter;
 use App\Billing\Support\BillingSurface;
+use App\Billing\Support\ProviderCapability;
 use App\Billing\BillingPermissions;
 use App\Billing\Support\ProviderProfileManager;
 use App\Http\Controllers\Controller;
@@ -64,6 +66,7 @@ class SettingsController extends Controller
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService,
         private readonly BillingDiagnosticsAssemblerContract $billingDiagnosticsAssembler,
+        private readonly BillingDiagnosticsPresenter $billingDiagnosticsPresenter,
         private readonly BillingProviderRegistryContract $billingProviderRegistry,
         private readonly ProviderCredentialSchemaRegistryContract $providerCredentialSchemaRegistry,
         private readonly ProviderProfileManager $providerProfileManager
@@ -247,13 +250,60 @@ class SettingsController extends Controller
                     'password_configured' => (bool) data_get($system, 'smtp.password_configured', false),
                 ],
                 'discount_config' => (array) ($system['discount_config'] ?? []),
+                'pin_policy' => [
+                    'operator_pin_set' => (bool) ($system['pin_set'] ?? false),
+                    'operator_pin_last_updated_at' => $system['pin_last_updated_at'] ?? null,
+                    'free_trial_pin_set' => (bool) ($system['free_trial_pin_set'] ?? false),
+                    'free_trial_pin_last_updated_at' => $system['free_trial_pin_last_updated_at'] ?? null,
+                    'discount_pin_set' => (bool) ($system['discount_pin_set'] ?? false),
+                    'discount_pin_last_updated_at' => $system['discount_pin_last_updated_at'] ?? null,
+                ],
             ],
             'source' => [
+                'editable' => BillingPermissions::canEditBillingConfig($request->user()),
                 'live_read_enabled' => (bool) config('services.billing.billing_system_live_read.enabled', false),
                 'source_of_truth' => (bool) config('services.billing.billing_system_live_read.enabled', false)
                     ? 'billing_system_settings'
                     : 'wallet_system_config',
+                'rollout' => [
+                    'precedence_state' => (bool) config('services.billing.billing_system_live_read.enabled', false)
+                        ? 'new_model_primary'
+                        : 'legacy_primary',
+                    'shadow_read_enabled' => (bool) config('billing.shadow_read.enabled', false),
+                    'dual_write_enabled' => (bool) config('billing.dual_write.enabled', false),
+                    'workspace_enabled' => (bool) config('billing.workspace.enabled', false),
+                    'diagnostics_v2_enabled' => (bool) config('billing.diagnostics.v2.enabled', false),
+                    'market_surface_cutover_count' => count((array) config('billing.market_surface_cutover', [])),
+                    'rollback_scope' => (bool) config('services.billing.billing_system_live_read.enabled', false)
+                        ? 'legacy_fallback_available'
+                        : 'legacy_primary_still_active',
+                    'kill_switches' => $this->walletSettingsService->currentKillSwitches(),
+                ],
             ],
+        ]);
+    }
+
+    public function updateBillingKillSwitches(Request $request)
+    {
+        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+            return response()->json(['error' => 'Forbidden'], 403);
+        }
+
+        $validated = $request->validate([
+            'market_ids'   => ['required', 'array'],
+            'market_ids.*' => ['integer', 'min:1'],
+            'surfaces'     => ['required', 'array'],
+            'surfaces.*'   => ['string', Rule::in(array_column(BillingSurface::cases(), 'value'))],
+        ]);
+
+        $this->walletSettingsService->saveKillSwitches(
+            $validated['market_ids'],
+            $validated['surfaces']
+        );
+
+        return response()->json([
+            'ok'            => true,
+            'kill_switches' => $this->walletSettingsService->currentKillSwitches(),
         ]);
     }
 
@@ -263,14 +313,131 @@ class SettingsController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
-        [, $platformStatuses] = $this->accessiblePlatformsAndStatuses($request);
+        [, $platformStatuses, $allowedPlatformIds] = $this->accessiblePlatformsAndStatuses($request);
         $marketId = $request->filled('market_id') ? (int) $request->input('market_id') : null;
         $providerKey = $request->filled('provider_key') ? (string) $request->input('provider_key') : null;
 
+        if ($marketId) {
+            $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+                $request->user(),
+                $marketId,
+                'You do not have access to this billing diagnostics market.'
+            );
+        }
+
         return response()->json([
             'services' => $this->billingDiagnosticsServices($request, $platformStatuses),
-            'diagnostics' => $this->billingDiagnosticsAssembler->assembleBilling($marketId, $providerKey),
+            'diagnostics' => $this->billingDiagnosticsPresenter->present(
+                $this->billingDiagnosticsAssembler->assembleBilling($marketId, $providerKey, $allowedPlatformIds),
+                $request->user(),
+                $allowedPlatformIds,
+                BillingPermissions::canUseBillingRouteSimulator($request->user()),
+                BillingPermissions::canDrillAcrossBillingMarkets($request->user())
+            ),
             'last_checked_at' => now()->toDateTimeString(),
+        ]);
+    }
+
+    public function billingDiagnosticsRouteSimulator(Request $request)
+    {
+        if (!BillingPermissions::canViewBillingDiagnostics($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        if (!BillingPermissions::canUseBillingRouteSimulator($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $validated = $request->validate([
+            'market_id' => ['required', 'integer', 'exists:platforms,id'],
+            'surface' => ['required', Rule::in(array_map(
+                static fn (BillingSurface $surface) => $surface->value,
+                BillingSurface::cases()
+            ))],
+            'provider_key' => ['nullable', 'string', 'max:80'],
+        ]);
+
+        $marketId = (int) $validated['market_id'];
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $marketId,
+            'You do not have access to this billing diagnostics market.'
+        );
+
+        $market = Platform::query()->findOrFail($marketId);
+        $surface = BillingSurface::from((string) $validated['surface']);
+        $providerKey = trim((string) ($validated['provider_key'] ?? ''));
+        $providerProfiles = BillingProviderProfile::query()
+            ->where('market_id', $market->id)
+            ->get();
+        $paymentLinkProviders = is_array($market->payment_link_providers) ? $market->payment_link_providers : [];
+        $activePaymentLinkProvider = trim((string) ($paymentLinkProviders['active_provider'] ?? ''));
+
+        $results = collect($this->billingProviderRegistry->definitions())
+            ->map(fn ($definition) => $definition)
+            ->filter(function ($definition) use ($providerKey, $surface) {
+                if (!$definition->supportsSurface($surface)) {
+                    return false;
+                }
+
+                if ($providerKey === '') {
+                    return true;
+                }
+
+                return $definition->matches($providerKey);
+            })
+            ->sortBy(fn ($definition) => $definition->label)
+            ->values()
+            ->map(function ($definition) use ($providerProfiles, $surface, $market, $activePaymentLinkProvider) {
+                $profiles = $providerProfiles
+                    ->filter(fn (BillingProviderProfile $profile) => $definition->matches((string) $profile->provider_type_key))
+                    ->values();
+                $activeProfiles = $profiles->where('active', true)->values();
+                $environments = $activeProfiles
+                    ->pluck('environment')
+                    ->filter()
+                    ->map(fn ($value) => strtoupper((string) $value))
+                    ->unique()
+                    ->values()
+                    ->all();
+                $supportsStatusQueries = $definition->capabilities->has(ProviderCapability::StatusQueries);
+                $supportsSandbox = $definition->capabilities->has(ProviderCapability::SandboxAvailable);
+                $eligible = $activeProfiles->isNotEmpty() && $definition->supportsCurrency($market->currency_code);
+
+                return [
+                    'provider_key' => $definition->key,
+                    'label' => $definition->label,
+                    'eligible' => $eligible,
+                    'reason' => $eligible
+                        ? 'Provider has active profiles and meets the current market/surface posture.'
+                        : 'Provider is missing an active profile or does not match the current market posture.',
+                    'profiles_active' => $activeProfiles->count(),
+                    'environments' => $environments,
+                    'status_queries' => $supportsStatusQueries,
+                    'sandbox_available' => $supportsSandbox,
+                    'proxy_supported' => $definition->supportsSurface(BillingSurface::ProxyHostedCheckout),
+                    'selected_by_market_policy' => $activePaymentLinkProvider !== ''
+                        && str_contains(strtolower($activePaymentLinkProvider), strtolower($definition->key)),
+                ];
+            })
+            ->values();
+
+        return response()->json([
+            'market' => [
+                'id' => (int) $market->id,
+                'name' => $market->name,
+                'country' => $market->country,
+                'currency_code' => $market->currency_code,
+            ],
+            'surface' => $surface->value,
+            'provider_key' => $providerKey !== '' ? $providerKey : null,
+            'results' => $results,
+            'meta' => [
+                'simulated_at' => now()->toDateTimeString(),
+                'permissions' => [
+                    'route_simulator' => true,
+                ],
+            ],
         ]);
     }
 
@@ -785,6 +952,8 @@ class SettingsController extends Controller
             'rules.*.operator_enabled' => ['nullable', 'boolean'],
             'rules.*.self_service_enabled' => ['nullable', 'boolean'],
             'rules.*.notes' => ['nullable', 'string', 'max:500'],
+            'rules.*.min_amount' => ['nullable', 'numeric', 'min:0'],
+            'rules.*.max_amount' => ['nullable', 'numeric', 'min:0'],
         ]);
 
         $rules = collect($validated['rules'])->keyBy('billing_surface');
@@ -828,6 +997,8 @@ class SettingsController extends Controller
                 $operatorEnabled = array_key_exists('operator_enabled', $rule) ? (bool) $rule['operator_enabled'] : true;
                 $selfServiceEnabled = array_key_exists('self_service_enabled', $rule) ? (bool) $rule['self_service_enabled'] : false;
                 $notes = trim((string) ($rule['notes'] ?? ''));
+                $minAmount = isset($rule['min_amount']) && $rule['min_amount'] !== '' ? (float) $rule['min_amount'] : null;
+                $maxAmount = isset($rule['max_amount']) && $rule['max_amount'] !== '' ? (float) $rule['max_amount'] : null;
                 $primaryProfileId = isset($rule['primary_profile_id']) ? (int) $rule['primary_profile_id'] : null;
                 $fallbackProfileIds = collect($rule['fallback_profile_ids'] ?? [])
                     ->map(fn ($id) => (int) $id)
@@ -862,9 +1033,11 @@ class SettingsController extends Controller
                             'execution_mode' => $executionMode,
                             'priority' => 100 + ($index * 100),
                             'fallback_group' => $fallbackProfileIds->isNotEmpty() ? "{$surface}-ordered" : null,
-                            'restriction_json' => [
+                            'restriction_json' => array_filter([
                                 'managed_in_billing_workspace' => true,
-                            ],
+                                'min_amount' => $minAmount,
+                                'max_amount' => $maxAmount,
+                            ], fn ($v) => $v !== null),
                             'notes' => $notes !== '' ? $notes : null,
                         ]
                     );
@@ -936,6 +1109,7 @@ class SettingsController extends Controller
                 "limit_json" => null,
                 "auto_renew_json" => null,
                 "ui_json" => null,
+                "fx_override_json" => null,
                 "created_at" => null,
                 "updated_at" => null,
             ];
@@ -973,6 +1147,10 @@ class SettingsController extends Controller
             'ui_json.show_refresh_button' => ['nullable', 'boolean'],
             'ui_json.recent_transactions_limit' => ['nullable', 'integer', 'min:1', 'max:50'],
             'ui_json.wallet_funding_label' => ['nullable', 'string', 'max:120'],
+            'fx_override_json' => ['nullable', 'array'],
+            'fx_override_json.enabled' => ['nullable', 'boolean'],
+            'fx_override_json.currency' => ['nullable', 'string', 'max:8'],
+            'fx_override_json.rate' => ['nullable', 'numeric', 'min:0'],
         ]);
 
         $presets = collect($validated['topup_preset_json'] ?? [])
@@ -1009,6 +1187,16 @@ class SettingsController extends Controller
             'enabled' => (bool) data_get($validated, 'auto_renew_json.enabled', false),
         ];
 
+        $fxOverrideJson = null;
+        if (isset($validated['fx_override_json'])) {
+            $fxRate = data_get($validated, 'fx_override_json.rate');
+            $fxOverrideJson = [
+                'enabled' => (bool) data_get($validated, 'fx_override_json.enabled', false),
+                'currency' => strtoupper(trim((string) data_get($validated, 'fx_override_json.currency', ''))),
+                'rate' => $fxRate !== null ? (float) $fxRate : null,
+            ];
+        }
+
         BillingWalletRule::query()->updateOrCreate(
             ['market_id' => $market->id],
             [
@@ -1018,6 +1206,7 @@ class SettingsController extends Controller
                 'limit_json' => $limitJson,
                 'auto_renew_json' => $autoRenewJson,
                 'ui_json' => $uiJson,
+                'fx_override_json' => $fxOverrideJson,
             ]
         );
 
@@ -1039,13 +1228,23 @@ class SettingsController extends Controller
             ->first();
 
         if (!$rule) {
+            $legacySystem = $this->walletSettingsService->currentSystemConfig(masked: false);
+            $legacyDiscountMax = data_get($legacySystem, "discount_config.max_percentage_by_platform.{$marketId}");
+            $seededDiscountJson = $legacyDiscountMax !== null
+                ? [
+                    'enabled' => (int) $legacyDiscountMax > 0,
+                    'max_percent' => (int) $legacyDiscountMax,
+                    'requires_pin' => (bool) ($legacySystem['discount_pin_set'] ?? false),
+                ]
+                : null;
+
             $rule = [
                 "id" => null,
                 "market_id" => $marketId,
                 "activation_method_json" => null,
                 "renewal_method_json" => null,
                 "free_trial_json" => null,
-                "discount_json" => null,
+                "discount_json" => $seededDiscountJson,
                 "expiry_policy_json" => null,
                 "created_at" => null,
                 "updated_at" => null,
@@ -1137,6 +1336,17 @@ class SettingsController extends Controller
                 'expiry_policy_json' => $expiryPolicyJson,
             ]
         );
+
+        // Dual-write discount cap to legacy wallet_system_config so old surfaces stay consistent
+        if (config('billing.dual_write.enabled', false) && $discountJson['max_percent'] !== null) {
+            $legacySystem = $this->walletSettingsService->currentSystemConfig(masked: false);
+            $maxByPlatform = (array) data_get($legacySystem, 'discount_config.max_percentage_by_platform', []);
+            $maxByPlatform[(string) $market->id] = $discountJson['max_percent'];
+            $this->walletSettingsService->updateDiscountConfig(
+                ['max_percentage_by_platform' => $maxByPlatform],
+                (int) $request->user()->id
+            );
+        }
 
         return $this->billingSubscriptionRules($marketId);
     }

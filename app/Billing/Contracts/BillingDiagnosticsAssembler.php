@@ -7,7 +7,10 @@ use App\Billing\Diagnostics\PaymentDiagnosticsView;
 
 interface BillingDiagnosticsAssembler
 {
-    public function assembleBilling(?int $marketId = null, ?string $providerKey = null): BillingDiagnosticsView;
+    /**
+     * @param  array<int, int>|null  $visibleMarketIds
+     */
+    public function assembleBilling(?int $marketId = null, ?string $providerKey = null, ?array $visibleMarketIds = null): BillingDiagnosticsView;
 
     public function assemblePayment(int $paymentId): PaymentDiagnosticsView;
 }

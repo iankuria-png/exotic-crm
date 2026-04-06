@@ -13,4 +13,5 @@ enum ProviderFamily: string
     case Pesapal = 'pesapal';
     case Paystack = 'paystack';
     case Paypal = 'paypal';
+    case Static = 'static';
 }

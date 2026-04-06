@@ -17,6 +17,7 @@ class BillingWalletRule extends Model
         'limit_json',
         'auto_renew_json',
         'ui_json',
+        'fx_override_json',
     ];
 
     protected $casts = [
@@ -25,6 +26,7 @@ class BillingWalletRule extends Model
         'limit_json' => 'array',
         'auto_renew_json' => 'array',
         'ui_json' => 'array',
+        'fx_override_json' => 'array',
     ];
 
     public function market()

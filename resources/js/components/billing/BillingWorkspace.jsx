@@ -24,6 +24,10 @@ const billingTabs = [
 
 export default function BillingWorkspace() {
     const [activeTab, setActiveTab] = useState('overview');
+    const [diagnosticsFilters, setDiagnosticsFilters] = useState({
+        marketId: '',
+        providerKey: '',
+    });
 
     const overviewQuery = useQuery({
         queryKey: ['billing-workspace-overview'],
@@ -50,11 +54,18 @@ export default function BillingWorkspace() {
     });
 
     const diagnosticsQuery = useQuery({
-        queryKey: ['billing-diagnostics-summary'],
-        queryFn: () => api.get('/crm/settings/billing/diagnostics-summary').then((response) => response.data),
+        queryKey: ['billing-diagnostics-summary', diagnosticsFilters.marketId, diagnosticsFilters.providerKey],
+        queryFn: () => api.get('/crm/settings/billing/diagnostics-summary', {
+            params: {
+                ...(diagnosticsFilters.marketId ? { market_id: Number(diagnosticsFilters.marketId) } : {}),
+                ...(diagnosticsFilters.providerKey ? { provider_key: diagnosticsFilters.providerKey } : {}),
+            },
+        }).then((response) => response.data),
         enabled: activeTab === 'diagnostics' && Boolean(features.diagnostics_v2),
         staleTime: 30_000,
     });
+
+    const diagnosticsProviderOptions = diagnosticsQuery.data?.diagnostics?.meta?.provider_options || [];
 
     const headerChips = useMemo(
         () => [
@@ -209,6 +220,8 @@ export default function BillingWorkspace() {
                 <BillingSystemTab
                     system={billingSystemQuery.data?.system || {}}
                     source={billingSystemQuery.data?.source || {}}
+                    features={features}
+                    markets={markets}
                     isLoading={billingSystemQuery.isLoading}
                     isError={billingSystemQuery.isError}
                     error={billingSystemQuery.error}
@@ -222,6 +235,10 @@ export default function BillingWorkspace() {
                     diagnosticsEnabled={Boolean(features.diagnostics_v2)}
                     services={diagnosticsQuery.data?.services || {}}
                     diagnostics={diagnosticsQuery.data?.diagnostics || null}
+                    markets={markets}
+                    providerOptions={diagnosticsProviderOptions}
+                    filters={diagnosticsFilters}
+                    onFiltersChange={setDiagnosticsFilters}
                     error={diagnosticsQuery.error}
                 />
             ) : null}

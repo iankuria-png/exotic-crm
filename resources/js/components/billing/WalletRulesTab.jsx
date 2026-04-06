@@ -20,6 +20,9 @@ function makeDraft(walletRule, market) {
         show_refresh_button: Boolean(walletRule?.ui_json?.show_refresh_button),
         recent_transactions_limit: walletRule?.ui_json?.recent_transactions_limit || '',
         wallet_funding_label: walletRule?.ui_json?.wallet_funding_label || '',
+        fx_override_enabled: Boolean(walletRule?.fx_override_json?.enabled),
+        fx_override_currency: walletRule?.fx_override_json?.currency || '',
+        fx_override_rate: walletRule?.fx_override_json?.rate != null ? String(walletRule.fx_override_json.rate) : '',
     };
 }
 
@@ -39,6 +42,9 @@ function normalizeDraft(draft) {
         show_refresh_button: Boolean(draft.show_refresh_button),
         recent_transactions_limit: String(draft.recent_transactions_limit || '').trim(),
         wallet_funding_label: String(draft.wallet_funding_label || '').trim(),
+        fx_override_enabled: Boolean(draft.fx_override_enabled),
+        fx_override_currency: String(draft.fx_override_currency || '').trim().toUpperCase(),
+        fx_override_rate: String(draft.fx_override_rate || '').trim(),
     };
 }
 
@@ -124,6 +130,11 @@ export default function WalletRulesTab({ platforms = [] }) {
                     ? Number(draft.recent_transactions_limit)
                     : null,
                 wallet_funding_label: String(draft.wallet_funding_label || '').trim(),
+            },
+            fx_override_json: {
+                enabled: Boolean(draft.fx_override_enabled),
+                currency: String(draft.fx_override_currency || '').trim().toUpperCase() || null,
+                rate: draft.fx_override_rate !== '' ? Number(draft.fx_override_rate) : null,
             },
         });
     };
@@ -346,6 +357,53 @@ export default function WalletRulesTab({ platforms = [] }) {
                     </div>
                 </section>
             </div>
+
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.03]">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                    Self-Checkout FX Override
+                </p>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                    Manually override the FX rate used in self-checkout flows for this market. Leave disabled to use the
+                    platform default rate. A future FX API integration will eventually replace this manual rate field.
+                </p>
+                <div className="mt-4 space-y-4">
+                    <ToggleRow
+                        label="Enable FX override"
+                        description="Apply a manual exchange rate to self-checkout billing totals in this market."
+                        checked={draft.fx_override_enabled}
+                        disabled={!editable}
+                        onChange={(checked) =>
+                            setDraft((current) => ({ ...current, fx_override_enabled: checked }))
+                        }
+                    />
+                    {draft.fx_override_enabled && (
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field
+                                label="Override currency"
+                                value={draft.fx_override_currency}
+                                disabled={!editable}
+                                placeholder="USD"
+                                onChange={(value) =>
+                                    setDraft((current) => ({
+                                        ...current,
+                                        fx_override_currency: value.toUpperCase().slice(0, 8),
+                                    }))
+                                }
+                            />
+                            <Field
+                                label="Override rate"
+                                value={draft.fx_override_rate}
+                                disabled={!editable}
+                                placeholder="e.g. 130.00"
+                                hint="How many units of the market currency equal 1 unit of the override currency."
+                                onChange={(value) =>
+                                    setDraft((current) => ({ ...current, fx_override_rate: value }))
+                                }
+                            />
+                        </div>
+                    )}
+                </div>
+            </section>
 
             <section className="rounded-3xl border border-slate-200 bg-slate-50/80 p-5">
                 <div className="grid gap-4 xl:grid-cols-4">

@@ -3,6 +3,9 @@
 namespace App\Billing\Diagnostics;
 
 use App\Billing\Contracts\BillingDiagnosticsAssembler as BillingDiagnosticsAssemblerContract;
+use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryContract;
+use App\Billing\Support\BillingSurface;
+use App\Billing\Support\ProviderCapability;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingProviderTransaction;
 use App\Models\BillingRoutingDecision;
@@ -22,39 +25,46 @@ use Illuminate\Support\Str;
 class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
 {
     public function __construct(
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly BillingProviderRegistryContract $billingProviderRegistry
     ) {
     }
 
-    public function assembleBilling(?int $marketId = null, ?string $providerKey = null): BillingDiagnosticsView
+    public function assembleBilling(?int $marketId = null, ?string $providerKey = null, ?array $visibleMarketIds = null): BillingDiagnosticsView
     {
         $providerKey = $this->normalizeProviderKey($providerKey);
         $system = $this->walletSettingsService->currentSystemConfig(masked: true);
         $platforms = Platform::query()
+            ->when(is_array($visibleMarketIds), fn (Builder $builder) => $builder->whereIn('id', $visibleMarketIds))
             ->when($marketId, fn (Builder $builder) => $builder->whereKey($marketId))
             ->orderBy('id')
             ->get();
 
         $providerProfiles = BillingProviderProfile::query()
+            ->when(is_array($visibleMarketIds), fn (Builder $builder) => $builder->whereIn('market_id', $visibleMarketIds))
             ->when($marketId, fn (Builder $builder) => $builder->where('market_id', $marketId))
             ->when($providerKey, fn (Builder $builder) => $builder->whereRaw('LOWER(provider_type_key) = ?', [$providerKey]))
             ->get();
 
         $walletRules = BillingWalletRule::query()
+            ->when(is_array($visibleMarketIds), fn (Builder $builder) => $builder->whereIn('market_id', $visibleMarketIds))
             ->when($marketId, fn (Builder $builder) => $builder->where('market_id', $marketId))
             ->get();
 
         $subscriptionRules = BillingSubscriptionRule::query()
+            ->when(is_array($visibleMarketIds), fn (Builder $builder) => $builder->whereIn('market_id', $visibleMarketIds))
             ->when($marketId, fn (Builder $builder) => $builder->where('market_id', $marketId))
             ->get();
 
         $recentRoutingDecisions = BillingRoutingDecision::query()
+            ->when(is_array($visibleMarketIds), fn (Builder $builder) => $builder->whereIn('market_id', $visibleMarketIds))
             ->when($marketId, fn (Builder $builder) => $builder->where('market_id', $marketId))
             ->when($providerKey, fn (Builder $builder) => $builder->whereRaw('LOWER(provider_type_key) = ?', [$providerKey]))
             ->where('created_at', '>=', now()->subDays(14))
             ->get();
 
         $recentWebhookEvents = BillingWebhookEvent::query()
+            ->when(is_array($visibleMarketIds), fn (Builder $builder) => $builder->whereIn('market_id', $visibleMarketIds))
             ->when($marketId, fn (Builder $builder) => $builder->where('market_id', $marketId))
             ->when($providerKey, fn (Builder $builder) => $builder->whereRaw('LOWER(provider_type_key) = ?', [$providerKey]))
             ->where('received_at', '>=', now()->subDays(14))
@@ -62,6 +72,7 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
 
         $recentFailedPayments = Payment::query()
             ->with(['client:id,name', 'platform:id,name'])
+            ->when(is_array($visibleMarketIds), fn (Builder $builder) => $builder->whereIn('platform_id', $visibleMarketIds))
             ->when($marketId, fn (Builder $builder) => $builder->where('platform_id', $marketId))
             ->when($providerKey, fn (Builder $builder) => $this->applyPaymentProviderFilter($builder, $providerKey))
             ->where('created_at', '>=', now()->subDays(14))
@@ -79,6 +90,7 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
         $walletAutoRenewMarkets = $subscriptionRules
             ->filter(fn (BillingSubscriptionRule $rule) => (bool) data_get($rule->renewal_method_json, 'wallet_auto_renew', false))
             ->count();
+        $providerMatrix = $this->buildProviderMatrix($providerProfiles, $providerKey);
 
         return new BillingDiagnosticsView(
             marketId: $marketId,
@@ -170,6 +182,14 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
                     ],
                 ],
                 [
+                    'key' => 'provider_matrix',
+                    'title' => 'Provider Capability Matrix',
+                    'status' => $providerMatrix['status'],
+                    'summary' => $providerMatrix['summary'],
+                    'entries' => $providerMatrix['entries'],
+                    'items' => $providerMatrix['items'],
+                ],
+                [
                     'key' => 'wp_contract_health',
                     'title' => 'WP Contract Health',
                     'status' => $this->resolveWpContractStatus($platforms),
@@ -204,15 +224,18 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
                         ];
                     })->values()->all(),
                 ],
+                $this->assembleShadowReadPostureSection($recentRoutingDecisions),
             ],
             meta: [
                 'generated_at' => now()->toDateTimeString(),
                 'scope' => [
                     'market_id' => $marketId,
                     'provider_key' => $providerKey,
+                    'visible_market_ids' => $visibleMarketIds,
                 ],
                 'redacted' => true,
                 'legacy_composed' => false,
+                'provider_options' => $providerMatrix['provider_options'],
             ]
         );
     }
@@ -613,6 +636,179 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
         }
 
         return 'No structured provisioning state has been recorded yet.';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildProviderMatrix(Collection $providerProfiles, ?string $providerKey = null): array
+    {
+        $definitions = collect($this->billingProviderRegistry->definitions())
+            ->map(fn ($definition) => $definition)
+            ->filter(function ($definition) use ($providerKey) {
+                if ($providerKey === null) {
+                    return true;
+                }
+
+                return $definition->matches($providerKey);
+            })
+            ->sortBy(fn ($definition) => $definition->label)
+            ->values();
+
+        $items = $definitions->map(function ($definition) use ($providerProfiles) {
+            $profiles = $providerProfiles
+                ->filter(fn (BillingProviderProfile $profile) => $definition->matches((string) $profile->provider_type_key))
+                ->values();
+            $activeProfiles = $profiles->where('active', true)->values();
+            $environments = $activeProfiles
+                ->pluck('environment')
+                ->filter()
+                ->map(fn ($value) => strtoupper((string) $value))
+                ->unique()
+                ->values();
+            $supportsStatusQueries = $definition->capabilities->has(ProviderCapability::StatusQueries);
+            $supportsSandbox = $definition->capabilities->has(ProviderCapability::SandboxAvailable);
+            $supportsProxyHostedCheckout = $definition->supportsSurface(BillingSurface::ProxyHostedCheckout);
+            $status = $activeProfiles->isEmpty()
+                ? 'pending'
+                : ($supportsStatusQueries ? 'healthy' : 'attention');
+
+            $value = sprintf(
+                '%d active profile%s • %s • Status queries: %s • Sandbox: %s',
+                $activeProfiles->count(),
+                $activeProfiles->count() === 1 ? '' : 's',
+                $environments->isEmpty() ? 'No active environments' : $environments->join(', '),
+                $supportsStatusQueries ? 'supported' : 'not available',
+                $supportsSandbox ? 'available' : 'not available'
+            );
+
+            if ($supportsProxyHostedCheckout) {
+                $value .= ' • Proxy hosted checkout ready';
+            }
+
+            return [
+                'label' => $definition->label,
+                'value' => $value,
+                'meta' => [
+                    'provider_key' => $definition->key,
+                ],
+                'status' => $status,
+            ];
+        })->values();
+
+        $supportedStatusQueryProviders = $definitions
+            ->filter(fn ($definition) => $definition->capabilities->has(ProviderCapability::StatusQueries))
+            ->count();
+        $supportedSandboxProviders = $definitions
+            ->filter(fn ($definition) => $definition->capabilities->has(ProviderCapability::SandboxAvailable))
+            ->count();
+
+        return [
+            'status' => $items->isEmpty() ? 'unavailable' : 'healthy',
+            'summary' => $items->isEmpty()
+                ? 'No provider families are available in the current diagnostics scope.'
+                : sprintf(
+                    '%d provider famil%s in scope; %d advertise live status queries and %d expose sandbox tooling.',
+                    $items->count(),
+                    $items->count() === 1 ? 'y is' : 'ies are',
+                    $supportedStatusQueryProviders,
+                    $supportedSandboxProviders
+                ),
+            'entries' => [
+                ['label' => 'Provider families in scope', 'value' => (string) $items->count()],
+                ['label' => 'Status-query capable', 'value' => (string) $supportedStatusQueryProviders],
+                ['label' => 'Sandbox-capable', 'value' => (string) $supportedSandboxProviders],
+            ],
+            'items' => $items->all(),
+            'provider_options' => $definitions
+                ->map(fn ($definition) => [
+                    'key' => $definition->key,
+                    'label' => $definition->label,
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * Assemble the shadow-read posture section from recent routing decisions that
+     * carry a shadow_diff_json payload. When shadow-read is disabled or no routing
+     * decisions have been recorded with diff data, the section is reported as
+     * 'deferred' so it appears in the observed-but-not-active diagnostics bucket.
+     *
+     * @param  Collection<int, BillingRoutingDecision>  $recentRoutingDecisions
+     * @return array<string, mixed>
+     */
+    private function assembleShadowReadPostureSection(Collection $recentRoutingDecisions): array
+    {
+        $shadowEnabled = (bool) config('billing.shadow_read.enabled', false);
+        $decisionsWithDiff = $recentRoutingDecisions->filter(
+            fn (BillingRoutingDecision $d) => is_array($d->shadow_diff_json) && isset($d->shadow_diff_json['surface'])
+        );
+
+        if (!$shadowEnabled || $decisionsWithDiff->isEmpty()) {
+            return [
+                'key' => 'shadow_read_posture',
+                'title' => 'Shadow Read Posture',
+                'status' => 'deferred',
+                'summary' => $shadowEnabled
+                    ? 'Shadow-read is enabled but no routing decisions with diff payloads have been recorded yet. Diffs are computed on wallet-funding decisions.'
+                    : 'Shadow-read is not yet enabled. Enable the BILLING_FEATURE_SHADOW_READ flag to begin recording config diffs alongside routing decisions.',
+                'entries' => [
+                    ['label' => 'Shadow read', 'value' => $shadowEnabled ? 'Enabled' : 'Disabled'],
+                    ['label' => 'Decisions with diffs (14d)', 'value' => '0'],
+                ],
+            ];
+        }
+
+        $totalWithDiff = $decisionsWithDiff->count();
+        $cleanDecisions = $decisionsWithDiff->filter(
+            fn (BillingRoutingDecision $d) => (bool) data_get($d->shadow_diff_json, 'clean', false)
+        );
+        $divergentDecisions = $decisionsWithDiff->filter(
+            fn (BillingRoutingDecision $d) => !(bool) data_get($d->shadow_diff_json, 'clean', false)
+        );
+        $divergentMarkets = $divergentDecisions->pluck('market_id')->filter()->unique()->values();
+        $allDivergentFields = $divergentDecisions
+            ->flatMap(fn (BillingRoutingDecision $d) => (array) data_get($d->shadow_diff_json, 'divergent_fields', []))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $isClean = $divergentDecisions->isEmpty();
+        $status = $isClean ? 'healthy' : 'attention';
+
+        $summary = $isClean
+            ? sprintf(
+                'All %d shadow-read diff%s recorded in the last 14 days are clean — legacy and new-model configs agree. Safe to proceed toward BILL-805.',
+                $totalWithDiff,
+                $totalWithDiff === 1 ? '' : 's'
+            )
+            : sprintf(
+                '%d of %d diff%s show divergence across %d market%s. Resolve these before flipping the live-read flag (BILL-805).',
+                $divergentDecisions->count(),
+                $totalWithDiff,
+                $totalWithDiff === 1 ? '' : 's',
+                $divergentMarkets->count(),
+                $divergentMarkets->count() === 1 ? '' : 's'
+            );
+
+        $entries = [
+            ['label' => 'Shadow read', 'value' => 'Enabled'],
+            ['label' => 'Decisions with diffs (14d)', 'value' => (string) $totalWithDiff],
+            ['label' => 'Clean diffs', 'value' => (string) $cleanDecisions->count()],
+            ['label' => 'Divergent diffs', 'value' => (string) $divergentDecisions->count()],
+            ['label' => 'Markets with divergence', 'value' => $divergentMarkets->isEmpty() ? 'None' : $divergentMarkets->join(', ')],
+            ['label' => 'Divergent field paths', 'value' => $allDivergentFields->isEmpty() ? 'None' : $allDivergentFields->join(', ')],
+        ];
+
+        return [
+            'key' => 'shadow_read_posture',
+            'title' => 'Shadow Read Posture',
+            'status' => $status,
+            'summary' => $summary,
+            'entries' => $entries,
+        ];
     }
 
     private function formatDateTime(mixed $value): string

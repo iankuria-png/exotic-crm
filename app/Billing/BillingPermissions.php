@@ -146,6 +146,42 @@ class BillingPermissions
     }
 
     /**
+     * Payment-level diagnostics are available to operators, but raw provider payloads
+     * stay restricted to billing managers.
+     *
+     * @param User|null $user
+     * @return bool
+     */
+    public static function canViewRawPaymentDiagnostics(?User $user): bool
+    {
+        return self::canAccessBillingWorkspace($user);
+    }
+
+    /**
+     * Route simulation can alter operator decision-making across markets, so keep it
+     * on the narrowest admin surface for now.
+     *
+     * @param User|null $user
+     * @return bool
+     */
+    public static function canUseBillingRouteSimulator(?User $user): bool
+    {
+        return $user?->role === 'admin';
+    }
+
+    /**
+     * Cross-market drill-through is broader than normal scoped diagnostics and should
+     * remain reserved for admins.
+     *
+     * @param User|null $user
+     * @return bool
+     */
+    public static function canDrillAcrossBillingMarkets(?User $user): bool
+    {
+        return $user?->role === 'admin';
+    }
+
+    /**
      * Get the list of allowed roles for billing access
      *
      * @return array

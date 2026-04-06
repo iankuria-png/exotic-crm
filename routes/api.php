@@ -247,7 +247,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
     Route::get('/settings/billing/overview', [SettingsController::class, 'billingOverview']);
     Route::get('/settings/billing/system', [SettingsController::class, 'billingSystem']);
+    Route::patch('/settings/billing/system/kill-switches', [SettingsController::class, 'updateBillingKillSwitches'])->middleware('role:admin');
     Route::get('/settings/billing/diagnostics-summary', [SettingsController::class, 'billingDiagnosticsSummary']);
+    Route::get('/settings/billing/diagnostics-route-simulator', [SettingsController::class, 'billingDiagnosticsRouteSimulator']);
     Route::get('/settings/billing/providers-catalog', [SettingsController::class, 'providersCatalog']);
     Route::get('/settings/billing/provider-profiles', [SettingsController::class, 'providerProfiles']);
     Route::post('/settings/billing/provider-profiles', [SettingsController::class, 'storeProviderProfile']);

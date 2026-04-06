@@ -20,6 +20,7 @@ class WalletSettingsService
 {
     public const SYSTEM_SETTINGS_KEY = 'wallet_system_config';
     public const PLATFORM_CREDENTIALS_KEY_PREFIX = 'wallet_platform_credentials_';
+    public const KILL_SWITCHES_KEY = 'billing_kill_switches';
     public const MODES = ['disabled', 'sandbox', 'production'];
     public const ENVIRONMENTS = ['sandbox', 'production'];
 
@@ -658,7 +659,9 @@ class WalletSettingsService
         $current = is_array($platform->wallet_settings) ? $platform->wallet_settings : [];
         $legacy = $this->mergePlatformSettings($platform, $this->defaultPlatformSettings($platform), $current);
 
-        if (!$this->shadowReadEnabled()) {
+        if (!$this->shadowReadEnabled()
+            || $this->isMarketKilled((int) $platform->id)
+            || $this->isSurfaceKilled('wallet_funding')) {
             return $legacy;
         }
 
@@ -1226,9 +1229,122 @@ class WalletSettingsService
         return $platformConfig['mode_override'] ?: $systemMode;
     }
 
+    /**
+     * Compute a shadow-read diff for a market's wallet settings.
+     * Compares what the legacy KV store would serve against what the new billing
+     * tables project. Returns null when shadow-read is disabled or no projection
+     * data exists for the market.
+     *
+     * @return array{surface: string, clean: bool, divergent_field_count: int, divergent_fields: list<string>, diff: array<string, array{legacy: mixed, projected: mixed}>, computed_at: string}|null
+     */
+    public function computeWalletSettingsDiff(Platform $platform): ?array
+    {
+        if (!$this->shadowReadEnabled()) {
+            return null;
+        }
+
+        $current = is_array($platform->wallet_settings) ? $platform->wallet_settings : [];
+        $legacy = $this->mergePlatformSettings($platform, $this->defaultPlatformSettings($platform), $current);
+        $projected = $this->legacyBillingConfigProjector->projectWalletSettings($platform, $legacy);
+
+        $divergent = $this->flatConfigDiff($legacy, $projected);
+
+        return [
+            'surface' => 'wallet_settings',
+            'clean' => count($divergent) === 0,
+            'divergent_field_count' => count($divergent),
+            'divergent_fields' => array_keys($divergent),
+            'diff' => $divergent,
+            'computed_at' => now()->toIso8601String(),
+        ];
+    }
+
+    /**
+     * Recursively diff two config arrays, returning only the divergent leaf paths.
+     * Skips arrays deeper than 2 levels and any path matching a sensitive key segment.
+     *
+     * @param  array<string, mixed>  $a  Legacy config
+     * @param  array<string, mixed>  $b  Projected config
+     * @return array<string, array{legacy: mixed, projected: mixed}>
+     */
+    private function flatConfigDiff(array $a, array $b, string $prefix = '', int $depth = 0): array
+    {
+        static $sensitiveSegments = ['pin_hash', 'free_trial_pin_hash', 'discount_pin_hash',
+            'consumer_key', 'consumer_secret', 'secret_key', 'public_key', 'bearer', 'hmac'];
+
+        if ($depth > 2) {
+            return [];
+        }
+
+        $result = [];
+        $allKeys = array_unique(array_merge(array_keys($a), array_keys($b)));
+
+        foreach ($allKeys as $key) {
+            // Skip any path segment that looks like a credential
+            foreach ($sensitiveSegments as $seg) {
+                if (str_contains((string) $key, $seg)) {
+                    continue 2;
+                }
+            }
+
+            $path = $prefix !== '' ? "{$prefix}.{$key}" : (string) $key;
+            $aVal = $a[$key] ?? null;
+            $bVal = $b[$key] ?? null;
+
+            if (is_array($aVal) && is_array($bVal)) {
+                $result = array_merge($result, $this->flatConfigDiff($aVal, $bVal, $path, $depth + 1));
+                continue;
+            }
+
+            $aNorm = is_scalar($aVal) ? (string) $aVal : null;
+            $bNorm = is_scalar($bVal) ? (string) $bVal : null;
+
+            if ($aNorm !== $bNorm) {
+                $result[$path] = ['legacy' => $aVal, 'projected' => $bVal];
+            }
+        }
+
+        return $result;
+    }
+
     private function shadowReadEnabled(): bool
     {
         return (bool) config('billing.shadow_read.enabled', false);
+    }
+
+    public function currentKillSwitches(): array
+    {
+        return $this->getKillSwitches();
+    }
+
+    public function saveKillSwitches(array $marketIds, array $surfaces): void
+    {
+        IntegrationSetting::updateOrCreate(
+            ['key' => self::KILL_SWITCHES_KEY],
+            ['value' => [
+                'market_ids' => array_values(array_unique($marketIds)),
+                'surfaces'   => array_values(array_unique($surfaces)),
+            ]]
+        );
+    }
+
+    private function getKillSwitches(): array
+    {
+        $stored = IntegrationSetting::query()
+            ->where('key', self::KILL_SWITCHES_KEY)
+            ->value('value');
+
+        return is_array($stored) ? $stored : ['market_ids' => [], 'surfaces' => []];
+    }
+
+    private function isMarketKilled(int $marketId): bool
+    {
+        return in_array($marketId, $this->getKillSwitches()['market_ids'] ?? [], strict: true);
+    }
+
+    private function isSurfaceKilled(string $surface): bool
+    {
+        return in_array($surface, $this->getKillSwitches()['surfaces'] ?? [], strict: true);
     }
 
     private function defaultWpCredentialSyncState(): array
