@@ -312,6 +312,7 @@ function walletProviderLabel(providerId) {
     if (providerId === 'pesapal') return 'Pesapal';
     if (providerId === 'paystack') return 'Paystack';
     if (providerId === 'mpesa_stk') return 'M-Pesa STK';
+    if (providerId === 'pawapay') return 'PawaPay';
     return providerId?.replaceAll('_', ' ') || 'Unknown';
 }
 

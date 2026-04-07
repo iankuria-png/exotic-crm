@@ -59,9 +59,7 @@ export default function PaymentLinkProviderCard({
                             onChange={(event) => updatePaymentLinkProvider(index, 'wallet_provider_key', event.target.value)}
                             className="crm-select"
                         >
-                            {walletProviderKeys
-                                .filter((providerKey) => paymentLinkProxyWalletProviders.includes(providerKey))
-                                .map((providerKey) => (
+                            {paymentLinkProxyWalletProviders.map((providerKey) => (
                                     <option key={providerKey} value={providerKey}>
                                         {walletProviderLabel(providerKey)}
                                     </option>
