@@ -62,6 +62,7 @@ class ClientController extends Controller
             'platform',
             'assignedAgent',
             'retentionInsight:client_id,score,band,primary_tag,computed_at',
+            'activeDeal.product:id,name,display_name,slug,tier',
         ]);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
@@ -90,13 +91,10 @@ class ClientController extends Controller
         }
 
         if ($request->filled('plan')) {
-            if ($request->plan === 'premium') {
-                $query->where('premium', true);
-            } elseif ($request->plan === 'featured') {
-                $query->where('featured', true);
-            } elseif ($request->plan === 'basic') {
-                $query->where('premium', false)->where('featured', false);
-            }
+            $this->applyCanonicalPlanFilter(
+                $query,
+                Client::normalizePlanFilterKey((string) $request->input('plan'))
+            );
         }
 
         if ($request->filled('signup_source')) {
@@ -147,27 +145,128 @@ class ClientController extends Controller
             });
         }
 
+        if ($request->filled('created_from')) {
+            $query->where('created_at', '>=', $this->parseClientDateBoundary((string) $request->input('created_from')));
+        }
+
+        if ($request->filled('created_to')) {
+            $query->where('created_at', '<=', $this->parseClientDateBoundary((string) $request->input('created_to'), endOfDay: true));
+        }
+
         $statsQuery = clone $query;
+        $premiumStatsQuery = clone $statsQuery;
+        $newUsersStatsQuery = clone $statsQuery;
+        $this->applyCanonicalPlanFilter($premiumStatsQuery, 'premium');
+
+        if (!$request->filled('created_from') && !$request->filled('created_to')) {
+            $newUsersStatsQuery->where('created_at', '>=', now()->subDays(6)->startOfDay());
+        }
+
         $stats = [
             'total' => (clone $statsQuery)->count(),
             'active' => (clone $statsQuery)->where('profile_status', 'publish')->count(),
-            'premium' => (clone $statsQuery)->where('premium', true)->count(),
+            'premium' => $premiumStatsQuery->count(),
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
             'inactive' => (clone $statsQuery)->where('profile_status', 'private')->count(),
             'with_chat' => (clone $statsQuery)->whereNotNull('sb_user_id')->count(),
             'online_now' => (clone $statsQuery)->where('last_online_at', '>=', now()->subMinutes(15)->timestamp)->count(),
+            'new_users' => $newUsersStatsQuery->count(),
             'retention_watch' => (clone $statsQuery)->whereHas('retentionInsight', function ($builder) {
                 $builder->whereIn('band', ClientRetentionInsightService::WATCH_BANDS);
             })->count(),
         ];
 
-        $clients = $query->orderBy('updated_at', 'desc')
-            ->paginate($request->get('per_page', 25));
+        $this->applyClientSort(
+            $query,
+            (string) $request->input('sort_by', 'updated_at'),
+            (string) $request->input('sort_direction', 'desc')
+        );
+
+        $clients = $query->paginate($request->get('per_page', 25));
 
         $payload = $clients->toArray();
         $payload['stats'] = $stats;
 
         return response()->json($payload);
+    }
+
+    private function applyCanonicalPlanFilter($query, string $planKey): void
+    {
+        if ($planKey === '') {
+            return;
+        }
+
+        $query->where(function ($builder) use ($planKey) {
+            $builder->whereHas('deals', function ($dealQuery) use ($planKey) {
+                $dealQuery->where('status', 'active')
+                    ->where(function ($matchQuery) use ($planKey) {
+                        $matchQuery->whereHas('product', function ($productQuery) use ($planKey) {
+                            $productQuery->where('tier', $planKey)
+                                ->orWhere('slug', $planKey);
+                        })
+                            ->orWhere(function ($fallbackDealQuery) use ($planKey) {
+                                $fallbackDealQuery->where('plan_type', $planKey)
+                                    ->where(function ($productFallbackQuery) {
+                                        $productFallbackQuery->whereNull('product_id')
+                                            ->orWhereDoesntHave('product');
+                                    });
+                            });
+                    });
+            });
+
+            if (!in_array($planKey, ['premium', 'featured', 'basic'], true)) {
+                return;
+            }
+
+            $builder->orWhere(function ($legacyQuery) use ($planKey) {
+                $legacyQuery->whereDoesntHave('deals', function ($dealQuery) {
+                    $dealQuery->where('status', 'active');
+                });
+
+                if ($planKey === 'premium') {
+                    $legacyQuery->where('premium', true);
+                    return;
+                }
+
+                if ($planKey === 'featured') {
+                    $legacyQuery->where('featured', true);
+                    return;
+                }
+
+                $legacyQuery->where('premium', false)->where('featured', false);
+            });
+        });
+    }
+
+    private function parseClientDateBoundary(string $date, bool $endOfDay = false): Carbon
+    {
+        $boundary = Carbon::createFromFormat('Y-m-d', trim($date), config('app.timezone'));
+
+        return $endOfDay ? $boundary->endOfDay() : $boundary->startOfDay();
+    }
+
+    private function applyClientSort($query, string $sortBy, string $sortDirection): void
+    {
+        $direction = strtolower($sortDirection) === 'asc' ? 'asc' : 'desc';
+
+        switch ($sortBy) {
+            case 'name':
+                $query->orderBy('name', $direction)
+                    ->orderBy('updated_at', 'desc')
+                    ->orderBy('id', 'desc');
+                break;
+
+            case 'created_at':
+                $query->orderBy('created_at', $direction)
+                    ->orderBy('id', $direction);
+                break;
+
+            case 'updated_at':
+            default:
+                $query->orderBy('updated_at', $direction)
+                    ->orderBy('id', $direction);
+                break;
+        }
     }
 
     public function store(Request $request)

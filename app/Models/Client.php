@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Services\ClientRetentionInsightService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class Client extends Model
 {
@@ -68,6 +69,7 @@ class Client extends Model
 
     protected $appends = [
         'wp_profile_url',
+        'plan_key',
         'plan_label',
     ];
 
@@ -194,16 +196,159 @@ class Client extends Model
         return "{$baseUrl}/?p={$wpPostId}";
     }
 
+    public function getPlanKeyAttribute(): string
+    {
+        return $this->resolvePlanPresentation()['key'];
+    }
+
     public function getPlanLabelAttribute(): string
     {
+        return $this->resolvePlanPresentation()['label'];
+    }
+
+    public static function normalizePlanFilterKey(?string $value): string
+    {
+        $trimmed = trim((string) ($value ?? ''));
+        if ($trimmed === '') {
+            return '';
+        }
+
+        return static::normalizeKnownPlanKey($trimmed) ?? Str::slug($trimmed);
+    }
+
+    public static function planPresentationFromPackageValues(?string $tier, ?string $label, ?string $slug = null): ?array
+    {
+        $normalizedTier = trim((string) ($tier ?? ''));
+        $normalizedLabel = trim((string) ($label ?? ''));
+        $normalizedSlug = trim((string) ($slug ?? ''));
+
+        $knownKey = static::normalizeKnownPlanKey($normalizedTier)
+            ?? static::normalizeKnownPlanKey($normalizedLabel)
+            ?? static::normalizeKnownPlanKey($normalizedSlug);
+
+        if ($knownKey !== null) {
+            return [
+                'key' => $knownKey,
+                'label' => static::labelForPlanKey($knownKey),
+            ];
+        }
+
+        if ($normalizedSlug !== '') {
+            return [
+                'key' => Str::slug($normalizedSlug),
+                'label' => static::humanizePlanLabel($normalizedLabel !== '' ? $normalizedLabel : $normalizedSlug),
+            ];
+        }
+
+        if ($normalizedLabel !== '') {
+            return [
+                'key' => Str::slug($normalizedLabel),
+                'label' => static::humanizePlanLabel($normalizedLabel),
+            ];
+        }
+
+        if ($normalizedTier !== '' && strtolower($normalizedTier) !== 'custom') {
+            return [
+                'key' => Str::slug($normalizedTier),
+                'label' => static::humanizePlanLabel($normalizedTier),
+            ];
+        }
+
+        return null;
+    }
+
+    protected function resolvePlanPresentation(): array
+    {
+        $activeDealPresentation = $this->resolveActiveDealPlanPresentation();
+        if ($activeDealPresentation !== null) {
+            return $activeDealPresentation;
+        }
+
         if ($this->premium) {
-            return 'Premium';
+            return ['key' => 'premium', 'label' => 'Premium'];
         }
 
         if ($this->featured) {
-            return 'Featured';
+            return ['key' => 'featured', 'label' => 'Featured'];
         }
 
-        return 'Basic';
+        return ['key' => 'basic', 'label' => 'Basic'];
+    }
+
+    protected function resolveActiveDealPlanPresentation(): ?array
+    {
+        $activeDeal = $this->relationLoaded('activeDeal')
+            ? $this->getRelation('activeDeal')
+            : $this->activeDeal()->with('product')->first();
+
+        if (!$activeDeal) {
+            return null;
+        }
+
+        $product = $activeDeal->relationLoaded('product')
+            ? $activeDeal->getRelation('product')
+            : $activeDeal->product;
+
+        if ($product) {
+            $presentation = static::planPresentationFromPackageValues(
+                $product->tier,
+                $product->display_name ?: $product->name,
+                $product->slug
+            );
+
+            if ($presentation !== null) {
+                return $presentation;
+            }
+        }
+
+        return static::planPresentationFromPackageValues($activeDeal->plan_type, $activeDeal->plan_type);
+    }
+
+    protected static function normalizeKnownPlanKey(?string $value): ?string
+    {
+        $normalized = Str::of((string) ($value ?? ''))
+            ->lower()
+            ->replace(['_', '-'], ' ')
+            ->squish()
+            ->value();
+
+        if ($normalized === '' || $normalized === 'custom') {
+            return null;
+        }
+
+        return match (true) {
+            str_contains($normalized, 'vvip') => 'vvip',
+            $normalized === 'vip' => 'vip',
+            str_contains($normalized, 'premium') => 'premium',
+            str_contains($normalized, 'featured') => 'featured',
+            str_contains($normalized, 'basic') => 'basic',
+            default => null,
+        };
+    }
+
+    protected static function labelForPlanKey(string $key): string
+    {
+        return match ($key) {
+            'vvip' => 'VVIP',
+            'vip' => 'VIP',
+            'premium' => 'Premium',
+            'featured' => 'Featured',
+            'basic' => 'Basic',
+            default => static::humanizePlanLabel($key),
+        };
+    }
+
+    protected static function humanizePlanLabel(string $value): string
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return 'Basic';
+        }
+
+        if (in_array(strtolower($trimmed), ['vip', 'vvip'], true)) {
+            return strtoupper($trimmed);
+        }
+
+        return Str::headline(str_replace(['_', '-'], ' ', $trimmed));
     }
 }

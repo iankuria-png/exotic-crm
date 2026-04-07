@@ -18,6 +18,15 @@ import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retenti
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 const SMART_DELETE_DAY_OPTIONS = [30, 60, 90, 180, 365];
+const DEFAULT_SORT_OPTION = 'updated_desc';
+const ONLINE_STATUS_WINDOW_MINUTES = 30;
+const PLAN_SORT_ORDER = {
+    vvip: 0,
+    vip: 1,
+    premium: 2,
+    basic: 3,
+    featured: 4,
+};
 
 function createBulkDeleteDialogState(platformId = '') {
     return {
@@ -50,15 +59,249 @@ function normalizePlatformFilter(value) {
     return /^\d+$/.test(raw) ? raw : '';
 }
 
+function normalizeDateInputValue(value) {
+    const raw = String(value ?? '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+}
+
+function formatDateInputValue(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
+
+function slugifyPlanKey(value) {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+function normalizeKnownPlanKey(value) {
+    const normalized = String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ');
+
+    if (!normalized || normalized === 'custom') {
+        return '';
+    }
+
+    if (normalized.includes('vvip')) return 'vvip';
+    if (normalized === 'vip') return 'vip';
+    if (normalized.includes('premium')) return 'premium';
+    if (normalized.includes('featured')) return 'featured';
+    if (normalized.includes('basic')) return 'basic';
+
+    return '';
+}
+
+function formatPlanLabel(value) {
+    const knownKey = normalizeKnownPlanKey(value);
+    if (knownKey === 'vvip') return 'VVIP';
+    if (knownKey === 'vip') return 'VIP';
+    if (knownKey === 'premium') return 'Premium';
+    if (knownKey === 'featured') return 'Featured';
+    if (knownKey === 'basic') return 'Basic';
+
+    return String(value ?? '')
+        .trim()
+        .replace(/[_-]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((word) => {
+            const lower = word.toLowerCase();
+            if (lower === 'vip' || lower === 'vvip') {
+                return lower.toUpperCase();
+            }
+
+            return lower.charAt(0).toUpperCase() + lower.slice(1);
+        })
+        .join(' ');
+}
+
+function planBadgeClasses(planKey) {
+    switch (planKey) {
+        case 'vvip':
+            return 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200';
+        case 'vip':
+            return 'bg-indigo-50 text-indigo-700 ring-indigo-200';
+        case 'premium':
+            return 'bg-teal-50 text-teal-700 ring-teal-200';
+        case 'featured':
+            return 'bg-amber-50 text-amber-700 ring-amber-200';
+        case 'basic':
+            return 'bg-slate-100 text-slate-600 ring-slate-200';
+        default:
+            return 'bg-sky-50 text-sky-700 ring-sky-200';
+    }
+}
+
+function getPackagePlanOption(pkg) {
+    if (!pkg || pkg.is_archived || !pkg.is_active) {
+        return null;
+    }
+
+    const labelSource = String(pkg.display_name || pkg.name || pkg.tier || pkg.slug || '').trim();
+    if (!labelSource) {
+        return null;
+    }
+
+    const knownKey = normalizeKnownPlanKey(pkg.tier) || normalizeKnownPlanKey(labelSource) || normalizeKnownPlanKey(pkg.slug);
+    const value = knownKey || slugifyPlanKey(pkg.slug || labelSource);
+    if (!value) {
+        return null;
+    }
+
+    return {
+        value,
+        label: knownKey ? formatPlanLabel(knownKey) : formatPlanLabel(labelSource),
+        sortOrder: Number(pkg.sort_order || 0),
+    };
+}
+
+function resolveInitialSortOption(searchParams) {
+    const sortBy = String(searchParams.get('sort_by') || '').trim();
+    const sortDirection = String(searchParams.get('sort_direction') || '').trim().toLowerCase();
+
+    if (sortBy === 'name' && sortDirection === 'asc') return 'name_asc';
+    if (sortBy === 'name' && sortDirection === 'desc') return 'name_desc';
+    if (sortBy === 'created_at' && sortDirection === 'asc') return 'created_asc';
+    if (sortBy === 'created_at' && sortDirection === 'desc') return 'created_desc';
+
+    return DEFAULT_SORT_OPTION;
+}
+
+function getSortParams(sortOption) {
+    switch (sortOption) {
+        case 'name_asc':
+            return { sort_by: 'name', sort_direction: 'asc' };
+        case 'name_desc':
+            return { sort_by: 'name', sort_direction: 'desc' };
+        case 'created_asc':
+            return { sort_by: 'created_at', sort_direction: 'asc' };
+        case 'created_desc':
+            return { sort_by: 'created_at', sort_direction: 'desc' };
+        case DEFAULT_SORT_OPTION:
+        default:
+            return { sort_by: 'updated_at', sort_direction: 'desc' };
+    }
+}
+
+function resolveCreatedRange(newUsersFilter, createdFrom, createdTo) {
+    if (newUsersFilter === 'custom') {
+        if (createdFrom && createdTo && createdFrom > createdTo) {
+            return { createdFrom: createdTo, createdTo: createdFrom };
+        }
+
+        return { createdFrom, createdTo };
+    }
+
+    if (!newUsersFilter) {
+        return { createdFrom: '', createdTo: '' };
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const endDate = formatDateInputValue(today);
+    const startDate = new Date(today);
+
+    if (newUsersFilter === 'today') {
+        return { createdFrom: endDate, createdTo: endDate };
+    }
+
+    if (newUsersFilter === '7d') {
+        startDate.setDate(startDate.getDate() - 6);
+        return { createdFrom: formatDateInputValue(startDate), createdTo: endDate };
+    }
+
+    if (newUsersFilter === '30d') {
+        startDate.setDate(startDate.getDate() - 29);
+        return { createdFrom: formatDateInputValue(startDate), createdTo: endDate };
+    }
+
+    return { createdFrom: '', createdTo: '' };
+}
+
+function formatRelativeFromUnix(unixTs) {
+    const ts = Number(unixTs || 0);
+    if (!ts) return '—';
+
+    const diffSeconds = Math.floor(Date.now() / 1000) - ts;
+    if (diffSeconds < 60) return 'just now';
+
+    const minutes = Math.floor(diffSeconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days}d ago`;
+
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months}mo ago`;
+
+    const years = Math.floor(months / 12);
+    return `${years}y ago`;
+}
+
+function isClientOnline(lastOnlineAt) {
+    const ts = Number(lastOnlineAt || 0);
+    if (!ts) {
+        return false;
+    }
+
+    return ts >= Math.floor(Date.now() / 1000) - (ONLINE_STATUS_WINDOW_MINUTES * 60);
+}
+
+function formatSeenTimestamp(unixTs) {
+    const ts = Number(unixTs || 0);
+    if (!ts) return '';
+
+    const parsed = new Date(ts * 1000);
+    if (Number.isNaN(parsed.getTime())) return '';
+
+    return parsed.toLocaleString(undefined, {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+}
+
+function formatLastSeenMeta(unixTs) {
+    const ts = Number(unixTs || 0);
+    if (!ts) {
+        return 'Never seen';
+    }
+
+    const relative = formatRelativeFromUnix(ts);
+    if (isClientOnline(ts)) {
+        return `Seen ${relative}`;
+    }
+
+    const exact = formatSeenTimestamp(ts);
+    return exact ? `Seen ${relative} • ${exact}` : `Seen ${relative}`;
+}
+
 export default function Clients() {
     const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending']);
-    const allowedPlans = new Set(['premium', 'featured', 'basic']);
     const allowedVerifiedFilters = new Set(['1', '0']);
     const allowedHasChatFilters = new Set(['1', '0']);
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
     const allowedSignupSources = new Set(['fast_signup', 'full_registration', 'crm_manual', 'crm_provisioned']);
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
     const allowedBehaviorTags = new Set(RETENTION_BEHAVIOR_TAGS);
+    const allowedNewUsersFilters = new Set(['today', '7d', '30d', 'custom']);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -75,10 +318,7 @@ export default function Clients() {
         const requested = (searchParams.get('status') || '').trim();
         return allowedStatuses.has(requested) ? requested : '';
     });
-    const [planFilter, setPlanFilter] = useState(() => {
-        const requested = (searchParams.get('plan') || '').trim();
-        return allowedPlans.has(requested) ? requested : '';
-    });
+    const [planFilter, setPlanFilter] = useState(() => (searchParams.get('plan') || '').trim());
     const [verifiedFilter, setVerifiedFilter] = useState(() => {
         const requested = (searchParams.get('verified') || '').trim();
         return allowedVerifiedFilters.has(requested) ? requested : '';
@@ -115,6 +355,17 @@ export default function Clients() {
         const requested = (searchParams.get('behavior_tag') || '').trim();
         return allowedBehaviorTags.has(requested) ? requested : '';
     });
+    const [newUsersFilter, setNewUsersFilter] = useState(() => {
+        const requested = (searchParams.get('new_users') || '').trim();
+        if (allowedNewUsersFilters.has(requested)) {
+            return requested;
+        }
+
+        return searchParams.get('created_from') || searchParams.get('created_to') ? 'custom' : '';
+    });
+    const [createdFrom, setCreatedFrom] = useState(() => normalizeDateInputValue(searchParams.get('created_from')));
+    const [createdTo, setCreatedTo] = useState(() => normalizeDateInputValue(searchParams.get('created_to')));
+    const [sortOption, setSortOption] = useState(() => resolveInitialSortOption(searchParams));
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
@@ -145,9 +396,32 @@ export default function Clients() {
         file: null,
         reason: 'CSV client upload from clients page',
     });
+    const resolvedCreatedRange = useMemo(
+        () => resolveCreatedRange(newUsersFilter, createdFrom, createdTo),
+        [newUsersFilter, createdFrom, createdTo],
+    );
+    const sortParams = useMemo(() => getSortParams(sortOption), [sortOption]);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['clients', page, perPage, search, statusFilter, planFilter, verifiedFilter, hasChatFilter, onlineFilter, platformFilter, signupSourceFilter, retentionBandFilter, behaviorTagFilter],
+        queryKey: [
+            'clients',
+            page,
+            perPage,
+            search,
+            statusFilter,
+            planFilter,
+            verifiedFilter,
+            hasChatFilter,
+            onlineFilter,
+            platformFilter,
+            signupSourceFilter,
+            retentionBandFilter,
+            behaviorTagFilter,
+            resolvedCreatedRange.createdFrom,
+            resolvedCreatedRange.createdTo,
+            sortParams.sort_by,
+            sortParams.sort_direction,
+        ],
         queryFn: () =>
             api.get('/crm/clients', {
                 params: {
@@ -163,6 +437,9 @@ export default function Clients() {
                     ...(signupSourceFilter && { signup_source: signupSourceFilter }),
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
+                    ...(resolvedCreatedRange.createdFrom && { created_from: resolvedCreatedRange.createdFrom }),
+                    ...(resolvedCreatedRange.createdTo && { created_to: resolvedCreatedRange.createdTo }),
+                    ...sortParams,
                 },
             }).then((response) => response.data),
     });
@@ -456,12 +733,66 @@ export default function Clients() {
         && createForm.name.trim().length > 0
         && !createMutation.isPending
         && !requiresProvisionContact;
+    const scopedPlanOptions = useMemo(() => {
+        const scopedPlatforms = platformFilter
+            ? platformOptions.filter((platform) => String(platform.platform_id) === String(platformFilter))
+            : platformOptions;
+
+        const collectedOptions = scopedPlatforms.flatMap((platform) => (
+            Array.isArray(platform.packages) ? platform.packages.map(getPackagePlanOption).filter(Boolean) : []
+        ));
+        const optionMap = new Map();
+
+        const orderedOptions = [...collectedOptions].sort((left, right) => {
+            if (platformFilter) {
+                return left.sortOrder - right.sortOrder
+                    || (PLAN_SORT_ORDER[left.value] ?? 99) - (PLAN_SORT_ORDER[right.value] ?? 99)
+                    || left.label.localeCompare(right.label);
+            }
+
+            return (PLAN_SORT_ORDER[left.value] ?? 99) - (PLAN_SORT_ORDER[right.value] ?? 99)
+                || left.label.localeCompare(right.label);
+        });
+
+        orderedOptions.forEach((option) => {
+            if (!optionMap.has(option.value)) {
+                optionMap.set(option.value, {
+                    value: option.value,
+                    label: option.label,
+                });
+            }
+        });
+
+        const featuredExistsInScope = planFilter === 'featured'
+            || rows.some((row) => slugifyPlanKey(row.plan_key || row.plan_label) === 'featured');
+
+        if (featuredExistsInScope && !optionMap.has('featured')) {
+            optionMap.set('featured', { value: 'featured', label: 'Featured' });
+        }
+
+        return [
+            { value: '', label: 'All plans' },
+            ...Array.from(optionMap.values()),
+        ];
+    }, [planFilter, platformFilter, platformOptions, rows]);
+
+    useEffect(() => {
+        if (!planFilter) {
+            return;
+        }
+
+        const hasSelectedPlanOption = scopedPlanOptions.some((option) => option.value === planFilter);
+        if (!hasSelectedPlanOption) {
+            setPlanFilter('');
+            setPage(1);
+        }
+    }, [planFilter, scopedPlanOptions]);
 
     const stats = useMemo(() => {
         if (data?.stats) {
             return {
                 active: Number(data.stats.active || 0),
-                premium: Number(data.stats.premium || 0),
+                new_users: Number(data.stats.new_users || 0),
                 verified: Number(data.stats.verified || 0),
                 with_chat: Number(data.stats.with_chat || 0),
                 retention_watch: Number(data.stats.retention_watch || 0),
@@ -469,9 +800,14 @@ export default function Clients() {
             };
         }
 
+        const sevenDayThreshold = Date.now() - (7 * 24 * 60 * 60 * 1000);
+
         return {
             active: rows.filter((row) => row.profile_status === 'publish').length,
-            premium: rows.filter((row) => row.premium).length,
+            new_users: rows.filter((row) => {
+                const createdAt = row.created_at ? new Date(row.created_at) : null;
+                return createdAt && !Number.isNaN(createdAt.getTime()) && createdAt.getTime() >= sevenDayThreshold;
+            }).length,
             verified: rows.filter((row) => row.verified).length,
             with_chat: rows.filter((row) => Number(row.sb_user_id || 0) > 0).length,
             retention_watch: rows.filter((row) => ['Watchlist', 'Needs Attention', 'Critical'].includes(String(row.retention_insight?.band || row.retentionInsight?.band || ''))).length,
@@ -481,18 +817,62 @@ export default function Clients() {
 
     const metricShare = useMemo(() => ({
         active: percentage(stats.active, stats.total),
-        premium: percentage(stats.premium, stats.total),
+        new_users: percentage(stats.new_users, stats.total),
         verified: percentage(stats.verified, stats.total),
         retention_watch: percentage(stats.retention_watch, stats.total),
     }), [stats]);
 
     const activeMetric = useMemo(() => {
-        if (statusFilter === 'publish' && planFilter === '' && verifiedFilter === '' && onlineFilter === '') return 'active';
-        if (planFilter === 'premium' && statusFilter === '' && verifiedFilter === '' && onlineFilter === '') return 'premium';
-        if (verifiedFilter === '1' && statusFilter === '' && planFilter === '' && onlineFilter === '') return 'verified';
-        if (retentionBandFilter === 'watch' && statusFilter === '' && planFilter === '' && verifiedFilter === '' && onlineFilter === '' && behaviorTagFilter === '') return 'retention_watch';
+        if (
+            statusFilter === 'publish'
+            && planFilter === ''
+            && verifiedFilter === ''
+            && onlineFilter === ''
+            && newUsersFilter === ''
+        ) return 'active';
+
+        if (
+            newUsersFilter === '7d'
+            && statusFilter === ''
+            && planFilter === ''
+            && verifiedFilter === ''
+            && onlineFilter === ''
+            && signupSourceFilter === ''
+            && retentionBandFilter === ''
+            && behaviorTagFilter === ''
+            && hasChatFilter === ''
+        ) return 'new_users';
+
+        if (
+            verifiedFilter === '1'
+            && statusFilter === ''
+            && planFilter === ''
+            && onlineFilter === ''
+            && newUsersFilter === ''
+        ) return 'verified';
+
+        if (
+            retentionBandFilter === 'watch'
+            && statusFilter === ''
+            && planFilter === ''
+            && verifiedFilter === ''
+            && onlineFilter === ''
+            && newUsersFilter === ''
+            && behaviorTagFilter === ''
+        ) return 'retention_watch';
+
         return '';
-    }, [statusFilter, planFilter, verifiedFilter, onlineFilter, retentionBandFilter, behaviorTagFilter]);
+    }, [
+        behaviorTagFilter,
+        hasChatFilter,
+        newUsersFilter,
+        onlineFilter,
+        planFilter,
+        retentionBandFilter,
+        signupSourceFilter,
+        statusFilter,
+        verifiedFilter,
+    ]);
 
     const applyMetricFilter = (metricKey) => {
         if (activeMetric === metricKey) {
@@ -500,6 +880,9 @@ export default function Clients() {
             setPlanFilter('');
             setVerifiedFilter('');
             setOnlineFilter('');
+            setNewUsersFilter('');
+            setCreatedFrom('');
+            setCreatedTo('');
             setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
@@ -511,14 +894,23 @@ export default function Clients() {
             setStatusFilter('publish');
             setPlanFilter('');
             setVerifiedFilter('');
-        } else if (metricKey === 'premium') {
+            setNewUsersFilter('');
+            setCreatedFrom('');
+            setCreatedTo('');
+        } else if (metricKey === 'new_users') {
             setStatusFilter('');
-            setPlanFilter('premium');
+            setPlanFilter('');
             setVerifiedFilter('');
+            setNewUsersFilter('7d');
+            setCreatedFrom('');
+            setCreatedTo('');
         } else if (metricKey === 'verified') {
             setStatusFilter('');
             setPlanFilter('');
             setVerifiedFilter('1');
+            setNewUsersFilter('');
+            setCreatedFrom('');
+            setCreatedTo('');
             setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
@@ -526,6 +918,9 @@ export default function Clients() {
             setStatusFilter('');
             setPlanFilter('');
             setVerifiedFilter('');
+            setNewUsersFilter('');
+            setCreatedFrom('');
+            setCreatedTo('');
             setSignupSourceFilter('');
             setRetentionBandFilter('watch');
             setBehaviorTagFilter('');
@@ -534,6 +929,23 @@ export default function Clients() {
         setOnlineFilter('');
         setPage(1);
     };
+
+    const hasActiveFilters = Boolean(
+        search
+        || statusFilter
+        || planFilter
+        || verifiedFilter !== ''
+        || hasChatFilter !== ''
+        || onlineFilter
+        || platformFilter
+        || signupSourceFilter
+        || retentionBandFilter
+        || behaviorTagFilter
+        || newUsersFilter
+        || createdFrom
+        || createdTo
+        || sortOption !== DEFAULT_SORT_OPTION
+    );
 
     const columns = [
         {
@@ -569,16 +981,6 @@ export default function Clients() {
             ),
         },
         {
-            key: 'identifiers',
-            label: 'IDs',
-            render: (row) => (
-                <div>
-                    <p className="crm-mono text-xs text-slate-700">CRM #{row.id}</p>
-                    <p className="crm-mono text-[11px] text-slate-500">WP User: {row.wp_user_id || '—'}</p>
-                </div>
-            ),
-        },
-        {
             key: 'phone_normalized',
             label: 'Phone',
             render: (row) => <span className="crm-mono text-xs text-slate-600">{row.phone_normalized || '—'}</span>,
@@ -592,14 +994,8 @@ export default function Clients() {
             key: 'plan',
             label: 'Plan',
             render: (row) => (
-                <div className="flex items-center gap-1.5">
-                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
-                        row.plan_label === 'Premium'
-                            ? 'bg-teal-50 text-teal-700 ring-teal-200'
-                            : row.plan_label === 'Featured'
-                                ? 'bg-amber-50 text-amber-700 ring-amber-200'
-                                : 'bg-slate-100 text-slate-600 ring-slate-200'
-                    }`}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${planBadgeClasses(slugifyPlanKey(row.plan_key || row.plan_label) || 'basic')}`}>
                         {row.plan_label || 'Basic'}
                     </span>
                     {row.verified ? (
@@ -609,6 +1005,26 @@ export default function Clients() {
                     ) : null}
                 </div>
             ),
+        },
+        {
+            key: 'online',
+            label: 'Online',
+            render: (row) => {
+                const online = isClientOnline(row.last_online_at);
+
+                return (
+                    <div className="space-y-1">
+                        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                            online
+                                ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                                : 'bg-slate-100 text-slate-600 ring-slate-200'
+                        }`}>
+                            {online ? 'Online' : 'Offline'}
+                        </span>
+                        <p className="text-[11px] text-slate-500">{formatLastSeenMeta(row.last_online_at)}</p>
+                    </div>
+                );
+            },
         },
         {
             key: 'signup_source',
@@ -724,12 +1140,12 @@ export default function Clients() {
                     active={activeMetric === 'active'}
                 />
                 <MetricCard
-                    label="Premium Profiles"
-                    value={stats.premium.toLocaleString()}
-                    meta={`${metricShare.premium}% of current scope on premium plan`}
+                    label="New Users"
+                    value={stats.new_users.toLocaleString()}
+                    meta={`${metricShare.new_users}% of current scope created in the last 7 days`}
                     tone="accent"
-                    onClick={() => applyMetricFilter('premium')}
-                    active={activeMetric === 'premium'}
+                    onClick={() => applyMetricFilter('new_users')}
+                    active={activeMetric === 'new_users'}
                 />
                 <MetricCard
                     label="Verified Profiles"
@@ -751,9 +1167,9 @@ export default function Clients() {
 
             <p className="px-1 text-xs text-slate-500">Click a metric card to segment the table. Click the same card again to clear.</p>
 
-            <section className="crm-filter-row">
-                <div className="flex flex-wrap items-end gap-3">
-                    <form onSubmit={handleSearch} className="min-w-[220px] flex-1">
+            <section className="crm-filter-row space-y-4">
+                <div className="grid gap-3 xl:grid-cols-6">
+                    <form onSubmit={handleSearch} className="min-w-0 xl:col-span-2">
                         <div className="flex flex-col gap-1">
                             <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">Search</span>
                             <div className="relative">
@@ -761,7 +1177,7 @@ export default function Clients() {
                                     type="text"
                                     value={searchInput}
                                     onChange={(event) => setSearchInput(event.target.value)}
-                                    placeholder="Name, phone, email, or ID..."
+                                    placeholder="Name, phone, or email..."
                                     className="crm-input pr-10"
                                 />
                                 <button type="submit" aria-label="Run client search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
@@ -797,14 +1213,74 @@ export default function Clients() {
                         label="Plan"
                         value={planFilter}
                         onChange={(event) => { setPlanFilter(event.target.value); setPage(1); }}
+                        options={scopedPlanOptions}
+                    />
+
+                    <FilterSelect
+                        label="New Users"
+                        value={newUsersFilter}
+                        onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setNewUsersFilter(nextValue);
+                            if (nextValue !== 'custom') {
+                                setCreatedFrom('');
+                                setCreatedTo('');
+                            }
+                            setPage(1);
+                        }}
                         options={[
-                            { value: '', label: 'All plans' },
-                            { value: 'premium', label: 'Premium' },
-                            { value: 'featured', label: 'Featured' },
-                            { value: 'basic', label: 'Basic' },
+                            { value: '', label: 'All clients' },
+                            { value: 'today', label: 'Today' },
+                            { value: '7d', label: 'Last 7 days' },
+                            { value: '30d', label: 'Last 30 days' },
+                            { value: 'custom', label: 'Custom range' },
                         ]}
                     />
 
+                    <FilterSelect
+                        label="Sort"
+                        value={sortOption}
+                        onChange={(event) => { setSortOption(event.target.value); setPage(1); }}
+                        options={[
+                            { value: DEFAULT_SORT_OPTION, label: 'Recently updated' },
+                            { value: 'name_asc', label: 'Client name A-Z' },
+                            { value: 'name_desc', label: 'Client name Z-A' },
+                            { value: 'created_desc', label: 'Newest signups' },
+                            { value: 'created_asc', label: 'Oldest signups' },
+                        ]}
+                    />
+                </div>
+
+                {newUsersFilter === 'custom' ? (
+                    <div className="grid gap-3 sm:grid-cols-2 lg:max-w-[22rem]">
+                        <label className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">From</span>
+                            <input
+                                type="date"
+                                value={createdFrom}
+                                onChange={(event) => {
+                                    setCreatedFrom(event.target.value);
+                                    setPage(1);
+                                }}
+                                className="crm-input"
+                            />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">To</span>
+                            <input
+                                type="date"
+                                value={createdTo}
+                                onChange={(event) => {
+                                    setCreatedTo(event.target.value);
+                                    setPage(1);
+                                }}
+                                className="crm-input"
+                            />
+                        </label>
+                    </div>
+                ) : null}
+
+                <div className="flex flex-wrap items-end gap-3">
                     <FilterSelect
                         label="Verified"
                         value={verifiedFilter}
@@ -876,7 +1352,7 @@ export default function Clients() {
                         ]}
                     />
 
-                    {(search || statusFilter || planFilter || verifiedFilter !== '' || hasChatFilter !== '' || onlineFilter || platformFilter || signupSourceFilter || retentionBandFilter || behaviorTagFilter) ? (
+                    {hasActiveFilters ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -891,6 +1367,10 @@ export default function Clients() {
                                 setSignupSourceFilter('');
                                 setRetentionBandFilter('');
                                 setBehaviorTagFilter('');
+                                setNewUsersFilter('');
+                                setCreatedFrom('');
+                                setCreatedTo('');
+                                setSortOption(DEFAULT_SORT_OPTION);
                                 setPage(1);
                             }}
                             className="mb-0.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
