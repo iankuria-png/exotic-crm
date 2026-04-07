@@ -1177,7 +1177,7 @@ export default function Clients() {
                                     type="text"
                                     value={searchInput}
                                     onChange={(event) => setSearchInput(event.target.value)}
-                                    placeholder="Name, phone, or email..."
+                                    placeholder="Name, phone, email, or profile URL..."
                                     className="crm-input pr-10"
                                 />
                                 <button type="submit" aria-label="Run client search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">

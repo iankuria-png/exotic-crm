@@ -23,6 +23,7 @@ use App\Services\CredentialDeliveryService;
 use App\Services\ClientSyncService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
+use App\Services\ClientProfileUrlSearchService;
 use App\Services\SupportBoardService;
 use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
@@ -46,13 +47,14 @@ class ClientController extends Controller
         private readonly ClientDeletionService $clientDeletionService,
         private readonly DealPaymentService $dealPaymentService,
         private readonly PaymentLinkService $paymentLinkService,
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly ClientProfileUrlSearchService $clientProfileUrlSearchService
     ) {
     }
 
     public function index(Request $request)
     {
-        $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+        $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
             $request,
             'platform_id',
             'You do not have access to this client market.'
@@ -68,18 +70,32 @@ class ClientController extends Controller
 
         if ($request->filled('search')) {
             $search = trim((string) $request->search);
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('phone_normalized', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%");
+            $resolvedClientIds = $this->clientProfileUrlSearchService->resolveClientIds(
+                $search,
+                $request->user(),
+                $requestedPlatformId
+            );
 
-                if (ctype_digit($search)) {
-                    $numeric = (int) $search;
-                    $q->orWhere('id', $numeric)
-                        ->orWhere('wp_post_id', $numeric)
-                        ->orWhere('wp_user_id', $numeric);
+            if (is_array($resolvedClientIds)) {
+                if ($resolvedClientIds === []) {
+                    $query->whereRaw('1 = 0');
+                } else {
+                    $query->whereIn('id', $resolvedClientIds);
                 }
-            });
+            } else {
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                      ->orWhere('phone_normalized', 'like', "%{$search}%")
+                      ->orWhere('email', 'like', "%{$search}%");
+
+                    if (ctype_digit($search)) {
+                        $numeric = (int) $search;
+                        $q->orWhere('id', $numeric)
+                            ->orWhere('wp_post_id', $numeric)
+                            ->orWhere('wp_user_id', $numeric);
+                    }
+                });
+            }
         }
 
         if ($request->filled('status')) {
