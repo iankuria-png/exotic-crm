@@ -140,7 +140,8 @@ class HostedCheckoutService
             $payload['country'] = $countryCode;
         }
 
-        $response = Http::timeout(20)
+        $response = Http::timeout(10)
+            ->connectTimeout(5)
             ->withToken($apiKey)
             ->post($this->pawaPayBaseUrl($context) . '/v2/paymentpage', $payload);
 

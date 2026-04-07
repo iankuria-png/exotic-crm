@@ -2382,7 +2382,8 @@ class PaymentController extends Controller
                 $platform,
                 $providerKey,
                 requireEnabled: false,
-                environmentOverride: $environment !== '' ? $environment : null
+                environmentOverride: $environment !== '' ? $environment : null,
+                surface: 'self_checkout'
             );
 
             $normalizedPhone = preg_replace('/\D+/', '', (string) $validated['phone']);
