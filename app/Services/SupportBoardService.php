@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\SupportBoardUnavailableException;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Models\User;
@@ -459,21 +460,25 @@ class SupportBoardService
         $response = $this->performRequest($function, $requestPayload);
 
         if ($response->failed()) {
+            $message = SupportBoardUnavailableException::forHttpFailure($function, $response->status())->getMessage();
+
             Log::error('SupportBoardService request failed', [
                 'api_url' => $this->apiUrl,
+                'platform_id' => (int) $this->platform->id,
                 'function' => $function,
                 'status' => $response->status(),
                 'body' => $response->body(),
+                'message' => $message,
             ]);
 
             $this->cacheFailure(
                 $function,
-                sprintf('Support Board returned HTTP %d.', $response->status()),
+                $message,
                 $response->status(),
                 $response->body(),
             );
 
-            $response->throw();
+            throw SupportBoardUnavailableException::forHttpFailure($function, $response->status());
         }
 
         $body = json_decode(ltrim($response->body(), "\xEF\xBB\xBF"), true);
@@ -556,7 +561,7 @@ class SupportBoardService
 
         $message = trim((string) ($cachedFailure['message'] ?? ''));
 
-        throw new RuntimeException($message !== '' ? $message : 'Support Board is temporarily unavailable.');
+        throw SupportBoardUnavailableException::forCachedFailure($message);
     }
 
     private function cacheFailure(

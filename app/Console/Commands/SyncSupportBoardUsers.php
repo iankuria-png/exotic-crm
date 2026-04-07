@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Jobs\RunSupportBoardSyncJob;
 use App\Services\SupportBoardLinkSyncService;
+use App\Services\SupportBoardService;
 use App\Services\SupportBoardSyncRunService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -62,6 +63,21 @@ class SyncSupportBoardUsers extends Command
             foreach ($platforms as $platform) {
                 $platformLabel = $platform->name ?: $platform->domain ?: "Platform {$platform->id}";
                 $clientCount = $linkSyncService->countClientsForPlatform($platform, $refresh);
+
+                if (Cache::has(SupportBoardService::failureCacheKey((int) $platform->id))) {
+                    $summary['skipped']++;
+                    $message = sprintf(
+                        'Skipping Support Board sync for %s (platform #%d): recent outage cached.',
+                        $platformLabel,
+                        (int) $platform->id
+                    );
+
+                    $this->warn($message);
+                    Log::warning($message, [
+                        'platform_id' => (int) $platform->id,
+                    ]);
+                    continue;
+                }
 
                 if ($clientCount === 0) {
                     $this->info("Skipping {$platformLabel}: no clients to queue.");

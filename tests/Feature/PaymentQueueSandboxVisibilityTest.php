@@ -290,6 +290,21 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('data.0.reference_number', 'SUCCESS-EXPIRED-001');
     }
 
+    public function test_mpesa_review_uses_authenticated_user_market_access(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/payments/mpesa-review');
+
+        $response->assertOk()
+            ->assertJsonPath('data', [])
+            ->assertJsonPath('meta.total', 0)
+            ->assertJsonPath('meta.total_review', 0);
+    }
+
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform
     {
         return Platform::query()->create([

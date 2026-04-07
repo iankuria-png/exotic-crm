@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\SupportBoardUnavailableException;
 use App\Models\SupportBoardSyncRun;
 use App\Services\SupportBoardLinkSyncService;
 use App\Services\SupportBoardSyncRunService;
@@ -44,6 +45,15 @@ class RunSupportBoardSyncJob implements ShouldQueue
 
         try {
             $this->processRun($run, $supportBoardSyncRunService, $supportBoardLinkSyncService);
+        } catch (SupportBoardUnavailableException $exception) {
+            Log::warning('SB sync job halted due to Support Board outage.', [
+                'run_id' => $run->id,
+                'platform_id' => $run->platform_id,
+                'error' => $exception->getMessage(),
+                'attempt' => $this->attempts(),
+            ]);
+
+            $supportBoardSyncRunService->markFailed($run, $exception);
         } catch (\Throwable $exception) {
             Log::error('SB sync job unhandled exception.', [
                 'run_id' => $run->id,

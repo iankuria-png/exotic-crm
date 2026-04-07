@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Exceptions\SupportBoardUnavailableException;
 use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\Platform;
@@ -18,6 +19,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
+use RuntimeException;
 use Tests\TestCase;
 
 class SupportBoardIntegrationTest extends TestCase
@@ -912,6 +914,134 @@ class SupportBoardIntegrationTest extends TestCase
         });
     }
 
+    public function test_support_board_http_failures_are_classified_as_unavailable_and_cached(): void
+    {
+        $platform = $this->createPlatform();
+
+        Http::fake([
+            '*' => Http::response("\xEF\xBB\xBF", 500),
+        ]);
+
+        try {
+            app(SupportBoardService::class, ['platform' => $platform])->fetchAllUsersWithDetails();
+            $this->fail('Expected SupportBoardUnavailableException to be thrown.');
+        } catch (SupportBoardUnavailableException $exception) {
+            $this->assertSame(
+                'Support Board request "get-users-with-details" returned HTTP 500.',
+                $exception->getMessage()
+            );
+        }
+
+        $failure = Cache::get(SupportBoardService::failureCacheKey((int) $platform->id));
+        $this->assertIsArray($failure);
+        $this->assertSame('get-users-with-details', $failure['function'] ?? null);
+        $this->assertSame(500, $failure['status'] ?? null);
+    }
+
+    public function test_support_board_cached_failures_are_classified_as_unavailable_without_reaching_http(): void
+    {
+        $platform = $this->createPlatform();
+
+        Cache::put(
+            SupportBoardService::failureCacheKey((int) $platform->id),
+            [
+                'function' => 'get-users-with-details',
+                'message' => 'Support Board request "get-users-with-details" returned HTTP 500.',
+                'status' => 500,
+                'recorded_at' => now()->toIso8601String(),
+            ],
+            now()->addMinutes(5)
+        );
+
+        Http::fake();
+
+        try {
+            app(SupportBoardService::class, ['platform' => $platform])->fetchAllUsersWithDetails();
+            $this->fail('Expected SupportBoardUnavailableException to be thrown.');
+        } catch (SupportBoardUnavailableException $exception) {
+            $this->assertSame(
+                'Support Board request "get-users-with-details" returned HTTP 500.',
+                $exception->getMessage()
+            );
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_support_board_sync_job_marks_run_failed_without_retrying_known_outages(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $admin = $this->createUser('admin');
+        $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'support-board-outage@example.test',
+        ]);
+
+        Http::fake([
+            '*' => Http::response("\xEF\xBB\xBF", 500),
+        ]);
+
+        $started = app(SupportBoardSyncRunService::class)->startRun(
+            $platform,
+            $admin,
+            false,
+            'Outage classification test'
+        );
+
+        (new RunSupportBoardSyncJob((int) $started['run']->id))
+            ->handle(
+                app(SupportBoardSyncRunService::class),
+                app(SupportBoardLinkSyncService::class)
+            );
+
+        $run = SupportBoardSyncRun::query()->findOrFail($started['run']->id);
+
+        $this->assertSame(SupportBoardSyncRun::STATUS_FAILED, $run->status);
+        $this->assertGreaterThanOrEqual(1, (int) $run->errors);
+        $this->assertStringContainsString(
+            'Support Board request "get-users-with-details" returned HTTP 500.',
+            (string) data_get($run->error_details, '0.message')
+        );
+    }
+
+    public function test_support_board_sync_job_still_rethrows_unexpected_failures(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $admin = $this->createUser('admin');
+        $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'unexpected-failure@example.test',
+        ]);
+
+        $started = app(SupportBoardSyncRunService::class)->startRun(
+            $platform,
+            $admin,
+            false,
+            'Unexpected failure propagation test'
+        );
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('boom');
+
+        (new RunSupportBoardSyncJob((int) $started['run']->id))
+            ->handle(
+                app(SupportBoardSyncRunService::class),
+                new class extends SupportBoardLinkSyncService
+                {
+                    public function __construct()
+                    {
+                    }
+
+                    public function syncPlatformBulkChunk(Platform $platform, bool $refresh = false, int $afterClientId = 0, int $limit = self::BULK_SYNC_CHUNK_SIZE): array
+                    {
+                        throw new RuntimeException('boom');
+                    }
+                }
+            );
+    }
+
     public function test_settings_support_board_sync_endpoint_rejects_sales_role(): void
     {
         $platform = $this->createPlatform();
@@ -1000,6 +1130,40 @@ class SupportBoardIntegrationTest extends TestCase
         Queue::assertNothingPushed();
         $this->assertSame(1, SupportBoardSyncRun::query()->count());
         $this->assertSame((int) $run->id, (int) SupportBoardSyncRun::query()->first()->id);
+    }
+
+    public function test_support_board_sync_command_skips_platforms_with_recent_cached_outages(): void
+    {
+        config(['queue.default' => 'database']);
+        $platform = $this->createPlatform();
+        $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'cached-outage@example.test',
+        ]);
+
+        Cache::put(
+            SupportBoardService::failureCacheKey((int) $platform->id),
+            [
+                'function' => 'get-users-with-details',
+                'message' => 'Support Board request "get-users-with-details" returned HTTP 500.',
+                'status' => 500,
+                'recorded_at' => now()->toIso8601String(),
+            ],
+            now()->addMinutes(5)
+        );
+
+        Queue::fake();
+
+        $this->artisan("crm:sync-sb-users --platform={$platform->id}")
+            ->expectsOutput(sprintf(
+                'Skipping Support Board sync for %s (platform #%d): recent outage cached.',
+                $platform->name ?: $platform->domain ?: "Platform {$platform->id}",
+                (int) $platform->id
+            ))
+            ->assertExitCode(0);
+
+        Queue::assertNothingPushed();
+        $this->assertSame(0, SupportBoardSyncRun::query()->count());
     }
 
     public function test_support_board_sync_command_skips_duplicate_invocation_when_lock_exists(): void

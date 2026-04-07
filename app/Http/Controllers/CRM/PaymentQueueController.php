@@ -1997,7 +1997,7 @@ class PaymentQueueController extends Controller
 
     public function mpesaReview(Request $request)
     {
-        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request);
+        $platformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         $perPage = min(max((int) ($request->query('per_page') ?: 50), 10), 200);
         $search = trim((string) ($request->query('search') ?? ''));
