@@ -7,6 +7,7 @@ use App\Billing\Contracts\BillingProviderRegistry as BillingProviderRegistryCont
 use App\Billing\Diagnostics\PaymentDiagnosticsPayloadPresenter;
 use App\Billing\Support\LegacyBillingOperationsCatalog;
 use App\Billing\Support\ProviderCapability;
+use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Deal;
@@ -166,34 +167,60 @@ class PaymentQueueController extends Controller
         $dayAgo = Carbon::now()->subDay();
         $threeDaysAgo = Carbon::now()->subDays(3);
 
+        // Per-status currency breakdowns — each returns breakdown[], currency_count, scalar_amount.
+        // scalar_amount is null when multiple currencies are in scope so the UI cannot
+        // silently display a meaningless mixed-currency total.
+        $pendingBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
+        $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'completed'));
+        $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
+        $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'completed')->whereNull('client_id'));
+
+        // Aging-bucket breakdowns
+        $lt1hBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo));
+        $h1_24Breakdown  = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $oneHourAgo)->where('created_at', '>=', $dayAgo));
+        $h25_72Breakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $dayAgo)->where('created_at', '>=', $threeDaysAgo));
+        $gt72hBreakdown  = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $threeDaysAgo));
+
         $stats = [
             'total' => (clone $statsQuery)->count(),
             'pending' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->count(),
-            'pending_amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->sum('amount'),
+            'pending_amount' => $pendingBreakdown['scalar_amount'],
+            'pending_amount_breakdown' => $pendingBreakdown['breakdown'],
+            'pending_currency_count' => $pendingBreakdown['currency_count'],
             'confirmed' => (clone $statsQuery)->where('status', 'completed')->count(),
-            'confirmed_amount' => (float) (clone $statsQuery)->where('status', 'completed')->sum('amount'),
+            'confirmed_amount' => $confirmedBreakdown['scalar_amount'],
+            'confirmed_amount_breakdown' => $confirmedBreakdown['breakdown'],
+            'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
             'failed' => (clone $statsQuery)->where('status', 'failed')->count(),
-            'failed_amount' => (float) (clone $statsQuery)->where('status', 'failed')->sum('amount'),
+            'failed_amount' => $failedBreakdown['scalar_amount'],
+            'failed_amount_breakdown' => $failedBreakdown['breakdown'],
+            'failed_currency_count' => $failedBreakdown['currency_count'],
             'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
             'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
             'unmatched_review' => (clone $statsQuery)->where('status', 'completed')->whereNull('client_id')->count(),
-            'unmatched_review_amount' => (float) (clone $statsQuery)->where('status', 'completed')->whereNull('client_id')->sum('amount'),
+            'unmatched_review_amount' => $unmatchedBreakdown['scalar_amount'],
+            'unmatched_review_amount_breakdown' => $unmatchedBreakdown['breakdown'],
+            'unmatched_review_currency_count' => $unmatchedBreakdown['currency_count'],
             'awaiting_aging' => [
                 'lt_1h' => [
                     'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo)->count(),
-                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo)->sum('amount'),
+                    'amount' => $lt1hBreakdown['scalar_amount'],
+                    'amount_breakdown' => $lt1hBreakdown['breakdown'],
                 ],
                 'h1_24' => [
                     'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $oneHourAgo)->where('created_at', '>=', $dayAgo)->count(),
-                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $oneHourAgo)->where('created_at', '>=', $dayAgo)->sum('amount'),
+                    'amount' => $h1_24Breakdown['scalar_amount'],
+                    'amount_breakdown' => $h1_24Breakdown['breakdown'],
                 ],
                 'h25_72' => [
                     'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $dayAgo)->where('created_at', '>=', $threeDaysAgo)->count(),
-                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $dayAgo)->where('created_at', '>=', $threeDaysAgo)->sum('amount'),
+                    'amount' => $h25_72Breakdown['scalar_amount'],
+                    'amount_breakdown' => $h25_72Breakdown['breakdown'],
                 ],
                 'gt_72h' => [
                     'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $threeDaysAgo)->count(),
-                    'amount' => (float) (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '<', $threeDaysAgo)->sum('amount'),
+                    'amount' => $gt72hBreakdown['scalar_amount'],
+                    'amount_breakdown' => $gt72hBreakdown['breakdown'],
                 ],
             ],
         ];

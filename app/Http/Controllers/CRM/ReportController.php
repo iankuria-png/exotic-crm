@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Deal;
@@ -133,27 +134,35 @@ class ReportController extends Controller
             ? round(($activeDeals / ($activeDeals + $expiringSoon)) * 100)
             : 0;
 
-        $revenueMtd = Payment::query()
+        $revenueMtdQuery = Payment::query()
             ->liveOnly()
             ->where('status', 'completed')
             ->excludingWalletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
-            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
-            ->sum('amount');
-        $walletTopupRevenueMtd = Payment::query()
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds));
+        $walletTopupMtdQuery = Payment::query()
             ->liveOnly()
             ->where('status', 'completed')
             ->walletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
-            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
-            ->sum('amount');
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds));
+
+        // Per-currency breakdowns for all KPI revenue fields.
+        $totalRevenueBreakdown   = CurrencyBreakdown::fromPaymentQuery(clone $paymentsQuery);
+        $revenueMtdBreakdown     = CurrencyBreakdown::fromPaymentQuery(clone $revenueMtdQuery);
+        $walletTopupBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsQuery);
+        $walletTopupMtdBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupMtdQuery);
 
         $kpis = [
-            'total_revenue' => (float) (clone $paymentsQuery)->sum('amount'),
-            'revenue_mtd' => (float) $revenueMtd,
+            'total_revenue' => $totalRevenueBreakdown['scalar_amount'],
+            'total_revenue_breakdown' => $totalRevenueBreakdown['breakdown'],
+            'revenue_mtd' => $revenueMtdBreakdown['scalar_amount'],
+            'revenue_mtd_breakdown' => $revenueMtdBreakdown['breakdown'],
             'wallet_topups_count' => (int) (clone $walletTopupsQuery)->count(),
-            'wallet_topup_revenue' => (float) (clone $walletTopupsQuery)->sum('amount'),
-            'wallet_topup_revenue_mtd' => (float) $walletTopupRevenueMtd,
+            'wallet_topup_revenue' => $walletTopupBreakdown['scalar_amount'],
+            'wallet_topup_revenue_breakdown' => $walletTopupBreakdown['breakdown'],
+            'wallet_topup_revenue_mtd' => $walletTopupMtdBreakdown['scalar_amount'],
+            'wallet_topup_revenue_mtd_breakdown' => $walletTopupMtdBreakdown['breakdown'],
             'active_clients' => (int) (clone $clientsQuery)->where('profile_status', 'publish')->count(),
             'total_clients' => (int) (clone $clientsQuery)->count(),
             'conversion_rate' => $conversionRate,
@@ -165,6 +174,8 @@ class ReportController extends Controller
         $monthKeyExpression = DB::connection()->getDriverName() === 'sqlite'
             ? "strftime('%Y-%m', created_at)"
             : "DATE_FORMAT(created_at, '%Y-%m')";
+        $paymentCurrencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), 'KES')";
+        $dealCurrencyExpression = "COALESCE(deals.currency, (SELECT currency_code FROM platforms WHERE platforms.id = deals.platform_id LIMIT 1), 'KES')";
 
         $revenueTrendRows = Payment::query()
             ->liveOnly()
@@ -179,12 +190,39 @@ class ReportController extends Controller
             ->limit(6)
             ->get()
             ->reverse()
-            ->values()
-            ->map(fn ($row) => [
-                'month_key' => $row->month_key,
-                'label' => $this->formatMonthLabel($row->month_key),
-                'value' => (float) $row->total_revenue,
-            ]);
+            ->values();
+
+        // Second pass: group by (month_key, currency) to build per-month breakdowns.
+        $trendCurrencyRows = Payment::query()
+            ->liveOnly()
+            ->selectRaw("{$monthKeyExpression} as month_key")
+            ->selectRaw("{$paymentCurrencyExpression} as currency")
+            ->selectRaw('SUM(amount) as total')
+            ->where('status', 'completed')
+            ->excludingWalletTopups()
+            ->whereBetween('created_at', [$from, $to])
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
+            ->groupBy('month_key')
+            ->groupByRaw($paymentCurrencyExpression)
+            ->get();
+
+        $breakdownByMonth = [];
+        foreach ($trendCurrencyRows as $row) {
+            $breakdownByMonth[$row->month_key][$row->currency] = (float) $row->total;
+        }
+        foreach ($breakdownByMonth as &$currencyMap) {
+            ksort($currencyMap);
+        }
+        unset($currencyMap);
+
+        $revenueTrendRows = $revenueTrendRows->map(fn ($row) => [
+            'month_key'         => $row->month_key,
+            'label'             => $this->formatMonthLabel($row->month_key),
+            'value'             => count($breakdownByMonth[$row->month_key] ?? []) === 1
+                                       ? array_values($breakdownByMonth[$row->month_key])[0]
+                                       : null,
+            'revenue_breakdown' => $breakdownByMonth[$row->month_key] ?? [],
+        ]);
 
         $leadSources = Lead::query()
             ->selectRaw('source, COUNT(*) as total')
@@ -197,7 +235,7 @@ class ReportController extends Controller
                 'value' => (int) $row->total,
             ]);
 
-        $packageRevenue = Deal::query()
+        $packageRevenueRows = Deal::query()
             ->leftJoin('products', 'products.id', '=', 'deals.product_id')
             ->selectRaw('COALESCE(products.name, deals.plan_type) as package_name')
             ->selectRaw('SUM(deals.amount) as total_revenue')
@@ -207,13 +245,41 @@ class ReportController extends Controller
             ->groupBy(DB::raw('COALESCE(products.name, deals.plan_type)'))
             ->orderByDesc('total_revenue')
             ->limit(10)
-            ->get()
-            ->map(fn ($row) => [
-                'label' => $row->package_name ?: 'Unknown',
-                'value' => (float) $row->total_revenue,
-            ]);
+            ->get();
 
-        $ownerPerformance = Deal::query()
+        // Currency breakdown per package
+        $packageCurrencyRows = Deal::query()
+            ->leftJoin('products', 'products.id', '=', 'deals.product_id')
+            ->selectRaw('COALESCE(products.name, deals.plan_type) as package_name')
+            ->selectRaw("{$dealCurrencyExpression} as currency")
+            ->selectRaw('SUM(deals.amount) as total')
+            ->whereBetween('deals.created_at', [$from, $to])
+            ->whereNotIn('deals.status', ['pending', 'cancelled'])
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('deals.platform_id', $platformIds))
+            ->groupByRaw("COALESCE(products.name, deals.plan_type), {$dealCurrencyExpression}")
+            ->get();
+
+        $packageBreakdownMap = [];
+        foreach ($packageCurrencyRows as $row) {
+            $key = $row->package_name ?: 'Unknown';
+            $packageBreakdownMap[$key][$row->currency] = (float) $row->total;
+        }
+        foreach ($packageBreakdownMap as &$currencyMap) {
+            ksort($currencyMap);
+        }
+        unset($currencyMap);
+
+        $packageRevenue = $packageRevenueRows->map(function ($row) use ($packageBreakdownMap) {
+            $label = $row->package_name ?: 'Unknown';
+            $breakdown = $packageBreakdownMap[$label] ?? [];
+            return [
+                'label'             => $label,
+                'value'             => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
+                'revenue_breakdown' => $breakdown,
+            ];
+        });
+
+        $ownerPerformanceRows = Deal::query()
             ->leftJoin('users', 'users.id', '=', 'deals.assigned_to')
             ->selectRaw("COALESCE(users.name, 'Unassigned') as owner_name")
             ->selectRaw('COUNT(deals.id) as deals_count')
@@ -227,23 +293,71 @@ class ReportController extends Controller
             ->groupBy(DB::raw("COALESCE(users.name, 'Unassigned')"))
             ->orderByDesc('deals_count')
             ->limit(10)
-            ->get()
-            ->map(fn ($row) => [
+            ->get();
+
+        // Currency breakdown per owner
+        $ownerCurrencyRows = Deal::query()
+            ->leftJoin('users', 'users.id', '=', 'deals.assigned_to')
+            ->selectRaw("COALESCE(users.name, 'Unassigned') as owner_name")
+            ->selectRaw("{$dealCurrencyExpression} as currency")
+            ->selectRaw('SUM(deals.amount) as total, COUNT(deals.id) as cnt')
+            ->whereBetween('deals.created_at', [$from, $to])
+            ->whereNotIn('deals.status', ['cancelled'])
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('deals.platform_id', $platformIds))
+            ->groupByRaw("COALESCE(users.name, 'Unassigned'), {$dealCurrencyExpression}")
+            ->get();
+
+        $ownerBreakdownMap = [];   // owner_name → [currency => amount]
+        $ownerDealCountMap = [];  // owner_name → total deal count (for avg)
+        foreach ($ownerCurrencyRows as $row) {
+            $ownerBreakdownMap[$row->owner_name][$row->currency] = (float) $row->total;
+            $ownerDealCountMap[$row->owner_name] = ($ownerDealCountMap[$row->owner_name] ?? 0) + (int) $row->cnt;
+        }
+        foreach ($ownerBreakdownMap as &$currencyMap) {
+            ksort($currencyMap);
+        }
+        unset($currencyMap);
+
+        $ownerPerformance = $ownerPerformanceRows->map(function ($row) use ($ownerBreakdownMap, $ownerDealCountMap) {
+            $breakdown = $ownerBreakdownMap[$row->owner_name] ?? [];
+            $dealCount = (int) $row->deals_count;
+            // avg breakdown: revenue[currency] / total deals for this owner
+            $avgBreakdown = [];
+            foreach ($breakdown as $currency => $amount) {
+                $avgBreakdown[$currency] = $dealCount > 0 ? round($amount / $dealCount, 2) : 0.0;
+            }
+            return [
                 'owner' => $row->owner_name,
-                'deals' => (int) $row->deals_count,
-                'revenue' => (float) $row->total_revenue,
+                'deals' => $dealCount,
+                'revenue' => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
+                'revenue_breakdown' => $breakdown,
+                'avg_revenue_per_subscription' => count($breakdown) === 1 && $dealCount > 0
+                    ? round(array_values($breakdown)[0] / $dealCount, 2)
+                    : null,
+                'avg_revenue_breakdown' => $avgBreakdown,
                 'active_subscriptions' => (int) $row->active_subscriptions,
                 'pre_activation_subscriptions' => (int) $row->pre_activation_subscriptions,
                 'expired_subscriptions' => (int) $row->expired_subscriptions,
-                'avg_revenue_per_subscription' => (int) $row->deals_count > 0
-                    ? round(((float) $row->total_revenue) / (int) $row->deals_count, 2)
-                    : 0,
-            ]);
+            ];
+        });
+
+        // Totals: aggregate revenue across all owners per currency
+        $totalsByKey = ['subscriptions' => 0, 'active_subscriptions' => 0];
+        $totalsBreakdown = [];
+        foreach ($ownerPerformance as $ownerRow) {
+            $totalsByKey['subscriptions'] += $ownerRow['deals'];
+            $totalsByKey['active_subscriptions'] += $ownerRow['active_subscriptions'];
+            foreach ($ownerRow['revenue_breakdown'] as $currency => $amount) {
+                $totalsBreakdown[$currency] = ($totalsBreakdown[$currency] ?? 0.0) + $amount;
+            }
+        }
+        ksort($totalsBreakdown);
 
         $ownerPerformanceTotals = [
-            'subscriptions' => (int) $ownerPerformance->sum('deals'),
-            'revenue' => (float) $ownerPerformance->sum('revenue'),
-            'active_subscriptions' => (int) $ownerPerformance->sum('active_subscriptions'),
+            'subscriptions' => $totalsByKey['subscriptions'],
+            'revenue' => count($totalsBreakdown) === 1 ? array_values($totalsBreakdown)[0] : null,
+            'revenue_breakdown' => $totalsBreakdown,
+            'active_subscriptions' => $totalsByKey['active_subscriptions'],
         ];
 
         $topOwner = $ownerPerformance->first();
@@ -293,6 +407,7 @@ class ReportController extends Controller
                     'owner' => $topOwner['owner'],
                     'deals' => $topOwner['deals'],
                     'revenue' => $topOwner['revenue'],
+                    'revenue_breakdown' => $topOwner['revenue_breakdown'],
                     'active_subscriptions' => $topOwner['active_subscriptions'],
                 ]
                 : null,

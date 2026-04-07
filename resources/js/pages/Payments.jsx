@@ -12,12 +12,10 @@ import PaymentImportDrawer from '../components/PaymentImportDrawer';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { candidateScore, scoreTone, toneClasses } from '../utils/scoring';
+import { formatCurrency } from '../utils/currency';
+import CurrencyAmount from '../components/CurrencyAmount';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
-
-function formatCurrency(amount, currency = 'KES') {
-    return `${currency} ${Number(amount || 0).toLocaleString()}`;
-}
 
 function normalizePlatformFilter(value) {
     const raw = String(value ?? '').trim();
@@ -871,12 +869,16 @@ export default function Payments() {
             return {
                 awaitingCount: Number(data.stats.pending || 0),
                 awaitingAmount: toAmount(data.stats.pending_amount),
+                awaitingBreakdown: data.stats.pending_amount_breakdown ?? {},
                 confirmedCount: Number(data.stats.confirmed || 0),
                 confirmedAmount: toAmount(data.stats.confirmed_amount),
+                confirmedBreakdown: data.stats.confirmed_amount_breakdown ?? {},
                 unmatchedCount: Number((data.stats.unmatched_review ?? data.stats.unmatched) || 0),
                 unmatchedAmount: toAmount(data.stats.unmatched_review_amount),
+                unmatchedBreakdown: data.stats.unmatched_review_amount_breakdown ?? {},
                 failedCount: Number(data.stats.failed || 0),
                 failedAmount: toAmount(data.stats.failed_amount),
+                failedBreakdown: data.stats.failed_amount_breakdown ?? {},
             };
         }
 
@@ -1281,7 +1283,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Awaiting Payment</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.awaitingCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.awaitingAmount, resolveCurrency(null))}</p>
+                    <CurrencyAmount breakdown={summary.awaitingBreakdown} scalarAmount={summary.awaitingAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
                     <p className="mt-1 text-xs text-slate-500">Initiated + pending transactions</p>
                 </button>
 
@@ -1299,7 +1301,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.confirmedAmount, resolveCurrency(null))}</p>
+                    <CurrencyAmount breakdown={summary.confirmedBreakdown} scalarAmount={summary.confirmedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
                     <p className="mt-1 text-xs text-slate-500">Completed payments</p>
                 </button>
 
@@ -1317,7 +1319,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Unmatched Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.unmatchedCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.unmatchedAmount, resolveCurrency(null))}</p>
+                    <CurrencyAmount breakdown={summary.unmatchedBreakdown} scalarAmount={summary.unmatchedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
                     <p className="mt-1 text-xs text-slate-500">Completed, no client linked</p>
                 </button>
 
@@ -1335,7 +1337,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Failed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.failedCount.toLocaleString()}</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(summary.failedAmount, resolveCurrency(null))}</p>
+                    <CurrencyAmount breakdown={summary.failedBreakdown} scalarAmount={summary.failedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
                     <p className="mt-1 text-xs text-slate-500">Needs retry or follow-up</p>
                 </button>
             </section>

@@ -1351,6 +1351,125 @@ HTML,
         $commitResponse->assertStatus(404);
     }
 
+    public function test_reports_summary_has_mixed_currency_breakdowns(): void
+    {
+        $platform = $this->createPlatform('Mixed Market');
+        $ownerA = $this->createUser('sales', [$platform->id]);
+        $ownerB = $this->createUser('sales', [$platform->id]);
+        $adminUser = $this->createUser('admin', [$platform->id]);
+
+        // Payment (KES) for revenue trend / kpis
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700222001',
+            'amount' => 4000,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subDays(2),
+            'updated_at' => now()->subDays(2),
+        ]);
+
+        // Payment (GHS) on the same platform for mixed scope
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '233743222002',
+            'amount' => 250,
+            'currency' => 'GHS',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subDays(1),
+            'updated_at' => now()->subDays(1),
+        ]);
+
+        // KES deal for owner A
+        $this->createDeal($platform, [
+            'assigned_to' => $ownerA->id,
+            'status' => 'active',
+            'amount' => 3000,
+            'currency' => 'KES',
+        ]);
+        // GHS deal for owner B
+        $this->createDeal($platform, [
+            'assigned_to' => $ownerB->id,
+            'status' => 'active',
+            'amount' => 180,
+            'currency' => 'GHS',
+        ]);
+
+        Sanctum::actingAs($adminUser);
+
+        $response = $this->getJson(
+            '/api/crm/reports/summary?platform_id=' . $platform->id
+            . '&from=' . now()->subDays(7)->toDateString()
+            . '&to=' . now()->toDateString()
+        );
+
+        $response->assertOk();
+
+        // KPI total_revenue is null when mixed
+        $this->assertNull($response->json('kpis.total_revenue'));
+        // Breakdowns have exact per-currency values
+        $this->assertSame(4000.0, (float) $response->json('kpis.total_revenue_breakdown.KES'));
+        $this->assertSame(250.0, (float) $response->json('kpis.total_revenue_breakdown.GHS'));
+
+        // Revenue trend rows have revenue_breakdown populated
+        $trendRows = $response->json('revenue_trend') ?? [];
+        $this->assertNotEmpty($trendRows);
+        foreach ($trendRows as $trendRow) {
+            $this->assertArrayHasKey('revenue_breakdown', $trendRow);
+        }
+
+        // Owner performance totals: revenue null when mixed
+        $this->assertNull($response->json('owner_performance_totals.revenue'));
+        $this->assertArrayHasKey('revenue_breakdown', $response->json('owner_performance_totals'));
+        $this->assertSame(3000.0, (float) $response->json('owner_performance_totals.revenue_breakdown.KES'));
+        $this->assertSame(180.0, (float) $response->json('owner_performance_totals.revenue_breakdown.GHS'));
+
+        // Per-owner revenue_breakdown is present
+        $ownerRows = $response->json('owner_performance') ?? [];
+        foreach ($ownerRows as $ownerRow) {
+            $this->assertArrayHasKey('revenue_breakdown', $ownerRow);
+        }
+    }
+
+    public function test_reports_summary_uses_platform_currency_when_row_currency_is_missing(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'GHS');
+        $adminUser = $this->createUser('admin', [$platform->id]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '233743222101',
+            'amount' => 380,
+            'currency' => null,
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subDays(2),
+            'updated_at' => now()->subDays(2),
+        ]);
+
+        Sanctum::actingAs($adminUser);
+
+        $response = $this->getJson(
+            '/api/crm/reports/summary?platform_id=' . $platform->id
+            . '&from=' . now()->subDays(7)->toDateString()
+            . '&to=' . now()->toDateString()
+        );
+
+        $response->assertOk();
+
+        $this->assertSame(380.0, (float) $response->json('kpis.total_revenue_breakdown.GHS'));
+        $this->assertArrayNotHasKey('KES', $response->json('kpis.total_revenue_breakdown'));
+        $this->assertSame(380.0, (float) $response->json('revenue_trend.0.revenue_breakdown.GHS'));
+    }
+
     private function createUser(string $role = 'sales', array $assignedMarketIds = []): User
     {
         return User::query()->create([
@@ -1363,12 +1482,13 @@ HTML,
         ]);
     }
 
-    private function createPlatform(string $name): Platform
+    private function createPlatform(string $name, string $currencyCode = 'KES'): Platform
     {
         return Platform::query()->create([
             'name' => $name,
             'domain' => Str::slug($name) . '-' . Str::random(6) . '.test',
             'country' => $name,
+            'currency_code' => $currencyCode,
             'is_active' => true,
             'wp_api_url' => 'https://example.test/wp-json/exotic-crm-sync/v1',
             'wp_api_user' => 'crm-user',

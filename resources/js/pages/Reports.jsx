@@ -6,21 +6,14 @@ import PageHeader from '../components/PageHeader';
 import MetricCard from '../components/MetricCard';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
+import { formatCurrency, asNumber } from '../utils/currency';
+import CurrencyAmount from '../components/CurrencyAmount';
 
 const PROFILE_ENGAGEMENT_LABELS = {
     phone_click: 'Phone',
     whatsapp_click: 'WhatsApp',
     viber_click: 'Viber',
 };
-
-function asNumber(value) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function formatCurrency(value, currency = 'KES') {
-    return `${currency} ${asNumber(value).toLocaleString()}`;
-}
 
 function formatPercent(value, digits = 1) {
     return `${asNumber(value).toFixed(digits)}%`;
@@ -136,6 +129,27 @@ function BarList({ rows, colorClass = 'bg-teal-600', minimumPercent = 6 }) {
     );
 }
 
+// Used when revenue_trend has multiple currencies in a single month (mixed scope).
+// Renders a simple month-by-month breakdown list instead of a bar chart.
+function RevenueBreakdownList({ rows }) {
+    return (
+        <div className="space-y-2">
+            {rows.map((row) => (
+                <div key={row.month_key} className="flex items-start justify-between gap-4 rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2 text-sm">
+                    <span className="font-medium text-slate-600">{row.label}</span>
+                    <div className="text-right">
+                        {Object.keys(row.revenue_breakdown ?? {}).length > 0
+                            ? Object.entries(row.revenue_breakdown).map(([code, amt]) => (
+                                <div key={code} className="font-semibold text-slate-800">{formatCurrency(amt, code)}</div>
+                            ))
+                            : <span className="text-slate-400">—</span>}
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 function FunnelFlow({ stages, totals }) {
     const maxCount = stages.reduce((max, stage) => Math.max(max, asNumber(stage.count)), 0) || 1;
 
@@ -172,12 +186,16 @@ function FunnelFlow({ stages, totals }) {
     );
 }
 
-function OwnerPerformanceTable({ rows, totals, currency = 'KES' }) {
+function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false }) {
     if (!rows.length) {
         return <InsightEmptyState title="No owner performance data" message="No subscriptions were created in this reporting window." />;
     }
 
-    const revenueTotal = asNumber(totals?.revenue);
+    // For share calculation use the totals breakdown sum or scalar
+    const totalsBreakdown = totals?.revenue_breakdown ?? {};
+    const revenueTotal = isMixed
+        ? Object.values(totalsBreakdown).reduce((sum, v) => sum + v, 0)
+        : asNumber(totals?.revenue);
 
     return (
         <div className="overflow-x-auto">
@@ -192,12 +210,16 @@ function OwnerPerformanceTable({ rows, totals, currency = 'KES' }) {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                     {rows.map((row) => {
-                        const share = revenueTotal > 0 ? Math.round((asNumber(row.revenue) / revenueTotal) * 100) : 0;
+                        const rowBreakdown = row.revenue_breakdown ?? {};
+                        const rowTotal = Object.values(rowBreakdown).reduce((sum, v) => sum + v, 0);
+                        const share = revenueTotal > 0 ? Math.round((rowTotal / revenueTotal) * 100) : 0;
                         return (
                             <tr key={row.owner}>
                                 <td className="px-3 py-3">
                                     <p className="font-semibold text-slate-800">{row.owner}</p>
-                                    <p className="text-xs text-slate-500">{formatCurrency(row.avg_revenue_per_subscription, currency)} avg / subscription</p>
+                                    {isMixed
+                                        ? <CurrencyAmount breakdown={row.avg_revenue_breakdown ?? {}} scalarAmount={row.avg_revenue_per_subscription} fallbackCurrency={currency} className="text-xs text-slate-500" stackClassName="leading-snug" />
+                                        : <p className="text-xs text-slate-500">{formatCurrency(row.avg_revenue_per_subscription, currency)} avg / subscription</p>}
                                 </td>
                                 <td className="px-3 py-3 text-slate-700">
                                     <p className="font-semibold">{asNumber(row.deals).toLocaleString()}</p>
@@ -209,7 +231,9 @@ function OwnerPerformanceTable({ rows, totals, currency = 'KES' }) {
                                     </div>
                                     <p className="mt-1 text-xs text-slate-500">{share}% revenue share</p>
                                 </td>
-                                <td className="px-3 py-3 text-right font-semibold text-slate-800">{formatCurrency(row.revenue, currency)}</td>
+                                <td className="px-3 py-3 text-right font-semibold text-slate-800">
+                                    <CurrencyAmount breakdown={rowBreakdown} scalarAmount={row.revenue} fallbackCurrency={currency} stackClassName="leading-snug" />
+                                </td>
                             </tr>
                         );
                     })}
@@ -303,6 +327,19 @@ export default function Reports() {
     }, [platformFilter, fromDate, toDate]);
 
     const kpis = data?.kpis || {};
+    const resolvedReportCurrency = useMemo(() => {
+        const totalRevenueCurrencies = Object.keys(kpis.total_revenue_breakdown ?? {});
+        if (totalRevenueCurrencies.length === 1) {
+            return totalRevenueCurrencies[0];
+        }
+
+        const revenueMtdCurrencies = Object.keys(kpis.revenue_mtd_breakdown ?? {});
+        if (revenueMtdCurrencies.length === 1) {
+            return revenueMtdCurrencies[0];
+        }
+
+        return reportCurrency;
+    }, [kpis.total_revenue_breakdown, kpis.revenue_mtd_breakdown, reportCurrency]);
     const funnel = data?.lead_funnel || {};
     const funnelStages = (data?.lead_funnel_stages || []).map((stage) => ({
         ...stage,
@@ -313,13 +350,30 @@ export default function Reports() {
     const conversionRate = kpis.conversion_rate ?? percent(asNumber(funnel.converted), Object.values(funnel).reduce((sum, value) => sum + asNumber(value), 0));
     const renewalRate = kpis.renewal_rate ?? 0;
 
+    // Detect mixed-currency scope from the report-wide revenue breakdown.
+    // This catches both:
+    // - multiple currencies within a single row/month, and
+    // - different currencies spread across different rows (for example Mar=KES, Apr=USD).
+    const isMixedReport = useMemo(
+        () => Object.keys(kpis.total_revenue_breakdown ?? {}).length > 1,
+        [kpis.total_revenue_breakdown],
+    );
+
     const revenueTrend = useMemo(
         () => (data?.revenue_trend || []).map((row) => ({
+            month_key: row.month_key,
             label: row.label,
             value: asNumber(row.value),
-            formattedValue: formatCurrency(row.value, reportCurrency),
+            revenue_breakdown: row.revenue_breakdown ?? {},
+            // For BarList bar width use sum across currencies when mixed
+            barValue: isMixedReport
+                ? Object.values(row.revenue_breakdown ?? {}).reduce((s, v) => s + v, 0)
+                : asNumber(row.value),
+                formattedValue: isMixedReport
+                    ? null  // replaced by RevenueBreakdownList
+                : formatCurrency(row.value, resolvedReportCurrency),
         })),
-        [data?.revenue_trend, reportCurrency],
+        [data?.revenue_trend, resolvedReportCurrency, isMixedReport],
     );
 
     const leadSources = useMemo(() => {
@@ -333,12 +387,20 @@ export default function Reports() {
     }, [data?.lead_sources]);
 
     const packageRevenue = useMemo(
-        () => (data?.package_revenue || []).map((row) => ({
-            label: row.label,
-            value: asNumber(row.value),
-            formattedValue: formatCurrency(row.value, reportCurrency),
-        })),
-        [data?.package_revenue, reportCurrency],
+        () => (data?.package_revenue || []).map((row) => {
+            const breakdown = row.revenue_breakdown ?? {};
+            const totalValue = isMixedReport
+                ? Object.values(breakdown).reduce((s, v) => s + v, 0)
+                : asNumber(row.value);
+            return {
+                label: row.label,
+                value: totalValue,
+                formattedValue: isMixedReport
+                    ? <CurrencyAmount breakdown={breakdown} scalarAmount={row.value} fallbackCurrency={resolvedReportCurrency} stackClassName="leading-snug text-right" />
+                    : formatCurrency(row.value, resolvedReportCurrency),
+            };
+        }),
+        [data?.package_revenue, resolvedReportCurrency, isMixedReport],
     );
 
     const ownerRows = data?.owner_performance || [];
@@ -378,24 +440,70 @@ export default function Reports() {
         setIsExporting(true);
         try {
             const rows = [];
-            rows.push(toCsvRow(['Section', 'Metric', 'Value']));
+            rows.push(toCsvRow(['Section', 'Metric', 'Currency', 'Value']));
             if (data) {
-                rows.push(toCsvRow(['KPI', 'Total Revenue', kpis.total_revenue ?? 0]));
-                rows.push(toCsvRow(['KPI', 'Revenue MTD', kpis.revenue_mtd ?? 0]));
-                rows.push(toCsvRow(['KPI', 'Active Clients', kpis.active_clients ?? 0]));
-                rows.push(toCsvRow(['KPI', 'Total Clients', kpis.total_clients ?? 0]));
-                rows.push(toCsvRow(['KPI', 'Conversion Rate', conversionRate]));
-                rows.push(toCsvRow(['KPI', 'Renewal Rate', renewalRate]));
-                rows.push(toCsvRow(['KPI', 'Range From', data?.range?.from || '']));
-                rows.push(toCsvRow(['KPI', 'Range To', data?.range?.to || '']));
+                // KPIs: one row per currency in the breakdown (never a mixed-currency scalar)
+                const totalRevBreakdown = kpis.total_revenue_breakdown ?? {};
+                if (Object.keys(totalRevBreakdown).length > 0) {
+                    Object.entries(totalRevBreakdown).forEach(([currency, amount]) =>
+                        rows.push(toCsvRow(['KPI', 'Total Revenue', currency, amount])),
+                    );
+                } else {
+                    rows.push(toCsvRow(['KPI', 'Total Revenue', resolvedReportCurrency, kpis.total_revenue ?? 0]));
+                }
+                const revMtdBreakdown = kpis.revenue_mtd_breakdown ?? {};
+                if (Object.keys(revMtdBreakdown).length > 0) {
+                    Object.entries(revMtdBreakdown).forEach(([currency, amount]) =>
+                        rows.push(toCsvRow(['KPI', 'Revenue MTD', currency, amount])),
+                    );
+                } else {
+                    rows.push(toCsvRow(['KPI', 'Revenue MTD', resolvedReportCurrency, kpis.revenue_mtd ?? 0]));
+                }
+                rows.push(toCsvRow(['KPI', 'Active Clients', '', kpis.active_clients ?? 0]));
+                rows.push(toCsvRow(['KPI', 'Total Clients', '', kpis.total_clients ?? 0]));
+                rows.push(toCsvRow(['KPI', 'Conversion Rate', '', conversionRate]));
+                rows.push(toCsvRow(['KPI', 'Renewal Rate', '', renewalRate]));
+                rows.push(toCsvRow(['KPI', 'Range From', '', data?.range?.from || '']));
+                rows.push(toCsvRow(['KPI', 'Range To', '', data?.range?.to || '']));
 
-                (data.revenue_trend || []).forEach((row) => rows.push(toCsvRow(['Revenue Trend', row.label, row.value])));
-                (data.lead_sources || []).forEach((row) => rows.push(toCsvRow(['Lead Source', row.source, row.value])));
-                (data.lead_funnel_stages || []).forEach((row) => rows.push(toCsvRow(['Lead Funnel', row.label, row.count])));
-                (data.package_revenue || []).forEach((row) => rows.push(toCsvRow(['Package Revenue', row.label, row.value])));
-                (data.owner_performance || []).forEach((row) => rows.push(
-                    toCsvRow(['Owner Performance', row.owner, `${row.deals} subscriptions | ${row.active_subscriptions} active | ${row.revenue} revenue`]),
-                ));
+                // Revenue trend: one row per (month, currency)
+                (data.revenue_trend || []).forEach((row) => {
+                    const bd = row.revenue_breakdown ?? {};
+                    if (Object.keys(bd).length > 0) {
+                        Object.entries(bd).forEach(([currency, amount]) =>
+                            rows.push(toCsvRow(['Revenue Trend', row.label, currency, amount])),
+                        );
+                    } else {
+                        rows.push(toCsvRow(['Revenue Trend', row.label, resolvedReportCurrency, row.value ?? 0]));
+                    }
+                });
+
+                (data.lead_sources || []).forEach((row) => rows.push(toCsvRow(['Lead Source', row.source, '', row.value])));
+                (data.lead_funnel_stages || []).forEach((row) => rows.push(toCsvRow(['Lead Funnel', row.label, '', row.count])));
+
+                // Package revenue: one row per (package, currency)
+                (data.package_revenue || []).forEach((row) => {
+                    const bd = row.revenue_breakdown ?? {};
+                    if (Object.keys(bd).length > 0) {
+                        Object.entries(bd).forEach(([currency, amount]) =>
+                            rows.push(toCsvRow(['Package Revenue', row.label, currency, amount])),
+                        );
+                    } else {
+                        rows.push(toCsvRow(['Package Revenue', row.label, resolvedReportCurrency, row.value ?? 0]));
+                    }
+                });
+
+                // Owner performance: one row per (owner, currency)
+                (data.owner_performance || []).forEach((row) => {
+                    const bd = row.revenue_breakdown ?? {};
+                    if (Object.keys(bd).length > 0) {
+                        Object.entries(bd).forEach(([currency, amount]) =>
+                            rows.push(toCsvRow(['Owner Performance', row.owner, currency, `${row.deals} subscriptions | ${row.active_subscriptions} active | ${amount} revenue`])),
+                        );
+                    } else {
+                        rows.push(toCsvRow(['Owner Performance', row.owner, resolvedReportCurrency, `${row.deals} subscriptions | ${row.active_subscriptions} active | ${row.revenue ?? 0} revenue`]));
+                    }
+                });
             }
 
             if (engagementData) {
@@ -504,7 +612,7 @@ export default function Reports() {
                     <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <MetricCard
                             label="Total Revenue"
-                            value={formatCurrency(kpis.total_revenue, reportCurrency)}
+                            value={<CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} />}
                             meta="selected reporting window"
                             tone="accent"
                         />
@@ -541,7 +649,9 @@ export default function Reports() {
                             <ReportPanel title="Revenue Trend" subtitle="Completed payments by month">
                                 {isLoading ? <p className="text-sm text-slate-500">Loading revenue trend...</p> : (
                                     revenueTrend.length > 0
-                                        ? <BarList rows={revenueTrend} colorClass="bg-teal-600" />
+                                        ? isMixedReport
+                                            ? <RevenueBreakdownList rows={revenueTrend} />
+                                            : <BarList rows={revenueTrend} colorClass="bg-teal-600" />
                                         : <InsightEmptyState title="No payment trend available" message="No completed payments found for this range." />
                                 )}
                             </ReportPanel>
@@ -565,10 +675,12 @@ export default function Reports() {
                                     {topOwner ? (
                                         <div className="rounded-lg border border-teal-100 bg-teal-50/70 px-3 py-2 text-sm text-teal-900">
                                             <span className="font-semibold">Top owner:</span>{' '}
-                                            {topOwner.owner} ({asNumber(topOwner.deals)} subscriptions, {formatCurrency(topOwner.revenue, reportCurrency)})
+                                            {isMixedReport
+                                                ? `${topOwner.owner} (${asNumber(topOwner.deals)} subscriptions)`
+                                                : `${topOwner.owner} (${asNumber(topOwner.deals)} subscriptions, ${formatCurrency(topOwner.revenue, resolvedReportCurrency)})`}
                                         </div>
                                     ) : null}
-                                    <OwnerPerformanceTable rows={ownerRows} totals={ownerTotals} currency={reportCurrency} />
+                                    <OwnerPerformanceTable rows={ownerRows} totals={ownerTotals} currency={resolvedReportCurrency} isMixed={isMixedReport} />
                                 </div>
                             </ReportPanel>
                         </div>

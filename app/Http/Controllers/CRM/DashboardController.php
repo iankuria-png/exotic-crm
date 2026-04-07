@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\CRM;
 
+use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Client;
@@ -181,13 +182,29 @@ class DashboardController extends Controller
         }
 
         $completedPaymentsWindow = (clone $paymentsWindowQuery)->count();
-        $revenueWindow = (float) (clone $paymentsWindowQuery)->sum('amount');
-        $revenuePreviousWindow = (float) (clone $previousRevenueQuery)->sum('amount');
+
+        // Per-currency breakdowns for all revenue KPIs.  scalar_amount is null when
+        // multiple currencies are present so the frontend cannot display a wrong total.
+        $revenueWindowBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $paymentsWindowQuery);
+        $revenuePreviousBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery);
+        $walletTopupBreakdown      = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsWindowQuery);
+
+        $revenueWindow         = $revenueWindowBreakdown['scalar_amount'];
+        $revenuePreviousWindow = $revenuePreviousBreakdown['scalar_amount'];
+        $walletTopupRevenueWindow = $walletTopupBreakdown['scalar_amount'];
+
+        $isMixed = $revenueWindowBreakdown['currency_count'] > 1;
+
         $walletTopupsWindow = (clone $walletTopupsWindowQuery)->count();
-        $walletTopupRevenueWindow = (float) (clone $walletTopupsWindowQuery)->sum('amount');
-        $averageTicket = $completedPaymentsWindow > 0 ? round($revenueWindow / $completedPaymentsWindow, 2) : 0.0;
-        $revenueDeltaPercent = $revenuePreviousWindow > 0
-            ? round((($revenueWindow - $revenuePreviousWindow) / $revenuePreviousWindow) * 100, 1)
+
+        // Average ticket and delta only make sense for a single-currency scope.
+        $averageTicket = (!$isMixed && $completedPaymentsWindow > 0 && $revenueWindow !== null)
+            ? round($revenueWindow / $completedPaymentsWindow, 2)
+            : null;
+
+        $prevRevScalar = $revenuePreviousBreakdown['scalar_amount'];
+        $revenueDeltaPercent = (!$isMixed && $revenuePreviousBreakdown['currency_count'] <= 1 && $prevRevScalar !== null && $prevRevScalar > 0 && $revenueWindow !== null)
+            ? round((($revenueWindow - $prevRevScalar) / $prevRevScalar) * 100, 1)
             : null;
 
         $paymentRecoveryPending = (clone $awaitingPaymentsQuery)->count();
@@ -264,12 +281,17 @@ class DashboardController extends Controller
                 'completed_payments_mtd' => $completedPaymentsWindow,
                 'recent_payments' => $completedPaymentsWindow,
                 'revenue_window' => $revenueWindow,
+                'revenue_window_breakdown' => $revenueWindowBreakdown['breakdown'],
                 'revenue_mtd' => $revenueWindow,
+                'revenue_mtd_breakdown' => $revenueWindowBreakdown['breakdown'],
                 'wallet_topups_window' => $walletTopupsWindow,
                 'wallet_topup_revenue_window' => $walletTopupRevenueWindow,
+                'wallet_topup_revenue_window_breakdown' => $walletTopupBreakdown['breakdown'],
                 'revenue_previous_window' => $revenuePreviousWindow,
+                'revenue_previous_window_breakdown' => $revenuePreviousBreakdown['breakdown'],
                 'revenue_delta_percent' => $revenueDeltaPercent,
                 'average_ticket_window' => $averageTicket,
+                'revenue_is_mixed' => $isMixed,
                 'payment_recovery_queue_total' => $paymentRecoveryTotal,
                 'payment_recovery_pending' => $paymentRecoveryPending,
                 'payment_recovery_failed' => $paymentRecoveryFailed,

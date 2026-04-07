@@ -10,22 +10,15 @@ import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import { getCountryFlag } from '../utils/flags';
+import { formatCurrency, asNumber } from '../utils/currency';
+import CurrencyAmount from '../components/CurrencyAmount';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 
-function asNumber(value) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function clampPercent(value) {
     return Math.max(0, Math.min(100, value));
-}
-
-function formatCurrency(value, currency = 'KES') {
-    return `${currency} ${asNumber(value).toLocaleString()}`;
 }
 
 function normalizePlatformFilter(value) {
@@ -435,9 +428,11 @@ export default function Dashboard() {
     const totalClients = asNumber(kpis.total_clients);
     const pendingLeads = asNumber(kpis.pending_leads);
     const totalLeads = asNumber(kpis.total_leads);
-    const revenueWindow = asNumber(kpis.revenue_window ?? kpis.revenue_mtd);
-    const averageTicketWindow = asNumber(kpis.average_ticket_window);
-    const revenueDeltaLabel = formatDelta(kpis.revenue_delta_percent);
+    const revenueWindow = kpis.revenue_window ?? kpis.revenue_mtd ?? null;
+    const revenueWindowBreakdown = kpis.revenue_window_breakdown ?? kpis.revenue_mtd_breakdown ?? {};
+    const isMixedRevenue = kpis.revenue_is_mixed ?? Object.keys(revenueWindowBreakdown).length > 1;
+    const averageTicketWindow = kpis.average_ticket_window ?? null;
+    const revenueDeltaLabel = kpis.revenue_delta_percent != null ? formatDelta(kpis.revenue_delta_percent) : null;
     const recentPaymentsCount = asNumber(kpis.completed_payments_window ?? kpis.completed_payments_mtd ?? kpis.recent_payments);
     const unmatchedPaymentsWindow = asNumber(kpis.unmatched_payments_window ?? kpis.unmatched_payments);
     const paymentRecoveryPending = asNumber(kpis.payment_recovery_pending);
@@ -467,11 +462,13 @@ export default function Dashboard() {
         {
             key: 'revenue',
             label: 'Collected Revenue',
-            value: formatCurrency(revenueWindow, selectedCurrency),
+            value: <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-[1.4rem] leading-snug font-semibold tracking-tight text-slate-900" />,
             hint: recentPaymentsCount > 0
-                ? `${recentPaymentsCount} completed • avg ${formatCurrency(averageTicketWindow, selectedCurrency)}`
+                ? isMixedRevenue
+                    ? `${recentPaymentsCount} completed • Mixed currencies in scope`
+                    : `${recentPaymentsCount} completed • avg ${formatCurrency(averageTicketWindow, selectedCurrency)}`
                 : 'No completed payments in selected range',
-            subHint: revenueDeltaLabel || 'No previous window baseline',
+            subHint: revenueDeltaLabel || 'No comparable single-currency baseline',
             accentDot: 'bg-teal-600',
             hintClass: 'text-teal-700',
             onClick: () => navigate(withMarketScope('/payments?status=completed')),

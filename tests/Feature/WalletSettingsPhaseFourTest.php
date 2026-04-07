@@ -688,6 +688,56 @@ class WalletSettingsPhaseFourTest extends TestCase
         ]);
     }
 
+    public function test_dashboard_kpis_have_breakdown_and_nullable_scalar_when_mixed(): void
+    {
+        $platform = $this->createPlatform('Mixed Currency Market');
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        // Two live subscription payments with different currencies on the same platform
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700111001',
+            'amount' => 3000,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subMinutes(10),
+            'updated_at' => now()->subMinutes(10),
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '233743111002',
+            'amount' => 220,
+            'currency' => 'GHS',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subMinutes(5),
+            'updated_at' => now()->subMinutes(5),
+        ]);
+
+        $dashboard = $this->getJson('/api/crm/dashboard?platform_id=' . $platform->id);
+
+        $dashboard->assertOk()
+            // Scalar must be null because the scope is multi-currency
+            ->assertJsonPath('kpis.revenue_window', null)
+            ->assertJsonPath('kpis.revenue_is_mixed', true)
+            // Average ticket is null when mixed (no single currency to average)
+            ->assertJsonPath('kpis.average_ticket_window', null)
+            // Delta is null when scope is mixed
+            ->assertJsonPath('kpis.revenue_delta_percent', null)
+            // Count is always present
+            ->assertJsonPath('kpis.completed_payments_window', 2);
+
+        $this->assertSame(3000.0, (float) $dashboard->json('kpis.revenue_window_breakdown.KES'));
+        $this->assertSame(220.0, (float) $dashboard->json('kpis.revenue_window_breakdown.GHS'));
+    }
+
     private function createCompletedPayment(Platform $platform, float $amount, string $purpose = 'subscription'): Payment
     {
         return Payment::query()->create([

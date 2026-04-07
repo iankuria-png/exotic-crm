@@ -62,7 +62,9 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('total', 2)
             ->assertJsonPath('stats_scope', 'live')
             ->assertJsonPath('stats.confirmed', 1)
-            ->assertJsonPath('stats.confirmed_amount', 5000);
+            ->assertJsonPath('stats.confirmed_currency_count', 1);
+        $this->assertSame(5000.0, (float) $response->json('stats.confirmed_amount'));
+        $this->assertSame(5000.0, (float) $response->json('stats.confirmed_amount_breakdown.KES'));
 
         $references = collect($response->json('data'))->pluck('reference_number')->all();
         $this->assertContains('LIVE-PAYMENT-001', $references);
@@ -128,15 +130,119 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $this->assertSame('LIVE-PAYMENT-002', $productionResponse->json('data.0.reference_number'));
     }
 
-    private function createPlatform(): Platform
+    public function test_stats_breakdown_is_per_currency_and_scalar_is_null_when_mixed(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform);
+
+        // Two live completed payments with different currencies on the same platform
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700000501',
+            'amount' => 5000,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'MIXED-LIVE-KES-001',
+            'reference_number' => 'MIXED-LIVE-KES-001',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'provider_environment' => 'production',
+            'created_at' => now()->subMinutes(15),
+            'updated_at' => now()->subMinutes(15),
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '233743394455',
+            'amount' => 380,
+            'currency' => 'GHS',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'MIXED-LIVE-GHS-001',
+            'reference_number' => 'MIXED-LIVE-GHS-001',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'provider_environment' => 'production',
+            'created_at' => now()->subMinutes(10),
+            'updated_at' => now()->subMinutes(10),
+        ]);
+
+        // Sandbox payment — must not appear in live stats
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700000502',
+            'amount' => 9999,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'MIXED-SANDBOX-001',
+            'reference_number' => 'MIXED-SANDBOX-001',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'provider_environment' => 'sandbox',
+            'payment_data' => ['test_mode' => true, 'test_result' => 'completed', 'side_effects_skipped' => true],
+            'created_at' => now()->subMinutes(5),
+            'updated_at' => now()->subMinutes(5),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonPath('stats_scope', 'live')
+            // Counts are always correct regardless of currency
+            ->assertJsonPath('stats.confirmed', 2)
+            // Mixed scope: scalar must be null so the UI cannot show a fake total
+            ->assertJsonPath('stats.confirmed_amount', null)
+            ->assertJsonPath('stats.confirmed_currency_count', 2)
+            // Sandbox row still appears in the row list
+            ->assertJsonPath('total', 3);
+        // Per-currency breakdown has exact values
+        $this->assertSame(5000.0, (float) $response->json('stats.confirmed_amount_breakdown.KES'));
+        $this->assertSame(380.0, (float) $response->json('stats.confirmed_amount_breakdown.GHS'));
+    }
+
+    public function test_null_payment_currency_falls_back_to_platform_currency_in_breakdowns(): void
+    {
+        $platform = $this->createPlatform('Ghana', 'GHS');
+        $salesUser = $this->createUser($platform);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '233700000601',
+            'amount' => 380,
+            'currency' => null,
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'NULL-CURRENCY-GHS-001',
+            'reference_number' => 'NULL-CURRENCY-GHS-001',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'provider_environment' => 'production',
+            'created_at' => now()->subMinutes(12),
+            'updated_at' => now()->subMinutes(12),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonPath('stats.confirmed', 1)
+            ->assertJsonPath('stats.confirmed_currency_count', 1);
+
+        $this->assertSame(380.0, (float) $response->json('stats.confirmed_amount'));
+        $this->assertSame(380.0, (float) $response->json('stats.confirmed_amount_breakdown.GHS'));
+        $this->assertArrayNotHasKey('KES', $response->json('stats.confirmed_amount_breakdown'));
+    }
+
+    private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform
     {
         return Platform::query()->create([
-            'name' => 'Sandbox Visibility Market',
+            'name' => $country . ' Sandbox Visibility Market',
             'domain' => 'sandbox-visibility-' . Str::random(6) . '.example.test',
-            'country' => 'Kenya',
+            'country' => $country,
             'timezone' => 'Africa/Nairobi',
             'phone_prefix' => '254',
-            'currency_code' => 'KES',
+            'currency_code' => $currencyCode,
             'is_active' => true,
             'wp_api_url' => 'https://sandbox-visibility.example.test/wp-json/exotic-crm-sync/v1',
             'wp_api_user' => 'crm-user',
