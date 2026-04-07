@@ -234,6 +234,62 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $this->assertArrayNotHasKey('KES', $response->json('stats.confirmed_amount_breakdown'));
     }
 
+    public function test_confirmed_stats_and_completed_filter_include_expired_successful_payments(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700000701',
+            'amount' => 1500,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'SUCCESS-COMPLETED-001',
+            'reference_number' => 'SUCCESS-COMPLETED-001',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'provider_environment' => 'production',
+            'created_at' => now()->subMinutes(20),
+            'updated_at' => now()->subMinutes(20),
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700000702',
+            'amount' => 59.2,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'SUCCESS-EXPIRED-001',
+            'reference_number' => 'SUCCESS-EXPIRED-001',
+            'status' => 'expired',
+            'purpose' => 'subscription',
+            'provider_environment' => 'production',
+            'created_at' => now()->subMinutes(10),
+            'updated_at' => now()->subMinutes(10),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $summaryResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $summaryResponse->assertOk()
+            ->assertJsonPath('stats.confirmed', 2)
+            ->assertJsonPath('stats.confirmed_currency_count', 1);
+        $this->assertSame(1559.2, (float) $summaryResponse->json('stats.confirmed_amount'));
+
+        $completedFilterResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&status=completed');
+        $completedFilterResponse->assertOk()
+            ->assertJsonPath('total', 2);
+        $completedReferences = collect($completedFilterResponse->json('data'))->pluck('reference_number')->all();
+        $this->assertContains('SUCCESS-COMPLETED-001', $completedReferences);
+        $this->assertContains('SUCCESS-EXPIRED-001', $completedReferences);
+
+        $expiredFilterResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&status=expired');
+        $expiredFilterResponse->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'SUCCESS-EXPIRED-001');
+    }
+
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform
     {
         return Platform::query()->create([

@@ -104,15 +104,18 @@ class PaymentQueueController extends Controller
             $statsQuery->liveOnly();
         }
 
+        $successfulStatuses = $this->successfulPaymentStatuses();
         $statusFilter = trim((string) $request->input('status', ''));
         if ($statusFilter !== '') {
             if ($statusFilter === 'awaiting_payment') {
                 $query->whereIn('status', ['initiated', 'pending']);
+            } elseif ($statusFilter === 'completed') {
+                $query->whereIn('status', $successfulStatuses);
             } elseif ($statusFilter === 'recovery_queue') {
-                $query->where(function ($builder) {
+                $query->where(function ($builder) use ($successfulStatuses) {
                     $builder->whereIn('status', ['initiated', 'pending', 'failed'])
-                        ->orWhere(function ($unmatchedCompleted) {
-                            $unmatchedCompleted->where('status', 'completed')
+                        ->orWhere(function ($unmatchedCompleted) use ($successfulStatuses) {
+                            $unmatchedCompleted->whereIn('status', $successfulStatuses)
                                 ->whereNull('client_id');
                         });
                 });
@@ -171,9 +174,9 @@ class PaymentQueueController extends Controller
         // scalar_amount is null when multiple currencies are in scope so the UI cannot
         // silently display a meaningless mixed-currency total.
         $pendingBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
-        $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'completed'));
+        $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $successfulStatuses));
         $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
-        $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'completed')->whereNull('client_id'));
+        $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $successfulStatuses)->whereNull('client_id'));
 
         // Aging-bucket breakdowns
         $lt1hBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo));
@@ -187,7 +190,7 @@ class PaymentQueueController extends Controller
             'pending_amount' => $pendingBreakdown['scalar_amount'],
             'pending_amount_breakdown' => $pendingBreakdown['breakdown'],
             'pending_currency_count' => $pendingBreakdown['currency_count'],
-            'confirmed' => (clone $statsQuery)->where('status', 'completed')->count(),
+            'confirmed' => (clone $statsQuery)->whereIn('status', $successfulStatuses)->count(),
             'confirmed_amount' => $confirmedBreakdown['scalar_amount'],
             'confirmed_amount_breakdown' => $confirmedBreakdown['breakdown'],
             'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
@@ -197,7 +200,7 @@ class PaymentQueueController extends Controller
             'failed_currency_count' => $failedBreakdown['currency_count'],
             'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
             'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
-            'unmatched_review' => (clone $statsQuery)->where('status', 'completed')->whereNull('client_id')->count(),
+            'unmatched_review' => (clone $statsQuery)->whereIn('status', $successfulStatuses)->whereNull('client_id')->count(),
             'unmatched_review_amount' => $unmatchedBreakdown['scalar_amount'],
             'unmatched_review_amount_breakdown' => $unmatchedBreakdown['breakdown'],
             'unmatched_review_currency_count' => $unmatchedBreakdown['currency_count'],
@@ -2274,6 +2277,17 @@ class PaymentQueueController extends Controller
             'auto_low' => 'medium',
             default => 'low',
         };
+    }
+
+    /**
+     * Successful payments can later move to `expired` when the linked subscription
+     * lapses. The payments workspace still treats those rows as confirmed revenue.
+     *
+     * @return array<int, string>
+     */
+    private function successfulPaymentStatuses(): array
+    {
+        return ['completed', 'expired'];
     }
 
     /**

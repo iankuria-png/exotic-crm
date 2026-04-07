@@ -16,6 +16,7 @@ import { formatCurrency } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
+const SUCCESSFUL_PAYMENT_STATUSES = ['completed', 'expired'];
 
 function normalizePlatformFilter(value) {
     const raw = String(value ?? '').trim();
@@ -342,7 +343,7 @@ function StructuredDiagnosticsSection({ section }) {
 }
 
 export default function Payments() {
-    const allowedStatuses = new Set(['awaiting_payment', 'completed', 'initiated', 'pending', 'failed', 'recovery_queue']);
+    const allowedStatuses = new Set(['awaiting_payment', 'completed', 'expired', 'initiated', 'pending', 'failed', 'recovery_queue']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
@@ -883,7 +884,7 @@ export default function Payments() {
         }
 
         const awaitingRows = rows.filter((row) => ['initiated', 'pending'].includes(row.status));
-        const completedRows = rows.filter((row) => row.status === 'completed');
+        const completedRows = rows.filter((row) => SUCCESSFUL_PAYMENT_STATUSES.includes(row.status));
         const unmatchedRows = completedRows.filter((row) => !row.client_id);
         const failedRows = rows.filter((row) => row.status === 'failed');
         const sumAmount = (list) => list.reduce((sum, row) => sum + toAmount(row.amount), 0);
@@ -1302,7 +1303,7 @@ export default function Payments() {
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
                     <CurrencyAmount breakdown={summary.confirmedBreakdown} scalarAmount={summary.confirmedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
-                    <p className="mt-1 text-xs text-slate-500">Completed payments</p>
+                    <p className="mt-1 text-xs text-slate-500">Completed + expired successful payments</p>
                 </button>
 
                 <button
@@ -1320,7 +1321,7 @@ export default function Payments() {
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.unmatchedCount.toLocaleString()}</p>
                     <CurrencyAmount breakdown={summary.unmatchedBreakdown} scalarAmount={summary.unmatchedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
-                    <p className="mt-1 text-xs text-slate-500">Completed, no client linked</p>
+                    <p className="mt-1 text-xs text-slate-500">Successful payments, no client linked</p>
                 </button>
 
                 <button
@@ -1386,6 +1387,7 @@ export default function Payments() {
                             { value: 'awaiting_payment', label: 'Awaiting payment' },
                             { value: 'recovery_queue', label: 'Recovery queue' },
                             { value: 'completed', label: 'Completed' },
+                            { value: 'expired', label: 'Expired' },
                             { value: 'initiated', label: 'Initiated' },
                             { value: 'pending', label: 'Pending' },
                             { value: 'failed', label: 'Failed' },
