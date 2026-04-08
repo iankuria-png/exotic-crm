@@ -55,6 +55,30 @@ class ClientUrlSearchTest extends TestCase
             ->assertJsonCount(1, 'data');
     }
 
+    public function test_client_search_falls_back_to_slug_match_when_live_url_is_missing(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'wp_post_id' => 7722,
+            'name' => 'Venessa',
+        ]);
+
+        DB::table('escort_live_urls')->insert([
+            'post_id' => 7722,
+            'post_name' => 'venessa-5',
+            'live_url' => null,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/venessa-5/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonCount(1, 'data');
+    }
+
     public function test_client_search_supports_wordpress_query_style_profile_url(): void
     {
         $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');

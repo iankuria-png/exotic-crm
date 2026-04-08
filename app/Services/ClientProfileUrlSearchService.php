@@ -37,7 +37,11 @@ class ClientProfileUrlSearchService
         $matches = [];
 
         foreach ($candidatePlatforms as $platform) {
-            $postId = $this->resolvePostIdForPlatform($platform, $normalizedUrl['url_candidates']);
+            $postId = $this->resolvePostIdForPlatform(
+                $platform,
+                $normalizedUrl['url_candidates'],
+                $normalizedUrl['slug_candidates']
+            );
             if ($postId === null) {
                 continue;
             }
@@ -95,6 +99,7 @@ class ClientProfileUrlSearchService
 
         $urlCandidates = [];
         $basePath = $path === '/' ? '' : rtrim($path, '/');
+        $slugCandidates = $this->extractSlugCandidates($path);
 
         foreach ([$rawHost, $host, 'www.' . $host] as $hostVariant) {
             $hostVariant = strtolower(trim($hostVariant));
@@ -118,6 +123,7 @@ class ClientProfileUrlSearchService
             'host' => $host,
             'wp_post_id' => $wpPostId,
             'url_candidates' => $urlCandidates,
+            'slug_candidates' => $slugCandidates,
         ];
     }
 
@@ -153,7 +159,7 @@ class ClientProfileUrlSearchService
             ->all();
     }
 
-    private function resolvePostIdForPlatform(Platform $platform, array $urlCandidates): ?int
+    private function resolvePostIdForPlatform(Platform $platform, array $urlCandidates, array $slugCandidates): ?int
     {
         try {
             $connectionName = $this->resolveConnectionName($platform);
@@ -166,11 +172,33 @@ class ClientProfileUrlSearchService
                 return (int) $postId;
             }
 
+            if ($slugCandidates !== []) {
+                $postIdFromLiveUrlSlug = EscortLiveUrl::on($connectionName)
+                    ->whereIn('post_name', $slugCandidates)
+                    ->value('post_id');
+
+                if ($postIdFromLiveUrlSlug !== null) {
+                    return (int) $postIdFromLiveUrlSlug;
+                }
+
+                $postIdFromPostSlug = WordpressPost::on($connectionName)
+                    ->whereIn('post_name', $slugCandidates)
+                    ->value('ID');
+
+                if ($postIdFromPostSlug !== null) {
+                    return (int) $postIdFromPostSlug;
+                }
+            }
+
             $guidPostId = WordpressPost::on($connectionName)
                 ->whereIn('guid', $urlCandidates)
                 ->value('ID');
 
-            return $guidPostId !== null ? (int) $guidPostId : null;
+            if ($guidPostId !== null) {
+                return (int) $guidPostId;
+            }
+
+            return null;
         } catch (Throwable $exception) {
             Log::warning('Failed to resolve client search URL for platform.', [
                 'platform_id' => $platform->id,
@@ -228,5 +256,36 @@ class ClientProfileUrlSearchService
         $host = strtolower(trim($host));
 
         return preg_replace('#^www\.#', '', $host) ?: '';
+    }
+
+    private function extractSlugCandidates(string $path): array
+    {
+        $trimmedPath = trim($path);
+        if ($trimmedPath === '' || $trimmedPath === '/') {
+            return [];
+        }
+
+        $segments = array_values(array_filter(explode('/', trim($trimmedPath, '/'))));
+        if ($segments === []) {
+            return [];
+        }
+
+        $lastSegment = urldecode((string) end($segments));
+        $lastSegment = trim($lastSegment);
+        if ($lastSegment === '') {
+            return [];
+        }
+
+        $slugCandidates = [
+            strtolower($lastSegment),
+        ];
+
+        $sanitized = preg_replace('/[^a-z0-9_-]+/i', '-', $lastSegment) ?: '';
+        $sanitized = strtolower(trim($sanitized, '-'));
+        if ($sanitized !== '') {
+            $slugCandidates[] = $sanitized;
+        }
+
+        return array_values(array_unique(array_filter($slugCandidates)));
     }
 }
