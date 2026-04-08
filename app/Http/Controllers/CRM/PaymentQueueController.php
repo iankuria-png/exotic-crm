@@ -887,6 +887,7 @@ class PaymentQueueController extends Controller
         $failureReason = $latestFailedAttempt?->error_message
             ?? (is_array($rawPayload['failure_data'] ?? null) ? ($rawPayload['failure_data']['message'] ?? null) : null)
             ?? (is_array($manualCloseMeta) ? ($manualCloseMeta['reason'] ?? null) : null);
+        $failureReason = $failureReason ?: ($payment->failure_reason ?: null);
         $canCheckProviderStatus = $this->canCheckProviderStatus($payment, $linkProxy);
         $canSandboxReconcile = $this->canSandboxReconcile($payment, $linkProxy);
 
@@ -1901,6 +1902,12 @@ class PaymentQueueController extends Controller
 
     private function resolveFailureStage(Payment $payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta, ?array $linkProxy = null): string
     {
+        if ($this->isPendingManualSubmissionReview($payment)) {
+            return $payment->deal && (string) $payment->deal->status === 'active'
+                ? 'manual_verification_pending'
+                : 'manual_review_pending';
+        }
+
         if (is_array($manualCloseMeta)) {
             return 'manually_closed';
         }
@@ -1960,6 +1967,10 @@ class PaymentQueueController extends Controller
 
     private function buildRecommendations(Payment $payment, ?array $linkProxy = null): array
     {
+        if ($this->isPendingManualSubmissionReview($payment)) {
+            return [];
+        }
+
         $ageHours = $payment->created_at
             ? now()->diffInHours($payment->created_at)
             : 0;
@@ -2331,6 +2342,23 @@ class PaymentQueueController extends Controller
         }
 
         return $submission;
+    }
+
+    private function isPendingManualSubmissionReview(Payment $payment): bool
+    {
+        if ((string) $payment->reconciliation_state !== 'manual_review') {
+            return false;
+        }
+
+        $submission = $payment->relationLoaded('manualSubmission')
+            ? $payment->manualSubmission
+            : $payment->manualSubmission()->first();
+
+        if (!$submission) {
+            return false;
+        }
+
+        return (string) ($submission->review_decision ?? '') !== 'rejected';
     }
 
     public function mpesaReview(Request $request)

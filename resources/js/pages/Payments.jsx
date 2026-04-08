@@ -122,12 +122,17 @@ function sandboxStatusLabel(payment) {
 }
 
 function renderPaymentStatusBadges(payment) {
+    const manualReviewStatus = unresolvedManualReviewStatus(payment);
     const status = String(payment?.status || '').toLowerCase();
     const customLabel = sandboxStatusLabel(payment);
 
     return (
         <div className="flex flex-wrap items-center gap-1.5">
-            <StatusBadge status={status} label={customLabel} />
+            {manualReviewStatus ? (
+                <StatusBadge status={manualReviewStatus.status} label={manualReviewStatus.label} />
+            ) : (
+                <StatusBadge status={status} label={customLabel} />
+            )}
             {isSandboxPayment(payment) ? <StatusBadge status="sandbox" label="Sandbox/Test" tone="sandbox" /> : null}
         </div>
     );
@@ -161,8 +166,15 @@ function diagnosticToneClasses(status) {
 }
 
 function buildDiagnosisHeadline(payment, failure) {
+    const manualReviewStatus = unresolvedManualReviewStatus(payment);
     const status = String(payment?.status || '').toLowerCase();
     const stage = titleize(failure?.stage);
+
+    if (manualReviewStatus) {
+        return manualReviewStatus.label === 'Verification pending'
+            ? 'Payment proof is awaiting manual verification while the subscription remains active.'
+            : 'Payment proof is pending manual review before the subscription can be activated.';
+    }
 
     if (status === 'completed') {
         return 'Payment is completed in CRM and the latest telemetry shows a resolved flow.';
@@ -278,6 +290,34 @@ function isManualSubmissionPayment(payment) {
     return Boolean(payment?.manual_submission);
 }
 
+function manualCustomerStateValue(state) {
+    if (state && typeof state === 'object') {
+        return state.state || '';
+    }
+
+    return state || '';
+}
+
+function unresolvedManualReviewStatus(payment) {
+    if (!isManualSubmissionPayment(payment) || payment?.reconciliation_state !== 'manual_review') {
+        return null;
+    }
+
+    const customerState = manualCustomerStateValue(payment?.manual_submission?.customer_state);
+
+    if (customerState === 'verification_pending') {
+        return {
+            status: 'pending',
+            label: 'Verification pending',
+        };
+    }
+
+    return {
+        status: 'pending',
+        label: 'Pending review',
+    };
+}
+
 function manualSubmissionAction(payment) {
     if (!isManualSubmissionPayment(payment) || payment?.reconciliation_state !== 'manual_review') {
         return null;
@@ -299,7 +339,7 @@ function manualSubmissionAction(payment) {
 }
 
 function manualCustomerStateMeta(state) {
-    const normalized = String(state || '').toLowerCase();
+    const normalized = String(manualCustomerStateValue(state) || '').toLowerCase();
 
     if (normalized === 'verification_pending') {
         return {
@@ -330,6 +370,15 @@ function manualCustomerStateMeta(state) {
     }
 
     return null;
+}
+
+function diagnosticsStageLabel(payment, failure) {
+    const manualReviewStatus = unresolvedManualReviewStatus(payment);
+    if (manualReviewStatus) {
+        return manualReviewStatus.label;
+    }
+
+    return titleize(failure?.stage || 'overview');
 }
 
 function structuredDiagnosticsTone(status) {
@@ -1118,9 +1167,10 @@ export default function Payments() {
     const diagnosticsSummary = useMemo(() => ({
         headline: buildDiagnosisHeadline(diagnosticsPayment, diagnosticsData?.failure),
         tone: diagnosticToneClasses(
-            diagnosticsPayment?.status === 'reversed'
+            unresolvedManualReviewStatus(diagnosticsPayment)?.status
+                || (diagnosticsPayment?.status === 'reversed'
                 ? 'failed'
-                : diagnosticsPayment?.status
+                : diagnosticsPayment?.status)
         ),
     }), [diagnosticsData?.failure, diagnosticsPayment]);
     const primaryRecommendation = useMemo(
@@ -1787,7 +1837,7 @@ export default function Payments() {
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         {renderPaymentStatusBadges(diagnosticsData.payment)}
                                                         <span className="rounded-full border border-white/60 bg-white/60 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700">
-                                                            {titleize(diagnosticsData.failure?.stage || 'overview')}
+                                                            {diagnosticsStageLabel(diagnosticsData.payment, diagnosticsData.failure)}
                                                         </span>
                                                         {diagnosticsFreshness ? (
                                                             <span className="text-[11px] font-medium text-slate-600">
@@ -1797,7 +1847,9 @@ export default function Payments() {
                                                     </div>
                                                     <p className="mt-3 text-sm font-semibold text-slate-900">{diagnosticsSummary.headline}</p>
                                                     <p className="mt-2 text-xs text-slate-600">
-                                                        Reason: {diagnosticsData.failure?.reason || 'Not provided'} • Error: {diagnosticsData.failure?.error_code || '—'} • HTTP: {diagnosticsData.failure?.http_status || '—'}
+                                                        {unresolvedManualReviewStatus(diagnosticsData.payment)
+                                                            ? 'Awaiting operator review.'
+                                                            : `Reason: ${diagnosticsData.failure?.reason || 'Not provided'} • Error: ${diagnosticsData.failure?.error_code || '—'} • HTTP: ${diagnosticsData.failure?.http_status || '—'}`}
                                                     </p>
                                                 </div>
                                                 <div className="grid min-w-[180px] gap-2 sm:text-right">
