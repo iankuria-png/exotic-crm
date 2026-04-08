@@ -30,6 +30,7 @@ use App\Http\Controllers\CRM\SetupController;
 use App\Http\Controllers\CRM\SupportBoardController;
 use App\Http\Controllers\CRM\TeamController;
 use App\Http\Controllers\CRM\SystemHealthUpdateController;
+use App\Http\Controllers\CRM\AgentTodoController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -70,7 +71,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Dashboard
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
+    Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/products', [CrmDashboardController::class, 'products']);
+    Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales');
+
+    Route::middleware('role:admin,sub_admin,sales')->prefix('todos')->group(function () {
+        Route::get('/', [AgentTodoController::class, 'index']);
+        Route::post('/', [AgentTodoController::class, 'store']);
+        Route::patch('/{todo}', [AgentTodoController::class, 'update']);
+        Route::delete('/{todo}', [AgentTodoController::class, 'destroy']);
+    });
 
     Route::middleware('role:admin,sub_admin')->prefix('team')->group(function () {
         Route::get('/presence', [TeamController::class, 'presence']);
@@ -249,6 +259,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
+    Route::get('/settings/sales-dashboard-widgets', [SettingsController::class, 'getSalesDashboardWidgets']);
+    Route::patch('/settings/sales-dashboard-widgets', [SettingsController::class, 'updateSalesDashboardWidgets'])->middleware('role:admin,sub_admin');
     Route::get('/settings/billing/overview', [SettingsController::class, 'billingOverview']);
     Route::get('/settings/billing/system', [SettingsController::class, 'billingSystem']);
     Route::patch('/settings/billing/system/kill-switches', [SettingsController::class, 'updateBillingKillSwitches'])->middleware('role:admin');

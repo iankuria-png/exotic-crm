@@ -14,6 +14,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\RunSbLeadImportJob;
 use App\Jobs\RunSupportBoardSyncJob;
 use App\Models\AuditLog;
+use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use App\Models\SbLeadImportRun;
 use App\Models\Product;
@@ -55,6 +56,18 @@ use Illuminate\Validation\ValidationException;
 
 class SettingsController extends Controller
 {
+    private const SALES_DASHBOARD_WIDGETS_KEY = 'sales_dashboard_widgets';
+    private const SALES_DASHBOARD_WIDGET_DEFAULTS = [
+        'todos' => true,
+        'goals' => true,
+        'expiring_subs' => true,
+        'payment_recovery' => true,
+        'top_countries' => true,
+        'top_packages' => true,
+        'profile_engagement' => true,
+        'missed_chats' => true,
+    ];
+
     private const MANUAL_PAYMENT_METHOD_DEFINITIONS = [
         'collector' => [
             'label' => 'Collector',
@@ -194,6 +207,51 @@ class SettingsController extends Controller
                 'dedupe_modes' => ScraperSourceService::DEDUPE_MODES,
             ],
             'last_checked_at' => now()->toDateTimeString(),
+        ]);
+    }
+
+    public function getSalesDashboardWidgets(Request $request)
+    {
+        return response()->json([
+            'widgets' => $this->resolveSalesDashboardWidgets(),
+            'defaults' => self::SALES_DASHBOARD_WIDGET_DEFAULTS,
+            'editable' => $this->marketAuthorizationService->isManager($request->user()),
+        ]);
+    }
+
+    public function updateSalesDashboardWidgets(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can update sales dashboard widgets.'
+        );
+
+        $validated = $request->validate([
+            'widgets' => 'required|array',
+            'widgets.todos' => 'sometimes|boolean',
+            'widgets.goals' => 'sometimes|boolean',
+            'widgets.expiring_subs' => 'sometimes|boolean',
+            'widgets.payment_recovery' => 'sometimes|boolean',
+            'widgets.top_countries' => 'sometimes|boolean',
+            'widgets.top_packages' => 'sometimes|boolean',
+            'widgets.profile_engagement' => 'sometimes|boolean',
+            'widgets.missed_chats' => 'sometimes|boolean',
+        ]);
+
+        $widgets = $this->normalizeSalesDashboardWidgets($validated['widgets'] ?? []);
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => self::SALES_DASHBOARD_WIDGETS_KEY],
+            [
+                'value' => $widgets,
+                'updated_by' => $request->user()->id,
+            ]
+        );
+
+        return response()->json([
+            'widgets' => $widgets,
+            'defaults' => self::SALES_DASHBOARD_WIDGET_DEFAULTS,
+            'editable' => true,
         ]);
     }
 
@@ -2786,6 +2844,114 @@ class SettingsController extends Controller
         }
     }
 
+    public function runSalesMarketSync(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [
+                MarketAuthorizationService::ROLE_ADMIN,
+                MarketAuthorizationService::ROLE_SUB_ADMIN,
+                MarketAuthorizationService::ROLE_SALES,
+            ],
+            'Only admin, sub-admin, or sales users can run market sync.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+            'per_page' => 'nullable|integer|min:20|max:200',
+        ]);
+
+        if (!$this->platformHasWpCredentials($platform)) {
+            return response()->json([
+                'message' => 'WordPress sync credentials are incomplete for this market.',
+            ], 422);
+        }
+
+        $beforeState = $this->platformAuditState($platform);
+        $perPage = (int) ($validated['per_page'] ?? 100);
+
+        try {
+            $result = (new ClientSyncService($platform))->deltaSync($perPage);
+            $ranAt = now();
+
+            $platform->forceFill([
+                'sync_last_synced_at' => $ranAt,
+                'sync_last_scope' => 'clients',
+                'sync_last_status' => 'success',
+                'sync_last_error' => null,
+                'sync_last_result' => [
+                    'scope' => 'clients',
+                    'mode' => 'delta',
+                    'dry_run' => false,
+                    'ran_at' => $ranAt->toDateTimeString(),
+                    'clients' => $result,
+                    'leads' => null,
+                ],
+            ])->save();
+            $platform->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_SYNC_RUN,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Sales delta sync'
+            );
+
+            return response()->json([
+                'status' => 'success',
+                'synced_at' => $ranAt->toDateTimeString(),
+                'profiles_created' => (int) ($result['created'] ?? 0),
+                'profiles_updated' => (int) ($result['updated'] ?? 0),
+                'profiles_skipped' => (int) ($result['skipped'] ?? 0),
+                'profiles_total' => (int) ($result['total'] ?? 0),
+                'platform' => $this->serializePlatformIntegration($platform),
+            ]);
+        } catch (\Throwable $exception) {
+            $ranAt = now();
+
+            $platform->forceFill([
+                'sync_last_synced_at' => $ranAt,
+                'sync_last_scope' => 'clients',
+                'sync_last_status' => 'error',
+                'sync_last_error' => mb_substr($exception->getMessage(), 0, 500),
+                'sync_last_result' => [
+                    'scope' => 'clients',
+                    'mode' => 'delta',
+                    'dry_run' => false,
+                    'ran_at' => $ranAt->toDateTimeString(),
+                ],
+            ])->save();
+            $platform->refresh();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $platform->id,
+                CrmAuditAction::INTEGRATION_SYNC_RUN,
+                'platform',
+                (int) $platform->id,
+                $beforeState,
+                $this->platformAuditState($platform),
+                $validated['reason'] ?? 'Sales delta sync failed'
+            );
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Market sync failed.',
+                'error' => $exception->getMessage(),
+                'platform' => $this->serializePlatformIntegration($platform),
+            ], 422);
+        }
+    }
+
     public function runPlatformSupportBoardSync(
         Request $request,
         Platform $platform
@@ -4299,6 +4465,28 @@ class SettingsController extends Controller
             ->values();
 
         return [$platforms, $platformStatuses, $allowedPlatformIds];
+    }
+
+    private function resolveSalesDashboardWidgets(): array
+    {
+        $stored = IntegrationSetting::query()
+            ->where('key', self::SALES_DASHBOARD_WIDGETS_KEY)
+            ->value('value');
+
+        return $this->normalizeSalesDashboardWidgets(is_array($stored) ? $stored : []);
+    }
+
+    private function normalizeSalesDashboardWidgets(array $widgets): array
+    {
+        $normalized = self::SALES_DASHBOARD_WIDGET_DEFAULTS;
+
+        foreach (array_keys(self::SALES_DASHBOARD_WIDGET_DEFAULTS) as $key) {
+            if (array_key_exists($key, $widgets)) {
+                $normalized[$key] = (bool) $widgets[$key];
+            }
+        }
+
+        return $normalized;
     }
 
     private function normalizePaymentLinkProviders(array $config): ?array

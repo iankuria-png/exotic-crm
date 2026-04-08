@@ -8,7 +8,9 @@ import QuickStatsWidget from '../components/dashboard/QuickStatsWidget';
 import RecentActivityWidget from '../components/dashboard/RecentActivityWidget';
 import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
+import SalesDashboardView from '../components/dashboard/SalesDashboardView';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
+import { useAuth } from '../hooks/useAuth';
 import { getCountryFlag } from '../utils/flags';
 import { formatCurrency, asNumber } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
@@ -325,7 +327,7 @@ function RetentionWatchWidget({ summary, isLoading, onOpenWatchlist }) {
     );
 }
 
-export default function Dashboard() {
+function OperationsDashboard() {
     const navigate = useNavigate();
     const { config: widgetConfig } = useDashboardWidgets();
     const [platformFilter, setPlatformFilter] = useState(() => {
@@ -895,4 +897,28 @@ export default function Dashboard() {
             </section>
         </div>
     );
+}
+
+export default function Dashboard() {
+    const navigate = useNavigate();
+    const { user, isLoading } = useAuth();
+
+    if (isLoading && !user) {
+        return (
+            <div className="space-y-4">
+                <div className="h-64 animate-pulse rounded-[28px] bg-slate-200" />
+                <div className="grid gap-4 xl:grid-cols-4">
+                    {Array.from({ length: 4 }).map((_, index) => (
+                        <div key={index} className="h-40 animate-pulse rounded-[24px] bg-slate-100" />
+                    ))}
+                </div>
+            </div>
+        );
+    }
+
+    if (user?.role === 'sales') {
+        return <SalesDashboardView user={user} navigate={navigate} />;
+    }
+
+    return <OperationsDashboard />;
 }

@@ -14,16 +14,22 @@ use App\Models\Product;
 use App\Models\ClientNote;
 use App\Models\RenewalCampaign;
 use App\Models\TimelineEvent;
-use App\Models\IntegrationSetting;
 use App\Services\ClientRetentionInsightService;
 use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
+use App\Services\SupportBoardService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class DashboardController extends Controller
 {
+    private const SALES_NEW_USER_SOURCE_GROUPS = [
+        'crm_created' => ['crm_manual', 'crm_provisioned'],
+        'wp_organic' => ['fast_signup', 'full_registration'],
+    ];
+
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly RenewalService $renewalService,
@@ -38,6 +44,7 @@ class DashboardController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'search' => 'nullable|string|max:120',
             'country_period' => 'nullable|in:week,month',
+            'sales_view' => 'nullable|boolean',
         ]);
 
         $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -75,6 +82,7 @@ class DashboardController extends Controller
         $expiringDeals = $this->buildExpiringSubscriptionsWidget($platformIds, $search);
 
         $reviewBaselineCutoff = $this->resolveBaselineCutoff();
+        $salesView = $request->boolean('sales_view') || $request->user()?->role === MarketAuthorizationService::ROLE_SALES;
         $paymentReviewQueueQuery = Payment::query()
             ->liveOnly()
             ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
@@ -262,6 +270,9 @@ class DashboardController extends Controller
         $retentionSummary = $this->clientRetentionInsightService->buildDashboardSummary(
             is_array($platformIds) ? $platformIds : null
         );
+        $newUsers = $salesView ? $this->buildNewUsersKpi(is_array($platformIds) ? $platformIds : null) : null;
+        $topPackages = $salesView ? $this->buildTopPackages(is_array($platformIds) ? $platformIds : null, $from, $to) : [];
+        $missedChatsCount = $salesView ? $this->resolveMissedChatsCount(is_array($platformIds) ? $platformIds : null) : null;
 
         return response()->json([
             'filters' => [
@@ -310,12 +321,15 @@ class DashboardController extends Controller
                 'renewal_pipeline_4_14d' => $renewalPipeline14d,
                 'renewal_workload_14d' => $renewalWorkload14d,
                 'upcoming_follow_ups_count' => $upcomingFollowUpsCount,
+                'new_users' => $newUsers,
+                'missed_chats_count' => $missedChatsCount,
             ],
             'expiring_deals' => $expiringDeals,
             'payment_review_queue' => $paymentReviewQueue,
             'recent_payments' => $paymentReviewQueue,
             'upcoming_follow_ups' => $upcomingFollowUps,
             'country_revenue' => $countryRevenue,
+            'top_packages' => $topPackages,
             'active_campaigns_count' => $activeCampaignsCount,
             'recent_activity' => $recentActivity,
             'retention_summary' => $retentionSummary,
@@ -325,6 +339,48 @@ class DashboardController extends Controller
                 'failed_count' => $commsFailedCount,
             ],
         ]);
+    }
+
+    public function myMarkets(Request $request)
+    {
+        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        $query = Platform::query()
+            ->where('is_active', true)
+            ->orderBy('name');
+
+        if (is_array($allowedPlatformIds)) {
+            if (empty($allowedPlatformIds)) {
+                return response()->json([]);
+            }
+
+            $query->whereIn('id', $allowedPlatformIds);
+        }
+
+        $markets = $query->get()->map(function (Platform $platform) {
+            $lastResult = is_array($platform->sync_last_result) ? $platform->sync_last_result : [];
+            $profilesTotal = $this->extractSyncedProfilesTotal($lastResult);
+            $lastSyncedAt = optional($platform->sync_last_synced_at)->toDateTimeString();
+            $needsSync = $platform->sync_last_status === 'error'
+                || !$platform->sync_last_synced_at
+                || $platform->sync_last_synced_at->lt(now()->subHours(12));
+
+            return [
+                'id' => (int) $platform->id,
+                'name' => $platform->name,
+                'country' => $platform->country,
+                'country_code' => $this->countryCodeForCountry($platform->country),
+                'currency' => $platform->currency_code,
+                'sync_last_synced_at' => $lastSyncedAt,
+                'sync_last_status' => $platform->sync_last_status,
+                'sync_last_error' => $platform->sync_last_error,
+                'sync_last_result' => $lastResult,
+                'profiles_total' => $profilesTotal,
+                'needs_sync' => $needsSync,
+            ];
+        })->values();
+
+        return response()->json($markets);
     }
 
     public function products()
@@ -406,6 +462,164 @@ class DashboardController extends Controller
         usort($result, fn($a, $b) => array_sum($b['current_revenue_breakdown']) <=> array_sum($a['current_revenue_breakdown']));
 
         return $result;
+    }
+
+    private function buildNewUsersKpi(?array $platformIds): array
+    {
+        $windowStart = now()->subDays(6)->startOfDay();
+        $windowEnd = now()->endOfDay();
+
+        $query = Client::query()
+            ->selectRaw('signup_source, COUNT(*) as total')
+            ->whereBetween('created_at', [$windowStart, $windowEnd])
+            ->groupBy('signup_source');
+
+        if (is_array($platformIds)) {
+            if (empty($platformIds)) {
+                return [
+                    'crm_created' => 0,
+                    'wp_organic' => 0,
+                    'total' => 0,
+                ];
+            }
+
+            $query->whereIn('platform_id', $platformIds);
+        }
+
+        $countsBySource = $query->pluck('total', 'signup_source')
+            ->map(fn ($value) => (int) $value);
+
+        $crmCreated = collect(self::SALES_NEW_USER_SOURCE_GROUPS['crm_created'])
+            ->sum(fn (string $source) => (int) ($countsBySource[$source] ?? 0));
+        $wpOrganic = collect(self::SALES_NEW_USER_SOURCE_GROUPS['wp_organic'])
+            ->sum(fn (string $source) => (int) ($countsBySource[$source] ?? 0));
+
+        return [
+            'crm_created' => $crmCreated,
+            'wp_organic' => $wpOrganic,
+            'total' => $crmCreated + $wpOrganic,
+        ];
+    }
+
+    private function buildTopPackages(?array $platformIds, Carbon $from, Carbon $to): array
+    {
+        $packageExpression = "COALESCE(deal_products.name, payment_products.name, deals.plan_type, 'Unknown package')";
+
+        $query = Payment::query()
+            ->liveOnly()
+            ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
+            ->excludingWalletTopups()
+            ->whereBetween('payments.created_at', [$from, $to])
+            ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('products as payment_products', 'payment_products.id', '=', 'payments.product_id')
+            ->leftJoin('products as deal_products', 'deal_products.id', '=', 'deals.product_id')
+            ->selectRaw("{$packageExpression} as package_name, COUNT(*) as activation_count")
+            ->groupBy(DB::raw($packageExpression))
+            ->orderByDesc('activation_count')
+            ->limit(5);
+
+        if (is_array($platformIds)) {
+            if (empty($platformIds)) {
+                return [];
+            }
+
+            $query->whereIn('payments.platform_id', $platformIds);
+        }
+
+        return $query->get()
+            ->map(fn ($row) => [
+                'package_name' => (string) ($row->package_name ?: 'Unknown package'),
+                'activation_count' => (int) ($row->activation_count ?? 0),
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function resolveMissedChatsCount(?array $platformIds): ?int
+    {
+        $platformQuery = Platform::query()
+            ->whereNotNull('support_board_api_url')
+            ->whereNotNull('support_board_token')
+            ->orderBy('id');
+
+        if (is_array($platformIds)) {
+            if (empty($platformIds)) {
+                return 0;
+            }
+
+            $platformQuery->whereIn('id', $platformIds);
+        }
+
+        $platforms = $platformQuery->get();
+        if ($platforms->isEmpty()) {
+            return null;
+        }
+
+        $count = 0;
+        $hasSuccessfulFetch = false;
+
+        foreach ($platforms as $platform) {
+            $service = new SupportBoardService($platform);
+            if (!$service->isConfigured()) {
+                continue;
+            }
+
+            try {
+                $page = 1;
+                while ($page <= 50) {
+                    $batch = $service->getAllConversations($page);
+                    if (empty($batch)) {
+                        break;
+                    }
+
+                    $count += collect($batch)
+                        ->filter(fn (array $conversation) => (int) ($conversation['status_code'] ?? 0) !== 4)
+                        ->count();
+
+                    $hasSuccessfulFetch = true;
+                    $page++;
+                }
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        return $hasSuccessfulFetch ? $count : null;
+    }
+
+    private function extractSyncedProfilesTotal(array $result): ?int
+    {
+        $candidates = [
+            data_get($result, 'clients.total'),
+            data_get($result, 'total'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate === null) {
+                continue;
+            }
+
+            return (int) $candidate;
+        }
+
+        return null;
+    }
+
+    private function countryCodeForCountry(?string $country): ?string
+    {
+        $normalized = Str::lower(trim((string) $country));
+
+        return match ($normalized) {
+            'kenya' => 'KE',
+            'tanzania' => 'TZ',
+            'uganda' => 'UG',
+            'nigeria' => 'NG',
+            'south africa' => 'ZA',
+            'ghana' => 'GH',
+            'ethiopia' => 'ET',
+            'rwanda' => 'RW',
+            default => $normalized !== '' ? strtoupper(Str::substr($normalized, 0, 2)) : null,
+        };
     }
 
     /**

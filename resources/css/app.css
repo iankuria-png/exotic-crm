@@ -92,4 +92,42 @@
     .crm-kpi-meta {
         @apply mt-1.5 text-sm font-medium text-slate-600;
     }
+
+    .crm-sales-shell {
+        @apply space-y-5;
+    }
+
+    .crm-sales-hero {
+        background:
+            radial-gradient(circle at top left, rgba(45, 212, 191, 0.22), transparent 36%),
+            radial-gradient(circle at bottom right, rgba(250, 204, 21, 0.12), transparent 32%),
+            linear-gradient(135deg, #0f172a 0%, #0f766e 56%, #164e63 100%);
+        @apply relative overflow-hidden rounded-[28px] border border-slate-900/10 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.7)];
+    }
+
+    .crm-sales-hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+            linear-gradient(125deg, rgba(255,255,255,0.08), transparent 24%),
+            linear-gradient(180deg, transparent 0%, rgba(15,23,42,0.1) 100%);
+        pointer-events: none;
+    }
+
+    .crm-sales-panel {
+        @apply rounded-[26px] border border-slate-200/90 bg-white shadow-[0_24px_60px_-38px_rgba(15,23,42,0.35)];
+    }
+
+    .crm-sales-panel-prominent {
+        @apply shadow-[0_28px_70px_-36px_rgba(13,148,136,0.32)];
+    }
+
+    .crm-sales-panel-muted {
+        background: linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(241, 245, 249, 0.86) 100%);
+    }
+
+    .crm-sales-pill {
+        @apply inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-semibold tracking-[0.12em];
+    }
 }

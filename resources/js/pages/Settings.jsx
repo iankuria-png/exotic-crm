@@ -17,6 +17,7 @@ import PaymentLinkRoutingPanel from '../components/settings/PaymentLinkRoutingPa
 import PushRoutingPanel from '../components/settings/PushRoutingPanel';
 import ScraperConfigPanel from '../components/settings/ScraperConfigPanel';
 import ScraperCreateModal from '../components/settings/ScraperCreateModal';
+import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import { useAuth } from '../hooks/useAuth';
@@ -6580,7 +6581,12 @@ export default function Settings() {
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
-            {activeTab === 'dashboard' ? <DashboardSettingsPanel /> : null}
+            {activeTab === 'dashboard' ? (
+                <div className="space-y-4">
+                    <DashboardSettingsPanel />
+                    <SalesDashboardSettingsPanel />
+                </div>
+            ) : null}
             {activeTab === 'health' ? (
                 <SystemHealthWorkspace
                     canCreateMarkets={canCreateMarkets}
