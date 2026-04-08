@@ -11,6 +11,8 @@ import { getCountryFlag } from '../../utils/flags';
 const DASHBOARD_REFRESH_MS = 30_000;
 const SALES_MARKET_STORAGE_KEY = 'exoticcrm.sales_dashboard.market_filter';
 const SALES_RANGE_STORAGE_KEY = 'exoticcrm.sales_dashboard.range';
+const SALES_DASHBOARD_CACHE_PREFIX = 'exoticcrm.sales_dashboard.cache';
+const SALES_DASHBOARD_CACHE_TTL = 1000 * 60 * 60 * 24;
 const SALES_RANGE_OPTIONS = [
     { key: '7d', label: '7 days', days: 7 },
     { key: '30d', label: '30 days', days: 30 },
@@ -33,6 +35,53 @@ function normalizeMarketFilter(value) {
 
 function resolveRangeOption(rangeKey) {
     return SALES_RANGE_OPTIONS.find((option) => option.key === rangeKey) || SALES_RANGE_OPTIONS[1];
+}
+
+function makeDashboardCacheKey(user, scope) {
+    const userScope = user?.id || user?.email || 'sales';
+    return `${SALES_DASHBOARD_CACHE_PREFIX}.${userScope}.${scope}`;
+}
+
+function readDashboardCache(cacheKey) {
+    if (typeof window === 'undefined' || !cacheKey) {
+        return null;
+    }
+
+    try {
+        const raw = window.localStorage.getItem(cacheKey);
+        if (!raw) {
+            return null;
+        }
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || !('data' in parsed) || !parsed.updatedAt) {
+            return null;
+        }
+
+        if ((Date.now() - Number(parsed.updatedAt)) > SALES_DASHBOARD_CACHE_TTL) {
+            window.localStorage.removeItem(cacheKey);
+            return null;
+        }
+
+        return parsed;
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeDashboardCache(cacheKey, data) {
+    if (typeof window === 'undefined' || !cacheKey || data === undefined) {
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(cacheKey, JSON.stringify({
+            data,
+            updatedAt: Date.now(),
+        }));
+    } catch (error) {
+        // Ignore cache write failures and keep the live dashboard working.
+    }
 }
 
 function isoDateDaysAgo(days) {
@@ -205,6 +254,7 @@ function SalesHero({
     onRangeChange,
     summary,
     myStats,
+    isLoading,
     onOpenRecovery,
     onOpenRenewals,
 }) {
@@ -224,6 +274,9 @@ function SalesHero({
             : goalsBehind > 0
                 ? `${pluralize(goalsBehind, 'goal')} needs pace support.`
                 : 'Queues are under control.';
+    const heroMessage = isLoading
+        ? 'Loading your live market data. The board will fill in as the latest snapshot arrives.'
+        : focusMessage;
 
     return (
         <section className="crm-sales-hero px-6 py-6 sm:px-7 sm:py-7">
@@ -250,23 +303,23 @@ function SalesHero({
                         <h2 className="mt-1 max-w-3xl text-[2.1rem] leading-[1.02] font-semibold tracking-[-0.04em] text-white sm:text-[2.9rem]">
                             Customer Service Center
                         </h2>
-                        <p className="mt-3 max-w-2xl text-[0.98rem] leading-7 text-slate-200/92">{focusMessage}</p>
+                        <p className="mt-3 max-w-2xl text-[0.98rem] leading-7 text-slate-200/92">{heroMessage}</p>
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-3">
                         <div className="rounded-2xl border border-white/12 bg-white/10 px-4 py-4 backdrop-blur-sm">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-200">This period</p>
-                            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{totalActions.toLocaleString()}</p>
+                            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{isLoading ? '—' : totalActions.toLocaleString()}</p>
                             <p className="mt-1 text-sm text-slate-200">tracked actions by you</p>
                         </div>
                         <div className="rounded-2xl border border-white/12 bg-white/10 px-4 py-4 backdrop-blur-sm">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-200">Lead outreach</p>
-                            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{leadContacts.toLocaleString()}</p>
+                            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{isLoading ? '—' : leadContacts.toLocaleString()}</p>
                             <p className="mt-1 text-sm text-slate-200">contacts logged this period</p>
                         </div>
                         <div className="rounded-2xl border border-white/12 bg-white/10 px-4 py-4 backdrop-blur-sm">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-200">Activations</p>
-                            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{activations.toLocaleString()}</p>
+                            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{isLoading ? '—' : activations.toLocaleString()}</p>
                             <p className="mt-1 text-sm text-slate-200">subscriptions activated</p>
                         </div>
                     </div>
@@ -746,11 +799,40 @@ function ExpiringSubscriptionsCard({ deals, isLoading, onOpen }) {
     );
 }
 
-function PaymentRecoveryCard({ kpis, onOpen }) {
+function PaymentRecoveryCard({ kpis, onOpen, isLoading }) {
     const queueTotal = asNumber(kpis.payment_recovery_queue_total);
     const failed = asNumber(kpis.payment_recovery_failed);
     const pending = asNumber(kpis.payment_recovery_pending);
     const unmatched = asNumber(kpis.payment_recovery_unmatched);
+    const breakdownRows = [
+        {
+            label: 'Failed payments',
+            hint: 'Priority follow-up',
+            value: failed,
+            badge: 'Priority',
+            tone: failed > 0 ? 'danger' : 'neutral',
+        },
+        {
+            label: 'Pending payments',
+            hint: 'Awaiting completion',
+            value: pending,
+            badge: 'Awaiting',
+            tone: pending > 0 ? 'warning' : 'neutral',
+        },
+        {
+            label: 'Unmatched payments',
+            hint: 'Needs reconciliation',
+            value: unmatched,
+            badge: 'Manual',
+            tone: unmatched > 0 ? 'warning' : 'neutral',
+        },
+    ];
+    const primaryTone = failed > 0 ? 'danger' : queueTotal > 0 ? 'warning' : 'success';
+    const primaryLabel = failed > 0
+        ? `${failed} failed need action`
+        : queueTotal > 0
+            ? 'Queue needs review'
+            : 'Queue clear';
 
     return (
         <UtilityCard
@@ -759,34 +841,60 @@ function PaymentRecoveryCard({ kpis, onOpen }) {
             meta="Keep failed, pending, and unmatched payments moving."
             action={<ActionButton label="Open queue" onClick={onOpen} />}
         >
-            <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white">
-                <div className="grid gap-0 sm:grid-cols-3">
-                    <div className="border-b border-slate-200 px-4 py-4 sm:border-b-0 sm:border-r">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total</p>
-                        <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{queueTotal.toLocaleString()}</p>
-                        <p className="mt-2 text-xs text-slate-500">items in queue</p>
-                    </div>
-                    <div className="border-b border-slate-200 px-4 py-4 sm:border-b-0 sm:border-r">
-                        <div className="flex items-center justify-between gap-2">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Failed</p>
-                            <Badge label="Needs attention" tone={failed > 0 ? 'danger' : 'neutral'} />
+            {isLoading ? (
+                <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-4">
+                        <div className="animate-pulse">
+                            <div className="h-3 w-24 rounded bg-slate-100" />
+                            <div className="mt-3 h-10 w-24 rounded bg-slate-100" />
+                            <div className="mt-3 h-3 w-48 rounded bg-slate-100" />
                         </div>
-                        <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{failed.toLocaleString()}</p>
-                        <p className="mt-2 text-xs text-slate-500">payment failures</p>
                     </div>
-                    <div className="px-4 py-4">
-                        <div className="flex items-center justify-between gap-2">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Pending</p>
-                            <Badge label="Awaiting update" tone={pending > 0 ? 'warning' : 'neutral'} />
-                        </div>
-                        <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{pending.toLocaleString()}</p>
-                        <p className="mt-2 text-xs text-slate-500">still pending</p>
+                    <div className="divide-y divide-slate-200">
+                        {Array.from({ length: 3 }).map((_, index) => (
+                            <div key={index} className="flex items-center justify-between gap-4 px-4 py-3.5">
+                                <div className="animate-pulse">
+                                    <div className="h-4 w-28 rounded bg-slate-100" />
+                                    <div className="mt-2 h-3 w-24 rounded bg-slate-100" />
+                                </div>
+                                <div className="animate-pulse text-right">
+                                    <div className="ml-auto h-8 w-10 rounded bg-slate-100" />
+                                    <div className="mt-2 ml-auto h-7 w-16 rounded-xl bg-slate-100" />
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
+            ) : (
+            <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white">
+                <div className="border-b border-slate-200 px-4 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Queue total</p>
+                            <p className="mt-2 text-[2.4rem] leading-none font-semibold tracking-[-0.04em] text-slate-950">{queueTotal.toLocaleString()}</p>
+                            <p className="mt-2 text-sm text-slate-500">payments waiting for review or reconciliation</p>
+                        </div>
+                        <Badge label={primaryLabel} tone={primaryTone} />
+                    </div>
+                </div>
+                <div className="divide-y divide-slate-200">
+                    {breakdownRows.map((row) => (
+                        <div key={row.label} className="flex items-center justify-between gap-4 px-4 py-3.5">
+                            <div className="min-w-0">
+                                <p className="text-sm font-semibold text-slate-800">{row.label}</p>
+                                <p className="mt-1 text-xs text-slate-500">{row.hint}</p>
+                            </div>
+                            <div className="shrink-0 text-right">
+                                <p className="text-2xl leading-none font-semibold tracking-[-0.03em] text-slate-950">{row.value.toLocaleString()}</p>
+                                <div className="mt-2 flex justify-end">
+                                    <Badge label={row.badge} tone={row.tone} />
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
             </div>
-            <p className="text-sm leading-6 text-slate-500">
-                {unmatched.toLocaleString()} unmatched payments are also sitting inside the queue and may need manual reconciliation.
-            </p>
+            )}
         </UtilityCard>
     );
 }
@@ -924,13 +1032,19 @@ export default function SalesDashboardView({ user, navigate }) {
     const selectedRange = resolveRangeOption(rangeKey);
     const fromDate = isoDateDaysAgo(selectedRange.days - 1);
     const toDate = isoDateDaysAgo(0);
+    const marketsCacheKey = makeDashboardCacheKey(user, 'markets');
+    const summaryCacheKey = makeDashboardCacheKey(user, `summary.${marketFilter || 'all'}.${rangeKey}`);
+    const myStatsCacheKey = makeDashboardCacheKey(user, `stats.${marketFilter || 'all'}.${selectedRange.days > 7 ? 'month' : 'week'}`);
 
     const { config: widgetConfig } = useSalesWidgetConfig();
 
     const marketsQuery = useQuery({
         queryKey: ['sales-dashboard-markets'],
         queryFn: () => api.get('/crm/dashboard/my-markets').then((response) => response.data),
-        staleTime: 60_000,
+        initialData: () => readDashboardCache(marketsCacheKey)?.data,
+        initialDataUpdatedAt: () => readDashboardCache(marketsCacheKey)?.updatedAt,
+        staleTime: 300_000,
+        refetchOnWindowFocus: false,
     });
 
     const markets = marketsQuery.data || [];
@@ -968,6 +1082,12 @@ export default function SalesDashboardView({ user, navigate }) {
         }
     }, [marketFilter, markets]);
 
+    useEffect(() => {
+        if (marketsQuery.data) {
+            writeDashboardCache(marketsCacheKey, marketsQuery.data);
+        }
+    }, [marketsCacheKey, marketsQuery.data]);
+
     const summaryQuery = useQuery({
         queryKey: ['sales-dashboard-summary', marketFilter, rangeKey],
         queryFn: () => api.get('/crm/dashboard', {
@@ -979,7 +1099,12 @@ export default function SalesDashboardView({ user, navigate }) {
                 ...(marketFilter ? { platform_id: Number(marketFilter) } : {}),
             },
         }).then((response) => response.data),
+        initialData: () => readDashboardCache(summaryCacheKey)?.data,
+        initialDataUpdatedAt: () => readDashboardCache(summaryCacheKey)?.updatedAt,
+        placeholderData: (previousData) => previousData,
+        staleTime: 60_000,
         refetchInterval: DASHBOARD_REFRESH_MS,
+        refetchOnWindowFocus: false,
     });
 
     const myStatsQuery = useQuery({
@@ -990,8 +1115,25 @@ export default function SalesDashboardView({ user, navigate }) {
                 ...(marketFilter ? { platform_id: Number(marketFilter) } : {}),
             },
         }).then((response) => response.data),
+        initialData: () => readDashboardCache(myStatsCacheKey)?.data,
+        initialDataUpdatedAt: () => readDashboardCache(myStatsCacheKey)?.updatedAt,
+        placeholderData: (previousData) => previousData,
+        staleTime: 60_000,
         refetchInterval: DASHBOARD_REFRESH_MS,
+        refetchOnWindowFocus: false,
     });
+
+    useEffect(() => {
+        if (summaryQuery.data) {
+            writeDashboardCache(summaryCacheKey, summaryQuery.data);
+        }
+    }, [summaryCacheKey, summaryQuery.data]);
+
+    useEffect(() => {
+        if (myStatsQuery.data) {
+            writeDashboardCache(myStatsCacheKey, myStatsQuery.data);
+        }
+    }, [myStatsCacheKey, myStatsQuery.data]);
 
     const todosQuery = useQuery({
         queryKey: ['sales-dashboard-todos'],
@@ -1078,8 +1220,8 @@ export default function SalesDashboardView({ user, navigate }) {
     const countries = summary.country_revenue || [];
     const packages = summary.top_packages || [];
     const missedChatsCount = kpis.missed_chats_count;
-    const leadTrend = myStats.trend?.leads_contacted;
-    const activationTrend = myStats.trend?.subs_activated;
+    const isHeroBooting = (!summaryQuery.data && summaryQuery.isLoading) || (!myStatsQuery.data && myStatsQuery.isLoading);
+    const isPrimaryMetricsBooting = !summaryQuery.data && summaryQuery.isLoading;
 
     const submitTodo = (event) => {
         event.preventDefault();
@@ -1124,61 +1266,87 @@ export default function SalesDashboardView({ user, navigate }) {
                 onRangeChange={setRangeKey}
                 summary={summary}
                 myStats={myStats}
+                isLoading={isHeroBooting}
                 onOpenRecovery={() => navigate(marketFilter ? `/payments?status=recovery_queue&platform_id=${marketFilter}` : '/payments?status=recovery_queue')}
                 onOpenRenewals={() => navigate(marketFilter ? `/deals?bucket=workload&platform_id=${marketFilter}` : '/deals?bucket=workload')}
             />
 
             <section className="grid gap-4 xl:grid-cols-12">
-                <SalesKpiCard
-                    label="Collected revenue"
-                    value={(
-                        <CurrencyAmount
-                            breakdown={revenueBreakdown}
-                            scalarAmount={revenueScalar}
-                            fallbackCurrency={revenueCurrency}
-                            className="crm-mono"
-                            stackClassName="crm-mono"
+                {isPrimaryMetricsBooting ? (
+                    <>
+                        <div className="crm-sales-panel bg-white xl:col-span-5">
+                            <div className="animate-pulse space-y-4 px-5 py-5">
+                                <div className="h-3 w-28 rounded bg-slate-100" />
+                                <div className="h-14 w-48 rounded bg-slate-100" />
+                                <div className="h-4 w-40 rounded bg-slate-100" />
+                                <div className="h-10 w-32 rounded-xl bg-slate-100" />
+                            </div>
+                        </div>
+                        {['xl:col-span-2', 'xl:col-span-2', 'xl:col-span-3'].map((spanClass, index) => (
+                            <div key={index} className={`crm-sales-panel bg-white ${spanClass}`}>
+                                <div className="animate-pulse space-y-4 px-5 py-5">
+                                    <div className="h-3 w-24 rounded bg-slate-100" />
+                                    <div className="h-12 w-24 rounded bg-slate-100" />
+                                    <div className="h-4 w-36 rounded bg-slate-100" />
+                                    <div className="h-10 w-28 rounded-xl bg-slate-100" />
+                                </div>
+                            </div>
+                        ))}
+                    </>
+                ) : (
+                    <>
+                        <SalesKpiCard
+                            label="Collected revenue"
+                            value={(
+                                <CurrencyAmount
+                                    breakdown={revenueBreakdown}
+                                    scalarAmount={revenueScalar}
+                                    fallbackCurrency={revenueCurrency}
+                                    className="crm-mono"
+                                    stackClassName="crm-mono"
+                                />
+                            )}
+                            meta={revenueCurrencies.length > 1 ? 'Mixed-currency revenue in this scope' : `Window anchored to ${selectedRange.label.toLowerCase()}`}
+                            subMeta={revenueDeltaLabel}
+                            featured
+                            actionLabel="Open payments"
+                            onClick={() => navigate(marketFilter ? `/payments?status=completed&platform_id=${marketFilter}` : '/payments?status=completed')}
+                            className="xl:col-span-5"
+                            badge={<Badge label={Number.isFinite(revenueDelta) && revenueDelta !== 0 ? `${revenueDelta > 0 ? '+' : ''}${revenueDelta}%` : 'No change'} tone={revenueDelta > 0 ? 'success' : revenueDelta < 0 ? 'danger' : 'neutral'} />}
                         />
-                    )}
-                    meta={revenueCurrencies.length > 1 ? 'Mixed-currency revenue in this scope' : `Window anchored to ${selectedRange.label.toLowerCase()}`}
-                    subMeta={revenueDeltaLabel}
-                    featured
-                    actionLabel="Open payments"
-                    onClick={() => navigate(marketFilter ? `/payments?status=completed&platform_id=${marketFilter}` : '/payments?status=completed')}
-                    className="xl:col-span-5"
-                    badge={<Badge label={Number.isFinite(revenueDelta) && revenueDelta !== 0 ? `${revenueDelta > 0 ? '+' : ''}${revenueDelta}%` : 'No change'} tone={revenueDelta > 0 ? 'success' : revenueDelta < 0 ? 'danger' : 'neutral'} />}
-                />
 
-                <SalesKpiCard
-                    label="Active clients"
-                    value={activeClients.toLocaleString()}
-                    meta={totalClients > 0 ? `${Math.round((activeClients / totalClients) * 100)}% of ${totalClients.toLocaleString()} profiles are active` : 'No profiles found in this scope'}
-                    actionLabel="Open clients"
-                    onClick={() => navigate(marketFilter ? `/clients?status=publish&platform_id=${marketFilter}` : '/clients?status=publish')}
-                    className="xl:col-span-2"
-                    badge={<Badge label={totalClients > 0 ? `${Math.round((activeClients / totalClients) * 100)}% active` : 'No profiles'} tone={activeClients > 0 ? 'success' : 'neutral'} />}
-                />
+                        <SalesKpiCard
+                            label="Active clients"
+                            value={activeClients.toLocaleString()}
+                            meta={totalClients > 0 ? `${Math.round((activeClients / totalClients) * 100)}% of ${totalClients.toLocaleString()} profiles are active` : 'No profiles found in this scope'}
+                            actionLabel="Open clients"
+                            onClick={() => navigate(marketFilter ? `/clients?status=publish&platform_id=${marketFilter}` : '/clients?status=publish')}
+                            className="xl:col-span-2"
+                            badge={<Badge label={totalClients > 0 ? `${Math.round((activeClients / totalClients) * 100)}% active` : 'No profiles'} tone={activeClients > 0 ? 'success' : 'neutral'} />}
+                        />
 
-                <SalesKpiCard
-                    label="Renewal workload"
-                    value={renewalWorkload.toLocaleString()}
-                    meta={renewalWorkload > 0 ? `${asNumber(kpis.renewal_risk_72h).toLocaleString()} in 0-3 days • ${asNumber(kpis.renewal_pipeline_4_14d).toLocaleString()} in 4-14 days` : 'No renewals due in the next 14 days'}
-                    actionLabel="Open renewals"
-                    onClick={() => navigate(marketFilter ? `/deals?bucket=workload&platform_id=${marketFilter}` : '/deals?bucket=workload')}
-                    className="xl:col-span-2"
-                    badge={<Badge label={renewalWorkload > 0 ? 'Due soon' : 'Clear'} tone={renewalWorkload > 0 ? 'warning' : 'success'} />}
-                />
+                        <SalesKpiCard
+                            label="Renewal workload"
+                            value={renewalWorkload.toLocaleString()}
+                            meta={renewalWorkload > 0 ? `${asNumber(kpis.renewal_risk_72h).toLocaleString()} in 0-3 days • ${asNumber(kpis.renewal_pipeline_4_14d).toLocaleString()} in 4-14 days` : 'No renewals due in the next 14 days'}
+                            actionLabel="Open renewals"
+                            onClick={() => navigate(marketFilter ? `/deals?bucket=workload&platform_id=${marketFilter}` : '/deals?bucket=workload')}
+                            className="xl:col-span-2"
+                            badge={<Badge label={renewalWorkload > 0 ? 'Due soon' : 'Clear'} tone={renewalWorkload > 0 ? 'warning' : 'success'} />}
+                        />
 
-                <SalesKpiCard
-                    label="New users"
-                    value={newUsers.total.toLocaleString()}
-                    meta={`${newUsers.crm_created.toLocaleString()} CRM-created • ${newUsers.wp_organic.toLocaleString()} organic`}
-                    subMeta="Trailing 7-day intake, split so sourcing stays visible."
-                    actionLabel="Open leads"
-                    onClick={() => navigate(marketFilter ? `/leads?platform_id=${marketFilter}` : '/leads')}
-                    className="xl:col-span-3"
-                    badge={<Badge label="7-day intake" tone="neutral" />}
-                />
+                        <SalesKpiCard
+                            label="New users"
+                            value={newUsers.total.toLocaleString()}
+                            meta={`${newUsers.crm_created.toLocaleString()} CRM-created • ${newUsers.wp_organic.toLocaleString()} organic`}
+                            subMeta="Trailing 7-day intake, split so sourcing stays visible."
+                            actionLabel="Open leads"
+                            onClick={() => navigate(marketFilter ? `/leads?platform_id=${marketFilter}` : '/leads')}
+                            className="xl:col-span-3"
+                            badge={<Badge label="7-day intake" tone="neutral" />}
+                        />
+                    </>
+                )}
             </section>
 
             <section className="grid gap-4 xl:grid-cols-12">
@@ -1225,6 +1393,7 @@ export default function SalesDashboardView({ user, navigate }) {
                     {widgetConfig.payment_recovery ? (
                         <PaymentRecoveryCard
                             kpis={kpis}
+                            isLoading={isPrimaryMetricsBooting}
                             onOpen={() => navigate(marketFilter ? `/payments?status=recovery_queue&platform_id=${marketFilter}` : '/payments?status=recovery_queue')}
                         />
                     ) : null}
