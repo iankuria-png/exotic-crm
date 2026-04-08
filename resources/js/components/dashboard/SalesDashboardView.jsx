@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import SectionFrame from '../SectionFrame';
@@ -7,7 +7,6 @@ import ProfileEngagementWidget from './ProfileEngagementWidget';
 import useSalesWidgetConfig from '../../hooks/useSalesWidgetConfig';
 import { useToast } from '../ToastProvider';
 import { getCountryFlag } from '../../utils/flags';
-import { formatCurrency } from '../../utils/currency';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const SALES_MARKET_STORAGE_KEY = 'exoticcrm.sales_dashboard.market_filter';
@@ -169,26 +168,30 @@ function LoadingStack({ count = 3, cardClassName = 'h-16 rounded-2xl bg-slate-10
     );
 }
 
-function TrendPill({ trend, label }) {
-    const delta = Number(trend?.percentage_change ?? 0);
-    const direction = trend?.direction || 'flat';
-
-    if (direction === 'flat') {
-        return (
-            <span className="rounded-full border border-slate-200 bg-white/70 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                {label} flat
-            </span>
-        );
-    }
-
-    const tone = direction === 'up'
-        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-        : 'border-rose-200 bg-rose-50 text-rose-700';
+function Badge({ label, tone = 'neutral' }) {
+    const toneMap = {
+        neutral: 'crm-sales-chip-neutral',
+        success: 'crm-sales-chip-success',
+        warning: 'crm-sales-chip-warning',
+        danger: 'crm-sales-chip-danger',
+    };
 
     return (
-        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${tone}`}>
-            {label} {direction === 'up' ? '+' : ''}{delta}%
+        <span className={`crm-sales-chip ${toneMap[tone] || toneMap.neutral}`}>
+            {label}
         </span>
+    );
+}
+
+function ActionButton({ label, onClick }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className="crm-sales-action"
+        >
+            {label}
+        </button>
     );
 }
 
@@ -219,8 +222,8 @@ function SalesHero({
         : recoveryQueue > 0
             ? `${pluralize(recoveryQueue, 'payment')} is waiting in recovery.`
             : goalsBehind > 0
-                ? `${pluralize(goalsBehind, 'goal')} is off pace and worth revisiting today.`
-                : 'Your board is clear enough to push for fresh activations and conversions.';
+                ? `${pluralize(goalsBehind, 'goal')} needs pace support.`
+                : 'Queues are under control.';
 
     return (
         <section className="crm-sales-hero px-6 py-6 sm:px-7 sm:py-7">
@@ -228,7 +231,7 @@ function SalesHero({
                 <div className="space-y-5">
                     <div className="flex flex-wrap items-center gap-2">
                         <span className="crm-sales-pill bg-white/14 text-white ring-1 ring-white/18">
-                            Sales command center
+                            Customer Service Center
                         </span>
                         <span className="crm-sales-pill bg-white/10 text-slate-100 ring-1 ring-white/12">
                             {formatLongDate()}
@@ -245,11 +248,9 @@ function SalesHero({
                             {greetingForHour()}, {firstName(user?.name)}.
                         </p>
                         <h2 className="mt-1 max-w-3xl text-[2.1rem] leading-[1.02] font-semibold tracking-[-0.04em] text-white sm:text-[2.9rem]">
-                            A cleaner sales brief, built around what needs action first.
+                            Customer Service Center
                         </h2>
-                        <p className="mt-3 max-w-2xl text-[1rem] leading-7 text-slate-200/92">
-                            {focusMessage} This view keeps your queue, goals, and market momentum in the same visual rhythm, without the usual dashboard clutter.
-                        </p>
+                        <p className="mt-3 max-w-2xl text-[0.98rem] leading-7 text-slate-200/92">{focusMessage}</p>
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-3">
@@ -291,7 +292,7 @@ function SalesHero({
                                 <option value="" className="text-slate-900">All accessible markets</option>
                                 {markets.map((market) => (
                                     <option key={market.id} value={market.id} className="text-slate-900">
-                                        {market.name}
+                                        {market.name}{market.is_active ? '' : ' (inactive)'}
                                     </option>
                                 ))}
                             </select>
@@ -340,16 +341,9 @@ function SalesHero({
     );
 }
 
-function SalesKpiCard({ label, value, meta, subMeta, tone = 'default', featured = false, actionLabel, onClick, children, className = '' }) {
-    const toneClasses = {
-        default: 'bg-white',
-        accent: 'bg-[linear-gradient(180deg,#f8fffd_0%,#ecfdf5_100%)]',
-        warm: 'bg-[linear-gradient(180deg,#fffaf1_0%,#fff4dd_100%)]',
-        slate: 'bg-[linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)]',
-    };
-
+function SalesKpiCard({ label, value, meta, subMeta, featured = false, actionLabel, onClick, badge, className = '' }) {
     return (
-        <article className={`crm-sales-panel ${toneClasses[tone] || toneClasses.default} ${featured ? 'crm-sales-panel-prominent' : ''} ${className}`}>
+        <article className={`crm-sales-panel bg-white ${featured ? 'crm-sales-panel-prominent border-teal-200/80' : ''} ${className}`}>
             <div className="flex h-full flex-col justify-between gap-5 px-5 py-5">
                 <div className="space-y-3">
                     <div className="flex items-start justify-between gap-3">
@@ -359,20 +353,14 @@ function SalesKpiCard({ label, value, meta, subMeta, tone = 'default', featured 
                                 {value}
                             </div>
                         </div>
-                        {children}
+                        {badge}
                     </div>
                     {meta ? <p className="text-sm font-medium text-slate-700">{meta}</p> : null}
                     {subMeta ? <p className="text-sm leading-6 text-slate-500">{subMeta}</p> : null}
                 </div>
 
                 {onClick ? (
-                    <button
-                        type="button"
-                        onClick={onClick}
-                        className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-300 bg-white/80 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-white"
-                    >
-                        {actionLabel || 'Open queue'}
-                    </button>
+                    <ActionButton label={actionLabel || 'Open queue'} onClick={onClick} />
                 ) : null}
             </div>
         </article>
@@ -727,18 +715,14 @@ function ExpiringSubscriptionsCard({ deals, isLoading, onOpen }) {
             eyebrow="Renewals"
             title="Expiring subscriptions"
             meta="Earliest renewals first so follow-up timing stays tight."
-            action={(
-                <button type="button" onClick={onOpen} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                    Open all
-                </button>
-            )}
+            action={<ActionButton label="Open all" onClick={() => onOpen()} />}
         >
             {isLoading ? (
                 <LoadingStack count={3} cardClassName="h-16 rounded-[18px] bg-slate-100" />
             ) : preview.length === 0 ? (
                 <EmptyState message="No subscriptions are expiring soon." />
             ) : (
-                <div className="space-y-3">
+                <div className="grid gap-3 lg:grid-cols-2">
                     {preview.map((deal) => (
                         <button
                             key={deal.id}
@@ -773,24 +757,31 @@ function PaymentRecoveryCard({ kpis, onOpen }) {
             eyebrow="Payments"
             title="Recovery queue"
             meta="Keep failed, pending, and unmatched payments moving."
-            action={(
-                <button type="button" onClick={onOpen} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                    Open queue
-                </button>
-            )}
+            action={<ActionButton label="Open queue" onClick={onOpen} />}
         >
-            <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-[18px] border border-slate-200 bg-slate-50/80 px-4 py-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total</p>
-                    <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{queueTotal.toLocaleString()}</p>
-                </div>
-                <div className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-700">Failed</p>
-                    <p className="mt-2 text-3xl font-semibold tracking-tight text-rose-800">{failed.toLocaleString()}</p>
-                </div>
-                <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">Pending</p>
-                    <p className="mt-2 text-3xl font-semibold tracking-tight text-amber-800">{pending.toLocaleString()}</p>
+            <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white">
+                <div className="grid gap-0 sm:grid-cols-3">
+                    <div className="border-b border-slate-200 px-4 py-4 sm:border-b-0 sm:border-r">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total</p>
+                        <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{queueTotal.toLocaleString()}</p>
+                        <p className="mt-2 text-xs text-slate-500">items in queue</p>
+                    </div>
+                    <div className="border-b border-slate-200 px-4 py-4 sm:border-b-0 sm:border-r">
+                        <div className="flex items-center justify-between gap-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Failed</p>
+                            <Badge label="Needs attention" tone={failed > 0 ? 'danger' : 'neutral'} />
+                        </div>
+                        <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{failed.toLocaleString()}</p>
+                        <p className="mt-2 text-xs text-slate-500">payment failures</p>
+                    </div>
+                    <div className="px-4 py-4">
+                        <div className="flex items-center justify-between gap-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Pending</p>
+                            <Badge label="Awaiting update" tone={pending > 0 ? 'warning' : 'neutral'} />
+                        </div>
+                        <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{pending.toLocaleString()}</p>
+                        <p className="mt-2 text-xs text-slate-500">still pending</p>
+                    </div>
                 </div>
             </div>
             <p className="text-sm leading-6 text-slate-500">
@@ -808,22 +799,22 @@ function MissedChatsCard({ count, onOpen }) {
             eyebrow="Support board"
             title="Missed chats"
             meta="A count-first signal for open conversations across configured markets."
-            action={onOpen ? (
-                <button type="button" onClick={onOpen} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                    Open chats
-                </button>
-            ) : null}
+            action={onOpen ? <ActionButton label="Open chats" onClick={onOpen} /> : null}
         >
-            <div className="rounded-[20px] border border-slate-200 bg-white px-4 py-5">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Open conversation count</p>
-                <p className="mt-2 text-[2.3rem] leading-none font-semibold tracking-[-0.04em] text-slate-950">
-                    {unavailable ? '—' : asNumber(count).toLocaleString()}
-                </p>
-                <p className="mt-2 text-sm text-slate-500">
-                    {unavailable
-                        ? 'Support board data is not configured or is temporarily unavailable for this scope.'
-                        : 'Use this as a high-level prompt to clear response backlog before it grows invisible.'}
-                </p>
+            <div className="grid gap-4 rounded-[20px] border border-slate-200 bg-white px-4 py-5 lg:grid-cols-[180px_minmax(0,1fr)]">
+                <div className="rounded-[18px] border border-slate-200 bg-slate-50/70 px-4 py-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Open conversation count</p>
+                    <p className="mt-3 text-[2.3rem] leading-none font-semibold tracking-[-0.04em] text-slate-950">
+                        {unavailable ? '—' : asNumber(count).toLocaleString()}
+                    </p>
+                </div>
+                <div className="flex flex-col justify-center">
+                    <p className="text-sm leading-7 text-slate-500">
+                        {unavailable
+                            ? 'Support board data is not configured or is temporarily unavailable for this scope.'
+                            : 'Use this as a prompt to clear open conversation backlog before response quality starts slipping.'}
+                    </p>
+                </div>
             </div>
         </UtilityCard>
     );
@@ -843,6 +834,7 @@ function MarketSyncPanel({ markets, onSync, isPending, syncingMarketId }) {
                 <div className="grid gap-3 xl:grid-cols-2">
                     {markets.map((market) => {
                         const syncResult = market.sync_last_result?.clients || {};
+                        const lastDelta = market.last_delta || syncResult || {};
                         const isSyncing = isPending && syncingMarketId === market.id;
                         return (
                             <div key={market.id} className="rounded-[22px] border border-slate-200 bg-white/90 p-4 shadow-sm">
@@ -856,36 +848,44 @@ function MarketSyncPanel({ markets, onSync, isPending, syncingMarketId }) {
                                             {market.country || 'Unknown country'} • {market.currency || 'KES'}
                                         </p>
                                     </div>
-                                    <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${syncStatusTone(market.sync_last_status)}`}>
+                                    <span className={`crm-sales-chip ${syncStatusTone(market.sync_last_status)}`}>
                                         {market.sync_last_status || 'unknown'}
                                     </span>
                                 </div>
 
                                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-3">
+                                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
                                         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Profiles</p>
-                                        <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{market.profiles_total?.toLocaleString?.() || '—'}</p>
+                                        <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{market.profiles_total?.toLocaleString?.() || '0'}</p>
+                                        <p className="mt-1 text-xs text-slate-500">current CRM total</p>
                                     </div>
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-3">
-                                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Created</p>
-                                        <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{asNumber(syncResult.created).toLocaleString()}</p>
+                                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Last created</p>
+                                        <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{asNumber(lastDelta.created).toLocaleString()}</p>
+                                        <p className="mt-1 text-xs text-slate-500">last delta sync</p>
                                     </div>
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-3">
-                                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Updated</p>
-                                        <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{asNumber(syncResult.updated).toLocaleString()}</p>
+                                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Last updated</p>
+                                        <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">{asNumber(lastDelta.updated).toLocaleString()}</p>
+                                        <p className="mt-1 text-xs text-slate-500">last delta sync</p>
                                     </div>
                                 </div>
 
                                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                                     <div className="text-sm text-slate-500">
                                         <p>Last sync: <span className="font-medium text-slate-700">{formatDateTime(market.sync_last_synced_at)}</span></p>
+                                        <p className="mt-1">
+                                            {asNumber(lastDelta.total) > 0
+                                                ? `Last delta processed ${asNumber(lastDelta.total).toLocaleString()} profile updates.`
+                                                : 'Last delta completed with no profile changes.'}
+                                        </p>
                                         {market.sync_last_error ? <p className="mt-1 text-rose-600">{market.sync_last_error}</p> : null}
                                     </div>
                                     <button
                                         type="button"
                                         onClick={() => onSync(market)}
                                         disabled={isSyncing}
-                                        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${market.needs_sync ? 'bg-slate-950 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'} disabled:cursor-not-allowed disabled:opacity-60`}
+                                        className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${market.needs_sync ? 'bg-slate-950 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'} disabled:cursor-not-allowed disabled:opacity-60`}
                                     >
                                         {isSyncing ? 'Syncing…' : market.needs_sync ? 'Refresh now' : 'Run delta sync'}
                                     </button>
@@ -1042,7 +1042,15 @@ export default function SalesDashboardView({ user, navigate }) {
             queryClient.invalidateQueries({ queryKey: ['sales-dashboard-markets'] });
             queryClient.invalidateQueries({ queryKey: ['sales-dashboard-summary'] });
             queryClient.invalidateQueries({ queryKey: ['sales-dashboard-my-stats'] });
-            toast.success(`${data?.platform?.platform_name || 'Market'} synced successfully.`);
+            const created = asNumber(data?.profiles_created);
+            const updated = asNumber(data?.profiles_updated);
+            const total = created + updated;
+
+            toast.success(
+                total > 0
+                    ? `${data?.platform?.platform_name || 'Market'} sync completed: ${created} created, ${updated} updated.`
+                    : `${data?.platform?.platform_name || 'Market'} sync completed. No profile changes were found.`
+            );
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || error?.response?.data?.error || 'Market sync failed.');
@@ -1134,35 +1142,31 @@ export default function SalesDashboardView({ user, navigate }) {
                     )}
                     meta={revenueCurrencies.length > 1 ? 'Mixed-currency revenue in this scope' : `Window anchored to ${selectedRange.label.toLowerCase()}`}
                     subMeta={revenueDeltaLabel}
-                    tone="accent"
                     featured
                     actionLabel="Open payments"
                     onClick={() => navigate(marketFilter ? `/payments?status=completed&platform_id=${marketFilter}` : '/payments?status=completed')}
                     className="xl:col-span-5"
-                >
-                    <TrendPill trend={{ percentage_change: revenueDelta, direction: revenueDelta > 0 ? 'up' : revenueDelta < 0 ? 'down' : 'flat' }} label="Revenue" />
-                </SalesKpiCard>
+                    badge={<Badge label={Number.isFinite(revenueDelta) && revenueDelta !== 0 ? `${revenueDelta > 0 ? '+' : ''}${revenueDelta}%` : 'No change'} tone={revenueDelta > 0 ? 'success' : revenueDelta < 0 ? 'danger' : 'neutral'} />}
+                />
 
                 <SalesKpiCard
                     label="Active clients"
                     value={activeClients.toLocaleString()}
                     meta={totalClients > 0 ? `${Math.round((activeClients / totalClients) * 100)}% of ${totalClients.toLocaleString()} profiles are active` : 'No profiles found in this scope'}
-                    tone="slate"
                     actionLabel="Open clients"
                     onClick={() => navigate(marketFilter ? `/clients?status=publish&platform_id=${marketFilter}` : '/clients?status=publish')}
                     className="xl:col-span-2"
-                >
-                    <TrendPill trend={activationTrend} label="Activations" />
-                </SalesKpiCard>
+                    badge={<Badge label={totalClients > 0 ? `${Math.round((activeClients / totalClients) * 100)}% active` : 'No profiles'} tone={activeClients > 0 ? 'success' : 'neutral'} />}
+                />
 
                 <SalesKpiCard
                     label="Renewal workload"
                     value={renewalWorkload.toLocaleString()}
                     meta={renewalWorkload > 0 ? `${asNumber(kpis.renewal_risk_72h).toLocaleString()} in 0-3 days • ${asNumber(kpis.renewal_pipeline_4_14d).toLocaleString()} in 4-14 days` : 'No renewals due in the next 14 days'}
-                    tone="warm"
                     actionLabel="Open renewals"
                     onClick={() => navigate(marketFilter ? `/deals?bucket=workload&platform_id=${marketFilter}` : '/deals?bucket=workload')}
                     className="xl:col-span-2"
+                    badge={<Badge label={renewalWorkload > 0 ? 'Due soon' : 'Clear'} tone={renewalWorkload > 0 ? 'warning' : 'success'} />}
                 />
 
                 <SalesKpiCard
@@ -1170,13 +1174,11 @@ export default function SalesDashboardView({ user, navigate }) {
                     value={newUsers.total.toLocaleString()}
                     meta={`${newUsers.crm_created.toLocaleString()} CRM-created • ${newUsers.wp_organic.toLocaleString()} organic`}
                     subMeta="Trailing 7-day intake, split so sourcing stays visible."
-                    tone="default"
                     actionLabel="Open leads"
                     onClick={() => navigate(marketFilter ? `/leads?platform_id=${marketFilter}` : '/leads')}
                     className="xl:col-span-3"
-                >
-                    <TrendPill trend={leadTrend} label="Lead outreach" />
-                </SalesKpiCard>
+                    badge={<Badge label="7-day intake" tone="neutral" />}
+                />
             </section>
 
             <section className="grid gap-4 xl:grid-cols-12">
@@ -1226,22 +1228,28 @@ export default function SalesDashboardView({ user, navigate }) {
                             onOpen={() => navigate(marketFilter ? `/payments?status=recovery_queue&platform_id=${marketFilter}` : '/payments?status=recovery_queue')}
                         />
                     ) : null}
+                </div>
+            </section>
 
-                    {widgetConfig.missed_chats ? (
+            <section className="grid gap-4 xl:grid-cols-12">
+                {widgetConfig.missed_chats ? (
+                    <div className={widgetConfig.expiring_subs ? 'xl:col-span-4' : 'xl:col-span-12'}>
                         <MissedChatsCard
                             count={missedChatsCount}
                             onOpen={() => navigate(marketFilter ? `/conversations?platform_id=${marketFilter}` : '/conversations')}
                         />
-                    ) : null}
+                    </div>
+                ) : null}
 
-                    {widgetConfig.expiring_subs ? (
+                {widgetConfig.expiring_subs ? (
+                    <div className={widgetConfig.missed_chats ? 'xl:col-span-8' : 'xl:col-span-12'}>
                         <ExpiringSubscriptionsCard
                             deals={expiringDeals}
                             isLoading={summaryQuery.isLoading}
-                            onOpen={(clientId) => navigate(clientId ? `/clients/${clientId}` : '/deals?status=active')}
+                            onOpen={(clientId) => navigate(clientId ? `/clients/${clientId}` : (marketFilter ? `/deals?status=active&platform_id=${marketFilter}` : '/deals?status=active'))}
                         />
-                    ) : null}
-                </div>
+                    </div>
+                ) : null}
             </section>
 
             {widgetConfig.profile_engagement ? (

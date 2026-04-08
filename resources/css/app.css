@@ -130,4 +130,28 @@
     .crm-sales-pill {
         @apply inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-semibold tracking-[0.12em];
     }
+
+    .crm-sales-chip {
+        @apply inline-flex items-center rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.08em];
+    }
+
+    .crm-sales-chip-neutral {
+        @apply border-slate-200 bg-slate-50 text-slate-600;
+    }
+
+    .crm-sales-chip-success {
+        @apply border-emerald-200 bg-emerald-50 text-emerald-700;
+    }
+
+    .crm-sales-chip-warning {
+        @apply border-amber-200 bg-amber-50 text-amber-700;
+    }
+
+    .crm-sales-chip-danger {
+        @apply border-rose-200 bg-rose-50 text-rose-700;
+    }
+
+    .crm-sales-action {
+        @apply inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50;
+    }
 }

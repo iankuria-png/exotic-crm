@@ -346,7 +346,6 @@ class DashboardController extends Controller
         $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         $query = Platform::query()
-            ->where('is_active', true)
             ->orderBy('name');
 
         if (is_array($allowedPlatformIds)) {
@@ -357,8 +356,16 @@ class DashboardController extends Controller
             $query->whereIn('id', $allowedPlatformIds);
         }
 
-        $markets = $query->get()->map(function (Platform $platform) {
+        $platforms = $query->get();
+        $clientCounts = Client::query()
+            ->selectRaw('platform_id, COUNT(*) as total')
+            ->whereIn('platform_id', $platforms->pluck('id')->all())
+            ->groupBy('platform_id')
+            ->pluck('total', 'platform_id');
+
+        $markets = $platforms->map(function (Platform $platform) use ($clientCounts) {
             $lastResult = is_array($platform->sync_last_result) ? $platform->sync_last_result : [];
+            $lastDelta = is_array(data_get($lastResult, 'clients')) ? data_get($lastResult, 'clients') : [];
             $profilesTotal = $this->extractSyncedProfilesTotal($lastResult);
             $lastSyncedAt = optional($platform->sync_last_synced_at)->toDateTimeString();
             $needsSync = $platform->sync_last_status === 'error'
@@ -371,11 +378,18 @@ class DashboardController extends Controller
                 'country' => $platform->country,
                 'country_code' => $this->countryCodeForCountry($platform->country),
                 'currency' => $platform->currency_code,
+                'is_active' => (bool) $platform->is_active,
                 'sync_last_synced_at' => $lastSyncedAt,
                 'sync_last_status' => $platform->sync_last_status,
                 'sync_last_error' => $platform->sync_last_error,
                 'sync_last_result' => $lastResult,
-                'profiles_total' => $profilesTotal,
+                'profiles_total' => (int) ($clientCounts[(int) $platform->id] ?? $profilesTotal ?? 0),
+                'last_delta' => [
+                    'created' => (int) ($lastDelta['created'] ?? 0),
+                    'updated' => (int) ($lastDelta['updated'] ?? 0),
+                    'skipped' => (int) ($lastDelta['skipped'] ?? 0),
+                    'total' => (int) ($lastDelta['total'] ?? 0),
+                ],
                 'needs_sync' => $needsSync,
             ];
         })->values();
@@ -420,9 +434,11 @@ class DashboardController extends Controller
         $previousTo = $currentFrom->copy()->subSecond();
         $previousFrom = $previousTo->copy()->subDays($windowDays - 1)->startOfDay();
 
-        $platforms = Platform::where('is_active', true);
+        $platforms = Platform::query();
         if (is_array($platformIds)) {
             $platforms->whereIn('id', $platformIds);
+        } else {
+            $platforms->where('is_active', true);
         }
         $platforms = $platforms->get();
 

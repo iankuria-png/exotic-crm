@@ -43,7 +43,7 @@ export default function MainLayout() {
                         </svg>
                     </button>
 
-                    <p className="hidden text-sm font-medium text-slate-500 lg:block">Sales operations workspace</p>
+                    <p className="hidden text-sm font-medium text-slate-500 lg:block">Customer service workspace</p>
 
                     {!isMarketing ? (
                         <div className="hidden items-center gap-2 sm:flex">

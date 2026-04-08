@@ -47,10 +47,6 @@ class MarketAuthorizationService
             ->unique()
             ->values();
 
-        if ($assigned->isNotEmpty()) {
-            return $assigned->all();
-        }
-
         $platformIds = $user->platforms()
             ->pluck('platforms.id')
             ->map(fn ($id) => (int) $id)
@@ -58,7 +54,12 @@ class MarketAuthorizationService
             ->unique()
             ->values();
 
-        return $platformIds->all();
+        return $assigned
+            ->merge($platformIds)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
     }
 
     public function userCanAccessPlatform(User $user, ?int $platformId): bool

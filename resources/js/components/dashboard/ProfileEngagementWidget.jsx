@@ -12,6 +12,21 @@ function formatPercent(value, digits = 1) {
     return `${asNumber(value).toFixed(digits)}%`;
 }
 
+function describeWindow(fromDate, toDate) {
+    if (!fromDate || !toDate) {
+        return 'selected window';
+    }
+
+    const from = new Date(fromDate);
+    const to = new Date(toDate);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+        return 'selected window';
+    }
+
+    const diffDays = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1);
+    return `${diffDays}-day window`;
+}
+
 function MiniStat({ label, value, meta }) {
     return (
         <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3.5 py-3">
@@ -87,6 +102,7 @@ export default function ProfileEngagementWidget({
     onOpenReport,
 }) {
     const enabled = Boolean(platformFilter);
+    const windowLabel = describeWindow(fromDate, toDate);
     const sharedParams = useMemo(() => ({
         platform_id: Number(platformFilter),
         ...(fromDate ? { from: fromDate } : {}),
@@ -129,7 +145,7 @@ export default function ProfileEngagementWidget({
     return (
         <SectionFrame
             title="Profile Engagement"
-            subtitle="Top and trailing profiles for the selected market."
+            subtitle={`Selected market performance across the ${windowLabel}. Deltas compare against the previous matching window.`}
             action={onOpenReport ? (
                 <button
                     type="button"
@@ -160,22 +176,22 @@ export default function ProfileEngagementWidget({
                         <MiniStat
                             label="Views"
                             value={asNumber(platformTotals.profile_view?.total).toLocaleString()}
-                            meta={`${asNumber(platformTotals.profile_view?.delta_percent).toFixed(1)}% vs previous`}
+                            meta={`${asNumber(platformTotals.profile_view?.delta_percent).toFixed(1)}% vs previous ${windowLabel}`}
                         />
                         <MiniStat
                             label="Unique visitors"
                             value={asNumber(platformTotals.unique_visitors?.total).toLocaleString()}
-                            meta={`${asNumber(platformTotals.unique_visitors?.delta_percent).toFixed(1)}% vs previous`}
+                            meta={`${asNumber(platformTotals.unique_visitors?.delta_percent).toFixed(1)}% vs previous ${windowLabel}`}
                         />
                         <MiniStat
                             label="Contacts"
                             value={asNumber(platformTotals.contact_actions?.total).toLocaleString()}
-                            meta={`${asNumber(platformTotals.contact_actions?.delta_percent).toFixed(1)}% vs previous`}
+                            meta={`${asNumber(platformTotals.contact_actions?.delta_percent).toFixed(1)}% vs previous ${windowLabel}`}
                         />
                         <MiniStat
                             label="Contact rate"
                             value={formatPercent(platformTotals.contact_rate_percent?.value)}
-                            meta={`${asNumber(platformTotals.contact_rate_percent?.delta_pp).toFixed(1)}pp vs previous`}
+                            meta={`${asNumber(platformTotals.contact_rate_percent?.delta_pp).toFixed(1)}pp vs previous ${windowLabel}`}
                         />
                     </div>
 
