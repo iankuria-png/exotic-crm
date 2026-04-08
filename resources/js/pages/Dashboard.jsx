@@ -465,9 +465,9 @@ export default function Dashboard() {
             value: <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-[1.4rem] leading-snug font-semibold tracking-tight text-slate-900" />,
             hint: recentPaymentsCount > 0
                 ? isMixedRevenue
-                    ? `${recentPaymentsCount} completed • Mixed currencies in scope`
-                    : `${recentPaymentsCount} completed • avg ${formatCurrency(averageTicketWindow, selectedCurrency)}`
-                : 'No completed payments in selected range',
+                    ? `${recentPaymentsCount} successful payments • Mixed currencies in scope`
+                    : `${recentPaymentsCount} successful payments • avg ${formatCurrency(averageTicketWindow, selectedCurrency)}`
+                : 'No successful payments in selected range',
             subHint: revenueDeltaLabel || 'No comparable single-currency baseline',
             accentDot: 'bg-teal-600',
             hintClass: 'text-teal-700',
@@ -829,7 +829,7 @@ export default function Dashboard() {
                                     helper={`${Math.round(matchQuality)}% matched this month`}
                                     value={matchQuality}
                                     tone="accent"
-                                    tooltip="Percentage of completed payments in the selected window that are linked to a client."
+                                    tooltip="Percentage of successful payments in the selected window that are linked to a client."
                                 />
                                 <MetricProgress
                                     label="Lead backlog pressure"

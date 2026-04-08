@@ -55,14 +55,10 @@ class ReportController extends Controller
             ? [(int) $selectedPlatformId]
             : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
-        $paymentsQuery = Payment::query()
-            ->liveOnly()
-            ->where('status', 'completed')
-            ->excludingWalletTopups()
-            ->whereBetween('created_at', [$from, $to]);
+        $paymentsQuery = $this->successfulCollectedPaymentsQuery($from, $to, $platformIds);
         $walletTopupsQuery = Payment::query()
             ->liveOnly()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
 
@@ -73,7 +69,7 @@ class ReportController extends Controller
         $dealsQuery = Deal::query()->whereBetween('created_at', [$from, $to]);
 
         if (is_array($platformIds)) {
-            $paymentsQuery->whereIn('platform_id', $platformIds);
+            $walletTopupsQuery->whereIn('platform_id', $platformIds);
             $clientsQuery->whereIn('platform_id', $platformIds);
             $leadsQuery->whereIn('platform_id', $platformIds);
             $dealsQuery->whereIn('platform_id', $platformIds);
@@ -136,13 +132,13 @@ class ReportController extends Controller
 
         $revenueMtdQuery = Payment::query()
             ->liveOnly()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->excludingWalletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds));
         $walletTopupMtdQuery = Payment::query()
             ->liveOnly()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->walletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds));
@@ -174,14 +170,15 @@ class ReportController extends Controller
         $monthKeyExpression = DB::connection()->getDriverName() === 'sqlite'
             ? "strftime('%Y-%m', created_at)"
             : "DATE_FORMAT(created_at, '%Y-%m')";
-        $paymentCurrencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), 'KES')";
-        $dealCurrencyExpression = "COALESCE(deals.currency, (SELECT currency_code FROM platforms WHERE platforms.id = deals.platform_id LIMIT 1), 'KES')";
+        $paymentCurrencyExpression = $this->paymentCurrencyExpression();
+        $packageNameExpression = $this->paymentPackageExpression();
+        $ownerNameExpression = $this->paymentOwnerExpression();
 
         $revenueTrendRows = Payment::query()
             ->liveOnly()
             ->selectRaw("{$monthKeyExpression} as month_key")
             ->selectRaw('SUM(amount) as total_revenue')
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
@@ -198,7 +195,7 @@ class ReportController extends Controller
             ->selectRaw("{$monthKeyExpression} as month_key")
             ->selectRaw("{$paymentCurrencyExpression} as currency")
             ->selectRaw('SUM(amount) as total')
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
@@ -235,132 +232,94 @@ class ReportController extends Controller
                 'value' => (int) $row->total,
             ]);
 
-        $packageRevenueRows = Deal::query()
-            ->leftJoin('products', 'products.id', '=', 'deals.product_id')
-            ->selectRaw('COALESCE(products.name, deals.plan_type) as package_name')
-            ->selectRaw('SUM(deals.amount) as total_revenue')
-            ->whereBetween('deals.created_at', [$from, $to])
-            ->whereNotIn('deals.status', ['pending', 'cancelled'])
-            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('deals.platform_id', $platformIds))
-            ->groupBy(DB::raw('COALESCE(products.name, deals.plan_type)'))
-            ->orderByDesc('total_revenue')
-            ->limit(10)
-            ->get();
+        $packageRevenue = (clone $paymentsQuery)
+            ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
+            ->leftJoin('products as payment_products', 'payment_products.id', '=', 'payments.product_id')
+            ->leftJoin('products as deal_products', 'deal_products.id', '=', 'deals.product_id')
+            ->selectRaw("{$packageNameExpression} as package_name")
+            ->selectRaw("{$paymentCurrencyExpression} as currency")
+            ->selectRaw('SUM(payments.amount) as total')
+            ->groupByRaw("{$packageNameExpression}, {$paymentCurrencyExpression}")
+            ->get()
+            ->groupBy(fn ($row) => $row->package_name ?: 'Unknown package')
+            ->map(function ($rows, $label) {
+                $breakdown = [];
+                foreach ($rows as $row) {
+                    $breakdown[$row->currency] = ($breakdown[$row->currency] ?? 0.0) + (float) $row->total;
+                }
+                ksort($breakdown);
 
-        // Currency breakdown per package
-        $packageCurrencyRows = Deal::query()
-            ->leftJoin('products', 'products.id', '=', 'deals.product_id')
-            ->selectRaw('COALESCE(products.name, deals.plan_type) as package_name')
-            ->selectRaw("{$dealCurrencyExpression} as currency")
-            ->selectRaw('SUM(deals.amount) as total')
-            ->whereBetween('deals.created_at', [$from, $to])
-            ->whereNotIn('deals.status', ['pending', 'cancelled'])
-            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('deals.platform_id', $platformIds))
-            ->groupByRaw("COALESCE(products.name, deals.plan_type), {$dealCurrencyExpression}")
-            ->get();
+                return [
+                    'label' => $label,
+                    'value' => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
+                    'revenue_breakdown' => $breakdown,
+                    'sort_value' => array_sum($breakdown),
+                ];
+            })
+            ->sortByDesc('sort_value')
+            ->take(10)
+            ->map(fn ($row) => [
+                'label' => $row['label'],
+                'value' => $row['value'],
+                'revenue_breakdown' => $row['revenue_breakdown'],
+            ])
+            ->values();
 
-        $packageBreakdownMap = [];
-        foreach ($packageCurrencyRows as $row) {
-            $key = $row->package_name ?: 'Unknown';
-            $packageBreakdownMap[$key][$row->currency] = (float) $row->total;
-        }
-        foreach ($packageBreakdownMap as &$currencyMap) {
-            ksort($currencyMap);
-        }
-        unset($currencyMap);
-
-        $packageRevenue = $packageRevenueRows->map(function ($row) use ($packageBreakdownMap) {
-            $label = $row->package_name ?: 'Unknown';
-            $breakdown = $packageBreakdownMap[$label] ?? [];
-            return [
-                'label'             => $label,
-                'value'             => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
-                'revenue_breakdown' => $breakdown,
-            ];
-        });
-
-        $ownerPerformanceRows = Deal::query()
+        $ownerPerformanceAll = (clone $paymentsQuery)
+            ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
             ->leftJoin('users', 'users.id', '=', 'deals.assigned_to')
-            ->selectRaw("COALESCE(users.name, 'Unassigned') as owner_name")
-            ->selectRaw('COUNT(deals.id) as deals_count')
-            ->selectRaw('SUM(deals.amount) as total_revenue')
-            ->selectRaw("SUM(CASE WHEN deals.status = 'active' THEN 1 ELSE 0 END) as active_subscriptions")
-            ->selectRaw("SUM(CASE WHEN deals.status IN ('pending', 'awaiting_payment', 'paid') THEN 1 ELSE 0 END) as pre_activation_subscriptions")
-            ->selectRaw("SUM(CASE WHEN deals.status = 'expired' THEN 1 ELSE 0 END) as expired_subscriptions")
-            ->whereBetween('deals.created_at', [$from, $to])
-            ->whereNotIn('deals.status', ['cancelled'])
-            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('deals.platform_id', $platformIds))
-            ->groupBy(DB::raw("COALESCE(users.name, 'Unassigned')"))
-            ->orderByDesc('deals_count')
-            ->limit(10)
-            ->get();
+            ->selectRaw("{$ownerNameExpression} as owner_name")
+            ->selectRaw("{$paymentCurrencyExpression} as currency")
+            ->selectRaw('SUM(payments.amount) as total')
+            ->selectRaw('COUNT(payments.id) as payments_count')
+            ->groupByRaw("{$ownerNameExpression}, {$paymentCurrencyExpression}")
+            ->get()
+            ->groupBy(fn ($row) => $row->owner_name ?: 'Unassigned')
+            ->map(function ($rows, $owner) {
+                $breakdown = [];
+                $paymentCount = 0;
+                foreach ($rows as $row) {
+                    $breakdown[$row->currency] = ($breakdown[$row->currency] ?? 0.0) + (float) $row->total;
+                    $paymentCount += (int) $row->payments_count;
+                }
+                ksort($breakdown);
 
-        // Currency breakdown per owner
-        $ownerCurrencyRows = Deal::query()
-            ->leftJoin('users', 'users.id', '=', 'deals.assigned_to')
-            ->selectRaw("COALESCE(users.name, 'Unassigned') as owner_name")
-            ->selectRaw("{$dealCurrencyExpression} as currency")
-            ->selectRaw('SUM(deals.amount) as total, COUNT(deals.id) as cnt')
-            ->whereBetween('deals.created_at', [$from, $to])
-            ->whereNotIn('deals.status', ['cancelled'])
-            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('deals.platform_id', $platformIds))
-            ->groupByRaw("COALESCE(users.name, 'Unassigned'), {$dealCurrencyExpression}")
-            ->get();
+                $avgBreakdown = [];
+                foreach ($breakdown as $currency => $amount) {
+                    $avgBreakdown[$currency] = $paymentCount > 0 ? round($amount / $paymentCount, 2) : 0.0;
+                }
 
-        $ownerBreakdownMap = [];   // owner_name → [currency => amount]
-        $ownerDealCountMap = [];  // owner_name → total deal count (for avg)
-        foreach ($ownerCurrencyRows as $row) {
-            $ownerBreakdownMap[$row->owner_name][$row->currency] = (float) $row->total;
-            $ownerDealCountMap[$row->owner_name] = ($ownerDealCountMap[$row->owner_name] ?? 0) + (int) $row->cnt;
-        }
-        foreach ($ownerBreakdownMap as &$currencyMap) {
-            ksort($currencyMap);
-        }
-        unset($currencyMap);
+                $scalarAverage = count($breakdown) === 1 && $paymentCount > 0
+                    ? round(array_values($breakdown)[0] / $paymentCount, 2)
+                    : null;
 
-        $ownerPerformance = $ownerPerformanceRows->map(function ($row) use ($ownerBreakdownMap, $ownerDealCountMap) {
-            $breakdown = $ownerBreakdownMap[$row->owner_name] ?? [];
-            $dealCount = (int) $row->deals_count;
-            // avg breakdown: revenue[currency] / total deals for this owner
-            $avgBreakdown = [];
-            foreach ($breakdown as $currency => $amount) {
-                $avgBreakdown[$currency] = $dealCount > 0 ? round($amount / $dealCount, 2) : 0.0;
-            }
-            return [
-                'owner' => $row->owner_name,
-                'deals' => $dealCount,
-                'revenue' => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
-                'revenue_breakdown' => $breakdown,
-                'avg_revenue_per_subscription' => count($breakdown) === 1 && $dealCount > 0
-                    ? round(array_values($breakdown)[0] / $dealCount, 2)
-                    : null,
-                'avg_revenue_breakdown' => $avgBreakdown,
-                'active_subscriptions' => (int) $row->active_subscriptions,
-                'pre_activation_subscriptions' => (int) $row->pre_activation_subscriptions,
-                'expired_subscriptions' => (int) $row->expired_subscriptions,
-            ];
-        });
-
-        // Totals: aggregate revenue across all owners per currency
-        $totalsByKey = ['subscriptions' => 0, 'active_subscriptions' => 0];
-        $totalsBreakdown = [];
-        foreach ($ownerPerformance as $ownerRow) {
-            $totalsByKey['subscriptions'] += $ownerRow['deals'];
-            $totalsByKey['active_subscriptions'] += $ownerRow['active_subscriptions'];
-            foreach ($ownerRow['revenue_breakdown'] as $currency => $amount) {
-                $totalsBreakdown[$currency] = ($totalsBreakdown[$currency] ?? 0.0) + $amount;
-            }
-        }
-        ksort($totalsBreakdown);
+                return [
+                    'owner' => $owner,
+                    'payments_count' => $paymentCount,
+                    'deals' => $paymentCount,
+                    'revenue' => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
+                    'revenue_breakdown' => $breakdown,
+                    'avg_revenue_per_payment' => $scalarAverage,
+                    'avg_revenue_per_payment_breakdown' => $avgBreakdown,
+                    'avg_revenue_per_subscription' => $scalarAverage,
+                    'avg_revenue_breakdown' => $avgBreakdown,
+                    'active_subscriptions' => 0,
+                    'sort_value' => array_sum($breakdown),
+                ];
+            })
+            ->sortByDesc('sort_value')
+            ->values();
 
         $ownerPerformanceTotals = [
-            'subscriptions' => $totalsByKey['subscriptions'],
-            'revenue' => count($totalsBreakdown) === 1 ? array_values($totalsBreakdown)[0] : null,
-            'revenue_breakdown' => $totalsBreakdown,
-            'active_subscriptions' => $totalsByKey['active_subscriptions'],
+            'subscriptions' => (int) $ownerPerformanceAll->sum('payments_count'),
+            'payments_count' => (int) $ownerPerformanceAll->sum('payments_count'),
+            'revenue' => count($kpis['total_revenue_breakdown']) === 1 ? array_values($kpis['total_revenue_breakdown'])[0] : null,
+            'revenue_breakdown' => $kpis['total_revenue_breakdown'],
+            'active_subscriptions' => 0,
         ];
 
-        $topOwner = $ownerPerformance->first();
+        $topOwner = $ownerPerformanceAll->first();
+        $ownerPerformance = $ownerPerformanceAll->take(10)->values();
 
         $renewalRuns = RenewalRun::query()
             ->whereBetween('run_at', [$from, $to])
@@ -406,6 +365,7 @@ class ReportController extends Controller
                 ? [
                     'owner' => $topOwner['owner'],
                     'deals' => $topOwner['deals'],
+                    'payments_count' => $topOwner['payments_count'],
                     'revenue' => $topOwner['revenue'],
                     'revenue_breakdown' => $topOwner['revenue_breakdown'],
                     'active_subscriptions' => $topOwner['active_subscriptions'],
@@ -520,6 +480,31 @@ class ReportController extends Controller
         } catch (\Throwable) {
             return $monthKey;
         }
+    }
+
+    private function successfulCollectedPaymentsQuery(Carbon $from, Carbon $to, ?array $platformIds): Builder
+    {
+        return Payment::query()
+            ->liveOnly()
+            ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
+            ->excludingWalletTopups()
+            ->whereBetween('payments.created_at', [$from, $to])
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('payments.platform_id', $platformIds));
+    }
+
+    private function paymentCurrencyExpression(): string
+    {
+        return "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), 'KES')";
+    }
+
+    private function paymentPackageExpression(): string
+    {
+        return "COALESCE(deal_products.name, payment_products.name, deals.plan_type, 'Unknown package')";
+    }
+
+    private function paymentOwnerExpression(): string
+    {
+        return "COALESCE(users.name, 'Unassigned')";
     }
 
     private function enrichAnalyticsProfiles(int $platformId, array $profiles): array

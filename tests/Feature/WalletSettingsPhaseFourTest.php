@@ -624,6 +624,7 @@ class WalletSettingsPhaseFourTest extends TestCase
         Sanctum::actingAs($admin);
 
         $this->createCompletedPayment($platform, 5000, 'subscription');
+        $this->createCompletedPayment($platform, 2200, 'subscription', 'expired');
         $this->createCompletedPayment($platform, 1200, 'wallet_topup');
         Payment::query()->create([
             'platform_id' => $platform->id,
@@ -647,17 +648,42 @@ class WalletSettingsPhaseFourTest extends TestCase
         $dashboard = $this->getJson('/api/crm/dashboard?platform_id=' . $platform->id);
 
         $dashboard->assertOk()
-            ->assertJsonPath('kpis.completed_payments_window', 1)
-            ->assertJsonPath('kpis.revenue_window', 5000)
+            ->assertJsonPath('kpis.completed_payments_window', 2)
+            ->assertJsonPath('kpis.revenue_window', 7200)
+            ->assertJsonPath('kpis.average_ticket_window', 3600)
             ->assertJsonPath('kpis.wallet_topups_window', 1)
-            ->assertJsonPath('kpis.wallet_topup_revenue_window', 1200);
+            ->assertJsonPath('kpis.wallet_topup_revenue_window', 1200)
+            ->assertJsonPath('country_revenue.0.current_revenue', 7200);
 
         $reports = $this->getJson('/api/crm/reports/summary?platform_id=' . $platform->id);
 
         $reports->assertOk()
-            ->assertJsonPath('kpis.total_revenue', 5000)
+            ->assertJsonPath('kpis.total_revenue', 7200)
             ->assertJsonPath('kpis.wallet_topups_count', 1)
             ->assertJsonPath('kpis.wallet_topup_revenue', 1200);
+    }
+
+    public function test_dashboard_delta_and_average_ticket_include_expired_successful_payments(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $this->createCompletedPayment($platform, 4000, 'subscription', 'completed', now()->subDays(2));
+        $this->createCompletedPayment($platform, 2000, 'subscription', 'expired', now()->subDay());
+        $this->createCompletedPayment($platform, 3000, 'subscription', 'completed', now()->subDays(10));
+
+        $from = now()->subDays(6)->toDateString();
+        $to = now()->toDateString();
+
+        $dashboard = $this->getJson("/api/crm/dashboard?platform_id={$platform->id}&from={$from}&to={$to}");
+
+        $dashboard->assertOk()
+            ->assertJsonPath('kpis.completed_payments_window', 2)
+            ->assertJsonPath('kpis.revenue_window', 6000)
+            ->assertJsonPath('kpis.revenue_previous_window', 3000)
+            ->assertJsonPath('kpis.average_ticket_window', 3000)
+            ->assertJsonPath('kpis.revenue_delta_percent', 100);
     }
 
     private function createPlatform(string $name): Platform
@@ -738,19 +764,32 @@ class WalletSettingsPhaseFourTest extends TestCase
         $this->assertSame(220.0, (float) $dashboard->json('kpis.revenue_window_breakdown.GHS'));
     }
 
-    private function createCompletedPayment(Platform $platform, float $amount, string $purpose = 'subscription'): Payment
+    private function createCompletedPayment(
+        Platform $platform,
+        float $amount,
+        string $purpose = 'subscription',
+        string $status = 'completed',
+        $createdAt = null
+    ): Payment
     {
-        return Payment::query()->create([
+        $createdAt = $createdAt ?? now()->subMinutes(5);
+
+        $payment = Payment::query()->create([
             'platform_id' => $platform->id,
             'phone' => '254700' . random_int(100000, 999999),
             'amount' => $amount,
             'currency' => 'KES',
             'transaction_uuid' => (string) Str::uuid(),
             'transaction_reference' => Str::upper(Str::random(10)),
-            'status' => 'completed',
+            'status' => $status,
             'purpose' => $purpose,
-            'created_at' => now()->subMinutes(5),
-            'updated_at' => now()->subMinutes(5),
         ]);
+
+        $payment->forceFill([
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ])->saveQuietly();
+
+        return $payment->fresh();
     }
 }

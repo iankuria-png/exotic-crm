@@ -188,7 +188,7 @@ function FunnelFlow({ stages, totals }) {
 
 function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false }) {
     if (!rows.length) {
-        return <InsightEmptyState title="No owner performance data" message="No subscriptions were created in this reporting window." />;
+        return <InsightEmptyState title="No owner performance data" message="No successful payments were collected in this reporting window." />;
     }
 
     // For share calculation use the totals breakdown sum or scalar
@@ -203,13 +203,14 @@ function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false
                 <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                     <tr>
                         <th className="px-3 py-2">Owner</th>
-                        <th className="px-3 py-2">Subscriptions</th>
-                        <th className="px-3 py-2">Pipeline Mix</th>
+                        <th className="px-3 py-2">Successful Payments</th>
+                        <th className="px-3 py-2">Revenue Mix</th>
                         <th className="px-3 py-2 text-right">Revenue</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                     {rows.map((row) => {
+                        const paymentCount = asNumber(row.payments_count ?? row.deals);
                         const rowBreakdown = row.revenue_breakdown ?? {};
                         const rowTotal = Object.values(rowBreakdown).reduce((sum, v) => sum + v, 0);
                         const share = revenueTotal > 0 ? Math.round((rowTotal / revenueTotal) * 100) : 0;
@@ -218,12 +219,12 @@ function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false
                                 <td className="px-3 py-3">
                                     <p className="font-semibold text-slate-800">{row.owner}</p>
                                     {isMixed
-                                        ? <CurrencyAmount breakdown={row.avg_revenue_breakdown ?? {}} scalarAmount={row.avg_revenue_per_subscription} fallbackCurrency={currency} className="text-xs text-slate-500" stackClassName="leading-snug" />
-                                        : <p className="text-xs text-slate-500">{formatCurrency(row.avg_revenue_per_subscription, currency)} avg / subscription</p>}
+                                        ? <CurrencyAmount breakdown={row.avg_revenue_per_payment_breakdown ?? row.avg_revenue_breakdown ?? {}} scalarAmount={row.avg_revenue_per_payment ?? row.avg_revenue_per_subscription} fallbackCurrency={currency} className="text-xs text-slate-500" stackClassName="leading-snug" />
+                                        : <p className="text-xs text-slate-500">{formatCurrency(row.avg_revenue_per_payment ?? row.avg_revenue_per_subscription, currency)} avg / payment</p>}
                                 </td>
                                 <td className="px-3 py-3 text-slate-700">
-                                    <p className="font-semibold">{asNumber(row.deals).toLocaleString()}</p>
-                                    <p className="text-xs text-slate-500">{asNumber(row.active_subscriptions).toLocaleString()} active</p>
+                                    <p className="font-semibold">{paymentCount.toLocaleString()}</p>
+                                    <p className="text-xs text-slate-500">Collected in selected range</p>
                                 </td>
                                 <td className="px-3 py-3">
                                     <div className="h-2 overflow-hidden rounded-full bg-slate-100">
@@ -446,10 +447,10 @@ export default function Reports() {
                 const totalRevBreakdown = kpis.total_revenue_breakdown ?? {};
                 if (Object.keys(totalRevBreakdown).length > 0) {
                     Object.entries(totalRevBreakdown).forEach(([currency, amount]) =>
-                        rows.push(toCsvRow(['KPI', 'Total Revenue', currency, amount])),
+                        rows.push(toCsvRow(['KPI', 'Collected Revenue', currency, amount])),
                     );
                 } else {
-                    rows.push(toCsvRow(['KPI', 'Total Revenue', resolvedReportCurrency, kpis.total_revenue ?? 0]));
+                    rows.push(toCsvRow(['KPI', 'Collected Revenue', resolvedReportCurrency, kpis.total_revenue ?? 0]));
                 }
                 const revMtdBreakdown = kpis.revenue_mtd_breakdown ?? {};
                 if (Object.keys(revMtdBreakdown).length > 0) {
@@ -495,13 +496,14 @@ export default function Reports() {
 
                 // Owner performance: one row per (owner, currency)
                 (data.owner_performance || []).forEach((row) => {
+                    const paymentCount = row.payments_count ?? row.deals ?? 0;
                     const bd = row.revenue_breakdown ?? {};
                     if (Object.keys(bd).length > 0) {
                         Object.entries(bd).forEach(([currency, amount]) =>
-                            rows.push(toCsvRow(['Owner Performance', row.owner, currency, `${row.deals} subscriptions | ${row.active_subscriptions} active | ${amount} revenue`])),
+                            rows.push(toCsvRow(['Owner Performance', row.owner, currency, `${paymentCount} successful payments | ${amount} revenue`])),
                         );
                     } else {
-                        rows.push(toCsvRow(['Owner Performance', row.owner, resolvedReportCurrency, `${row.deals} subscriptions | ${row.active_subscriptions} active | ${row.revenue ?? 0} revenue`]));
+                        rows.push(toCsvRow(['Owner Performance', row.owner, resolvedReportCurrency, `${paymentCount} successful payments | ${row.revenue ?? 0} revenue`]));
                     }
                 });
             }
@@ -611,7 +613,7 @@ export default function Reports() {
                 <>
                     <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <MetricCard
-                            label="Total Revenue"
+                            label="Collected Revenue"
                             value={<CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} />}
                             meta="selected reporting window"
                             tone="accent"
@@ -646,13 +648,13 @@ export default function Reports() {
                                 )}
                             </ReportPanel>
 
-                            <ReportPanel title="Revenue Trend" subtitle="Completed payments by month">
+                            <ReportPanel title="Revenue Trend" subtitle="Successful collected payments by month">
                                 {isLoading ? <p className="text-sm text-slate-500">Loading revenue trend...</p> : (
                                     revenueTrend.length > 0
                                         ? isMixedReport
                                             ? <RevenueBreakdownList rows={revenueTrend} />
                                             : <BarList rows={revenueTrend} colorClass="bg-teal-600" />
-                                        : <InsightEmptyState title="No payment trend available" message="No completed payments found for this range." />
+                                        : <InsightEmptyState title="No payment trend available" message="No successful payments found for this range." />
                                 )}
                             </ReportPanel>
 
@@ -664,20 +666,20 @@ export default function Reports() {
                         </div>
 
                         <div className="space-y-4 xl:col-span-6">
-                            <ReportPanel title="Revenue by Package" subtitle="Subscription value grouped by package">
+                            <ReportPanel title="Revenue by Package" subtitle="Collected payment revenue grouped by package">
                                 {packageRevenue.length > 0
                                     ? <BarList rows={packageRevenue} colorClass="bg-emerald-600" />
-                                    : <InsightEmptyState title="No package revenue yet" message="No subscription revenue has posted in this date window." />}
+                                    : <InsightEmptyState title="No package revenue yet" message="No collected payment revenue has posted in this date window." />}
                             </ReportPanel>
 
-                            <ReportPanel title="Owner Performance" subtitle="Subscriptions handled by owner">
+                            <ReportPanel title="Owner Performance" subtitle="Successful payments and collected revenue by owner">
                                 <div className="space-y-3">
                                     {topOwner ? (
                                         <div className="rounded-lg border border-teal-100 bg-teal-50/70 px-3 py-2 text-sm text-teal-900">
                                             <span className="font-semibold">Top owner:</span>{' '}
                                             {isMixedReport
-                                                ? `${topOwner.owner} (${asNumber(topOwner.deals)} subscriptions)`
-                                                : `${topOwner.owner} (${asNumber(topOwner.deals)} subscriptions, ${formatCurrency(topOwner.revenue, resolvedReportCurrency)})`}
+                                                ? `${topOwner.owner} (${asNumber(topOwner.payments_count ?? topOwner.deals)} successful payments)`
+                                                : `${topOwner.owner} (${asNumber(topOwner.payments_count ?? topOwner.deals)} successful payments, ${formatCurrency(topOwner.revenue, resolvedReportCurrency)})`}
                                         </div>
                                     ) : null}
                                     <OwnerPerformanceTable rows={ownerRows} totals={ownerTotals} currency={resolvedReportCurrency} isMixed={isMixedReport} />

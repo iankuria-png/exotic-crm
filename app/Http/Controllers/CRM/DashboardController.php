@@ -77,7 +77,7 @@ class DashboardController extends Controller
         $reviewBaselineCutoff = $this->resolveBaselineCutoff();
         $paymentReviewQueueQuery = Payment::query()
             ->liveOnly()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->whereNull('client_id')
             ->with(['platform', 'product'])
             ->orderBy('created_at', 'desc');
@@ -128,19 +128,26 @@ class DashboardController extends Controller
         $expiringSoonQuery = Deal::expiringSoon(7);
         $paymentsWindowQuery = Payment::query()
             ->liveOnly()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to]);
         $walletTopupsWindowQuery = Payment::query()
             ->liveOnly()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
-        $unmatchedPaymentsWindowQuery = Payment::query()->liveOnly()->whereNull('client_id')->where('status', 'completed')->whereBetween('created_at', [$from, $to]);
+        $unmatchedPaymentsWindowQuery = Payment::query()
+            ->liveOnly()
+            ->whereNull('client_id')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->whereBetween('created_at', [$from, $to]);
         $baselineCutoff = $this->resolveBaselineCutoff();
         $awaitingPaymentsQuery = Payment::query()->liveOnly()->whereIn('status', ['initiated', 'pending']);
         $failedPaymentsQuery = Payment::query()->liveOnly()->where('status', 'failed');
-        $unmatchedQueueQuery = Payment::query()->liveOnly()->whereNull('client_id')->where('status', 'completed');
+        $unmatchedQueueQuery = Payment::query()
+            ->liveOnly()
+            ->whereNull('client_id')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
         if ($baselineCutoff) {
             $awaitingPaymentsQuery->where('created_at', '>=', $baselineCutoff);
             $failedPaymentsQuery->where('created_at', '>=', $baselineCutoff);
@@ -161,6 +168,7 @@ class DashboardController extends Controller
             $activeDealsQuery->whereIn('platform_id', $platformIds);
             $expiringSoonQuery->whereIn('platform_id', $platformIds);
             $paymentsWindowQuery->whereIn('platform_id', $platformIds);
+            $walletTopupsWindowQuery->whereIn('platform_id', $platformIds);
             $unmatchedPaymentsWindowQuery->whereIn('platform_id', $platformIds);
             $awaitingPaymentsQuery->whereIn('platform_id', $platformIds);
             $failedPaymentsQuery->whereIn('platform_id', $platformIds);
@@ -174,7 +182,7 @@ class DashboardController extends Controller
         $previousTo = (clone $from)->subSecond();
         $previousRevenueQuery = Payment::query()
             ->liveOnly()
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$previousFrom, $previousTo]);
         if (is_array($platformIds)) {
@@ -369,14 +377,14 @@ class DashboardController extends Controller
         foreach ($platforms as $platform) {
             $currentRevenue = (float) Payment::where('platform_id', $platform->id)
                 ->liveOnly()
-                ->where('status', 'completed')
+                ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
                 ->excludingWalletTopups()
                 ->whereBetween('created_at', [$currentFrom, $currentTo])
                 ->sum('amount');
 
             $previousRevenue = (float) Payment::where('platform_id', $platform->id)
                 ->liveOnly()
-                ->where('status', 'completed')
+                ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
                 ->excludingWalletTopups()
                 ->whereBetween('created_at', [$previousFrom, $previousTo])
                 ->sum('amount');

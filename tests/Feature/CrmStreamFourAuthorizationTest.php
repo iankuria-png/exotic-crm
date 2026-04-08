@@ -734,17 +734,17 @@ CSV;
         $this->createLead($platform, ['status' => 'lost']);
         $this->createLead($platform, ['status' => 'new', 'archived_at' => now()]);
 
-        $this->createDeal($platform, [
+        $dealA1 = $this->createDeal($platform, [
             'assigned_to' => $ownerA->id,
             'status' => 'active',
             'amount' => 4000,
         ]);
-        $this->createDeal($platform, [
+        $dealA2 = $this->createDeal($platform, [
             'assigned_to' => $ownerA->id,
             'status' => 'pending',
             'amount' => 1500,
         ]);
-        $this->createDeal($platform, [
+        $dealB = $this->createDeal($platform, [
             'assigned_to' => $ownerB->id,
             'status' => 'expired',
             'amount' => 2200,
@@ -753,6 +753,54 @@ CSV;
             'assigned_to' => $ownerB->id,
             'status' => 'cancelled',
             'amount' => 3000,
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'deal_id' => $dealA1->id,
+            'product_id' => $dealA1->product_id,
+            'client_id' => $dealA1->client_id,
+            'phone' => '254711000111',
+            'amount' => 4000,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subDays(3),
+            'updated_at' => now()->subDays(3),
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'deal_id' => $dealA2->id,
+            'product_id' => $dealA2->product_id,
+            'client_id' => $dealA2->client_id,
+            'phone' => '254711000112',
+            'amount' => 1500,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subDays(2),
+            'updated_at' => now()->subDays(2),
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'deal_id' => $dealB->id,
+            'product_id' => $dealB->product_id,
+            'client_id' => $dealB->client_id,
+            'phone' => '254711000113',
+            'amount' => 2200,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'expired',
+            'purpose' => 'subscription',
+            'created_at' => now()->subDay(),
+            'updated_at' => now()->subDay(),
         ]);
 
         Sanctum::actingAs($salesUser);
@@ -768,7 +816,7 @@ CSV;
             ->assertJsonPath('lead_funnel_stages.0.key', 'new')
             ->assertJsonPath('owner_performance_top_owner.owner', $ownerA->name)
             ->assertJsonPath('owner_performance_totals.subscriptions', 3)
-            ->assertJsonPath('owner_performance_totals.active_subscriptions', 1);
+            ->assertJsonPath('owner_performance_totals.active_subscriptions', 0);
 
         $this->assertSame(5, $response->json('lead_funnel_totals.total'));
         $this->assertSame(3, $response->json('lead_funnel_totals.workable'));
@@ -1358,9 +1406,24 @@ HTML,
         $ownerB = $this->createUser('sales', [$platform->id]);
         $adminUser = $this->createUser('admin', [$platform->id]);
 
-        // Payment (KES) for revenue trend / kpis
+        $dealA = $this->createDeal($platform, [
+            'assigned_to' => $ownerA->id,
+            'status' => 'active',
+            'amount' => 3000,
+            'currency' => 'KES',
+        ]);
+        $dealB = $this->createDeal($platform, [
+            'assigned_to' => $ownerB->id,
+            'status' => 'active',
+            'amount' => 180,
+            'currency' => 'GHS',
+        ]);
+
         Payment::query()->create([
             'platform_id' => $platform->id,
+            'deal_id' => $dealA->id,
+            'product_id' => $dealA->product_id,
+            'client_id' => $dealA->client_id,
             'phone' => '254700222001',
             'amount' => 4000,
             'currency' => 'KES',
@@ -1372,33 +1435,20 @@ HTML,
             'updated_at' => now()->subDays(2),
         ]);
 
-        // Payment (GHS) on the same platform for mixed scope
         Payment::query()->create([
             'platform_id' => $platform->id,
+            'deal_id' => $dealB->id,
+            'product_id' => $dealB->product_id,
+            'client_id' => $dealB->client_id,
             'phone' => '233743222002',
             'amount' => 250,
             'currency' => 'GHS',
             'transaction_uuid' => (string) Str::uuid(),
             'transaction_reference' => Str::upper(Str::random(10)),
-            'status' => 'completed',
+            'status' => 'expired',
             'purpose' => 'subscription',
             'created_at' => now()->subDays(1),
             'updated_at' => now()->subDays(1),
-        ]);
-
-        // KES deal for owner A
-        $this->createDeal($platform, [
-            'assigned_to' => $ownerA->id,
-            'status' => 'active',
-            'amount' => 3000,
-            'currency' => 'KES',
-        ]);
-        // GHS deal for owner B
-        $this->createDeal($platform, [
-            'assigned_to' => $ownerB->id,
-            'status' => 'active',
-            'amount' => 180,
-            'currency' => 'GHS',
         ]);
 
         Sanctum::actingAs($adminUser);
@@ -1427,14 +1477,55 @@ HTML,
         // Owner performance totals: revenue null when mixed
         $this->assertNull($response->json('owner_performance_totals.revenue'));
         $this->assertArrayHasKey('revenue_breakdown', $response->json('owner_performance_totals'));
-        $this->assertSame(3000.0, (float) $response->json('owner_performance_totals.revenue_breakdown.KES'));
-        $this->assertSame(180.0, (float) $response->json('owner_performance_totals.revenue_breakdown.GHS'));
+        $this->assertSame(4000.0, (float) $response->json('owner_performance_totals.revenue_breakdown.KES'));
+        $this->assertSame(250.0, (float) $response->json('owner_performance_totals.revenue_breakdown.GHS'));
 
         // Per-owner revenue_breakdown is present
         $ownerRows = $response->json('owner_performance') ?? [];
         foreach ($ownerRows as $ownerRow) {
             $this->assertArrayHasKey('revenue_breakdown', $ownerRow);
         }
+    }
+
+    public function test_reports_summary_places_unmatched_successful_payments_in_fallback_buckets(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $adminUser = $this->createUser('admin', [$platform->id]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700333001',
+            'amount' => 900,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subDay(),
+            'updated_at' => now()->subDay(),
+        ]);
+
+        Sanctum::actingAs($adminUser);
+
+        $response = $this->getJson(
+            '/api/crm/reports/summary?platform_id=' . $platform->id
+            . '&from=' . now()->subDays(7)->toDateString()
+            . '&to=' . now()->toDateString()
+        );
+
+        $response->assertOk();
+
+        $packageRows = collect($response->json('package_revenue'));
+        $ownerRows = collect($response->json('owner_performance'));
+
+        $unknownPackage = $packageRows->firstWhere('label', 'Unknown package');
+        $unassignedOwner = $ownerRows->firstWhere('owner', 'Unassigned');
+
+        $this->assertNotNull($unknownPackage);
+        $this->assertNotNull($unassignedOwner);
+        $this->assertSame(900.0, (float) data_get($unknownPackage, 'revenue_breakdown.KES'));
+        $this->assertSame(900.0, (float) data_get($unassignedOwner, 'revenue_breakdown.KES'));
+        $this->assertSame(1, (int) data_get($unassignedOwner, 'payments_count'));
     }
 
     public function test_reports_summary_uses_platform_currency_when_row_currency_is_missing(): void
