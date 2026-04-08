@@ -36,11 +36,15 @@ use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use App\Models\BillingRoutingDecision;
+use App\Models\PaymentManualSubmission;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
+use App\Services\ManualPaymentSubmissionService;
+use App\Services\SubscriptionDeactivationService;
 
 class PaymentQueueController extends Controller
 {
@@ -60,7 +64,9 @@ class PaymentQueueController extends Controller
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly BillingProviderRegistryContract $billingProviderRegistry,
         private readonly PaymentDiagnosticsPayloadPresenter $paymentDiagnosticsPayloadPresenter,
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly ManualPaymentSubmissionService $manualPaymentSubmissionService,
+        private readonly SubscriptionDeactivationService $subscriptionDeactivationService
     ) {
     }
 
@@ -77,7 +83,7 @@ class PaymentQueueController extends Controller
             'You do not have access to this payment market.'
         );
 
-        $query = Payment::with(['platform', 'product', 'client']);
+        $query = Payment::with(['platform', 'product', 'client', 'manualSubmission']);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
         if ($request->filled('platform_id')) {
@@ -236,6 +242,17 @@ class PaymentQueueController extends Controller
                 $payment->platform->setAttribute(
                     'payment_link_providers',
                     $this->walletSettingsService->currentPaymentLinkProviders($payment->platform)
+                );
+            }
+
+             if ($payment->manualSubmission) {
+                $payment->manualSubmission->setAttribute(
+                    'proof_url',
+                    url("/api/crm/payments/manual-submissions/{$payment->manualSubmission->id}/proof")
+                );
+                $payment->manualSubmission->setAttribute(
+                    'customer_state',
+                    $this->manualPaymentSubmissionService->resolveCustomerState($payment)
                 );
             }
 
@@ -795,7 +812,7 @@ class PaymentQueueController extends Controller
     {
         $this->authorizePaymentAccess($request, $payment);
 
-        $payment->load(['platform', 'product', 'client', 'deal', 'confirmedBy']);
+        $payment->load(['platform', 'product', 'client', 'deal', 'confirmedBy', 'manualSubmission.reviewer']);
 
         $attempts = $payment->attempts()
             ->with('actor:id,name,email')
@@ -864,6 +881,7 @@ class PaymentQueueController extends Controller
             ->orderBy('attempt_sequence')
             ->orderBy('id')
             ->get();
+        $manualSubmission = $payment->manualSubmission;
 
         $failureStage = $this->resolveFailureStage($payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta, $linkProxy);
         $failureReason = $latestFailedAttempt?->error_message
@@ -902,6 +920,25 @@ class PaymentQueueController extends Controller
                 'check_provider_status' => $canCheckProviderStatus,
                 'sandbox_reconcile' => $canSandboxReconcile,
             ],
+            'manual_submission' => $manualSubmission ? [
+                'id' => (int) $manualSubmission->id,
+                'manual_method_key' => $manualSubmission->manual_method_key,
+                'activated_on_submit' => (bool) $manualSubmission->activated_on_submit,
+                'sender_name' => $manualSubmission->sender_name,
+                'transaction_reference' => $manualSubmission->transaction_reference,
+                'customer_note' => $manualSubmission->customer_note,
+                'review_decision' => $manualSubmission->review_decision,
+                'rejection_reason' => $manualSubmission->rejection_reason,
+                'reviewed_at' => optional($manualSubmission->reviewed_at)->toDateTimeString(),
+                'reviewer' => $manualSubmission->reviewer ? [
+                    'id' => (int) $manualSubmission->reviewer->id,
+                    'name' => $manualSubmission->reviewer->name,
+                ] : null,
+                'destination_snapshot' => $manualSubmission->destination_snapshot_json,
+                'instruction_snapshot' => $manualSubmission->instruction_snapshot_json,
+                'proof_url' => url("/api/crm/payments/manual-submissions/{$manualSubmission->id}/proof"),
+                'customer_state' => $this->manualPaymentSubmissionService->resolveCustomerState($payment),
+            ] : null,
             'link_proxy' => $linkProxy,
             'attempts' => $attempts->map(function ($attempt) {
                 return [
@@ -1306,6 +1343,294 @@ class PaymentQueueController extends Controller
         return response()->json([
             'message' => 'Payment closed manually.',
             'payment' => $payment->fresh(['platform', 'product', 'client']),
+        ]);
+    }
+
+    public function manualSubmissionProof(Request $request, PaymentManualSubmission $submission)
+    {
+        $submission->loadMissing(['payment']);
+
+        if (!$submission->payment) {
+            return response()->json([
+                'message' => 'Manual submission proof is unavailable.',
+            ], 404);
+        }
+
+        $this->authorizePaymentAccess($request, $submission->payment);
+
+        $disk = trim((string) ($submission->proof_disk ?: 'local'));
+        $path = trim((string) $submission->proof_path);
+
+        if ($path === '' || !Storage::disk($disk)->exists($path)) {
+            return response()->json([
+                'message' => 'Proof image could not be found.',
+            ], 404);
+        }
+
+        return Storage::disk($disk)->response(
+            $path,
+            basename($path),
+            [
+                'Content-Type' => $submission->proof_mime ?: 'application/octet-stream',
+                'Cache-Control' => 'private, no-store, no-cache',
+            ]
+        );
+    }
+
+    public function approveManualSubmission(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $payment->loadMissing(['manualSubmission', 'deal', 'client', 'platform', 'product']);
+        $submission = $this->requiredManualSubmission($payment);
+
+        if ((string) $payment->reconciliation_state !== 'manual_review') {
+            return response()->json([
+                'message' => 'Only unresolved manual submissions can be approved.',
+            ], 422);
+        }
+
+        $beforeState = [
+            'status' => $payment->status,
+            'reconciliation_state' => $payment->reconciliation_state,
+            'deal_id' => $payment->deal_id,
+            'review_decision' => $submission->review_decision,
+        ];
+
+        try {
+            DB::transaction(function () use ($payment, $submission, $request) {
+                $payment->refresh();
+                $payment->loadMissing(['manualSubmission', 'deal', 'client', 'platform', 'product']);
+
+                if (!$payment->deal || (string) $payment->deal->status !== 'active') {
+                    $this->manualPaymentSubmissionService->createOrActivateDeal(
+                        $payment,
+                        $submission,
+                        optional($request->user())->id
+                    );
+                }
+
+                $payment->forceFill([
+                    'status' => 'completed',
+                    'completed_at' => $payment->completed_at ?? now(),
+                    'reconciliation_state' => 'resolved',
+                ])->save();
+
+                $this->manualPaymentSubmissionService->markSubmissionReview(
+                    $submission,
+                    'approved',
+                    (int) $request->user()->id
+                );
+            });
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Manual payment approval failed', [
+                'payment_id' => $payment->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Approval failed: ' . $exception->getMessage(),
+            ], 500);
+        }
+
+        $payment = $payment->fresh(['platform', 'product', 'client', 'deal', 'manualSubmission']);
+        $this->manualPaymentSubmissionService->synchronizeWpState($payment);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_MANUAL_APPROVE,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'status' => $payment->status,
+                'reconciliation_state' => $payment->reconciliation_state,
+                'deal_id' => $payment->deal_id,
+                'review_decision' => $payment->manualSubmission?->review_decision,
+            ],
+            $validated['reason'] ?? 'Manual payment approved and subscription activated'
+        );
+
+        return response()->json([
+            'message' => 'Manual payment approved.',
+            'payment' => $payment,
+        ]);
+    }
+
+    public function verifyManualSubmission(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $payment->loadMissing(['manualSubmission', 'deal', 'client', 'platform', 'product']);
+        $submission = $this->requiredManualSubmission($payment);
+
+        if ((string) $payment->reconciliation_state !== 'manual_review') {
+            return response()->json([
+                'message' => 'Only unresolved manual submissions can be verified.',
+            ], 422);
+        }
+
+        if (!$submission->activated_on_submit && (!$payment->deal || (string) $payment->deal->status !== 'active')) {
+            return response()->json([
+                'message' => 'Use approve and activate for manual submissions that are not already live.',
+            ], 422);
+        }
+
+        $beforeState = [
+            'status' => $payment->status,
+            'reconciliation_state' => $payment->reconciliation_state,
+            'review_decision' => $submission->review_decision,
+        ];
+
+        DB::transaction(function () use ($payment, $submission, $request) {
+            $payment->forceFill([
+                'status' => 'completed',
+                'completed_at' => $payment->completed_at ?? now(),
+                'reconciliation_state' => 'resolved',
+            ])->save();
+
+            $this->manualPaymentSubmissionService->markSubmissionReview(
+                $submission,
+                'approved',
+                (int) $request->user()->id
+            );
+        });
+
+        $payment = $payment->fresh(['platform', 'product', 'client', 'deal', 'manualSubmission']);
+        $this->manualPaymentSubmissionService->synchronizeWpState($payment);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_MANUAL_VERIFY,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'status' => $payment->status,
+                'reconciliation_state' => $payment->reconciliation_state,
+                'review_decision' => $payment->manualSubmission?->review_decision,
+            ],
+            $validated['reason'] ?? 'Manual payment verified after benefit-of-doubt activation'
+        );
+
+        return response()->json([
+            'message' => 'Manual payment verified.',
+            'payment' => $payment,
+        ]);
+    }
+
+    public function rejectManualSubmission(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $payment->loadMissing(['manualSubmission', 'deal', 'client', 'platform', 'product']);
+        $submission = $this->requiredManualSubmission($payment);
+
+        if ((string) $payment->reconciliation_state !== 'manual_review') {
+            return response()->json([
+                'message' => 'Only unresolved manual submissions can be rejected.',
+            ], 422);
+        }
+
+        $beforeState = [
+            'status' => $payment->status,
+            'reconciliation_state' => $payment->reconciliation_state,
+            'deal_status' => $payment->deal?->status,
+            'review_decision' => $submission->review_decision,
+        ];
+
+        $client = $payment->client;
+
+        try {
+            DB::transaction(function () use ($payment, $submission, $validated, $request) {
+                $payment->refresh();
+                $payment->loadMissing(['manualSubmission', 'deal', 'client', 'platform', 'product']);
+
+                if ($payment->deal && (string) $payment->deal->status === 'active') {
+                    $this->subscriptionDeactivationService->deactivateDeal(
+                        $payment->deal,
+                        (string) $validated['reason'],
+                        optional($request->user())->id
+                    );
+                }
+
+                $payment->forceFill([
+                    'status' => 'failed',
+                    'failure_reason' => mb_substr((string) $validated['reason'], 0, 190),
+                    'reconciliation_state' => 'resolved',
+                ])->save();
+
+                $this->manualPaymentSubmissionService->markSubmissionReview(
+                    $submission,
+                    'rejected',
+                    (int) $request->user()->id,
+                    (string) $validated['reason']
+                );
+            });
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Manual payment rejection failed', [
+                'payment_id' => $payment->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Rejection failed: ' . $exception->getMessage(),
+            ], 500);
+        }
+
+        $payment = $payment->fresh(['platform', 'product', 'client', 'deal', 'manualSubmission']);
+        $this->manualPaymentSubmissionService->synchronizeWpState($payment);
+
+        if ($client && $request->filled('reason')) {
+            $message = 'We could not verify your payment proof. Reason: ' . trim((string) $validated['reason']);
+            $this->notificationService->sendSmsToClient($client, $message, [
+                'purpose' => 'manual_payment_rejected',
+                'payment_id' => $payment->id,
+            ]);
+        }
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_MANUAL_REJECT,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            [
+                'status' => $payment->status,
+                'reconciliation_state' => $payment->reconciliation_state,
+                'deal_status' => $payment->deal?->status,
+                'review_decision' => $payment->manualSubmission?->review_decision,
+                'rejection_reason' => $payment->manualSubmission?->rejection_reason,
+            ],
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'message' => 'Manual payment rejected.',
+            'payment' => $payment,
         ]);
     }
 
@@ -1993,6 +2318,19 @@ class PaymentQueueController extends Controller
         if ($payment->platform_id && !$this->marketAuthorizationService->userCanAccessPlatform($request->user(), (int) $payment->platform_id)) {
             abort(403, 'You do not have access to this payment market.');
         }
+    }
+
+    private function requiredManualSubmission(Payment $payment): PaymentManualSubmission
+    {
+        $submission = $payment->relationLoaded('manualSubmission')
+            ? $payment->manualSubmission
+            : $payment->manualSubmission()->first();
+
+        if (!$submission) {
+            throw new InvalidArgumentException('This payment does not have a manual submission to review.');
+        }
+
+        return $submission;
     }
 
     public function mpesaReview(Request $request)

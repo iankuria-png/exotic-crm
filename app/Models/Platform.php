@@ -88,6 +88,11 @@ class Platform extends Model
         return $this->hasOne(BillingSubscriptionRule::class, 'market_id');
     }
 
+    public function billingManualPaymentMethods()
+    {
+        return $this->hasMany(BillingManualPaymentMethod::class, 'market_id');
+    }
+
     public function billingRoutingDecisions()
     {
         return $this->hasMany(BillingRoutingDecision::class, 'market_id');

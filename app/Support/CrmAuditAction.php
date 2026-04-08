@@ -43,6 +43,9 @@ final class CrmAuditAction
     public const PAYMENT_SEND_LINK = 'payment_send_link';
     public const PAYMENT_SANDBOX_RECONCILE = 'payment_sandbox_reconcile';
     public const PAYMENT_CREATE_SUBSCRIPTION = 'payment_create_subscription';
+    public const PAYMENT_MANUAL_APPROVE = 'payment_manual_approve';
+    public const PAYMENT_MANUAL_VERIFY = 'payment_manual_verify';
+    public const PAYMENT_MANUAL_REJECT = 'payment_manual_reject';
     public const PAYMENT_MANUAL_CLOSE = 'payment_manual_close';
     public const PAYMENT_IMPORT_PREVIEW = 'payment_import_preview';
     public const PAYMENT_IMPORT_COMMIT = 'payment_import_commit';

@@ -19,6 +19,7 @@ use App\Services\DynamicDatabaseService;
 use App\Services\BillingModeService;
 use App\Services\HostedCheckoutService;
 use App\Services\LegacyStkService;
+use App\Services\ManualPaymentSubmissionService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentAttemptService;
@@ -39,6 +40,7 @@ class PaymentController extends Controller
         private readonly HostedCheckoutService $hostedCheckoutService,
         private readonly BillingModeService $billingModeService,
         private readonly WalletCheckoutService $walletCheckoutService,
+        private readonly ManualPaymentSubmissionService $manualPaymentSubmissionService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
@@ -2637,6 +2639,132 @@ class PaymentController extends Controller
     public function initiateCardPayment(Request $request)
     {
         return $this->selfCheckout($request);
+    }
+
+    public function submitManualPayment(Request $request)
+    {
+        $validated = $request->validate([
+            'product_id' => 'required|integer|exists:products,id',
+            'platform_id' => 'nullable|integer|exists:platforms,id',
+            'user_id' => 'required|integer',
+            'email' => 'nullable|email|max:255',
+            'first_name' => 'required|string|max:100',
+            'last_name' => 'required|string|max:100',
+            'phone' => 'required|string|max:30',
+            'duration' => 'required|string|max:50',
+            'manual_method_key' => 'required|string|max:40',
+            'sender_name' => 'required|string|max:160',
+            'transaction_reference' => 'required|string|max:255',
+            'customer_note' => 'nullable|string|max:1000',
+            'proof_image' => 'required|file|mimetypes:image/jpeg,image/png,image/webp|max:8192',
+        ]);
+
+        try {
+            $product = Product::query()
+                ->with(['activePrices', 'platform'])
+                ->findOrFail((int) $validated['product_id']);
+
+            if (!(bool) $product->is_active || (bool) $product->is_archived) {
+                throw new \InvalidArgumentException('The selected package is not currently available.');
+            }
+
+            $platformId = (int) ($validated['platform_id'] ?? $product->platform_id ?? 0);
+            if ($platformId <= 0) {
+                throw new \InvalidArgumentException('A platform id is required for manual payment submission.');
+            }
+
+            $platform = Platform::query()->findOrFail($platformId);
+
+            if ((int) $product->platform_id !== 0 && (int) $product->platform_id !== (int) $platform->id) {
+                throw new \InvalidArgumentException('The selected package does not belong to this platform.');
+            }
+
+            if (!$this->marketBillingMethodPolicy->allowsCanonicalMethod($platform, 'activation', 'manual')) {
+                throw new \InvalidArgumentException('Manual payment is not enabled for this market.');
+            }
+
+            $pricing = $this->walletCheckoutService->resolveSubscriptionPricing($product, (string) $validated['duration']);
+            $normalizedPhone = preg_replace('/\D+/', '', (string) $validated['phone']);
+            if ($normalizedPhone === '') {
+                $normalizedPhone = trim((string) $validated['phone']);
+            }
+
+            $client = $this->resolveSubscriptionCheckoutClient(
+                (int) $platform->id,
+                (int) $validated['user_id'],
+                $normalizedPhone
+            );
+
+            if (!$client) {
+                throw new \InvalidArgumentException('We could not match this submission to your account. Please contact support.');
+            }
+
+            $result = $this->manualPaymentSubmissionService->submit(
+                $platform,
+                $product,
+                $client,
+                $pricing,
+                (string) $validated['manual_method_key'],
+                $request->file('proof_image'),
+                [
+                    'first_name' => $validated['first_name'],
+                    'last_name' => $validated['last_name'],
+                    'email' => $validated['email'] ?? '',
+                    'phone' => $normalizedPhone,
+                    'sender_name' => $validated['sender_name'],
+                    'transaction_reference' => $validated['transaction_reference'],
+                    'customer_note' => $validated['customer_note'] ?? '',
+                ]
+            );
+
+            $payment = $result['payment'];
+            $submission = $result['submission'];
+            $customerState = $result['customer_state'];
+
+            if (!empty($result['duplicate'])) {
+                return response()->json([
+                    'status' => false,
+                    'duplicate' => true,
+                    'message' => $customerState['message'] ?: 'A payment proof submission is already under review.',
+                    'submission_id' => $submission?->id,
+                    'payment_id' => $payment?->id,
+                    'customer_state' => $customerState['state'],
+                    'next_step_copy' => $customerState['message'],
+                    'billing_method_policy' => $this->marketBillingMethodPolicy->contract($platform),
+                ], 409);
+            }
+
+            return response()->json([
+                'status' => true,
+                'message' => $customerState['message'] ?: 'Manual payment proof submitted successfully.',
+                'submission_id' => $submission->id,
+                'payment_id' => $payment->id,
+                'customer_state' => $customerState['state'],
+                'next_step_copy' => $customerState['message'],
+                'billing_method_policy' => $this->marketBillingMethodPolicy->contract($platform),
+            ], 201);
+        } catch (ValidationException $exception) {
+            throw $exception;
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'status' => false,
+                'message' => $exception->getMessage(),
+                'error_code' => 'manual_payment_invalid_request',
+            ], 422);
+        } catch (\Throwable $exception) {
+            Log::error('Manual payment submission failed', [
+                'product_id' => $validated['product_id'] ?? null,
+                'platform_id' => $validated['platform_id'] ?? null,
+                'user_id' => $validated['user_id'] ?? null,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'We could not submit your payment proof right now.',
+                'error' => config('app.debug') ? $exception->getMessage() : 'Manual payment submission failed',
+            ], 500);
+        }
     }
 
     private function applySelfCheckoutFxOverride(array $pricing, array $resolvedProvider): array

@@ -3,6 +3,7 @@
 namespace App\Billing\Repositories;
 
 use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingManualPaymentMethod;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingRoutingDecision;
 use App\Models\BillingRoutingRule;
@@ -63,6 +64,27 @@ class BillingConfigurationRepository
     {
         return BillingSubscriptionRule::query()
             ->where('market_id', $marketId)
+            ->first();
+    }
+
+    /**
+     * @return Collection<int, BillingManualPaymentMethod>
+     */
+    public function manualPaymentMethodsForMarket(int $marketId, bool $enabledOnly = false): Collection
+    {
+        return BillingManualPaymentMethod::query()
+            ->where('market_id', $marketId)
+            ->when($enabledOnly, fn ($query) => $query->where('enabled', true))
+            ->orderBy('method_key')
+            ->get();
+    }
+
+    public function manualPaymentMethodForMarket(int $marketId, string $methodKey, bool $enabledOnly = false): ?BillingManualPaymentMethod
+    {
+        return BillingManualPaymentMethod::query()
+            ->where('market_id', $marketId)
+            ->where('method_key', strtolower(trim($methodKey)))
+            ->when($enabledOnly, fn ($query) => $query->where('enabled', true))
             ->first();
     }
 

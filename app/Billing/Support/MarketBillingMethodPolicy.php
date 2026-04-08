@@ -8,7 +8,7 @@ use App\Services\WalletSettingsService;
 
 class MarketBillingMethodPolicy
 {
-    public const CONTRACT_VERSION = '2026-04-06';
+    public const CONTRACT_VERSION = '2026-04-08';
 
     /**
      * @var array<string, string>
@@ -61,6 +61,9 @@ class MarketBillingMethodPolicy
         $walletRule = $marketId > 0
             ? $this->billingConfigurationRepository->walletRuleForMarket($marketId)
             : null;
+        $manualMethods = $marketId > 0
+            ? $this->billingConfigurationRepository->manualPaymentMethodsForMarket($marketId, true)
+            : collect();
 
         $activationMethods = $this->normalizeCanonicalMethods(
             $subscriptionRule?->activation_method_json,
@@ -91,6 +94,9 @@ class MarketBillingMethodPolicy
             'activation' => [
                 'methods' => $activationMethods,
                 'crm_methods' => $this->canonicalToCrmMethods($activationMethods, $freeTrialEnabled),
+                'manual_methods' => in_array('manual', $activationMethods, true)
+                    ? $manualMethods->map(fn ($method) => $this->serializeManualMethod($method))->values()->all()
+                    : [],
             ],
             'renewal' => [
                 'methods' => $renewalMethods,
@@ -101,6 +107,38 @@ class MarketBillingMethodPolicy
                 'enabled' => $freeTrialEnabled,
             ],
         ];
+    }
+
+    /**
+     * @param  \App\Models\BillingManualPaymentMethod  $method
+     * @return array<string, mixed>
+     */
+    private function serializeManualMethod($method): array
+    {
+        $details = is_array($method->details_json) ? $method->details_json : [];
+
+        return [
+            'key' => (string) $method->method_key,
+            'label' => trim((string) ($method->display_name ?: $this->defaultManualMethodLabel((string) $method->method_key))),
+            'enabled' => (bool) $method->enabled,
+            'instruction_intro' => $method->instruction_intro,
+            'instruction_footer' => $method->instruction_footer,
+            'proof_required' => (bool) $method->proof_required,
+            'sender_name_required' => (bool) $method->sender_name_required,
+            'transaction_id_required' => (bool) $method->transaction_id_required,
+            'auto_activate_on_submission' => (bool) $method->auto_activate_on_submission,
+            'details' => $details,
+        ];
+    }
+
+    private function defaultManualMethodLabel(string $methodKey): string
+    {
+        return match (strtolower(trim($methodKey))) {
+            'collector' => 'Collector',
+            'paybill' => 'Paybill',
+            'bank' => 'Bank transfer',
+            default => ucfirst(strtolower(trim($methodKey))),
+        };
     }
 
     public function contract(Platform|int|null $platform): array

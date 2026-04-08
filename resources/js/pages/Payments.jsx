@@ -274,6 +274,64 @@ function describeTimelineContent(content) {
     return 'Structured event data recorded.';
 }
 
+function isManualSubmissionPayment(payment) {
+    return Boolean(payment?.manual_submission);
+}
+
+function manualSubmissionAction(payment) {
+    if (!isManualSubmissionPayment(payment) || payment?.reconciliation_state !== 'manual_review') {
+        return null;
+    }
+
+    const alreadyActive = Boolean(payment?.manual_submission?.activated_on_submit) || Boolean(payment?.deal_id);
+
+    if (alreadyActive) {
+        return {
+            key: 'manual_verify',
+            label: 'Mark verified',
+        };
+    }
+
+    return {
+        key: 'manual_approve',
+        label: 'Approve & activate',
+    };
+}
+
+function manualCustomerStateMeta(state) {
+    const normalized = String(state || '').toLowerCase();
+
+    if (normalized === 'verification_pending') {
+        return {
+            label: 'Verification pending',
+            className: 'border-teal-200 bg-teal-50 text-teal-700',
+        };
+    }
+
+    if (normalized === 'awaiting_review') {
+        return {
+            label: 'Awaiting review',
+            className: 'border-amber-200 bg-amber-50 text-amber-700',
+        };
+    }
+
+    if (normalized === 'rejected') {
+        return {
+            label: 'Rejected',
+            className: 'border-rose-200 bg-rose-50 text-rose-700',
+        };
+    }
+
+    if (normalized === 'verified') {
+        return {
+            label: 'Verified',
+            className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        };
+    }
+
+    return null;
+}
+
 function structuredDiagnosticsTone(status) {
     const normalized = String(status || '').toLowerCase();
 
@@ -427,6 +485,11 @@ export default function Payments() {
         open: false,
         payment: null,
         category: 'timeout',
+        reason: '',
+    });
+    const [manualRejectDialog, setManualRejectDialog] = useState({
+        open: false,
+        payment: null,
         reason: '',
     });
     const [importDrawerOpen, setImportDrawerOpen] = useState(false);
@@ -626,6 +689,52 @@ export default function Payments() {
         },
     });
 
+    const manualApproveMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/manual-approve`, {
+                ...(reason ? { reason } : {}),
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+            toast.success('Manual payment approved and subscription activated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Approving the manual payment failed.');
+        },
+    });
+
+    const manualVerifyMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/manual-verify`, {
+                ...(reason ? { reason } : {}),
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+            toast.success('Manual payment marked as verified.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Verifying the manual payment failed.');
+        },
+    });
+
+    const manualRejectMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/manual-reject`, {
+                reason,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+            setManualRejectDialog({ open: false, payment: null, reason: '' });
+            toast.success('Manual payment rejected and customer state updated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Rejecting the manual payment failed.');
+        },
+    });
+
     const providerStatusMutation = useMutation({
         mutationFn: (paymentId) =>
             api.post(`/crm/payments/${paymentId}/check-provider-status`).then((response) => response.data),
@@ -787,6 +896,14 @@ export default function Payments() {
         setDiagnosticsDrawer({ open: false, payment: null });
     };
 
+    const openManualProof = (proofUrl) => {
+        if (!proofUrl || typeof window === 'undefined') {
+            return;
+        }
+
+        window.open(proofUrl, '_blank', 'noopener,noreferrer');
+    };
+
     const triggerRecommendation = (actionKey, paymentRow) => {
         if (!paymentRow) return;
 
@@ -927,6 +1044,11 @@ export default function Payments() {
     };
 
     const diagnosticsPayment = diagnosticsData?.payment || diagnosticsDrawer.payment;
+    const manualSubmissionData = diagnosticsData?.manual_submission || diagnosticsPayment?.manual_submission || null;
+    const manualSubmissionCustomerState = manualCustomerStateMeta(
+        manualSubmissionData?.customer_state || diagnosticsPayment?.manual_submission?.customer_state,
+    );
+    const manualSubmissionActionState = manualSubmissionAction(diagnosticsPayment);
     const linkProxyData = diagnosticsData?.link_proxy || null;
     const structuredDiagnostics = diagnosticsData?.structured_diagnostics || null;
     const structuredDiagnosticsSections = Array.isArray(structuredDiagnostics?.sections) ? structuredDiagnostics.sections : [];
@@ -1196,9 +1318,28 @@ export default function Payments() {
                 const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id && !sandboxRow;
                 const isLowConfidence = row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review';
                 const isManualReview = row.reconciliation_state === 'manual_review';
+                const manualAction = manualSubmissionAction(row);
 
                 let primary = null;
-                if (isManualReview) {
+                if (manualAction?.key === 'manual_approve') {
+                    primary = {
+                        label: manualAction.label,
+                        variant: 'success',
+                        onClick: () => manualApproveMutation.mutate({
+                            paymentId: row.id,
+                            reason: 'Manual payment approved from payment queue',
+                        }),
+                    };
+                } else if (manualAction?.key === 'manual_verify') {
+                    primary = {
+                        label: manualAction.label,
+                        variant: 'success',
+                        onClick: () => manualVerifyMutation.mutate({
+                            paymentId: row.id,
+                            reason: 'Manual payment verified from payment queue',
+                        }),
+                    };
+                } else if (isManualReview) {
                     primary = { label: 'Resolve', variant: 'success', onClick: () => reviewStateMutation.mutate({ paymentId: row.id, state: 'resolved', reason: 'Manual review resolved from payment queue' }) };
                 } else if (isFailed) {
                     primary = { label: 'Retry STK', variant: 'warning', onClick: () => setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' }) };
@@ -1221,6 +1362,20 @@ export default function Payments() {
                 }
 
                 const overflow = [
+                    isManualSubmissionPayment(row) && isManualReview && {
+                        key: 'manual-reject',
+                        label: 'Reject',
+                        onClick: () => setManualRejectDialog({
+                            open: true,
+                            payment: row,
+                            reason: '',
+                        }),
+                    },
+                    isManualSubmissionPayment(row) && row.manual_submission?.proof_url && {
+                        key: 'manual-proof',
+                        label: 'View proof',
+                        onClick: () => openManualProof(row.manual_submission.proof_url),
+                    },
                     isFailed && { key: 'send-link', label: 'Send payment link', onClick: () => setSendLinkDialog({ open: true, payment: row, channel: 'sms', provider: '', phone: row.phone || '', reason: 'Send payment link from CRM' }) },
                     isCompletedUnmatched && { key: 'manual-match', label: 'Match manually', onClick: () => openManualMatch(row) },
                     { key: 'diagnose', label: 'Diagnose', onClick: () => openDiagnostics(row) },
@@ -1230,7 +1385,7 @@ export default function Payments() {
                     <RowActionMenu
                         primaryAction={primary}
                         actions={overflow}
-                        badge={sandboxRow ? 'Sandbox' : (row.client_id ? 'Matched' : null)}
+                        badge={sandboxRow ? 'Sandbox' : (isManualSubmissionPayment(row) ? 'Manual proof' : (row.client_id ? 'Matched' : null))}
                     />
                 );
             },
@@ -1571,6 +1726,7 @@ export default function Payments() {
                                 <div className="mt-3 flex flex-wrap gap-2">
                                     {[
                                         ['overview', 'Overview'],
+                                        ...(manualSubmissionData ? [['manual-proof', 'Manual Proof']] : []),
                                         ['telemetry', 'Telemetry'],
                                         ['history', 'History'],
                                     ].map(([key, label]) => (
@@ -1690,6 +1846,168 @@ export default function Payments() {
                                                 ))}
                                             </div>
                                         </section>
+
+                                        {manualSubmissionData ? (
+                                            <section id="payment-diagnostics-manual-proof" className="rounded-xl border border-slate-200 bg-white p-4">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <h4 className="text-sm font-semibold text-slate-900">Manual payment proof</h4>
+                                                            <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600">
+                                                                {titleize(manualSubmissionData.manual_method_key || 'manual')}
+                                                            </span>
+                                                            {manualSubmissionCustomerState ? (
+                                                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${manualSubmissionCustomerState.className}`}>
+                                                                    {manualSubmissionCustomerState.label}
+                                                                </span>
+                                                            ) : null}
+                                                            {manualSubmissionData.review_decision ? (
+                                                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${
+                                                                    manualSubmissionData.review_decision === 'approved'
+                                                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                                                        : 'border-rose-200 bg-rose-50 text-rose-700'
+                                                                }`}>
+                                                                    {titleize(manualSubmissionData.review_decision)}
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
+                                                        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                                                            Review the exact destination snapshot, customer note, and uploaded proof before resolving the manual review queue.
+                                                        </p>
+                                                    </div>
+
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        {manualSubmissionData.proof_url ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openManualProof(manualSubmissionData.proof_url)}
+                                                                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                                            >
+                                                                View proof
+                                                            </button>
+                                                        ) : null}
+                                                        {manualSubmissionActionState?.key === 'manual_approve' ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => manualApproveMutation.mutate({
+                                                                    paymentId: diagnosticsPayment.id,
+                                                                    reason: 'Manual payment approved from diagnostics drawer',
+                                                                })}
+                                                                disabled={manualApproveMutation.isPending}
+                                                                className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            >
+                                                                {manualApproveMutation.isPending ? 'Approving…' : 'Approve & activate'}
+                                                            </button>
+                                                        ) : null}
+                                                        {manualSubmissionActionState?.key === 'manual_verify' ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => manualVerifyMutation.mutate({
+                                                                    paymentId: diagnosticsPayment.id,
+                                                                    reason: 'Manual payment verified from diagnostics drawer',
+                                                                })}
+                                                                disabled={manualVerifyMutation.isPending}
+                                                                className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            >
+                                                                {manualVerifyMutation.isPending ? 'Verifying…' : 'Mark verified'}
+                                                            </button>
+                                                        ) : null}
+                                                        {diagnosticsPayment?.reconciliation_state === 'manual_review' ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setManualRejectDialog({
+                                                                    open: true,
+                                                                    payment: diagnosticsPayment,
+                                                                    reason: '',
+                                                                })}
+                                                                className="rounded-md border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                                                            >
+                                                                Reject
+                                                            </button>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+
+                                                <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)]">
+                                                    <div className="space-y-3">
+                                                        {manualSubmissionData.proof_url ? (
+                                                            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                                                                <img
+                                                                    src={manualSubmissionData.proof_url}
+                                                                    alt="Manual payment proof"
+                                                                    className="h-64 w-full object-cover"
+                                                                    loading="lazy"
+                                                                />
+                                                            </div>
+                                                        ) : (
+                                                            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                                                                Proof image unavailable for this submission.
+                                                            </div>
+                                                        )}
+
+                                                        <div className="grid gap-2">
+                                                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Sender name:</span> {manualSubmissionData.sender_name || '—'}</p>
+                                                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Transaction reference:</span> {manualSubmissionData.transaction_reference || '—'}</p>
+                                                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Activated on submit:</span> {manualSubmissionData.activated_on_submit ? 'Yes' : 'No'}</p>
+                                                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-semibold text-slate-800">Reviewed at:</span> {manualSubmissionData.reviewed_at ? formatDateTime(manualSubmissionData.reviewed_at) : 'Pending review'}</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-4">
+                                                        <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                                                            <h5 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Instruction snapshot</h5>
+                                                            <p className="mt-3 text-sm leading-6 text-slate-700">
+                                                                {manualSubmissionData.instruction_snapshot?.instruction_intro || 'No instruction intro recorded.'}
+                                                            </p>
+                                                            {manualSubmissionData.instruction_snapshot?.instruction_footer ? (
+                                                                <p className="mt-3 text-xs leading-6 text-slate-500">
+                                                                    {manualSubmissionData.instruction_snapshot.instruction_footer}
+                                                                </p>
+                                                            ) : null}
+                                                        </section>
+
+                                                        <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                                                            <h5 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Destination snapshot</h5>
+                                                            {manualSubmissionData.destination_snapshot ? (
+                                                                <div className="mt-3 space-y-3">
+                                                                    <div className="grid gap-2 sm:grid-cols-2">
+                                                                        <p className="rounded-md bg-white px-3 py-2 text-xs text-slate-600">
+                                                                            <span className="font-semibold text-slate-800">Method:</span> {titleize(manualSubmissionData.destination_snapshot.method_key || 'manual')}
+                                                                        </p>
+                                                                        <p className="rounded-md bg-white px-3 py-2 text-xs text-slate-600">
+                                                                            <span className="font-semibold text-slate-800">Display name:</span> {manualSubmissionData.destination_snapshot.display_name || '—'}
+                                                                        </p>
+                                                                    </div>
+                                                                    {Object.entries(manualSubmissionData.destination_snapshot.details || {}).length > 0 ? (
+                                                                        <div className="grid gap-2 sm:grid-cols-2">
+                                                                            {Object.entries(manualSubmissionData.destination_snapshot.details || {}).map(([key, value]) => (
+                                                                                <p key={key} className="rounded-md bg-white px-3 py-2 text-xs text-slate-600">
+                                                                                    <span className="font-semibold text-slate-800">{titleize(key)}:</span> {String(value || '—')}
+                                                                                </p>
+                                                                            ))}
+                                                                        </div>
+                                                                    ) : null}
+                                                                </div>
+                                                            ) : (
+                                                                <p className="mt-3 text-sm text-slate-500">No destination snapshot was captured.</p>
+                                                            )}
+                                                        </section>
+
+                                                        <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                                                            <h5 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Customer note</h5>
+                                                            <p className="mt-3 text-sm leading-6 text-slate-700">
+                                                                {manualSubmissionData.customer_note || 'No customer note was provided.'}
+                                                            </p>
+                                                            {manualSubmissionData.rejection_reason ? (
+                                                                <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                                                                    <span className="font-semibold">Rejection reason:</span> {manualSubmissionData.rejection_reason}
+                                                                </p>
+                                                            ) : null}
+                                                        </section>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        ) : null}
 
                                         {isSandboxPayment(diagnosticsData.payment) ? (
                                             <section className="rounded-xl border border-sky-200 bg-sky-50 p-4">
@@ -2393,6 +2711,37 @@ export default function Payments() {
                     onChange={(event) => setCreateSubDialog((current) => ({ ...current, reason: event.target.value }))}
                     className="crm-input"
                     placeholder="e.g. Create subscription from matched payment"
+                />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={manualRejectDialog.open && !!manualRejectDialog.payment}
+                title="Reject manual payment"
+                message={manualRejectDialog.payment
+                    ? `Reject payment #${manualRejectDialog.payment.id} and notify the customer that the submitted proof could not be verified.`
+                    : ''}
+                confirmLabel="Reject payment"
+                tone="danger"
+                onCancel={() => setManualRejectDialog({ open: false, payment: null, reason: '' })}
+                onConfirm={() => {
+                    if (manualRejectDialog.payment) {
+                        manualRejectMutation.mutate({
+                            paymentId: manualRejectDialog.payment.id,
+                            reason: manualRejectDialog.reason.trim(),
+                        });
+                    }
+                }}
+                confirmDisabled={manualRejectMutation.isPending || !manualRejectDialog.reason.trim()}
+                isPending={manualRejectMutation.isPending}
+            >
+                <label htmlFor="manual-reject-reason" className="mb-1 block text-sm font-medium text-slate-700">Rejection reason</label>
+                <textarea
+                    id="manual-reject-reason"
+                    rows={3}
+                    value={manualRejectDialog.reason}
+                    onChange={(event) => setManualRejectDialog((current) => ({ ...current, reason: event.target.value }))}
+                    className="crm-input"
+                    placeholder="Explain why the payment proof could not be accepted."
                 />
             </ConfirmDialog>
 

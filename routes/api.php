@@ -235,6 +235,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);
         Route::post('/payments/{payment}/retry-stk', [PaymentQueueController::class, 'retryStk']);
         Route::post('/payments/{payment}/send-payment-link', [PaymentQueueController::class, 'sendPaymentLink']);
+        Route::get('/payments/manual-submissions/{submission}/proof', [PaymentQueueController::class, 'manualSubmissionProof']);
+        Route::post('/payments/{payment}/manual-approve', [PaymentQueueController::class, 'approveManualSubmission']);
+        Route::post('/payments/{payment}/manual-verify', [PaymentQueueController::class, 'verifyManualSubmission']);
+        Route::post('/payments/{payment}/manual-reject', [PaymentQueueController::class, 'rejectManualSubmission']);
         Route::post('/payments/{payment}/manual-close', [PaymentQueueController::class, 'manualClose']);
         Route::post('/payments/{payment}/review-state', [PaymentQueueController::class, 'updateReviewState']);
         Route::post('/payments/{payment}/create-subscription', [PaymentQueueController::class, 'createSubscription']);
@@ -260,6 +264,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::put('/settings/billing/wallet-rules/{market}', [SettingsController::class, 'storeBillingWalletRules']);
     Route::get('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'billingSubscriptionRules']);
     Route::put('/settings/billing/subscription-rules/{market}', [SettingsController::class, 'storeBillingSubscriptionRules']);
+    Route::get('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'billingManualPaymentMethods']);
+    Route::put('/settings/billing/manual-payment-methods/{market}', [SettingsController::class, 'storeBillingManualPaymentMethods']);
     Route::get('/settings/system-health/updates', [SystemHealthUpdateController::class, 'show'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/log', [SystemHealthUpdateController::class, 'log'])->middleware('role:admin,sub_admin');
     Route::get('/settings/system-health/updates/commits', [SystemHealthUpdateController::class, 'commitHistory'])->middleware('role:admin,sub_admin');
@@ -358,6 +364,7 @@ Route::delete('/products/{id}', [ProductController::class, 'destroy']);
 Route::post('/initiate-stk-payment', [PaymentController::class, 'initiate']);
 Route::post('/initiate-payment', [PaymentController::class, 'initiatePayment']);
 Route::post('/self-checkout', [PaymentController::class, 'selfCheckout']);
+Route::post('/manual-payment-submissions', [PaymentController::class, 'submitManualPayment']);
 Route::post('/initiate-card-payment', [PaymentController::class, 'initiateCardPayment']);
 Route::post('/cybersource/initiate-payment', [PaymentController::class, 'initiateCardPayment']);
 Route::middleware('wallet.auth:read')->group(function () {

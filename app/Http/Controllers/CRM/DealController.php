@@ -16,6 +16,7 @@ use App\Services\ClientSyncService;
 use App\Services\DealPaymentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
+use App\Services\SubscriptionDeactivationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
@@ -32,6 +33,7 @@ class DealController extends Controller
         private readonly \App\Services\RenewalService $renewalService,
         private readonly DealPaymentService $dealPaymentService,
         private readonly NotificationService $notificationService,
+        private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly WalletSettingsService $walletSettingsService
     ) {
@@ -521,15 +523,12 @@ class DealController extends Controller
 
         DB::beginTransaction();
         try {
-            $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
-            $wpSync = WpSyncService::forPlatform($client->platform_id);
-            $wpSync->deactivateClient($client->wp_post_id);
-
-            $deal->update(['status' => 'cancelled']);
-
-            $syncService = new ClientSyncService($platform);
-            $syncService->syncOne($client->wp_post_id);
-            $client->refresh();
+            $deal = $this->subscriptionDeactivationService->deactivateDeal(
+                $deal,
+                (string) $request->reason,
+                optional($request->user())->id
+            );
+            $client = $deal->client?->fresh() ?? $client->fresh();
 
             $this->auditService->fromRequest(
                 $request,
@@ -544,19 +543,6 @@ class DealController extends Controller
                 ],
                 (string) $request->reason
             );
-
-            TimelineEvent::create([
-                'platform_id' => $client->platform_id,
-                'entity_type' => 'client',
-                'entity_id' => $client->id,
-                'event_type' => 'profile_deactivated',
-                'actor_id' => $request->user()->id,
-                'content' => [
-                    'deal_id' => $deal->id,
-                    'reason' => $request->reason,
-                ],
-                'created_at' => now(),
-            ]);
 
             DB::commit();
 

@@ -26,6 +26,7 @@ use App\Models\User;
 use App\Models\BillingRoutingRule;
 use App\Models\BillingWalletRule;
 use App\Models\BillingSubscriptionRule;
+use App\Models\BillingManualPaymentMethod;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingMarketProviderBinding;
 use App\Services\AuditService;
@@ -54,6 +55,21 @@ use Illuminate\Validation\ValidationException;
 
 class SettingsController extends Controller
 {
+    private const MANUAL_PAYMENT_METHOD_DEFINITIONS = [
+        'collector' => [
+            'label' => 'Collector',
+            'detail_fields' => ['network', 'phone_number', 'recipient_name', 'collector_label'],
+        ],
+        'paybill' => [
+            'label' => 'Paybill',
+            'detail_fields' => ['provider_name', 'business_number', 'account_reference_hint', 'recipient_name'],
+        ],
+        'bank' => [
+            'label' => 'Bank transfer',
+            'detail_fields' => ['bank_name', 'account_number', 'account_name', 'branch'],
+        ],
+    ];
+
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly AuditService $auditService,
@@ -1225,6 +1241,92 @@ class SettingsController extends Controller
         return $this->billingWalletRules($marketId);
     }
 
+    public function billingManualPaymentMethods(int $marketId)
+    {
+        if (!BillingPermissions::canViewSubscriptionRules(auth()->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $market = Platform::query()->select(['id', 'name', 'country', 'currency_code'])->findOrFail($marketId);
+        $storedMethods = BillingManualPaymentMethod::query()
+            ->where('market_id', $marketId)
+            ->get()
+            ->keyBy(fn (BillingManualPaymentMethod $method) => strtolower(trim((string) $method->method_key)));
+
+        $methods = collect(array_keys(self::MANUAL_PAYMENT_METHOD_DEFINITIONS))
+            ->map(function (string $methodKey) use ($marketId, $storedMethods) {
+                $method = $storedMethods->get($methodKey);
+
+                if ($method instanceof BillingManualPaymentMethod) {
+                    return $this->serializeManualPaymentMethod($method);
+                }
+
+                return $this->defaultManualPaymentMethodState($marketId, $methodKey);
+            })
+            ->values();
+
+        return response()->json([
+            'market' => $market,
+            'manual_methods' => $methods,
+            'supported_methods' => array_values(array_map(function (string $methodKey, array $definition) {
+                return [
+                    'key' => $methodKey,
+                    'label' => $definition['label'],
+                    'detail_fields' => $definition['detail_fields'],
+                ];
+            }, array_keys(self::MANUAL_PAYMENT_METHOD_DEFINITIONS), self::MANUAL_PAYMENT_METHOD_DEFINITIONS)),
+            'editable' => BillingPermissions::canEditBillingConfig(auth()->user()),
+        ]);
+    }
+
+    public function storeBillingManualPaymentMethods(Request $request, int $marketId)
+    {
+        if (!BillingPermissions::canEditBillingConfig($request->user())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $market = Platform::query()->findOrFail($marketId);
+        $supportedMethods = array_keys(self::MANUAL_PAYMENT_METHOD_DEFINITIONS);
+
+        $validated = $request->validate([
+            'methods' => ['required', 'array', 'min:1'],
+            'methods.*.method_key' => ['required', 'string', Rule::in($supportedMethods)],
+            'methods.*.enabled' => ['required', 'boolean'],
+            'methods.*.display_name' => ['nullable', 'string', 'max:160'],
+            'methods.*.instruction_intro' => ['nullable', 'string', 'max:1000'],
+            'methods.*.instruction_footer' => ['nullable', 'string', 'max:1000'],
+            'methods.*.proof_required' => ['nullable', 'boolean'],
+            'methods.*.sender_name_required' => ['nullable', 'boolean'],
+            'methods.*.transaction_id_required' => ['nullable', 'boolean'],
+            'methods.*.auto_activate_on_submission' => ['nullable', 'boolean'],
+            'methods.*.details' => ['nullable', 'array'],
+        ]);
+
+        $methodsByKey = collect($validated['methods'])
+            ->keyBy(fn (array $method) => strtolower(trim((string) $method['method_key'])));
+
+        DB::transaction(function () use ($supportedMethods, $methodsByKey, $market) {
+            foreach ($supportedMethods as $methodKey) {
+                $payload = $methodsByKey->get($methodKey, [
+                    'method_key' => $methodKey,
+                    'enabled' => false,
+                ]);
+
+                $normalized = $this->normalizeManualPaymentMethodPayload($methodKey, $payload);
+
+                BillingManualPaymentMethod::query()->updateOrCreate(
+                    [
+                        'market_id' => (int) $market->id,
+                        'method_key' => $methodKey,
+                    ],
+                    $normalized
+                );
+            }
+        });
+
+        return $this->billingManualPaymentMethods($marketId);
+    }
+
     public function billingSubscriptionRules(int $marketId)
     {
         // BILL-307: Authorization check - Billing workspace restricted to admin/sub_admin
@@ -1361,6 +1463,87 @@ class SettingsController extends Controller
         }
 
         return $this->billingSubscriptionRules($marketId);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function defaultManualPaymentMethodState(int $marketId, string $methodKey): array
+    {
+        $definition = self::MANUAL_PAYMENT_METHOD_DEFINITIONS[$methodKey] ?? [
+            'label' => Str::headline($methodKey),
+            'detail_fields' => [],
+        ];
+
+        return [
+            'id' => null,
+            'market_id' => $marketId,
+            'method_key' => $methodKey,
+            'enabled' => false,
+            'display_name' => $definition['label'],
+            'instruction_intro' => "Make payment and send the payment screenshot with the sender's name and transaction ID.",
+            'instruction_footer' => '',
+            'proof_required' => true,
+            'sender_name_required' => true,
+            'transaction_id_required' => true,
+            'auto_activate_on_submission' => false,
+            'details' => array_fill_keys($definition['detail_fields'], ''),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeManualPaymentMethod(BillingManualPaymentMethod $method): array
+    {
+        $default = $this->defaultManualPaymentMethodState((int) $method->market_id, (string) $method->method_key);
+
+        return array_merge($default, [
+            'id' => (int) $method->id,
+            'enabled' => (bool) $method->enabled,
+            'display_name' => $method->display_name ?: $default['display_name'],
+            'instruction_intro' => $method->instruction_intro ?: $default['instruction_intro'],
+            'instruction_footer' => $method->instruction_footer ?: '',
+            'proof_required' => true,
+            'sender_name_required' => true,
+            'transaction_id_required' => true,
+            'auto_activate_on_submission' => (bool) $method->auto_activate_on_submission,
+            'details' => array_merge(
+                is_array($default['details']) ? $default['details'] : [],
+                is_array($method->details_json) ? $method->details_json : []
+            ),
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function normalizeManualPaymentMethodPayload(string $methodKey, array $payload): array
+    {
+        $definition = self::MANUAL_PAYMENT_METHOD_DEFINITIONS[$methodKey] ?? [
+            'label' => Str::headline($methodKey),
+            'detail_fields' => [],
+        ];
+        $detailFields = $definition['detail_fields'];
+        $details = is_array($payload['details'] ?? null) ? $payload['details'] : [];
+        $normalizedDetails = [];
+
+        foreach ($detailFields as $field) {
+            $normalizedDetails[$field] = trim((string) ($details[$field] ?? ''));
+        }
+
+        return [
+            'enabled' => (bool) ($payload['enabled'] ?? false),
+            'display_name' => trim((string) ($payload['display_name'] ?? '')) ?: $definition['label'],
+            'instruction_intro' => trim((string) ($payload['instruction_intro'] ?? "Make payment and send the payment screenshot with the sender's name and transaction ID.")) ?: null,
+            'instruction_footer' => trim((string) ($payload['instruction_footer'] ?? '')) ?: null,
+            'proof_required' => true,
+            'sender_name_required' => true,
+            'transaction_id_required' => true,
+            'auto_activate_on_submission' => (bool) ($payload['auto_activate_on_submission'] ?? false),
+            'details_json' => $normalizedDetails,
+        ];
     }
 
     private function serializeRoutingRule(BillingRoutingRule $rule): array
@@ -4410,6 +4593,27 @@ class SettingsController extends Controller
                 'severity' => 'medium',
                 'summary' => 'Pending payment was manually closed by an operator.',
                 'suggested_action' => 'Review closure reason and confirm customer follow-up was completed.',
+            ],
+            CrmAuditAction::PAYMENT_MANUAL_APPROVE => [
+                'title' => 'Manual payment approved',
+                'category' => 'payments',
+                'severity' => 'medium',
+                'summary' => 'An operator approved a manual payment submission and activated the subscription.',
+                'suggested_action' => 'Confirm the profile is live and that the payment evidence was stored correctly.',
+            ],
+            CrmAuditAction::PAYMENT_MANUAL_VERIFY => [
+                'title' => 'Manual payment verified',
+                'category' => 'payments',
+                'severity' => 'low',
+                'summary' => 'An already-active manual payment submission was verified by an operator.',
+                'suggested_action' => 'No immediate action required unless the customer disputes the verification.',
+            ],
+            CrmAuditAction::PAYMENT_MANUAL_REJECT => [
+                'title' => 'Manual payment rejected',
+                'category' => 'payments',
+                'severity' => 'high',
+                'summary' => 'A manual payment submission was rejected and the customer was informed.',
+                'suggested_action' => 'Review the rejection reason and confirm any rollback or deactivation completed cleanly.',
             ],
             CrmAuditAction::RENEWAL_SMS_SENT => [
                 'title' => 'Renewal reminder sent',

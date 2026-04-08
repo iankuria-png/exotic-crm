@@ -434,7 +434,7 @@ class WalletApiPhaseFiveTest extends TestCase
             ->assertJsonPath('action.type', 'redirect')
             ->assertJsonPath('action.url', 'https://checkout.paystack.test/redirect')
             ->assertJsonPath('payment.purpose', 'wallet_topup')
-            ->assertJsonPath('billing_method_policy.version', '2026-04-06')
+            ->assertJsonPath('billing_method_policy.version', '2026-04-08')
             ->assertJsonPath('billing_method_policy.activation.methods', ['manual', 'payment_link'])
             ->assertJsonPath('billing_method_policy.renewal.methods', ['wallet_balance', 'payment_link'])
             ->assertJsonPath('billing_method_policy.renewal.wallet_auto_renew', false);

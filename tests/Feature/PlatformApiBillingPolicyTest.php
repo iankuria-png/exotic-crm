@@ -33,7 +33,7 @@ class PlatformApiBillingPolicyTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('platforms.0.id', $platform->id)
-            ->assertJsonPath('platforms.0.billing_method_policy.version', '2026-04-06')
+            ->assertJsonPath('platforms.0.billing_method_policy.version', '2026-04-08')
             ->assertJsonPath('platforms.0.billing_method_policy.activation.methods', ['manual', 'payment_link'])
             ->assertJsonPath('platforms.0.billing_method_policy.renewal.methods', ['wallet_balance', 'payment_link'])
             ->assertJsonPath('platforms.0.billing_method_policy.renewal.wallet_auto_renew', false);

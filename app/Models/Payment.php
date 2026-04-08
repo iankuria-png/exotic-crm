@@ -143,6 +143,11 @@ class Payment extends Model
         return $this->belongsTo(PaymentImportBatch::class, 'import_batch_id');
     }
 
+    public function manualSubmission()
+    {
+        return $this->hasOne(PaymentManualSubmission::class);
+    }
+
     public function scopeExcludingWalletTopups($query)
     {
         return $query->where(function ($builder) {
