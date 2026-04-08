@@ -373,6 +373,98 @@ class RenewalService
         ];
     }
 
+    public function buildSummary(array $filters = []): array
+    {
+        $includeUntracked = (bool) ($filters['include_untracked'] ?? false);
+        $summaryBase = Client::query()
+            ->leftJoin('deals', function ($join) {
+                $join->on('clients.id', '=', 'deals.client_id')
+                    ->whereRaw('deals.id = (SELECT id FROM deals d2 WHERE d2.client_id = clients.id ORDER BY d2.created_at DESC LIMIT 1)');
+            })
+            ->where(function ($q) use ($includeUntracked) {
+                $q->whereNotNull('deals.id')
+                    ->orWhereNotNull('clients.escort_expire')
+                    ->orWhereNotNull('clients.premium_expire')
+                    ->orWhereNotNull('clients.featured_expire')
+                    ->orWhere('clients.profile_status', 'private');
+
+                if ($includeUntracked) {
+                    $q->orWhere(function ($untracked) {
+                        $untracked->whereNull('deals.id')
+                            ->where('clients.profile_status', 'publish')
+                            ->whereNull('clients.escort_expire')
+                            ->whereNull('clients.premium_expire')
+                            ->whereNull('clients.featured_expire');
+                    });
+                }
+            });
+
+        if (!empty($filters['platform_ids']) && is_array($filters['platform_ids'])) {
+            $summaryBase->whereIn('clients.platform_id', $filters['platform_ids']);
+        } elseif (!empty($filters['platform_id'])) {
+            $summaryBase->where('clients.platform_id', (int) $filters['platform_id']);
+        }
+
+        if (!empty($filters['search'])) {
+            $search = trim((string) $filters['search']);
+            $summaryBase->where(function ($q) use ($search) {
+                $q->where('clients.name', 'like', "%{$search}%")
+                    ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
+            });
+        }
+
+        $inScopeBase = clone $summaryBase;
+        $this->applyBucketFilter($inScopeBase, 'all');
+
+        $inScopeTotal = $inScopeBase
+            ->select('clients.id')
+            ->distinct()
+            ->count('clients.id');
+
+        $nowTs = now()->timestamp;
+        $dateExpr = $this->expiryDateExpr();
+        $summaryRow = (clone $summaryBase)
+            ->selectRaw(
+                "SUM(CASE WHEN (deals.status = 'active' OR (deals.id IS NULL AND {$dateExpr} >= ?)) THEN 1 ELSE 0 END) as active_deals,
+                 SUM(CASE WHEN (deals.status = 'active' AND deals.id IS NOT NULL) THEN 1 ELSE 0 END) as modern_active_count,
+                 SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as risk,
+                 SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as pending,
+                 SUM(CASE WHEN deals.renewal_reminders_paused = 1 THEN 1 ELSE 0 END) as paused_reminders,
+                 SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as expired_deals,
+                 SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' THEN 1 ELSE 0 END) as untracked_active,
+                 SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL AND clients.premium_expire IS NULL AND clients.featured_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
+                 SUM(CASE WHEN deals.status IN ('pending','awaiting_payment','paid','active') THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
+                 SUM(CASE WHEN deals.status = 'active' AND deals.payment_id IS NOT NULL THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
+                [
+                    $nowTs,
+                    $nowTs,
+                    $nowTs + (3 * 86400),
+                    $nowTs + (4 * 86400),
+                    $nowTs + (14 * 86400),
+                    $nowTs - (14 * 86400),
+                    $nowTs - 1,
+                    $nowTs - (14 * 86400),
+                ]
+            )
+            ->first();
+
+        $summaryRow = $summaryRow ?: (object) [];
+
+        return [
+            'in_scope_total' => (int) $inScopeTotal,
+            'active_deals' => (int) ($summaryRow->active_deals ?? 0),
+            'modern_active_count' => (int) ($summaryRow->modern_active_count ?? 0),
+            'risk' => (int) ($summaryRow->risk ?? 0),
+            'pending' => (int) ($summaryRow->pending ?? 0),
+            'untracked_active' => (int) ($summaryRow->untracked_active ?? 0),
+            'paused_reminders' => (int) ($summaryRow->paused_reminders ?? 0),
+            'expired_deals' => (int) ($summaryRow->expired_deals ?? 0),
+            'lapsed_deals' => (int) ($summaryRow->lapsed_deals ?? 0),
+            'pipeline_value' => (float) ($summaryRow->pipeline_value ?? 0),
+            'verified_revenue' => (float) ($summaryRow->verified_revenue ?? 0),
+        ];
+    }
+
     private function estimateLegacySubscription(?string $planType, Collection $activeProductCatalog, string $fallbackCurrency = 'KES'): array
     {
         if (empty($planType)) {

@@ -161,13 +161,6 @@ class DashboardController extends Controller
             $failedPaymentsQuery->where('created_at', '>=', $baselineCutoff);
             $unmatchedQueueQuery->where('created_at', '>=', $baselineCutoff);
         }
-        $renewalRisk72hQuery = Deal::active()
-            ->where('expires_at', '>', now())
-            ->where('expires_at', '<=', now()->copy()->addDays(3));
-        $renewalPipeline14dQuery = Deal::active()
-            ->where('expires_at', '>', now()->copy()->addDays(3))
-            ->where('expires_at', '<=', now()->copy()->addDays(14));
-
         if (is_array($platformIds)) {
             $activeClientsQuery->whereIn('platform_id', $platformIds);
             $totalClientsQuery->whereIn('platform_id', $platformIds);
@@ -181,8 +174,6 @@ class DashboardController extends Controller
             $awaitingPaymentsQuery->whereIn('platform_id', $platformIds);
             $failedPaymentsQuery->whereIn('platform_id', $platformIds);
             $unmatchedQueueQuery->whereIn('platform_id', $platformIds);
-            $renewalRisk72hQuery->whereIn('platform_id', $platformIds);
-            $renewalPipeline14dQuery->whereIn('platform_id', $platformIds);
         }
 
         $windowSeconds = max(1, $to->diffInSeconds($from) + 1);
@@ -229,8 +220,14 @@ class DashboardController extends Controller
         $unmatchedPaymentsWindow = (clone $unmatchedPaymentsWindowQuery)->count();
         $paymentRecoveryTotal = $paymentRecoveryPending + $paymentRecoveryFailed + $paymentRecoveryUnmatched;
 
-        $renewalRisk72h = (clone $renewalRisk72hQuery)->count();
-        $renewalPipeline14d = (clone $renewalPipeline14dQuery)->count();
+        $renewalSummary = $this->renewalService->buildSummary([
+            'platform_ids' => is_array($platformIds) ? $platformIds : null,
+            'platform_id' => !is_array($platformIds) && $selectedPlatformId ? (int) $selectedPlatformId : null,
+            'search' => $search,
+            'include_untracked' => true,
+        ]);
+        $renewalRisk72h = (int) ($renewalSummary['risk'] ?? 0);
+        $renewalPipeline14d = (int) ($renewalSummary['pending'] ?? 0);
         $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
         $countryPeriod = $validated['country_period'] ?? 'week';
