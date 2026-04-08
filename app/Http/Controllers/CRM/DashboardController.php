@@ -226,7 +226,7 @@ class DashboardController extends Controller
         $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
         $countryPeriod = $validated['country_period'] ?? 'week';
-        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod);
+        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to);
 
         $activeCampaignsQuery = RenewalCampaign::enabled();
         if (is_array($platformIds)) {
@@ -352,20 +352,17 @@ class DashboardController extends Controller
         return response()->json($products);
     }
 
-    private function buildCountryRevenue(?array $platformIds, string $period): array
+    private function buildCountryRevenue(?array $platformIds, string $period, Carbon $rangeFrom, Carbon $rangeTo): array
     {
-        $now = now();
-        if ($period === 'month') {
-            $currentFrom = $now->copy()->startOfMonth();
-            $currentTo = $now->copy()->endOfDay();
-            $previousFrom = $now->copy()->subMonth()->startOfMonth();
-            $previousTo = $now->copy()->subMonth()->endOfMonth();
-        } else {
-            $currentFrom = $now->copy()->startOfWeek();
-            $currentTo = $now->copy()->endOfDay();
-            $previousFrom = $now->copy()->subWeek()->startOfWeek();
-            $previousTo = $now->copy()->subWeek()->endOfWeek();
-        }
+        $windowDays = $period === 'month' ? 30 : 7;
+        $currentTo = $rangeTo->copy();
+        $periodFrom = $rangeTo->copy()->subDays($windowDays - 1)->startOfDay();
+        $currentFrom = $rangeFrom->copy()->greaterThan($periodFrom)
+            ? $rangeFrom->copy()
+            : $periodFrom;
+
+        $previousTo = $currentFrom->copy()->subSecond();
+        $previousFrom = $previousTo->copy()->subDays($windowDays - 1)->startOfDay();
 
         $platforms = Platform::where('is_active', true);
         if (is_array($platformIds)) {
@@ -375,38 +372,72 @@ class DashboardController extends Controller
 
         $result = [];
         foreach ($platforms as $platform) {
-            $currentRevenue = (float) Payment::where('platform_id', $platform->id)
+            $currentRevenueQuery = Payment::where('platform_id', $platform->id)
                 ->liveOnly()
                 ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
                 ->excludingWalletTopups()
-                ->whereBetween('created_at', [$currentFrom, $currentTo])
-                ->sum('amount');
+                ->whereBetween('created_at', [$currentFrom, $currentTo]);
 
-            $previousRevenue = (float) Payment::where('platform_id', $platform->id)
+            $previousRevenueQuery = Payment::where('platform_id', $platform->id)
                 ->liveOnly()
                 ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
                 ->excludingWalletTopups()
-                ->whereBetween('created_at', [$previousFrom, $previousTo])
-                ->sum('amount');
+                ->whereBetween('created_at', [$previousFrom, $previousTo]);
 
-            $trend = $previousRevenue > 0
-                ? round((($currentRevenue - $previousRevenue) / $previousRevenue) * 100, 1)
-                : ($currentRevenue > 0 ? 100.0 : null);
+            $currentRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $currentRevenueQuery, $platform->currency_code ?: 'KES');
+            $previousRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery, $platform->currency_code ?: 'KES');
+            $currentRevenue = $currentRevenueBreakdown['scalar_amount'];
+            $previousRevenue = $previousRevenueBreakdown['scalar_amount'];
+            $trend = $this->calculateComparableCountryTrend($currentRevenueBreakdown, $previousRevenueBreakdown);
 
             $result[] = [
                 'platform_id' => $platform->id,
                 'name' => $platform->name,
                 'country' => $platform->country,
                 'currency' => $platform->currency_code,
+                'current_revenue_breakdown' => $currentRevenueBreakdown['breakdown'],
                 'current_revenue' => $currentRevenue,
+                'previous_revenue_breakdown' => $previousRevenueBreakdown['breakdown'],
                 'previous_revenue' => $previousRevenue,
                 'trend' => $trend,
             ];
         }
 
-        usort($result, fn($a, $b) => $b['current_revenue'] <=> $a['current_revenue']);
+        usort($result, fn($a, $b) => array_sum($b['current_revenue_breakdown']) <=> array_sum($a['current_revenue_breakdown']));
 
         return $result;
+    }
+
+    /**
+     * Compare two country revenue windows only when both windows are effectively
+     * single-currency scopes in the same resolved currency.
+     */
+    private function calculateComparableCountryTrend(array $currentBreakdown, array $previousBreakdown): ?float
+    {
+        if (($currentBreakdown['currency_count'] ?? 0) > 1 || ($previousBreakdown['currency_count'] ?? 0) > 1) {
+            return null;
+        }
+
+        $currentCurrency = array_key_first($currentBreakdown['breakdown'] ?? []);
+        $previousCurrency = array_key_first($previousBreakdown['breakdown'] ?? []);
+
+        if ($currentCurrency !== null && $previousCurrency !== null && $currentCurrency !== $previousCurrency) {
+            return null;
+        }
+
+        $resolvedCurrency = $currentCurrency ?? $previousCurrency;
+        if ($resolvedCurrency === null) {
+            return null;
+        }
+
+        $currentAmount = (float) ($currentBreakdown['breakdown'][$resolvedCurrency] ?? 0);
+        $previousAmount = (float) ($previousBreakdown['breakdown'][$resolvedCurrency] ?? 0);
+
+        if ($previousAmount > 0) {
+            return round((($currentAmount - $previousAmount) / $previousAmount) * 100, 1);
+        }
+
+        return $currentAmount > 0 ? 100.0 : null;
     }
 
     /**

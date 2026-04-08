@@ -432,6 +432,9 @@ export default function Dashboard() {
     const revenueWindowBreakdown = kpis.revenue_window_breakdown ?? kpis.revenue_mtd_breakdown ?? {};
     const isMixedRevenue = kpis.revenue_is_mixed ?? Object.keys(revenueWindowBreakdown).length > 1;
     const averageTicketWindow = kpis.average_ticket_window ?? null;
+    const resolvedRevenueCurrency = Object.keys(revenueWindowBreakdown).length === 1
+        ? Object.keys(revenueWindowBreakdown)[0]
+        : selectedCurrency;
     const revenueDeltaLabel = kpis.revenue_delta_percent != null ? formatDelta(kpis.revenue_delta_percent) : null;
     const recentPaymentsCount = asNumber(kpis.completed_payments_window ?? kpis.completed_payments_mtd ?? kpis.recent_payments);
     const unmatchedPaymentsWindow = asNumber(kpis.unmatched_payments_window ?? kpis.unmatched_payments);
@@ -466,7 +469,7 @@ export default function Dashboard() {
             hint: recentPaymentsCount > 0
                 ? isMixedRevenue
                     ? `${recentPaymentsCount} successful payments • Mixed currencies in scope`
-                    : `${recentPaymentsCount} successful payments • avg ${formatCurrency(averageTicketWindow, selectedCurrency)}`
+                    : `${recentPaymentsCount} successful payments • avg ${formatCurrency(averageTicketWindow, resolvedRevenueCurrency)}`
                 : 'No successful payments in selected range',
             subHint: revenueDeltaLabel || 'No comparable single-currency baseline',
             accentDot: 'bg-teal-600',

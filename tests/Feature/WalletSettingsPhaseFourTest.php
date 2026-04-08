@@ -764,6 +764,32 @@ class WalletSettingsPhaseFourTest extends TestCase
         $this->assertSame(220.0, (float) $dashboard->json('kpis.revenue_window_breakdown.GHS'));
     }
 
+    public function test_dashboard_country_revenue_uses_actual_payment_currency_breakdowns(): void
+    {
+        $platform = $this->createPlatform('Ghana');
+        $platform->update(['currency_code' => 'GHS']);
+
+        $admin = $this->createUser('admin');
+        Sanctum::actingAs($admin);
+
+        $this->createCompletedPayment($platform, 59.2, 'subscription', 'completed', now()->subDays(9));
+        $this->createCompletedPayment($platform, 59.2, 'subscription', 'expired', now()->subDays(9));
+
+        $from = now()->subDays(21)->toDateString();
+        $to = now()->toDateString();
+
+        $dashboard = $this->getJson("/api/crm/dashboard?platform_id={$platform->id}&from={$from}&to={$to}&country_period=month");
+
+        $dashboard->assertOk()
+            ->assertJsonPath('kpis.completed_payments_window', 2)
+            ->assertJsonPath('kpis.revenue_window', 118.4)
+            ->assertJsonPath('kpis.average_ticket_window', 59.2)
+            ->assertJsonPath('country_revenue.0.current_revenue', 118.4);
+
+        $this->assertSame(118.4, (float) $dashboard->json('kpis.revenue_window_breakdown.KES'));
+        $this->assertSame(118.4, (float) $dashboard->json('country_revenue.0.current_revenue_breakdown.KES'));
+    }
+
     private function createCompletedPayment(
         Platform $platform,
         float $amount,

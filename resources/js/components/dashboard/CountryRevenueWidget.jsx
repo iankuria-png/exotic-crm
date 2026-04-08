@@ -1,10 +1,7 @@
 import React from 'react';
 import SectionFrame from '../SectionFrame';
 import { getCountryFlag } from '../../utils/flags';
-
-function formatRevenue(amount, currency = 'KES') {
-    return `${currency} ${Number(amount || 0).toLocaleString()}`;
-}
+import CurrencyAmount from '../CurrencyAmount';
 
 function TrendArrow({ trend }) {
     if (trend === null || trend === undefined) {
@@ -58,10 +55,14 @@ function PeriodToggle({ period, onChange }) {
 }
 
 export default function CountryRevenueWidget({ data = [], period = 'week', onPeriodChange, isLoading }) {
+    const subtitle = period === 'month'
+        ? 'Revenue by market in selected 30-day window'
+        : 'Revenue by market in selected 7-day window';
+
     return (
         <SectionFrame
             title="Top Performing Countries"
-            subtitle={`Revenue by market this ${period}`}
+            subtitle={subtitle}
             action={<PeriodToggle period={period} onChange={onPeriodChange} />}
         >
             {isLoading ? (
@@ -85,9 +86,13 @@ export default function CountryRevenueWidget({ data = [], period = 'week', onPer
                                 </div>
                             </div>
                             <div className="text-right">
-                                <p className="crm-mono text-sm font-semibold text-slate-900">
-                                    {formatRevenue(market.current_revenue, market.currency)}
-                                </p>
+                                <CurrencyAmount
+                                    breakdown={market.current_revenue_breakdown}
+                                    scalarAmount={market.current_revenue}
+                                    fallbackCurrency={market.currency}
+                                    className="crm-mono text-sm font-semibold text-slate-900"
+                                    stackClassName="crm-mono text-sm font-semibold text-slate-900"
+                                />
                                 <TrendArrow trend={market.trend} />
                             </div>
                         </div>
