@@ -4803,6 +4803,20 @@ class SettingsController extends Controller
                 'summary' => 'A manual payment submission was rejected and the customer was informed.',
                 'suggested_action' => 'Review the rejection reason and confirm any rollback or deactivation completed cleanly.',
             ],
+            CrmAuditAction::PAYMENT_MARK_TEST => [
+                'title' => 'Payment marked as test',
+                'category' => 'payments',
+                'severity' => 'medium',
+                'summary' => 'An admin excluded a payment from business views by marking it as test.',
+                'suggested_action' => 'Confirm this was a non-business record before relying on KPI deltas.',
+            ],
+            CrmAuditAction::PAYMENT_DELETE_TEST => [
+                'title' => 'Test payment deleted',
+                'category' => 'payments',
+                'severity' => 'high',
+                'summary' => 'An admin permanently removed a test payment after recording an audit snapshot.',
+                'suggested_action' => 'Review the stored snapshot if historical reconciliation questions come up.',
+            ],
             CrmAuditAction::RENEWAL_SMS_SENT => [
                 'title' => 'Renewal reminder sent',
                 'category' => 'renewals',

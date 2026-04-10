@@ -14,6 +14,7 @@ import { platformOptionsWithFlags } from '../utils/flags';
 import { candidateScore, scoreTone, toneClasses } from '../utils/scoring';
 import { formatCurrency } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
+import { useAuth } from '../hooks/useAuth';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 const SUCCESSFUL_PAYMENT_STATUSES = ['completed', 'expired'];
@@ -98,6 +99,26 @@ function isSandboxPayment(payment) {
         || Boolean(payment?.payment_data?.test_mode);
 }
 
+function isExplicitTestPayment(payment) {
+    return String(payment?.record_classification || '').toLowerCase() === 'test';
+}
+
+function isTestPayment(payment) {
+    return isExplicitTestPayment(payment) || isSandboxPayment(payment);
+}
+
+function paymentTestBadge(payment) {
+    if (isSandboxPayment(payment)) {
+        return { status: 'sandbox', label: 'Sandbox/Test', tone: 'sandbox' };
+    }
+
+    if (isExplicitTestPayment(payment)) {
+        return { status: 'sandbox', label: 'Test Record', tone: 'sandbox' };
+    }
+
+    return null;
+}
+
 function sandboxStatusLabel(payment) {
     if (!isSandboxPayment(payment)) {
         return null;
@@ -125,6 +146,7 @@ function renderPaymentStatusBadges(payment) {
     const manualReviewStatus = unresolvedManualReviewStatus(payment);
     const status = String(payment?.status || '').toLowerCase();
     const customLabel = sandboxStatusLabel(payment);
+    const testBadge = paymentTestBadge(payment);
 
     return (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -133,7 +155,7 @@ function renderPaymentStatusBadges(payment) {
             ) : (
                 <StatusBadge status={status} label={customLabel} />
             )}
-            {isSandboxPayment(payment) ? <StatusBadge status="sandbox" label="Sandbox/Test" tone="sandbox" /> : null}
+            {testBadge ? <StatusBadge status={testBadge.status} label={testBadge.label} tone={testBadge.tone} /> : null}
         </div>
     );
 }
@@ -456,10 +478,13 @@ export default function Payments() {
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
     const allowedReviewStateFilters = new Set(['open', 'manual_review', 'resolved']);
+    const allowedTestVisibilityFilters = new Set(['hide', 'include', 'only']);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const toast = useToast();
+    const { user, isLoading: authLoading } = useAuth();
+    const canViewTests = user?.role === 'admin';
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
@@ -483,6 +508,10 @@ export default function Payments() {
         const requested = (searchParams.get('environment') || '').trim().toLowerCase();
         return allowedEnvironmentFilters.has(requested) ? requested : '';
     });
+    const [testVisibility, setTestVisibility] = useState(() => {
+        const requested = (searchParams.get('test_visibility') || '').trim().toLowerCase();
+        return allowedTestVisibilityFilters.has(requested) ? requested : 'hide';
+    });
     const [confidenceFilter, setConfidenceFilter] = useState(() => {
         const requested = (searchParams.get('match_confidence') || '').trim();
         return allowedConfidenceFilters.has(requested) ? requested : '';
@@ -503,7 +532,7 @@ export default function Payments() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
-    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter));
+    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter || testVisibility !== 'hide'));
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
@@ -541,6 +570,16 @@ export default function Payments() {
         payment: null,
         reason: '',
     });
+    const [markTestDialog, setMarkTestDialog] = useState({
+        open: false,
+        payment: null,
+        reason: 'Exclude non-business or QA payment from sales-facing metrics.',
+    });
+    const [deleteTestDialog, setDeleteTestDialog] = useState({
+        open: false,
+        payment: null,
+        reason: 'Permanently remove non-business test payment after audit snapshot review.',
+    });
     const [importDrawerOpen, setImportDrawerOpen] = useState(false);
 
     const { data: integrationData } = useQuery({
@@ -563,7 +602,7 @@ export default function Payments() {
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, confidenceFilter, reviewStateFilter, fromDate, toDate],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, fromDate, toDate, canViewTests],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -574,7 +613,8 @@ export default function Payments() {
                     ...(matchFilter && { matched: matchFilter }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(sourceFilter && { source: sourceFilter }),
-                    ...(environmentFilter && { environment: environmentFilter }),
+                    ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
+                    ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
                     ...(confidenceFilter && { match_confidence: confidenceFilter }),
                     ...(reviewStateFilter && { review_state: reviewStateFilter }),
                     ...(fromDate && { from: fromDate }),
@@ -784,6 +824,46 @@ export default function Payments() {
         },
     });
 
+    const markTestMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.post(`/crm/payments/${paymentId}/mark-test`, {
+                reason,
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+            setMarkTestDialog({
+                open: false,
+                payment: null,
+                reason: 'Exclude non-business or QA payment from sales-facing metrics.',
+            });
+            toast.success('Payment marked as test and hidden from default business views.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Marking the payment as test failed.');
+        },
+    });
+
+    const deleteTestMutation = useMutation({
+        mutationFn: ({ paymentId, reason }) =>
+            api.delete(`/crm/payments/${paymentId}/delete-test`, {
+                data: { reason },
+            }).then((response) => response.data),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.removeQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
+            setDeleteTestDialog({
+                open: false,
+                payment: null,
+                reason: 'Permanently remove non-business test payment after audit snapshot review.',
+            });
+            toast.success('Test payment deleted permanently.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Deleting the test payment failed.');
+        },
+    });
+
     const providerStatusMutation = useMutation({
         mutationFn: (paymentId) =>
             api.post(`/crm/payments/${paymentId}/check-provider-status`).then((response) => response.data),
@@ -987,8 +1067,8 @@ export default function Payments() {
         }
 
         if (actionKey === 'create_subscription') {
-            if (isSandboxPayment(paymentRow)) {
-                toast.info('Sandbox payments stay in test mode and cannot create live subscriptions.');
+            if (isTestPayment(paymentRow)) {
+                toast.info('Test-classified payments cannot create live subscriptions.');
                 return;
             }
             closeDiagnostics();
@@ -1066,6 +1146,9 @@ export default function Payments() {
             failedAmount: sumAmount(failedRows),
         };
     }, [data?.stats, rows]);
+
+    const statsScope = String(data?.stats_scope || 'business');
+    const visibilityMode = canViewTests ? testVisibility : 'hide';
 
     const activeMetric = useMemo(() => {
         if (statusFilter === 'awaiting_payment') return 'awaiting';
@@ -1287,6 +1370,24 @@ export default function Payments() {
     }, [platformFilter, platformOptions]);
 
     useEffect(() => {
+        if (authLoading) {
+            return;
+        }
+
+        if (canViewTests) {
+            return;
+        }
+
+        if (testVisibility !== 'hide') {
+            setTestVisibility('hide');
+        }
+
+        if (environmentFilter === 'sandbox') {
+            setEnvironmentFilter('');
+        }
+    }, [authLoading, canViewTests, environmentFilter, testVisibility]);
+
+    useEffect(() => {
         const listener = (event) => {
             const isConfirmShortcut = (event.ctrlKey || event.metaKey) && event.key === 'Enter';
             if (!isConfirmShortcut || selectedRows.length === 0) {
@@ -1362,10 +1463,10 @@ export default function Payments() {
             key: 'actions',
             label: '',
             render: (row) => {
-                const sandboxRow = isSandboxPayment(row);
+                const testRow = isTestPayment(row);
                 const isFailed = row.status === 'failed' || row.status === 'initiated' || row.status === 'pending';
                 const isCompletedUnmatched = row.status === 'completed' && !row.client_id;
-                const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id && !sandboxRow;
+                const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id && !testRow;
                 const isLowConfidence = row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review';
                 const isManualReview = row.reconciliation_state === 'manual_review';
                 const manualAction = manualSubmissionAction(row);
@@ -1426,6 +1527,26 @@ export default function Payments() {
                         label: 'View proof',
                         onClick: () => openManualProof(row.manual_submission.proof_url),
                     },
+                    canViewTests && !isExplicitTestPayment(row) && {
+                        key: 'mark-test',
+                        label: 'Mark as test',
+                        variant: 'warning',
+                        onClick: () => setMarkTestDialog({
+                            open: true,
+                            payment: row,
+                            reason: 'Exclude non-business or QA payment from sales-facing metrics.',
+                        }),
+                    },
+                    canViewTests && isExplicitTestPayment(row) && {
+                        key: 'delete-test',
+                        label: 'Delete test payment',
+                        variant: 'danger',
+                        onClick: () => setDeleteTestDialog({
+                            open: true,
+                            payment: row,
+                            reason: 'Permanently remove non-business test payment after audit snapshot review.',
+                        }),
+                    },
                     isFailed && { key: 'send-link', label: 'Send payment link', onClick: () => setSendLinkDialog({ open: true, payment: row, channel: 'sms', provider: '', phone: row.phone || '', reason: 'Send payment link from CRM' }) },
                     isCompletedUnmatched && { key: 'manual-match', label: 'Match manually', onClick: () => openManualMatch(row) },
                     { key: 'diagnose', label: 'Diagnose', onClick: () => openDiagnostics(row) },
@@ -1435,7 +1556,7 @@ export default function Payments() {
                     <RowActionMenu
                         primaryAction={primary}
                         actions={overflow}
-                        badge={sandboxRow ? 'Sandbox' : (isManualSubmissionPayment(row) ? 'Manual proof' : (row.client_id ? 'Matched' : null))}
+                        badge={isExplicitTestPayment(row) ? 'Test' : (testRow ? 'Sandbox' : (isManualSubmissionPayment(row) ? 'Manual proof' : (row.client_id ? 'Matched' : null)))}
                     />
                 );
             },
@@ -1549,9 +1670,13 @@ export default function Payments() {
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
-                {environmentFilter === 'sandbox'
-                    ? 'Sandbox filter active: summary cards and the table now reflect sandbox/test payments only.'
-                    : 'Summary cards stay live-only by default. Sandbox/test rows remain visible in the table unless you filter them out.'}
+                {visibilityMode === 'only'
+                    ? 'Tests-only mode active: both the table and summary cards are showing non-business payment rows for admin review.'
+                    : visibilityMode === 'include'
+                        ? 'Admin test visibility is on: summary cards stay business-only while the table includes test and sandbox rows for review.'
+                        : statsScope === 'test'
+                            ? 'Test inspection mode is active for this view.'
+                            : 'Business view active: test and sandbox rows stay hidden from the table and summary cards unless an admin reveals them.'}
             </section>
 
             <section className="crm-filter-row space-y-3">
@@ -1636,8 +1761,21 @@ export default function Payments() {
                         <span className="self-end pb-2 text-xs text-rose-500">From must be before To</span>
                     )}
 
-                    {(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter) || showAdvancedFilters ? (
+                    {(sourceFilter || (canViewTests && environmentFilter) || confidenceFilter || reviewStateFilter || (canViewTests && testVisibility !== 'hide')) || showAdvancedFilters ? (
                         <>
+                            {canViewTests ? (
+                                <FilterSelect
+                                    label="Visibility"
+                                    value={testVisibility}
+                                    onChange={(event) => { setTestVisibility(event.target.value); setPage(1); }}
+                                    options={[
+                                        { value: 'hide', label: 'Business only' },
+                                        { value: 'include', label: 'Show tests in table' },
+                                        { value: 'only', label: 'Tests only' },
+                                    ]}
+                                />
+                            ) : null}
+
                             <FilterSelect
                                 label="Source"
                                 value={sourceFilter}
@@ -1649,16 +1787,18 @@ export default function Payments() {
                                 ]}
                             />
 
-                            <FilterSelect
-                                label="Environment"
-                                value={environmentFilter}
-                                onChange={(event) => { setEnvironmentFilter(event.target.value); setPage(1); }}
-                                options={[
-                                    { value: '', label: 'All rows / live KPIs' },
-                                    { value: 'production', label: 'Production only' },
-                                    { value: 'sandbox', label: 'Sandbox only' },
-                                ]}
-                            />
+                            {canViewTests ? (
+                                <FilterSelect
+                                    label="Environment"
+                                    value={environmentFilter}
+                                    onChange={(event) => { setEnvironmentFilter(event.target.value); setPage(1); }}
+                                    options={[
+                                        { value: '', label: 'All environments' },
+                                        { value: 'production', label: 'Production only' },
+                                        { value: 'sandbox', label: 'Sandbox only' },
+                                    ]}
+                                />
+                            ) : null}
 
                             <FilterSelect
                                 label="Confidence"
@@ -1695,7 +1835,7 @@ export default function Payments() {
                         </button>
                     )}
 
-                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter) ? (
+                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -1706,6 +1846,7 @@ export default function Payments() {
                                 setPlatformFilter('');
                                 setSourceFilter('');
                                 setEnvironmentFilter('');
+                                setTestVisibility('hide');
                                 setConfidenceFilter('');
                                 setReviewStateFilter('');
                                 setFromDate('');
@@ -2061,17 +2202,17 @@ export default function Payments() {
                                             </section>
                                         ) : null}
 
-                                        {isSandboxPayment(diagnosticsData.payment) ? (
+                                        {isTestPayment(diagnosticsData.payment) ? (
                                             <section className="rounded-xl border border-sky-200 bg-sky-50 p-4">
                                                 <h4 className="text-sm font-semibold text-sky-900">Sandbox/Test Safeguards</h4>
                                                 <p className="mt-1 text-sm text-sky-800">
-                                                    This payment is marked as sandbox-only. Live wallet credits, subscriptions, and profile activation stay disabled.
+                                                    This payment is flagged as non-business. Live wallet credits, subscriptions, and KPI reporting stay disabled until it is treated as a real payment again.
                                                 </p>
                                                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                                                     <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Test result:</span> {titleize(diagnosticsData.payment?.payment_data?.test_result || diagnosticsData.payment?.status)}</p>
                                                     <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Side effects skipped:</span> {diagnosticsData.payment?.payment_data?.side_effects_skipped ? 'Yes' : 'No'}</p>
                                                     <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Verified at:</span> {formatDateTime(diagnosticsData.payment?.payment_data?.verified_at)}</p>
-                                                    <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Environment:</span> {titleize(diagnosticsData.payment?.provider_environment || 'sandbox')}</p>
+                                                    <p className="rounded-md bg-white/70 px-2 py-1 text-xs text-sky-800"><span className="font-semibold">Classification:</span> {isExplicitTestPayment(diagnosticsData.payment) ? 'Admin-marked test' : titleize(diagnosticsData.payment?.provider_environment || 'sandbox')}</p>
                                                 </div>
                                             </section>
                                         ) : null}
@@ -2742,8 +2883,8 @@ export default function Payments() {
                 onCancel={() => setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' })}
                 onConfirm={() => {
                     if (createSubDialog.payment) {
-                        if (isSandboxPayment(createSubDialog.payment)) {
-                            toast.info('Sandbox payments stay in test mode and cannot create live subscriptions.');
+                        if (isTestPayment(createSubDialog.payment)) {
+                            toast.info('Test-classified payments cannot create live subscriptions.');
                             return;
                         }
                         createSubscriptionMutation.mutate({
@@ -2795,6 +2936,90 @@ export default function Payments() {
                     className="crm-input"
                     placeholder="Explain why the payment proof could not be accepted."
                 />
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={markTestDialog.open && !!markTestDialog.payment}
+                title="Mark payment as test"
+                message={markTestDialog.payment
+                    ? `Exclude payment #${markTestDialog.payment.id} from default dashboards, reports, and sales-facing tables.`
+                    : ''}
+                confirmLabel="Mark as test"
+                tone="warning"
+                onCancel={() => setMarkTestDialog({ open: false, payment: null, reason: 'Exclude non-business or QA payment from sales-facing metrics.' })}
+                onConfirm={() => {
+                    if (markTestDialog.payment) {
+                        markTestMutation.mutate({
+                            paymentId: markTestDialog.payment.id,
+                            reason: markTestDialog.reason.trim(),
+                        });
+                    }
+                }}
+                confirmDisabled={markTestMutation.isPending || !markTestDialog.reason.trim()}
+                isPending={markTestMutation.isPending}
+            >
+                <div className="space-y-3">
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        This keeps the row out of normal business totals immediately, but preserves it for admin review and audit history.
+                    </div>
+                    <div>
+                        <label htmlFor="mark-test-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                        <textarea
+                            id="mark-test-reason"
+                            rows={3}
+                            value={markTestDialog.reason}
+                            onChange={(event) => setMarkTestDialog((current) => ({ ...current, reason: event.target.value }))}
+                            className="crm-input"
+                            placeholder="Explain why this payment should be treated as a non-business/test record."
+                        />
+                    </div>
+                </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={deleteTestDialog.open && !!deleteTestDialog.payment}
+                title="Delete test payment"
+                message={deleteTestDialog.payment
+                    ? `Permanently delete test payment #${deleteTestDialog.payment.id}. This action is admin-only and cannot be undone.`
+                    : ''}
+                confirmLabel="Delete permanently"
+                tone="danger"
+                onCancel={() => setDeleteTestDialog({ open: false, payment: null, reason: 'Permanently remove non-business test payment after audit snapshot review.' })}
+                onConfirm={() => {
+                    if (deleteTestDialog.payment) {
+                        deleteTestMutation.mutate({
+                            paymentId: deleteTestDialog.payment.id,
+                            reason: deleteTestDialog.reason.trim(),
+                        });
+                    }
+                }}
+                confirmDisabled={deleteTestMutation.isPending || !deleteTestDialog.reason.trim()}
+                isPending={deleteTestMutation.isPending}
+            >
+                <div className="space-y-3">
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                        CRM will keep an audit snapshot first, then remove the test row and its cascading test telemetry records.
+                    </div>
+                    {deleteTestDialog.payment ? (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Reference:</span> {deleteTestDialog.payment.transaction_reference || '—'}</p>
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Amount:</span> {formatCurrency(deleteTestDialog.payment.amount, resolveCurrency(deleteTestDialog.payment.currency))}</p>
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Client:</span> {deleteTestDialog.payment.client?.name || 'Unmatched'}</p>
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Classification:</span> {isExplicitTestPayment(deleteTestDialog.payment) ? 'Admin-marked test' : 'Sandbox/Test'}</p>
+                        </div>
+                    ) : null}
+                    <div>
+                        <label htmlFor="delete-test-reason" className="mb-1 block text-sm font-medium text-slate-700">Deletion reason</label>
+                        <textarea
+                            id="delete-test-reason"
+                            rows={3}
+                            value={deleteTestDialog.reason}
+                            onChange={(event) => setDeleteTestDialog((current) => ({ ...current, reason: event.target.value }))}
+                            className="crm-input"
+                            placeholder="Explain why this test payment should be permanently removed."
+                        />
+                    </div>
+                </div>
             </ConfirmDialog>
 
             <ConfirmDialog

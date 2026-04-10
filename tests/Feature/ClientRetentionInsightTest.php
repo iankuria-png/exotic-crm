@@ -100,6 +100,49 @@ class ClientRetentionInsightTest extends TestCase
         $this->assertArrayNotHasKey('subscription_lifecycle', $insight->component_scores);
     }
 
+    public function test_retention_ignores_test_and_sandbox_payment_rows(): void
+    {
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'last_online_at' => now()->subDay()->timestamp,
+            'phone_normalized' => '254788000111',
+        ]);
+
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'phone' => $client->phone_normalized,
+            'amount' => 1500,
+            'currency' => 'KES',
+            'status' => 'failed',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'QA fixture',
+            'test_marked_at' => now()->subHours(3),
+            'created_at' => now()->subHours(3),
+        ]);
+
+        Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'phone' => $client->phone_normalized,
+            'amount' => 1500,
+            'currency' => 'KES',
+            'status' => 'failed',
+            'provider_environment' => 'sandbox',
+            'payment_data' => [
+                'test_mode' => true,
+                'test_result' => 'failed',
+            ],
+            'created_at' => now()->subHours(2),
+        ]);
+
+        $insight = app(ClientRetentionInsightService::class)->refreshForClient($client);
+
+        $this->assertArrayNotHasKey('payments', $insight->component_scores);
+    }
+
     private function seedRetentionCohort(Platform $platform, Product $product): Client
     {
         for ($index = 0; $index < 15; $index++) {

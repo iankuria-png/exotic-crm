@@ -30,6 +30,7 @@ use App\Services\PaymentLinkService;
 use App\Services\ProviderStatusQueryOrchestrator;
 use App\Services\LegacyStkService;
 use App\Models\IntegrationSetting;
+use App\Models\WalletTransaction;
 use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
@@ -42,6 +43,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Arr;
+use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 use App\Services\ManualPaymentSubmissionService;
 use App\Services\SubscriptionDeactivationService;
@@ -75,6 +78,8 @@ class PaymentQueueController extends Controller
         $validated = $request->validate([
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
+            'environment' => 'nullable|in:production,sandbox',
+            'test_visibility' => 'nullable|in:hide,include,only',
         ]);
 
         $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -83,32 +88,38 @@ class PaymentQueueController extends Controller
             'You do not have access to this payment market.'
         );
 
-        $query = Payment::with(['platform', 'product', 'client', 'manualSubmission']);
-        $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+        $environmentFilter = strtolower(trim((string) $request->input('environment', '')));
+        $testVisibility = strtolower(trim((string) ($validated['test_visibility'] ?? 'hide')));
+        $testVisibility = in_array($testVisibility, ['hide', 'include', 'only'], true) ? $testVisibility : 'hide';
+        $canViewTests = $this->canViewTests($request);
+
+        if (($testVisibility !== 'hide' || $environmentFilter === 'sandbox') && !$canViewTests) {
+            abort(403, 'Only admin users can view test payments.');
+        }
+
+        $baseQuery = Payment::query()->with(['platform', 'product', 'client', 'manualSubmission']);
+        $this->marketAuthorizationService->applyPlatformScope($baseQuery, $request->user());
 
         if ($request->filled('platform_id')) {
-            $query->where('platform_id', $request->platform_id);
+            $baseQuery->where('platform_id', $request->platform_id);
         }
 
         if ($request->filled('search')) {
             $search = $request->search;
-            $query->where(function ($q) use ($search) {
+            $baseQuery->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
                     ->orWhere('transaction_reference', 'like', "%{$search}%");
             });
         }
 
-        $environmentFilter = strtolower(trim((string) $request->input('environment', '')));
-        if ($environmentFilter === 'production') {
-            $query->liveOnly();
-        } elseif ($environmentFilter === 'sandbox') {
-            $query->sandboxTest();
-        }
+        $query = clone $baseQuery;
+        $this->applyPaymentWorkspaceVisibility($query, $testVisibility, $environmentFilter);
 
-        $statsQuery = clone $query;
-        if ($environmentFilter === '') {
-            $statsQuery->liveOnly();
-        }
+        $statsVisibility = $testVisibility === 'include' && $environmentFilter === ''
+            ? 'hide'
+            : $testVisibility;
+        $statsQuery = clone $baseQuery;
+        $this->applyPaymentWorkspaceVisibility($statsQuery, $statsVisibility, $environmentFilter);
 
         $successfulStatuses = $this->successfulPaymentStatuses();
         $statusFilter = trim((string) $request->input('status', ''));
@@ -175,14 +186,20 @@ class PaymentQueueController extends Controller
         $oneHourAgo = Carbon::now()->subHour();
         $dayAgo = Carbon::now()->subDay();
         $threeDaysAgo = Carbon::now()->subDays(3);
+        $confirmedStatsQuery = (clone $statsQuery)
+            ->whereIn('status', $successfulStatuses)
+            ->where(function (Builder $builder) {
+                $builder->whereNull('reconciliation_state')
+                    ->orWhere('reconciliation_state', '!=', 'manual_review');
+            });
 
         // Per-status currency breakdowns — each returns breakdown[], currency_count, scalar_amount.
         // scalar_amount is null when multiple currencies are in scope so the UI cannot
         // silently display a meaningless mixed-currency total.
         $pendingBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
-        $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $successfulStatuses));
+        $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $confirmedStatsQuery);
         $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
-        $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $successfulStatuses)->whereNull('client_id'));
+        $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
 
         // Aging-bucket breakdowns
         $lt1hBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo));
@@ -196,7 +213,7 @@ class PaymentQueueController extends Controller
             'pending_amount' => $pendingBreakdown['scalar_amount'],
             'pending_amount_breakdown' => $pendingBreakdown['breakdown'],
             'pending_currency_count' => $pendingBreakdown['currency_count'],
-            'confirmed' => (clone $statsQuery)->whereIn('status', $successfulStatuses)->count(),
+            'confirmed' => (clone $confirmedStatsQuery)->count(),
             'confirmed_amount' => $confirmedBreakdown['scalar_amount'],
             'confirmed_amount_breakdown' => $confirmedBreakdown['breakdown'],
             'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
@@ -206,7 +223,7 @@ class PaymentQueueController extends Controller
             'failed_currency_count' => $failedBreakdown['currency_count'],
             'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
             'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
-            'unmatched_review' => (clone $statsQuery)->whereIn('status', $successfulStatuses)->whereNull('client_id')->count(),
+            'unmatched_review' => (clone $confirmedStatsQuery)->whereNull('client_id')->count(),
             'unmatched_review_amount' => $unmatchedBreakdown['scalar_amount'],
             'unmatched_review_amount_breakdown' => $unmatchedBreakdown['breakdown'],
             'unmatched_review_currency_count' => $unmatchedBreakdown['currency_count'],
@@ -262,9 +279,125 @@ class PaymentQueueController extends Controller
         $payload = $payments->toArray();
         $payload['stats'] = $stats;
         $payload['environment_filter'] = $environmentFilter !== '' ? $environmentFilter : null;
-        $payload['stats_scope'] = $environmentFilter === 'sandbox' ? 'sandbox' : 'live';
+        $payload['test_visibility'] = $testVisibility;
+        $payload['can_view_tests'] = $canViewTests;
+        $payload['stats_scope'] = $this->resolveStatsScope($statsVisibility, $environmentFilter);
         $payload['baseline_cutoff'] = $baselineCutoff?->toDateString();
         return response()->json($payload);
+    }
+
+    public function markTest(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can mark test payments.'
+        );
+
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $payment->refresh();
+        if ($payment->isClassifiedTest()) {
+            return response()->json([
+                'message' => 'Payment is already marked as test.',
+                'payment' => $payment,
+            ]);
+        }
+
+        $beforeState = Arr::only($payment->toArray(), [
+            'record_classification',
+            'test_reason',
+            'test_marked_at',
+            'test_marked_by',
+            'provider_environment',
+            'payment_data',
+        ]);
+
+        $payment->forceFill([
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => (string) $validated['reason'],
+            'test_marked_at' => now(),
+            'test_marked_by' => $request->user()->id,
+        ])->save();
+
+        $freshPayment = $payment->fresh(['platform', 'product', 'client', 'manualSubmission']);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $payment->platform_id,
+            CrmAuditAction::PAYMENT_MARK_TEST,
+            'payment',
+            (int) $payment->id,
+            $beforeState,
+            Arr::only($freshPayment?->toArray() ?? [], [
+                'record_classification',
+                'test_reason',
+                'test_marked_at',
+                'test_marked_by',
+            ]),
+            (string) $validated['reason']
+        );
+
+        return response()->json([
+            'message' => 'Payment marked as test and removed from default business views.',
+            'payment' => $freshPayment,
+        ]);
+    }
+
+    public function deleteTest(Request $request, Payment $payment)
+    {
+        $this->authorizePaymentAccess($request, $payment);
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN],
+            'Only admin users can delete test payments.'
+        );
+
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $payment->refresh();
+        if (!$payment->isClassifiedTest()) {
+            return response()->json([
+                'message' => 'Only payments explicitly marked as test can be deleted.',
+            ], 422);
+        }
+
+        $deleteBlockers = $this->testPaymentDeleteBlockers($payment);
+        if ($deleteBlockers !== []) {
+            return response()->json([
+                'message' => 'This test payment is linked to live CRM records and cannot be hard-deleted.',
+                'blockers' => $deleteBlockers,
+            ], 422);
+        }
+
+        $snapshot = $this->deleteTestPaymentSnapshot($payment);
+        $paymentId = (int) $payment->id;
+        $platformId = (int) $payment->platform_id;
+
+        DB::transaction(function () use ($request, $payment, $platformId, $paymentId, $snapshot, $validated): void {
+            $this->auditService->fromRequest(
+                $request,
+                $platformId,
+                CrmAuditAction::PAYMENT_DELETE_TEST,
+                'payment',
+                $paymentId,
+                $snapshot,
+                ['deleted' => true],
+                (string) $validated['reason']
+            );
+
+            $payment->delete();
+        });
+
+        return response()->json([
+            'message' => 'Test payment deleted permanently.',
+            'deleted_payment_id' => $paymentId,
+        ]);
     }
 
     public function candidates(Request $request, Payment $payment)
@@ -395,7 +528,7 @@ class PaymentQueueController extends Controller
             (string) $validated['reason']
         );
 
-        $canCreateSubscription = !$this->isSandboxPayment($payment)
+        $canCreateSubscription = !$this->isNonBusinessTestPayment($payment)
             && $payment->status === 'completed'
             && $payment->client_id
             && !$payment->deal_id
@@ -417,6 +550,9 @@ class PaymentQueueController extends Controller
 
         if ($payment->status !== 'completed') {
             return response()->json(['message' => 'Only completed payments can create subscriptions.'], 422);
+        }
+        if ($this->isNonBusinessTestPayment($payment)) {
+            return response()->json(['message' => 'Test or sandbox payments cannot create live subscriptions.'], 422);
         }
         if (!$payment->client_id) {
             return response()->json(['message' => 'Payment must be matched to a client first.'], 422);
@@ -721,7 +857,9 @@ class PaymentQueueController extends Controller
         );
 
         $batchQuery = PaymentImportBatch::query();
-        $paymentQuery = Payment::query()->where('source', 'excel_import');
+        $paymentQuery = Payment::query()
+            ->businessVisible()
+            ->where('source', 'excel_import');
 
         if (!empty($validated['platform_id'])) {
             $platformId = (int) $validated['platform_id'];
@@ -831,6 +969,8 @@ class PaymentQueueController extends Controller
                 CrmAuditAction::PAYMENT_MATCH_CONFIRM,
                 CrmAuditAction::PAYMENT_CREATE_SUBSCRIPTION,
                 CrmAuditAction::PAYMENT_MANUAL_CLOSE,
+                CrmAuditAction::PAYMENT_MARK_TEST,
+                CrmAuditAction::PAYMENT_DELETE_TEST,
                 CrmAuditAction::PAYMENT_REVIEW_STATE_UPDATE,
             ])
             ->orderByDesc('id')
@@ -1975,6 +2115,7 @@ class PaymentQueueController extends Controller
             ? now()->diffInHours($payment->created_at)
             : 0;
         $sandboxPayment = $this->isSandboxPayment($payment);
+        $nonBusinessTestPayment = $this->isNonBusinessTestPayment($payment);
         $canCheckProviderStatus = $this->canCheckProviderStatus($payment, $linkProxy)
             && $ageHours >= 1;
         $providerRecoveryRecommendation = $canCheckProviderStatus
@@ -2071,9 +2212,14 @@ class PaymentQueueController extends Controller
                 ];
             }
 
-            if ($sandboxPayment) {
+            if ($nonBusinessTestPayment) {
                 return [
-                    ['key' => 'manual_review', 'label' => 'Record sandbox result', 'description' => 'Keep this test payment visible for diagnostics only. Live subscription creation stays disabled.', 'recommended' => true],
+                    [
+                        'key' => 'manual_review',
+                        'label' => $sandboxPayment ? 'Record sandbox result' : 'Record test result',
+                        'description' => 'Keep this non-business payment visible for diagnostics only. Live subscription creation stays disabled.',
+                        'recommended' => true,
+                    ],
                 ];
             }
 
@@ -2245,6 +2391,11 @@ class PaymentQueueController extends Controller
             || (bool) data_get($payment->payment_data, 'test_mode', false);
     }
 
+    private function isNonBusinessTestPayment(Payment $payment): bool
+    {
+        return $payment->isClassifiedTest() || $this->isSandboxPayment($payment);
+    }
+
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision
     {
         if ($payment->relationLoaded('routingDecisions')) {
@@ -2321,6 +2472,84 @@ class PaymentQueueController extends Controller
             'test_mode' => (bool) data_get($payment->payment_data, 'test_mode', false),
             'test_result' => data_get($payment->payment_data, 'test_result'),
             'side_effects_skipped' => (bool) data_get($payment->payment_data, 'side_effects_skipped', false),
+        ];
+    }
+
+    private function applyPaymentWorkspaceVisibility(Builder $query, string $testVisibility, string $environmentFilter): Builder
+    {
+        $query->workspaceVisible($testVisibility);
+
+        if ($environmentFilter === 'production') {
+            $query->where(function (Builder $builder) {
+                $builder->whereNull('provider_environment')
+                    ->orWhereRaw("LOWER(provider_environment) = ?", ['production']);
+            });
+        } elseif ($environmentFilter === 'sandbox') {
+            $query->sandboxTest();
+        }
+
+        return $query;
+    }
+
+    private function resolveStatsScope(string $testVisibility, string $environmentFilter): string
+    {
+        if ($environmentFilter === 'sandbox' || $testVisibility === 'only') {
+            return 'test';
+        }
+
+        return 'business';
+    }
+
+    private function canViewTests(Request $request): bool
+    {
+        return $this->marketAuthorizationService->hasRole($request->user(), [MarketAuthorizationService::ROLE_ADMIN]);
+    }
+
+    private function testPaymentDeleteBlockers(Payment $payment): array
+    {
+        $blockers = [];
+
+        if ($payment->deal_id) {
+            $blockers[] = 'payment_has_linked_deal';
+        }
+
+        if (Deal::query()->where('payment_id', $payment->id)->exists()) {
+            $blockers[] = 'deal_references_payment';
+        }
+
+        if ($payment->wallet_transaction_id) {
+            $blockers[] = 'payment_has_wallet_transaction';
+        }
+
+        if (WalletTransaction::query()->where('payment_id', $payment->id)->exists()) {
+            $blockers[] = 'wallet_transaction_references_payment';
+        }
+
+        return array_values(array_unique($blockers));
+    }
+
+    private function deleteTestPaymentSnapshot(Payment $payment): array
+    {
+        $payment->loadMissing([
+            'platform:id,name,country',
+            'product:id,name',
+            'client:id,name,phone_normalized',
+            'manualSubmission:id,payment_id,review_decision',
+        ]);
+
+        return [
+            'payment' => $payment->toArray(),
+            'related_entity_ids' => [
+                'deal_id' => $payment->deal_id ? (int) $payment->deal_id : null,
+                'client_id' => $payment->client_id ? (int) $payment->client_id : null,
+                'wallet_transaction_id' => $payment->wallet_transaction_id ? (int) $payment->wallet_transaction_id : null,
+            ],
+            'counts' => [
+                'attempts' => $payment->attempts()->count(),
+                'provider_transactions' => $payment->providerTransactions()->count(),
+                'routing_decisions' => $payment->routingDecisions()->count(),
+                'proxy_sessions' => $payment->proxySessions()->count(),
+            ],
         ];
     }
 

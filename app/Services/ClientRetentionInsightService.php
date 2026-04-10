@@ -387,21 +387,27 @@ class ClientRetentionInsightService
     private function buildPaymentsComponent(Client $client): array
     {
         $payments = Payment::query()
+            ->businessVisible()
             ->excludingWalletTopups()
             ->where('client_id', (int) $client->id)
-            ->whereIn('status', ['completed', 'failed', 'initiated', 'pending'])
+            ->whereIn('status', array_values(array_unique(array_merge(Payment::SUCCESSFUL_STATUSES, ['failed', 'initiated', 'pending']))))
             ->where('created_at', '>=', now()->subDays(self::SIGNAL_WINDOW_DAYS))
-            ->get(['status', 'created_at', 'completed_at', 'amount', 'transaction_reference']);
+            ->get(['status', 'created_at', 'completed_at', 'amount', 'transaction_reference', 'reconciliation_state']);
 
         if ($payments->isEmpty()) {
             return $this->unavailableComponent('Payments');
         }
 
-        $completed = $payments->where('status', 'completed')->count();
+        $manualReviewPending = $payments->where('reconciliation_state', 'manual_review')->count();
+        $completed = $payments
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reject(fn (Payment $payment): bool => (string) $payment->reconciliation_state === 'manual_review')
+            ->count();
         $failed = $payments->where('status', 'failed')->count();
-        $pending = $payments->whereIn('status', ['initiated', 'pending'])->count();
+        $pending = $payments->whereIn('status', ['initiated', 'pending'])->count() + $manualReviewPending;
         $recentCompleted = $payments
-            ->where('status', 'completed')
+            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reject(fn (Payment $payment): bool => (string) $payment->reconciliation_state === 'manual_review')
             ->where('created_at', '>=', now()->subDays(self::PAYMENT_WINDOW_DAYS))
             ->count();
 
@@ -412,7 +418,13 @@ class ClientRetentionInsightService
         }
 
         $score = (int) max(5, min(100, round($score)));
-        $latestCompletedAt = optional($payments->where('status', 'completed')->sortByDesc('created_at')->first())->created_at;
+        $latestCompletedAt = optional(
+            $payments
+                ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+                ->reject(fn (Payment $payment): bool => (string) $payment->reconciliation_state === 'manual_review')
+                ->sortByDesc('created_at')
+                ->first()
+        )->created_at;
 
         return [
             'available' => true,
@@ -603,9 +615,9 @@ class ClientRetentionInsightService
         $responseReceived = false;
         if ($lastReminderAt) {
             $responseReceived = Payment::query()
+                ->reportableSuccessful()
                 ->where('client_id', (int) $client->id)
                 ->excludingWalletTopups()
-                ->where('status', 'completed')
                 ->where('created_at', '>=', $lastReminderAt)
                 ->exists();
         }
@@ -731,7 +743,19 @@ class ClientRetentionInsightService
                     ->orWhereExists(function ($subQuery): void {
                         $subQuery->selectRaw('1')
                             ->from('payments')
-                            ->whereColumn('payments.client_id', 'clients.id');
+                            ->whereColumn('payments.client_id', 'clients.id')
+                            ->where(function ($builder): void {
+                                $builder->whereNull('payments.record_classification')
+                                    ->orWhere('payments.record_classification', '!=', Payment::RECORD_CLASSIFICATION_TEST);
+                            })
+                            ->where(function ($builder): void {
+                                $builder->whereNull('payments.provider_environment')
+                                    ->orWhereRaw("LOWER(payments.provider_environment) != ?", ['sandbox']);
+                            })
+                            ->where(function ($builder): void {
+                                $builder->whereNull('payments.payment_data->test_mode')
+                                    ->orWhere('payments.payment_data->test_mode', false);
+                            });
                     });
             });
 
@@ -748,8 +772,8 @@ class ClientRetentionInsightService
             ->avg();
 
         $averageCompletedPayments = (float) Payment::query()
+            ->reportableSuccessful()
             ->excludingWalletTopups()
-            ->where('status', 'completed')
             ->where('created_at', '>=', now()->subDays(self::PAYMENT_WINDOW_DAYS))
             ->whereIn('client_id', function ($subQuery) use ($client): void {
                 $subQuery->select('id')
@@ -765,9 +789,9 @@ class ClientRetentionInsightService
             ? Carbon::createFromTimestamp((int) $client->last_online_at)->diffInDays($now)
             : null;
         $clientCompletedPayments = (int) Payment::query()
+            ->reportableSuccessful()
             ->excludingWalletTopups()
             ->where('client_id', (int) $client->id)
-            ->where('status', 'completed')
             ->where('created_at', '>=', now()->subDays(self::PAYMENT_WINDOW_DAYS))
             ->count();
 

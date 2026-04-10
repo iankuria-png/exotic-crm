@@ -84,8 +84,7 @@ class DashboardController extends Controller
         $reviewBaselineCutoff = $this->resolveBaselineCutoff();
         $salesView = $request->boolean('sales_view') || $request->user()?->role === MarketAuthorizationService::ROLE_SALES;
         $paymentReviewQueueQuery = Payment::query()
-            ->liveOnly()
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->whereNull('client_id')
             ->with(['platform', 'product'])
             ->orderBy('created_at', 'desc');
@@ -135,25 +134,22 @@ class DashboardController extends Controller
         $activeDealsQuery = Deal::active();
         $expiringSoonQuery = Deal::expiringSoon(7);
         $paymentsWindowQuery = Payment::query()
-            ->liveOnly()
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to]);
         $walletTopupsWindowQuery = Payment::query()
-            ->liveOnly()
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
         $unmatchedPaymentsWindowQuery = Payment::query()
-            ->liveOnly()
+            ->reportableSuccessful()
             ->whereNull('client_id')
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->whereBetween('created_at', [$from, $to]);
         $baselineCutoff = $this->resolveBaselineCutoff();
-        $awaitingPaymentsQuery = Payment::query()->liveOnly()->whereIn('status', ['initiated', 'pending']);
-        $failedPaymentsQuery = Payment::query()->liveOnly()->where('status', 'failed');
+        $awaitingPaymentsQuery = Payment::query()->businessVisible()->whereIn('status', ['initiated', 'pending']);
+        $failedPaymentsQuery = Payment::query()->businessVisible()->where('status', 'failed');
         $unmatchedQueueQuery = Payment::query()
-            ->liveOnly()
+            ->reportableSuccessful()
             ->whereNull('client_id')
             ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
         if ($baselineCutoff) {
@@ -180,8 +176,7 @@ class DashboardController extends Controller
         $previousFrom = (clone $from)->subSeconds($windowSeconds);
         $previousTo = (clone $from)->subSecond();
         $previousRevenueQuery = Payment::query()
-            ->liveOnly()
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$previousFrom, $previousTo]);
         if (is_array($platformIds)) {
@@ -442,14 +437,12 @@ class DashboardController extends Controller
         $result = [];
         foreach ($platforms as $platform) {
             $currentRevenueQuery = Payment::where('platform_id', $platform->id)
-                ->liveOnly()
-                ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+                ->reportableSuccessful()
                 ->excludingWalletTopups()
                 ->whereBetween('created_at', [$currentFrom, $currentTo]);
 
             $previousRevenueQuery = Payment::where('platform_id', $platform->id)
-                ->liveOnly()
-                ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+                ->reportableSuccessful()
                 ->excludingWalletTopups()
                 ->whereBetween('created_at', [$previousFrom, $previousTo]);
 
@@ -519,8 +512,7 @@ class DashboardController extends Controller
         $packageExpression = "COALESCE(deal_products.name, payment_products.name, deals.plan_type, 'Unknown package')";
 
         $query = Payment::query()
-            ->liveOnly()
-            ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->excludingWalletTopups()
             ->whereBetween('payments.created_at', [$from, $to])
             ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
@@ -763,7 +755,7 @@ class DashboardController extends Controller
         $clientsQuery = Client::query();
         $leadsQuery = Lead::query();
         $dealsQuery = Deal::query();
-        $paymentsQuery = Payment::query()->liveOnly();
+        $paymentsQuery = Payment::query()->businessVisible();
         $notesQuery = ClientNote::query();
 
         if (is_array($platformIds)) {

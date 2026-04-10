@@ -626,6 +626,39 @@ class WalletSettingsPhaseFourTest extends TestCase
         $this->createCompletedPayment($platform, 5000, 'subscription');
         $this->createCompletedPayment($platform, 2200, 'subscription', 'expired');
         $this->createCompletedPayment($platform, 1200, 'wallet_topup');
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700999998',
+            'amount' => 3300,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'reference_number' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'QA revenue fixture',
+            'test_marked_at' => now()->subMinutes(6),
+            'created_at' => now()->subMinutes(6),
+            'updated_at' => now()->subMinutes(6),
+        ]);
+
+        Payment::query()->create([
+            'platform_id' => $platform->id,
+            'phone' => '254700999997',
+            'amount' => 4100,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => Str::upper(Str::random(10)),
+            'reference_number' => Str::upper(Str::random(10)),
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'reconciliation_state' => 'manual_review',
+            'created_at' => now()->subMinutes(5),
+            'updated_at' => now()->subMinutes(5),
+        ]);
+
         Payment::query()->create([
             'platform_id' => $platform->id,
             'phone' => '254700999999',

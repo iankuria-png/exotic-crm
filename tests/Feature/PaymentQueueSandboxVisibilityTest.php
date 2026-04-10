@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
@@ -14,44 +15,42 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_payments_workspace_keeps_sandbox_rows_visible_but_excludes_them_from_live_summary_cards(): void
+    public function test_sales_workspace_hides_test_and_sandbox_rows_from_table_and_summary_cards(): void
     {
         $platform = $this->createPlatform();
-        $salesUser = $this->createUser($platform);
+        $salesUser = $this->createUser($platform, 'sales');
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000301',
-            'amount' => 5000,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
+        $this->createPayment($platform, [
             'transaction_reference' => 'LIVE-PAYMENT-001',
-            'reference_number' => 'LIVE-PAYMENT-001',
+            'amount' => 5000,
             'status' => 'completed',
-            'purpose' => 'subscription',
-            'provider_environment' => 'production',
-            'created_at' => now()->subMinutes(10),
-            'updated_at' => now()->subMinutes(10),
         ]);
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000302',
-            'amount' => 9000,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
-            'transaction_reference' => 'SANDBOX-PAYMENT-001',
-            'reference_number' => 'SANDBOX-PAYMENT-001',
+        $this->createPayment($platform, [
+            'transaction_reference' => 'LIVE-MANUAL-REVIEW-001',
+            'amount' => 4100,
             'status' => 'completed',
-            'purpose' => 'subscription',
+            'reconciliation_state' => 'manual_review',
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'SANDBOX-PAYMENT-001',
+            'amount' => 9000,
+            'status' => 'completed',
             'provider_environment' => 'sandbox',
             'payment_data' => [
                 'test_mode' => true,
                 'test_result' => 'completed',
-                'side_effects_skipped' => true,
             ],
-            'created_at' => now()->subMinutes(5),
-            'updated_at' => now()->subMinutes(5),
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'EXPLICIT-TEST-001',
+            'amount' => 3000,
+            'status' => 'completed',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'QA verification row',
+            'test_marked_at' => now()->subMinute(),
         ]);
 
         Sanctum::actingAs($salesUser);
@@ -60,213 +59,277 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('total', 2)
-            ->assertJsonPath('stats_scope', 'live')
+            ->assertJsonPath('can_view_tests', false)
+            ->assertJsonPath('test_visibility', 'hide')
+            ->assertJsonPath('stats_scope', 'business')
             ->assertJsonPath('stats.confirmed', 1)
+            ->assertJsonPath('stats.confirmed_amount', 5000)
             ->assertJsonPath('stats.confirmed_currency_count', 1);
-        $this->assertSame(5000.0, (float) $response->json('stats.confirmed_amount'));
-        $this->assertSame(5000.0, (float) $response->json('stats.confirmed_amount_breakdown.KES'));
 
         $references = collect($response->json('data'))->pluck('reference_number')->all();
         $this->assertContains('LIVE-PAYMENT-001', $references);
-        $this->assertContains('SANDBOX-PAYMENT-001', $references);
+        $this->assertContains('LIVE-MANUAL-REVIEW-001', $references);
+        $this->assertNotContains('SANDBOX-PAYMENT-001', $references);
+        $this->assertNotContains('EXPLICIT-TEST-001', $references);
     }
 
-    public function test_payments_workspace_environment_filter_can_focus_on_sandbox_or_production_rows(): void
+    public function test_admin_can_include_tests_in_table_while_summary_cards_remain_business_only(): void
     {
         $platform = $this->createPlatform();
-        $salesUser = $this->createUser($platform);
+        $admin = $this->createUser($platform, 'admin');
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000401',
-            'amount' => 4200,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
+        $this->createPayment($platform, [
             'transaction_reference' => 'LIVE-PAYMENT-002',
-            'reference_number' => 'LIVE-PAYMENT-002',
+            'amount' => 4200,
             'status' => 'completed',
-            'purpose' => 'subscription',
-            'provider_environment' => 'production',
-            'created_at' => now()->subMinutes(9),
-            'updated_at' => now()->subMinutes(9),
         ]);
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000402',
-            'amount' => 6100,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
-            'transaction_reference' => 'SANDBOX-PAYMENT-002',
-            'reference_number' => 'SANDBOX-PAYMENT-002',
+        $this->createPayment($platform, [
+            'transaction_reference' => 'LIVE-MANUAL-REVIEW-002',
+            'amount' => 1100,
             'status' => 'completed',
-            'purpose' => 'subscription',
+            'reconciliation_state' => 'manual_review',
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'SANDBOX-PAYMENT-002',
+            'amount' => 6100,
+            'status' => 'completed',
             'provider_environment' => 'sandbox',
             'payment_data' => [
                 'test_mode' => true,
                 'test_result' => 'completed',
-                'side_effects_skipped' => true,
             ],
-            'created_at' => now()->subMinutes(4),
-            'updated_at' => now()->subMinutes(4),
         ]);
 
-        Sanctum::actingAs($salesUser);
+        $this->createPayment($platform, [
+            'transaction_reference' => 'EXPLICIT-TEST-002',
+            'amount' => 2300,
+            'status' => 'completed',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'Training import',
+            'test_marked_at' => now()->subMinute(),
+        ]);
 
-        $sandboxResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&environment=sandbox');
-        $sandboxResponse->assertOk()
-            ->assertJsonPath('total', 1)
-            ->assertJsonPath('environment_filter', 'sandbox')
-            ->assertJsonPath('stats_scope', 'sandbox')
-            ->assertJsonPath('stats.confirmed_amount', 6100);
-        $this->assertSame('SANDBOX-PAYMENT-002', $sandboxResponse->json('data.0.reference_number'));
+        Sanctum::actingAs($admin);
 
-        $productionResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&environment=production');
-        $productionResponse->assertOk()
-            ->assertJsonPath('total', 1)
-            ->assertJsonPath('environment_filter', 'production')
-            ->assertJsonPath('stats_scope', 'live')
+        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&test_visibility=include');
+
+        $response->assertOk()
+            ->assertJsonPath('total', 4)
+            ->assertJsonPath('can_view_tests', true)
+            ->assertJsonPath('test_visibility', 'include')
+            ->assertJsonPath('stats_scope', 'business')
+            ->assertJsonPath('stats.confirmed', 1)
             ->assertJsonPath('stats.confirmed_amount', 4200);
-        $this->assertSame('LIVE-PAYMENT-002', $productionResponse->json('data.0.reference_number'));
+
+        $references = collect($response->json('data'))->pluck('reference_number')->all();
+        $this->assertContains('LIVE-PAYMENT-002', $references);
+        $this->assertContains('LIVE-MANUAL-REVIEW-002', $references);
+        $this->assertContains('SANDBOX-PAYMENT-002', $references);
+        $this->assertContains('EXPLICIT-TEST-002', $references);
     }
 
-    public function test_stats_breakdown_is_per_currency_and_scalar_is_null_when_mixed(): void
+    public function test_admin_can_switch_to_tests_only_mode(): void
     {
         $platform = $this->createPlatform();
-        $salesUser = $this->createUser($platform);
+        $admin = $this->createUser($platform, 'admin');
 
-        // Two live completed payments with different currencies on the same platform
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000501',
-            'amount' => 5000,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
-            'transaction_reference' => 'MIXED-LIVE-KES-001',
-            'reference_number' => 'MIXED-LIVE-KES-001',
+        $this->createPayment($platform, [
+            'transaction_reference' => 'LIVE-PAYMENT-003',
+            'amount' => 4200,
             'status' => 'completed',
-            'purpose' => 'subscription',
-            'provider_environment' => 'production',
-            'created_at' => now()->subMinutes(15),
-            'updated_at' => now()->subMinutes(15),
         ]);
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '233743394455',
-            'amount' => 380,
-            'currency' => 'GHS',
-            'transaction_uuid' => (string) Str::uuid(),
-            'transaction_reference' => 'MIXED-LIVE-GHS-001',
-            'reference_number' => 'MIXED-LIVE-GHS-001',
+        $this->createPayment($platform, [
+            'transaction_reference' => 'SANDBOX-PAYMENT-003',
+            'amount' => 6100,
             'status' => 'completed',
-            'purpose' => 'subscription',
-            'provider_environment' => 'production',
-            'created_at' => now()->subMinutes(10),
-            'updated_at' => now()->subMinutes(10),
-        ]);
-
-        // Sandbox payment — must not appear in live stats
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000502',
-            'amount' => 9999,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
-            'transaction_reference' => 'MIXED-SANDBOX-001',
-            'reference_number' => 'MIXED-SANDBOX-001',
-            'status' => 'completed',
-            'purpose' => 'subscription',
             'provider_environment' => 'sandbox',
-            'payment_data' => ['test_mode' => true, 'test_result' => 'completed', 'side_effects_skipped' => true],
-            'created_at' => now()->subMinutes(5),
-            'updated_at' => now()->subMinutes(5),
+            'payment_data' => [
+                'test_mode' => true,
+                'test_result' => 'completed',
+            ],
         ]);
 
-        Sanctum::actingAs($salesUser);
+        $this->createPayment($platform, [
+            'transaction_reference' => 'EXPLICIT-TEST-003',
+            'amount' => 2300,
+            'status' => 'completed',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'QA training',
+            'test_marked_at' => now()->subMinute(),
+        ]);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&test_visibility=only');
 
         $response->assertOk()
-            ->assertJsonPath('stats_scope', 'live')
-            // Counts are always correct regardless of currency
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('test_visibility', 'only')
+            ->assertJsonPath('stats_scope', 'test')
             ->assertJsonPath('stats.confirmed', 2)
-            // Mixed scope: scalar must be null so the UI cannot show a fake total
-            ->assertJsonPath('stats.confirmed_amount', null)
-            ->assertJsonPath('stats.confirmed_currency_count', 2)
-            // Sandbox row still appears in the row list
-            ->assertJsonPath('total', 3);
-        // Per-currency breakdown has exact values
-        $this->assertSame(5000.0, (float) $response->json('stats.confirmed_amount_breakdown.KES'));
-        $this->assertSame(380.0, (float) $response->json('stats.confirmed_amount_breakdown.GHS'));
+            ->assertJsonPath('stats.confirmed_amount', 8400);
+
+        $references = collect($response->json('data'))->pluck('reference_number')->all();
+        $this->assertNotContains('LIVE-PAYMENT-003', $references);
+        $this->assertContains('SANDBOX-PAYMENT-003', $references);
+        $this->assertContains('EXPLICIT-TEST-003', $references);
     }
 
-    public function test_null_payment_currency_falls_back_to_platform_currency_in_breakdowns(): void
+    public function test_sales_user_cannot_request_test_visibility_controls(): void
     {
-        $platform = $this->createPlatform('Ghana', 'GHS');
-        $salesUser = $this->createUser($platform);
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '233700000601',
-            'amount' => 380,
-            'currency' => null,
-            'transaction_uuid' => (string) Str::uuid(),
-            'transaction_reference' => 'NULL-CURRENCY-GHS-001',
-            'reference_number' => 'NULL-CURRENCY-GHS-001',
+        Sanctum::actingAs($salesUser);
+
+        $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&test_visibility=include')
+            ->assertForbidden();
+
+        $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&environment=sandbox')
+            ->assertForbidden();
+    }
+
+    public function test_admin_can_mark_payment_as_test_and_delete_unlinked_test_payment(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createUser($platform, 'admin');
+        $payment = $this->createPayment($platform, [
+            'transaction_reference' => 'LIVE-PAYMENT-004',
+            'amount' => 2500,
             'status' => 'completed',
-            'purpose' => 'subscription',
-            'provider_environment' => 'production',
-            'created_at' => now()->subMinutes(12),
-            'updated_at' => now()->subMinutes(12),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $markResponse = $this->postJson("/api/crm/payments/{$payment->id}/mark-test", [
+            'reason' => 'Mark QA-created payment as non-business.',
+        ]);
+
+        $markResponse->assertOk()
+            ->assertJsonPath('payment.record_classification', Payment::RECORD_CLASSIFICATION_TEST)
+            ->assertJsonPath('payment.test_reason', 'Mark QA-created payment as non-business.');
+
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+        ]);
+
+        $businessView = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $businessView->assertOk()->assertJsonPath('total', 0);
+
+        $deleteResponse = $this->deleteJson("/api/crm/payments/{$payment->id}/delete-test", [
+            'reason' => 'Remove isolated QA fixture.',
+        ]);
+
+        $deleteResponse->assertOk()
+            ->assertJsonPath('deleted_payment_id', $payment->id);
+
+        $this->assertDatabaseMissing('payments', [
+            'id' => $payment->id,
+        ]);
+    }
+
+    public function test_non_admin_cannot_mark_or_delete_test_payments(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+        $payment = $this->createPayment($platform, [
+            'transaction_reference' => 'LIVE-PAYMENT-005',
+            'status' => 'completed',
         ]);
 
         Sanctum::actingAs($salesUser);
 
-        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+        $this->postJson("/api/crm/payments/{$payment->id}/mark-test", [
+            'reason' => 'Not allowed.',
+        ])->assertForbidden();
 
-        $response->assertOk()
-            ->assertJsonPath('stats.confirmed', 1)
-            ->assertJsonPath('stats.confirmed_currency_count', 1);
+        $payment->forceFill([
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'Already classified',
+            'test_marked_at' => now(),
+            'test_marked_by' => $salesUser->id,
+        ])->save();
 
-        $this->assertSame(380.0, (float) $response->json('stats.confirmed_amount'));
-        $this->assertSame(380.0, (float) $response->json('stats.confirmed_amount_breakdown.GHS'));
-        $this->assertArrayNotHasKey('KES', $response->json('stats.confirmed_amount_breakdown'));
+        $this->deleteJson("/api/crm/payments/{$payment->id}/delete-test", [
+            'reason' => 'Not allowed.',
+        ])->assertForbidden();
+    }
+
+    public function test_admin_cannot_delete_test_payment_when_live_records_still_reference_it(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createUser($platform, 'admin');
+        $payment = $this->createPayment($platform, [
+            'transaction_reference' => 'EXPLICIT-TEST-DELETE-BLOCKED',
+            'status' => 'completed',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'Linked QA record',
+            'test_marked_at' => now()->subMinute(),
+            'wallet_transaction_id' => 99,
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->deleteJson("/api/crm/payments/{$payment->id}/delete-test", [
+            'reason' => 'Attempt delete despite live linkage.',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('blockers.0', 'payment_has_wallet_transaction');
+
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+        ]);
+    }
+
+    public function test_explicit_test_payment_cannot_create_subscription_from_queue(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'phone_normalized' => '254700000777',
+        ]);
+
+        $payment = $this->createPayment($platform, [
+            'transaction_reference' => 'EXPLICIT-TEST-NO-SUB',
+            'status' => 'completed',
+            'client_id' => $client->id,
+            'reconciliation_confidence' => 'high',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_TEST,
+            'test_reason' => 'QA activation trial',
+            'test_marked_at' => now()->subMinute(),
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->postJson("/api/crm/payments/{$payment->id}/create-subscription", [
+            'reason' => 'Try to activate from a test payment.',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('message', 'Test or sandbox payments cannot create live subscriptions.');
     }
 
     public function test_confirmed_stats_and_completed_filter_include_expired_successful_payments(): void
     {
         $platform = $this->createPlatform();
-        $salesUser = $this->createUser($platform);
+        $salesUser = $this->createUser($platform, 'sales');
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000701',
-            'amount' => 1500,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
+        $this->createPayment($platform, [
             'transaction_reference' => 'SUCCESS-COMPLETED-001',
-            'reference_number' => 'SUCCESS-COMPLETED-001',
+            'amount' => 1500,
             'status' => 'completed',
-            'purpose' => 'subscription',
-            'provider_environment' => 'production',
-            'created_at' => now()->subMinutes(20),
-            'updated_at' => now()->subMinutes(20),
         ]);
 
-        Payment::query()->create([
-            'platform_id' => $platform->id,
-            'phone' => '254700000702',
-            'amount' => 59.2,
-            'currency' => 'KES',
-            'transaction_uuid' => (string) Str::uuid(),
+        $this->createPayment($platform, [
             'transaction_reference' => 'SUCCESS-EXPIRED-001',
-            'reference_number' => 'SUCCESS-EXPIRED-001',
+            'amount' => 59.2,
             'status' => 'expired',
-            'purpose' => 'subscription',
-            'provider_environment' => 'production',
-            'created_at' => now()->subMinutes(10),
-            'updated_at' => now()->subMinutes(10),
         ]);
 
         Sanctum::actingAs($salesUser);
@@ -293,7 +356,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
     public function test_mpesa_review_uses_authenticated_user_market_access(): void
     {
         $platform = $this->createPlatform();
-        $salesUser = $this->createUser($platform);
+        $salesUser = $this->createUser($platform, 'sales');
 
         Sanctum::actingAs($salesUser);
 
@@ -321,15 +384,37 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         ]);
     }
 
-    private function createUser(Platform $platform): User
+    private function createUser(Platform $platform, string $role): User
     {
         return User::query()->create([
-            'name' => 'Sales User',
-            'email' => 'sales-' . Str::random(6) . '@example.test',
+            'name' => ucfirst(str_replace('_', ' ', $role)) . ' User',
+            'email' => strtolower($role) . '-' . Str::random(6) . '@example.test',
             'password' => bcrypt('password'),
-            'role' => 'sales',
+            'role' => $role,
             'assigned_market_ids' => [$platform->id],
             'status' => 'active',
         ]);
+    }
+
+    private function createPayment(Platform $platform, array $attributes = []): Payment
+    {
+        $reference = $attributes['transaction_reference'] ?? ('PAY-' . Str::upper(Str::random(8)));
+        $createdAt = $attributes['created_at'] ?? now()->subMinutes(5);
+
+        return Payment::query()->create(array_merge([
+            'platform_id' => $platform->id,
+            'phone' => '254700' . random_int(100000, 999999),
+            'amount' => 1000,
+            'currency' => 'KES',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => $reference,
+            'reference_number' => $reference,
+            'status' => 'initiated',
+            'purpose' => 'subscription',
+            'provider_environment' => 'production',
+            'payment_data' => [],
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ], $attributes));
     }
 }

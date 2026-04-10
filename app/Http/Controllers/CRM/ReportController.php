@@ -57,8 +57,7 @@ class ReportController extends Controller
 
         $paymentsQuery = $this->successfulCollectedPaymentsQuery($from, $to, $platformIds);
         $walletTopupsQuery = Payment::query()
-            ->liveOnly()
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->walletTopups()
             ->whereBetween('created_at', [$from, $to]);
 
@@ -131,14 +130,12 @@ class ReportController extends Controller
             : 0;
 
         $revenueMtdQuery = Payment::query()
-            ->liveOnly()
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->excludingWalletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds));
         $walletTopupMtdQuery = Payment::query()
-            ->liveOnly()
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->walletTopups()
             ->where('created_at', '>=', now()->startOfMonth())
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds));
@@ -175,10 +172,9 @@ class ReportController extends Controller
         $ownerNameExpression = $this->paymentOwnerExpression();
 
         $revenueTrendRows = Payment::query()
-            ->liveOnly()
+            ->reportableSuccessful()
             ->selectRaw("{$monthKeyExpression} as month_key")
             ->selectRaw('SUM(amount) as total_revenue')
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
@@ -191,11 +187,10 @@ class ReportController extends Controller
 
         // Second pass: group by (month_key, currency) to build per-month breakdowns.
         $trendCurrencyRows = Payment::query()
-            ->liveOnly()
+            ->reportableSuccessful()
             ->selectRaw("{$monthKeyExpression} as month_key")
             ->selectRaw("{$paymentCurrencyExpression} as currency")
             ->selectRaw('SUM(amount) as total')
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES)
             ->excludingWalletTopups()
             ->whereBetween('created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
@@ -485,8 +480,7 @@ class ReportController extends Controller
     private function successfulCollectedPaymentsQuery(Carbon $from, Carbon $to, ?array $platformIds): Builder
     {
         return Payment::query()
-            ->liveOnly()
-            ->whereIn('payments.status', Payment::SUCCESSFUL_STATUSES)
+            ->reportableSuccessful()
             ->excludingWalletTopups()
             ->whereBetween('payments.created_at', [$from, $to])
             ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('payments.platform_id', $platformIds));

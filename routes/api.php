@@ -240,6 +240,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::get('/payments/{payment}/diagnostics', [PaymentQueueController::class, 'diagnostics']);
         Route::post('/payments/{payment}/check-provider-status', [PaymentQueueController::class, 'checkProviderStatus']);
         Route::post('/payments/{payment}/sandbox-reconcile', [PaymentQueueController::class, 'sandboxReconcile']);
+        Route::post('/payments/{payment}/mark-test', [PaymentQueueController::class, 'markTest'])->middleware('role:admin');
+        Route::delete('/payments/{payment}/delete-test', [PaymentQueueController::class, 'deleteTest'])->middleware('role:admin');
         Route::get('/payments/{payment}/candidates', [PaymentQueueController::class, 'candidates']);
         Route::post('/payments/{payment}/auto-match', [PaymentQueueController::class, 'autoMatch']);
         Route::post('/payments/{payment}/confirm-match', [PaymentQueueController::class, 'confirmMatch']);

@@ -41,6 +41,8 @@ final class CrmAuditAction
     public const PAYMENT_MATCH_BATCH = 'payment_match_batch';
     public const PAYMENT_RETRY_STK = 'payment_retry_stk';
     public const PAYMENT_SEND_LINK = 'payment_send_link';
+    public const PAYMENT_MARK_TEST = 'payment_mark_test';
+    public const PAYMENT_DELETE_TEST = 'payment_delete_test';
     public const PAYMENT_SANDBOX_RECONCILE = 'payment_sandbox_reconcile';
     public const PAYMENT_CREATE_SUBSCRIPTION = 'payment_create_subscription';
     public const PAYMENT_MANUAL_APPROVE = 'payment_manual_approve';
