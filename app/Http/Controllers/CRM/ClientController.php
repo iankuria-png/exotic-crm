@@ -106,6 +106,10 @@ class ClientController extends Controller
             $query->where('platform_id', $request->platform_id);
         }
 
+        if ($request->boolean('high_risk')) {
+            $query->highRisk();
+        }
+
         if ($request->filled('plan')) {
             $this->applyCanonicalPlanFilter(
                 $query,
@@ -183,6 +187,7 @@ class ClientController extends Controller
             'active' => (clone $statsQuery)->where('profile_status', 'publish')->count(),
             'premium' => $premiumStatsQuery->count(),
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
+            'high_risk' => (clone $statsQuery)->where('is_high_risk', true)->count(),
             'inactive' => (clone $statsQuery)->where('profile_status', 'private')->count(),
             'with_chat' => (clone $statsQuery)->whereNotNull('sb_user_id')->count(),
             'online_now' => (clone $statsQuery)->where('last_online_at', '>=', now()->subMinutes(15)->timestamp)->count(),

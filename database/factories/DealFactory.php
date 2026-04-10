@@ -48,6 +48,9 @@ class DealFactory extends Factory
             'renewal_paused_until' => null,
             'renewal_pause_reason' => null,
             'origin' => 'manual',
+            'cancellation_reason_code' => null,
+            'cancellation_notes' => null,
+            'cancelled_payment_id' => null,
         ];
     }
 }

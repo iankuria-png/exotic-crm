@@ -94,6 +94,23 @@ function titleize(value) {
         .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function paymentResolutionBadge(resolutionCode) {
+    const normalized = String(resolutionCode || '').toLowerCase();
+    if (!normalized) {
+        return null;
+    }
+
+    if (normalized === 'reversed') {
+        return { label: 'Reversed', className: 'bg-rose-50 text-rose-700 ring-rose-200' };
+    }
+
+    if (normalized === 'invalid_reference') {
+        return { label: 'Invalid Ref', className: 'bg-amber-50 text-amber-700 ring-amber-200' };
+    }
+
+    return { label: titleize(normalized), className: 'bg-slate-100 text-slate-600 ring-slate-200' };
+}
+
 function isSandboxPayment(payment) {
     return String(payment?.provider_environment || '').toLowerCase() === 'sandbox'
         || Boolean(payment?.payment_data?.test_mode);
@@ -478,6 +495,7 @@ export default function Payments() {
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
     const allowedReviewStateFilters = new Set(['open', 'manual_review', 'resolved']);
+    const allowedResolutionFilters = new Set(['reversed', 'invalid_reference']);
     const allowedTestVisibilityFilters = new Set(['hide', 'include', 'only']);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -520,6 +538,10 @@ export default function Payments() {
         const requested = (searchParams.get('review_state') || '').trim();
         return allowedReviewStateFilters.has(requested) ? requested : '';
     });
+    const [resolutionFilter, setResolutionFilter] = useState(() => {
+        const requested = (searchParams.get('resolution_code') || '').trim();
+        return allowedResolutionFilters.has(requested) ? requested : '';
+    });
     const [platformFilter, setPlatformFilter] = useState(() => {
         const requested = normalizePlatformFilter(searchParams.get('platform_id'));
         if (requested) {
@@ -532,7 +554,7 @@ export default function Payments() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
-    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter || testVisibility !== 'hide'));
+    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter || resolutionFilter || testVisibility !== 'hide'));
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
@@ -602,7 +624,7 @@ export default function Payments() {
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, fromDate, toDate, canViewTests],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, fromDate, toDate, canViewTests],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -617,6 +639,7 @@ export default function Payments() {
                     ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
                     ...(confidenceFilter && { match_confidence: confidenceFilter }),
                     ...(reviewStateFilter && { review_state: reviewStateFilter }),
+                    ...(resolutionFilter && { resolution_code: resolutionFilter }),
                     ...(fromDate && { from: fromDate }),
                     ...(toDate && { to: toDate }),
                 },
@@ -1441,6 +1464,20 @@ export default function Payments() {
             render: (row) => row.reconciliation_state ? <StatusBadge status={row.reconciliation_state} /> : <span className="text-xs text-slate-400">—</span>,
         },
         {
+            key: 'resolution',
+            label: 'Resolution',
+            render: (row) => {
+                const badge = paymentResolutionBadge(row.resolution_code);
+                return badge ? (
+                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${badge.className}`}>
+                        {badge.label}
+                    </span>
+                ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                );
+            },
+        },
+        {
             key: 'client',
             label: 'Matched Client',
             render: (row) => (
@@ -1761,7 +1798,7 @@ export default function Payments() {
                         <span className="self-end pb-2 text-xs text-rose-500">From must be before To</span>
                     )}
 
-                    {(sourceFilter || (canViewTests && environmentFilter) || confidenceFilter || reviewStateFilter || (canViewTests && testVisibility !== 'hide')) || showAdvancedFilters ? (
+                    {(sourceFilter || (canViewTests && environmentFilter) || confidenceFilter || reviewStateFilter || resolutionFilter || (canViewTests && testVisibility !== 'hide')) || showAdvancedFilters ? (
                         <>
                             {canViewTests ? (
                                 <FilterSelect
@@ -1823,6 +1860,17 @@ export default function Payments() {
                                     { value: 'resolved', label: 'Resolved' },
                                 ]}
                             />
+
+                            <FilterSelect
+                                label="Resolution"
+                                value={resolutionFilter}
+                                onChange={(event) => { setResolutionFilter(event.target.value); setPage(1); }}
+                                options={[
+                                    { value: '', label: 'All outcomes' },
+                                    { value: 'reversed', label: 'Reversed' },
+                                    { value: 'invalid_reference', label: 'Invalid reference' },
+                                ]}
+                            />
                         </>
                     ) : (
                         <button
@@ -1835,7 +1883,7 @@ export default function Payments() {
                         </button>
                     )}
 
-                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter) ? (
+                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -1849,6 +1897,7 @@ export default function Payments() {
                                 setTestVisibility('hide');
                                 setConfidenceFilter('');
                                 setReviewStateFilter('');
+                                setResolutionFilter('');
                                 setFromDate('');
                                 setToDate('');
                                 setHasInitializedFrom(false);

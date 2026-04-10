@@ -16,6 +16,19 @@ import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
+const DEAL_DEACTIVATION_REASON_OPTIONS = [
+    { value: 'payment_reversed', label: 'Payment reversed' },
+    { value: 'invalid_reference', label: 'Invalid reference' },
+    { value: 'fraud_suspected', label: 'Fraud suspected' },
+    { value: 'customer_request', label: 'Customer request' },
+    { value: 'duplicate_entry', label: 'Duplicate entry' },
+    { value: 'other', label: 'Other' },
+];
+const LINKED_PAYMENT_ACTION_OPTIONS = [
+    { value: 'none', label: 'No payment update' },
+    { value: 'reverse', label: 'Mark payment reversed' },
+    { value: 'invalidate', label: 'Invalidate payment' },
+];
 
 function formatCurrency(amount, currency = 'KES') {
     if (amount === null || amount === undefined || amount === '') {
@@ -34,9 +47,33 @@ function normalizePlatformFilter(value) {
     return /^\d+$/.test(raw) ? raw : '';
 }
 
+function defaultLinkedPaymentAction(reasonCode) {
+    if (reasonCode === 'payment_reversed') {
+        return 'reverse';
+    }
+
+    if (reasonCode === 'invalid_reference') {
+        return 'invalidate';
+    }
+
+    return 'none';
+}
+
+function formatReasonLabel(value) {
+    const option = DEAL_DEACTIVATION_REASON_OPTIONS.find((entry) => entry.value === value);
+    if (option) {
+        return option.label;
+    }
+
+    return String(value || '')
+        .replaceAll('_', ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 export default function Deals() {
     const allowedBuckets = new Set(['all', 'active', 'risk', 'pending', 'workload', 'stable', 'expired', 'lapsed', 'paused', 'untracked', 'mpesa_review', 'mpesa_history']);
     const allowedStatuses = new Set(['pending', 'awaiting_payment', 'paid', 'active', 'expired', 'renewed', 'cancelled', 'untracked']);
+    const allowedCancellationReasons = new Set(DEAL_DEACTIVATION_REASON_OPTIONS.map((option) => option.value));
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -62,10 +99,17 @@ export default function Deals() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
+    const [highRiskFilter, setHighRiskFilter] = useState(() => searchParams.get('high_risk') === '1' ? '1' : '');
+    const [cancellationReasonFilter, setCancellationReasonFilter] = useState(() => {
+        const requested = (searchParams.get('cancellation_reason_code') || '').trim();
+        return allowedCancellationReasons.has(requested) ? requested : '';
+    });
 
     const [dialog, setDialog] = useState({ type: null, deal: null });
     const [activateReason, setActivateReason] = useState('Activated from subscriptions page');
-    const [reason, setReason] = useState('Deactivated from subscriptions page');
+    const [deactivationReasonCode, setDeactivationReasonCode] = useState('other');
+    const [deactivationReasonNotes, setDeactivationReasonNotes] = useState('Deactivated from subscriptions page');
+    const [deactivationLinkedPaymentAction, setDeactivationLinkedPaymentAction] = useState('none');
     const [extendReason, setExtendReason] = useState('Extended from subscriptions page');
     const [extendDays, setExtendDays] = useState('7');
     const [renewReason, setRenewReason] = useState('Renewed from subscriptions page');
@@ -81,7 +125,9 @@ export default function Deals() {
     const [bulkDeactivateDialog, setBulkDeactivateDialog] = useState({
         open: false,
         selection: [],
-        reason: 'Bulk deactivation from subscriptions page',
+        reasonCode: 'other',
+        reasonNotes: 'Bulk deactivation from subscriptions page',
+        linkedPaymentAction: 'none',
         notifyClient: false,
     });
 
@@ -95,7 +141,7 @@ export default function Deals() {
     const isMpesaBucket = bucket === 'mpesa_review';
 
     const { data, isLoading } = useQuery({
-        queryKey: ['deals', page, perPage, search, statusFilter, bucket, platformFilter],
+        queryKey: ['deals', page, perPage, search, statusFilter, bucket, platformFilter, highRiskFilter, cancellationReasonFilter],
         queryFn: () =>
             api.get('/crm/deals', {
                 params: {
@@ -105,6 +151,8 @@ export default function Deals() {
                     ...(statusFilter && { status: statusFilter }),
                     bucket,
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
+                    ...(highRiskFilter === '1' && { high_risk: 1 }),
+                    ...(cancellationReasonFilter && { cancellation_reason_code: cancellationReasonFilter }),
                 },
             }).then((response) => response.data),
         enabled: !isMpesaBucket,
@@ -225,9 +273,11 @@ export default function Deals() {
     });
 
     const deactivateMutation = useMutation({
-        mutationFn: ({ dealId, deactivateReason, shouldNotify, templateId, message }) =>
+        mutationFn: ({ dealId, reasonCode, reasonNotes, linkedPaymentAction, shouldNotify, templateId, message }) =>
             api.post(`/crm/deals/${dealId}/deactivate`, {
-                reason: deactivateReason,
+                reason_code: reasonCode,
+                reason_notes: reasonNotes,
+                linked_payment_action: linkedPaymentAction,
                 notify_client: Boolean(shouldNotify),
                 notification_template_id: templateId || null,
                 notification_message: message || null,
@@ -236,7 +286,9 @@ export default function Deals() {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setDialog({ type: null, deal: null });
-            setReason('Deactivated from subscriptions page');
+            setDeactivationReasonCode('other');
+            setDeactivationReasonNotes('Deactivated from subscriptions page');
+            setDeactivationLinkedPaymentAction('none');
             setNotifyClient(false);
             setNotificationTemplateId('');
             setNotificationMessage('');
@@ -314,14 +366,16 @@ export default function Deals() {
     });
 
     const bulkDeactivateMutation = useMutation({
-        mutationFn: async ({ selection, reason, notifyClient }) => {
+        mutationFn: async ({ selection, reasonCode, reasonNotes, linkedPaymentAction, notifyClient }) => {
             const targets = selection.filter((row) => row.status === 'active' || row.status === 'expired');
             const skipped = selection.length - targets.length;
 
             const results = await Promise.allSettled(
                 targets.map((row) =>
                     api.post(`/crm/deals/${row.id}/deactivate`, {
-                        reason,
+                        reason_code: reasonCode,
+                        reason_notes: reasonNotes,
+                        linked_payment_action: linkedPaymentAction,
                         notify_client: notifyClient,
                     }),
                 ),
@@ -336,7 +390,14 @@ export default function Deals() {
             queryClient.invalidateQueries({ queryKey: ['deals'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setClearSelectionKey((value) => value + 1);
-            setBulkDeactivateDialog((d) => ({ ...d, open: false, selection: [] }));
+            setBulkDeactivateDialog((d) => ({
+                ...d,
+                open: false,
+                selection: [],
+                reasonCode: 'other',
+                reasonNotes: 'Bulk deactivation from subscriptions page',
+                linkedPaymentAction: 'none',
+            }));
             if (result.failed > 0) {
                 toast.warning(`Bulk deactivate: ${result.success}/${result.total} succeeded.`);
                 return;
@@ -453,7 +514,9 @@ export default function Deals() {
             setRenewDays('30');
         }
         if (type === 'deactivate') {
-            setReason('Deactivated from subscriptions page');
+            setDeactivationReasonCode('other');
+            setDeactivationReasonNotes('Deactivated from subscriptions page');
+            setDeactivationLinkedPaymentAction('none');
             setNotifyClient(false);
             setNotificationTemplateId('');
             setNotificationMessage('');
@@ -481,6 +544,9 @@ export default function Deals() {
                         )}
                         {row.is_free_trial && (
                             <span className="inline-flex shrink-0 items-center rounded-sm bg-violet-50 px-1 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-inset ring-violet-600/20">Free Trial</span>
+                        )}
+                        {row.client?.is_high_risk && (
+                            <span className="inline-flex shrink-0 items-center rounded-sm bg-rose-50 px-1 text-[10px] font-bold uppercase tracking-wider text-rose-700 ring-1 ring-inset ring-rose-200">High Risk</span>
                         )}
                     </div>
                     <p className="crm-mono text-xs text-slate-500" title={row.client?.phone_normalized || ''}>
@@ -572,6 +638,11 @@ export default function Deals() {
                             Verified
                         </span>
                     )}
+                    {row.cancellation_reason_code ? (
+                        <span className="inline-flex items-center rounded-sm bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-200">
+                            {formatReasonLabel(row.cancellation_reason_code)}
+                        </span>
+                    ) : null}
                 </div>
             ),
         },
@@ -668,7 +739,9 @@ export default function Deals() {
                 setBulkDeactivateDialog({
                     open: true,
                     selection: rowsSelection,
-                    reason: 'Bulk deactivation from subscriptions page',
+                    reasonCode: 'other',
+                    reasonNotes: 'Bulk deactivation from subscriptions page',
+                    linkedPaymentAction: 'none',
                     notifyClient: false,
                 });
             },
@@ -1041,7 +1114,27 @@ export default function Deals() {
                         ]}
                     />
 
-                    {(search || statusFilter || bucket !== 'all' || platformFilter) ? (
+                    <FilterSelect
+                        label="Risk"
+                        value={highRiskFilter}
+                        onChange={(event) => { setHighRiskFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All clients' },
+                            { value: '1', label: 'High risk only' },
+                        ]}
+                    />
+
+                    <FilterSelect
+                        label="Cancellation"
+                        value={cancellationReasonFilter}
+                        onChange={(event) => { setCancellationReasonFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All reasons' },
+                            ...DEAL_DEACTIVATION_REASON_OPTIONS,
+                        ]}
+                    />
+
+                    {(search || statusFilter || bucket !== 'all' || platformFilter || highRiskFilter || cancellationReasonFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -1050,6 +1143,8 @@ export default function Deals() {
                                 setStatusFilter('');
                                 setBucket('all');
                                 setPlatformFilter('');
+                                setHighRiskFilter('');
+                                setCancellationReasonFilter('');
                                 setPage(1);
                             }}
                             className="mb-0.5 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
@@ -1322,13 +1417,46 @@ export default function Deals() {
 
                             {dialog.type === 'deactivate' ? (
                                 <>
-                                    <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-reason">Reason</label>
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-reason-code">Reason code</label>
+                                    <select
+                                        id="deactivate-reason-code"
+                                        value={deactivationReasonCode}
+                                        onChange={(event) => {
+                                            const nextReasonCode = event.target.value;
+                                            setDeactivationReasonCode(nextReasonCode);
+                                            setDeactivationLinkedPaymentAction(defaultLinkedPaymentAction(nextReasonCode));
+                                        }}
+                                        className="crm-select"
+                                    >
+                                        {DEAL_DEACTIVATION_REASON_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-linked-payment-action">Linked payment action</label>
+                                    <select
+                                        id="deactivate-linked-payment-action"
+                                        value={deactivationLinkedPaymentAction}
+                                        onChange={(event) => setDeactivationLinkedPaymentAction(event.target.value)}
+                                        className="crm-select"
+                                    >
+                                        {LINKED_PAYMENT_ACTION_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-reason-notes">Notes</label>
                                     <textarea
-                                        id="deactivate-reason"
+                                        id="deactivate-reason-notes"
                                         rows={3}
-                                        value={reason}
-                                        onChange={(event) => setReason(event.target.value)}
+                                        value={deactivationReasonNotes}
+                                        onChange={(event) => setDeactivationReasonNotes(event.target.value)}
                                         className="crm-input"
+                                        placeholder="Explain why this subscription is being deactivated."
                                     />
 
                                     <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1443,12 +1571,14 @@ export default function Deals() {
                                     type="button"
                                     onClick={() => deactivateMutation.mutate({
                                         dealId: selectedDeal.id,
-                                        deactivateReason: reason,
+                                        reasonCode: deactivationReasonCode,
+                                        reasonNotes: deactivationReasonNotes.trim(),
+                                        linkedPaymentAction: deactivationLinkedPaymentAction,
                                         shouldNotify: notifyClient,
                                         templateId: notificationTemplateId ? Number(notificationTemplateId) : null,
                                         message: notificationMessage.trim(),
                                     })}
-                                    disabled={!reason.trim() || deactivateMutation.isPending}
+                                    disabled={!deactivationReasonNotes.trim() || deactivateMutation.isPending}
                                     className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {deactivateMutation.isPending ? 'Deactivating...' : 'Confirm deactivation'}
@@ -1478,14 +1608,45 @@ export default function Deals() {
                 tone="danger"
                 onCancel={() => setBulkDeactivateDialog((d) => ({ ...d, open: false }))}
                 onConfirm={() => bulkDeactivateMutation.mutate(bulkDeactivateDialog)}
-                confirmDisabled={!bulkDeactivateDialog.reason.trim() || bulkDeactivateMutation.isPending}
+                confirmDisabled={!bulkDeactivateDialog.reasonNotes.trim() || bulkDeactivateMutation.isPending}
                 isPending={bulkDeactivateMutation.isPending}
             >
-                <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Reason code</label>
+                <select
+                    value={bulkDeactivateDialog.reasonCode}
+                    onChange={(e) => {
+                        const nextReasonCode = e.target.value;
+                        setBulkDeactivateDialog((d) => ({
+                            ...d,
+                            reasonCode: nextReasonCode,
+                            linkedPaymentAction: defaultLinkedPaymentAction(nextReasonCode),
+                        }));
+                    }}
+                    className="crm-select"
+                >
+                    {DEAL_DEACTIVATION_REASON_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                            {option.label}
+                        </option>
+                    ))}
+                </select>
+                <label className="mb-1 mt-3 block text-sm font-medium text-slate-700">Linked payment action</label>
+                <select
+                    value={bulkDeactivateDialog.linkedPaymentAction}
+                    onChange={(e) => setBulkDeactivateDialog((d) => ({ ...d, linkedPaymentAction: e.target.value }))}
+                    className="crm-select"
+                >
+                    {LINKED_PAYMENT_ACTION_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                            {option.label}
+                        </option>
+                    ))}
+                </select>
+                <label className="mb-1 mt-3 block text-sm font-medium text-slate-700">Notes</label>
                 <textarea
                     rows={2}
-                    value={bulkDeactivateDialog.reason}
-                    onChange={(e) => setBulkDeactivateDialog((d) => ({ ...d, reason: e.target.value }))}
+                    value={bulkDeactivateDialog.reasonNotes}
+                    onChange={(e) => setBulkDeactivateDialog((d) => ({ ...d, reasonNotes: e.target.value }))}
                     className="crm-input"
                 />
                 <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">

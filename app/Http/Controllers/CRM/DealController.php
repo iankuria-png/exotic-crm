@@ -19,7 +19,10 @@ use App\Services\NotificationService;
 use App\Services\SubscriptionDeactivationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
+use App\Support\DeactivationRequest;
 use App\Support\CrmAuditAction;
+use App\Support\DealDeactivationReason;
+use App\Support\LinkedPaymentAction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -59,6 +62,8 @@ class DealController extends Controller
                 'bucket' => $request->get('bucket', 'all'),
                 'status' => $request->get('status'),
                 'platform_ids' => $platformIds,
+                'high_risk' => $request->boolean('high_risk'),
+                'cancellation_reason_code' => $request->get('cancellation_reason_code'),
                 'include_untracked' => true,
             ],
             (int) $request->get('per_page', 25),
@@ -509,26 +514,46 @@ class DealController extends Controller
             return response()->json(['message' => 'Deal has no associated client'], 422);
         }
 
-        $request->validate([
-            'reason' => 'required|string|max:500',
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+            'reason_code' => 'nullable|string|in:' . implode(',', $this->deactivationReasonValues()),
+            'reason_notes' => 'nullable|string|max:500',
+            'linked_payment_action' => 'nullable|string|in:' . implode(',', $this->linkedPaymentActionValues()),
             'notify_client' => 'nullable|boolean',
             'notification_message' => 'nullable|string|max:500',
             'notification_template_id' => 'nullable|integer|exists:templates,id',
         ]);
 
+        if (
+            trim((string) ($validated['reason_code'] ?? '')) === ''
+            && trim((string) ($validated['reason'] ?? '')) === ''
+        ) {
+            throw ValidationException::withMessages([
+                'reason_code' => 'A structured reason code or legacy reason is required.',
+            ]);
+        }
+
+        $deactivationRequest = $this->buildDeactivationRequest($validated);
+
         $beforeState = [
             'deal_status' => $deal->status,
+            'cancellation_reason_code' => $deal->cancellation_reason_code,
+            'cancellation_notes' => $deal->cancellation_notes,
+            'cancelled_payment_id' => $deal->cancelled_payment_id,
             'client_profile_status' => $client->profile_status,
+            'client_is_high_risk' => (bool) $client->is_high_risk,
+            'client_risk_reason_code' => $client->risk_reason_code,
         ];
 
         DB::beginTransaction();
         try {
             $deal = $this->subscriptionDeactivationService->deactivateDeal(
                 $deal,
-                (string) $request->reason,
+                $deactivationRequest,
                 optional($request->user())->id
             );
             $client = $deal->client?->fresh() ?? $client->fresh();
+            $cancelledPayment = $deal->cancelledPayment()->first();
 
             $this->auditService->fromRequest(
                 $request,
@@ -539,9 +564,16 @@ class DealController extends Controller
                 $beforeState,
                 [
                     'deal_status' => 'cancelled',
+                    'cancellation_reason_code' => $deal->cancellation_reason_code,
+                    'cancellation_notes' => $deal->cancellation_notes,
+                    'cancelled_payment_id' => $deal->cancelled_payment_id,
                     'client_profile_status' => $client->profile_status,
+                    'client_is_high_risk' => (bool) $client->is_high_risk,
+                    'client_risk_reason_code' => $client->risk_reason_code,
+                    'linked_payment_action' => $deactivationRequest->resolvedLinkedPaymentAction()->value,
+                    'payment_resolution_code' => $cancelledPayment?->resolution_code,
                 ],
-                (string) $request->reason
+                $deactivationRequest->auditReason()
             );
 
             DB::commit();
@@ -1168,6 +1200,50 @@ class DealController extends Controller
 
         $name = $client->name ?: 'there';
         return "Hi {$name}, your subscription has been deactivated. Contact support if this is unexpected.";
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function buildDeactivationRequest(array $validated): DeactivationRequest
+    {
+        $legacyReason = trim((string) ($validated['reason'] ?? ''));
+        $reasonCode = trim((string) ($validated['reason_code'] ?? ''));
+        $reasonNotes = trim((string) ($validated['reason_notes'] ?? ''));
+        $linkedPaymentAction = trim((string) ($validated['linked_payment_action'] ?? ''));
+
+        if ($reasonCode === '') {
+            $reasonCode = DealDeactivationReason::OTHER->value;
+            $reasonNotes = $reasonNotes !== '' ? $reasonNotes : ($legacyReason !== '' ? $legacyReason : null);
+        }
+
+        return new DeactivationRequest(
+            DealDeactivationReason::from($reasonCode),
+            $reasonNotes !== '' ? $reasonNotes : null,
+            $linkedPaymentAction !== '' ? LinkedPaymentAction::from($linkedPaymentAction) : null
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function deactivationReasonValues(): array
+    {
+        return array_map(
+            static fn (DealDeactivationReason $reason): string => $reason->value,
+            DealDeactivationReason::cases()
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function linkedPaymentActionValues(): array
+    {
+        return array_map(
+            static fn (LinkedPaymentAction $action): string => $action->value,
+            LinkedPaymentAction::cases()
+        );
     }
 
     private function authorizeDealAccess(Request $request, Deal $deal): void

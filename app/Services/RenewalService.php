@@ -56,7 +56,10 @@ class RenewalService
                 'deals.duration as deal_duration',
                 'deals.amount as deal_amount',
                 'deals.currency as deal_currency',
-                'deals.origin as deal_origin'
+                'deals.origin as deal_origin',
+                'deals.cancellation_reason_code as deal_cancellation_reason_code',
+                'deals.cancellation_notes as deal_cancellation_notes',
+                'deals.cancelled_payment_id as deal_cancelled_payment_id'
             )
             ->where(function ($q) use ($includeUntracked) {
                 $q->whereNotNull('deals.id')
@@ -88,6 +91,14 @@ class RenewalService
                 $q->where('clients.name', 'like', "%{$search}%")
                     ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
             });
+        }
+
+        if (!empty($filters['high_risk'])) {
+            $query->where('clients.is_high_risk', true);
+        }
+
+        if (!empty($filters['cancellation_reason_code'])) {
+            $query->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
         }
 
         $bucket = (string) ($filters['bucket'] ?? 'all');
@@ -246,6 +257,9 @@ class RenewalService
                     'reminders_paused' => $remindersPaused,
                     'renewal_paused_until' => $client->activeDeal ? optional($client->activeDeal->renewal_paused_until)->toDateTimeString() : null,
                     'renewal_pause_reason' => $client->activeDeal ? $client->activeDeal->renewal_pause_reason : null,
+                    'cancellation_reason_code' => $client->deal_cancellation_reason_code,
+                    'cancellation_notes' => $client->deal_cancellation_notes,
+                    'cancelled_payment_id' => $client->deal_cancelled_payment_id,
                 ]);
             })
         );
@@ -285,6 +299,14 @@ class RenewalService
                 $q->where('clients.name', 'like', "%{$search}%")
                     ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
             });
+        }
+
+        if (!empty($filters['high_risk'])) {
+            $summaryBase->where('clients.is_high_risk', true);
+        }
+
+        if (!empty($filters['cancellation_reason_code'])) {
+            $summaryBase->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
         }
 
         $inScopeBase = clone $summaryBase;
@@ -412,6 +434,14 @@ class RenewalService
             });
         }
 
+        if (!empty($filters['high_risk'])) {
+            $summaryBase->where('clients.is_high_risk', true);
+        }
+
+        if (!empty($filters['cancellation_reason_code'])) {
+            $summaryBase->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
+        }
+
         $inScopeBase = clone $summaryBase;
         $this->applyBucketFilter($inScopeBase, 'all');
 
@@ -532,6 +562,14 @@ class RenewalService
                     $q->where('clients.name', 'like', "%{$search}%")
                         ->orWhere('clients.phone_normalized', 'like', "%{$search}%");
                 });
+            }
+
+            if (!empty($filters['high_risk'])) {
+                $query->where('clients.is_high_risk', true);
+            }
+
+            if (!empty($filters['cancellation_reason_code'])) {
+                $query->where('deals.cancellation_reason_code', (string) $filters['cancellation_reason_code']);
             }
 
             if (!empty($filters['bucket'])) {

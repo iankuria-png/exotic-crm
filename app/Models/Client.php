@@ -35,6 +35,10 @@ class Client extends Model
         'sb_matched_by',
         'city',
         'profile_status',
+        'is_high_risk',
+        'risk_reason_code',
+        'risk_marked_at',
+        'risk_marked_by',
         'premium',
         'premium_expire',
         'featured',
@@ -54,6 +58,7 @@ class Client extends Model
 
     protected $casts = [
         'premium' => 'boolean',
+        'is_high_risk' => 'boolean',
         'featured' => 'boolean',
         'verified' => 'boolean',
         'wallet_balance' => 'decimal:2',
@@ -65,6 +70,7 @@ class Client extends Model
         'wallet_last_synced_at' => 'datetime',
         'last_synced_at' => 'datetime',
         'wp_modified_at' => 'datetime',
+        'risk_marked_at' => 'datetime',
     ];
 
     protected $appends = [
@@ -81,6 +87,11 @@ class Client extends Model
     public function assignedAgent()
     {
         return $this->belongsTo(User::class, 'assigned_to');
+    }
+
+    public function riskMarkedBy()
+    {
+        return $this->belongsTo(User::class, 'risk_marked_by');
     }
 
     public function deals()
@@ -152,6 +163,11 @@ class Client extends Model
     public function scopeForPlatform($query, $platformId)
     {
         return $query->where('platform_id', $platformId);
+    }
+
+    public function scopeHighRisk($query)
+    {
+        return $query->where('is_high_risk', true);
     }
 
     public function scopeInactiveFor($query, int $days)

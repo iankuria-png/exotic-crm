@@ -35,6 +35,8 @@ class Payment extends Model
     public const REPLACEMENT_REQUIRED_STATUSES = ['failed'];
     public const RECORD_CLASSIFICATION_LIVE = 'live';
     public const RECORD_CLASSIFICATION_TEST = 'test';
+    public const RESOLUTION_REVERSED = 'reversed';
+    public const RESOLUTION_INVALID_REFERENCE = 'invalid_reference';
 
     protected $fillable = [
         'user_id',
@@ -61,6 +63,8 @@ class Payment extends Model
         'provider_key',
         'provider_environment',
         'record_classification',
+        'resolution_code',
+        'resolution_meta_json',
         'test_reason',
         'test_marked_at',
         'test_marked_by',
@@ -78,6 +82,7 @@ class Payment extends Model
     protected $casts = [
         'raw_payload' => 'array',
         'payment_data' => 'array',
+        'resolution_meta_json' => 'array',
         'confirmed_at' => 'datetime',
         'completed_at' => 'datetime',
         'test_marked_at' => 'datetime',

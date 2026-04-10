@@ -297,6 +297,7 @@ export default function Clients() {
     const allowedStatuses = new Set(['publish', 'private', 'draft', 'pending']);
     const allowedVerifiedFilters = new Set(['1', '0']);
     const allowedHasChatFilters = new Set(['1', '0']);
+    const allowedHighRiskFilters = new Set(['1']);
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
     const allowedSignupSources = new Set(['fast_signup', 'full_registration', 'crm_manual', 'crm_provisioned']);
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
@@ -322,6 +323,10 @@ export default function Clients() {
     const [verifiedFilter, setVerifiedFilter] = useState(() => {
         const requested = (searchParams.get('verified') || '').trim();
         return allowedVerifiedFilters.has(requested) ? requested : '';
+    });
+    const [highRiskFilter, setHighRiskFilter] = useState(() => {
+        const requested = (searchParams.get('high_risk') || '').trim();
+        return allowedHighRiskFilters.has(requested) ? requested : '';
     });
     const [hasChatFilter, setHasChatFilter] = useState(() => {
         const requested = (searchParams.get('has_chat') || '').trim();
@@ -411,6 +416,7 @@ export default function Clients() {
             statusFilter,
             planFilter,
             verifiedFilter,
+            highRiskFilter,
             hasChatFilter,
             onlineFilter,
             platformFilter,
@@ -431,6 +437,7 @@ export default function Clients() {
                     ...(statusFilter && { status: statusFilter }),
                     ...(planFilter && { plan: planFilter }),
                     ...(verifiedFilter !== '' && { verified: verifiedFilter }),
+                    ...(highRiskFilter === '1' && { high_risk: 1 }),
                     ...(hasChatFilter !== '' && { has_chat: hasChatFilter }),
                     ...(onlineFilter && { online_within: Number(onlineFilter) }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
@@ -935,6 +942,7 @@ export default function Clients() {
         || statusFilter
         || planFilter
         || verifiedFilter !== ''
+        || highRiskFilter !== ''
         || hasChatFilter !== ''
         || onlineFilter
         || platformFilter
@@ -967,6 +975,11 @@ export default function Clients() {
                             <p className="truncate text-sm font-semibold text-slate-900" title={row.name || 'Unnamed'}>
                                 {row.name || 'Unnamed'}
                             </p>
+                            {row.is_high_risk ? (
+                                <span className="inline-flex shrink-0 items-center rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">
+                                    High Risk
+                                </span>
+                            ) : null}
                             {row.sb_user_id ? (
                                 <span className="inline-flex shrink-0 items-center rounded-md bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-inset ring-sky-200">
                                     Chat
@@ -1293,6 +1306,16 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="Risk"
+                        value={highRiskFilter}
+                        onChange={(event) => { setHighRiskFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All clients' },
+                            { value: '1', label: 'High risk only' },
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Chat"
                         value={hasChatFilter}
                         onChange={(event) => { setHasChatFilter(event.target.value); setPage(1); }}
@@ -1361,6 +1384,7 @@ export default function Clients() {
                                 setStatusFilter('');
                                 setPlanFilter('');
                                 setVerifiedFilter('');
+                                setHighRiskFilter('');
                                 setHasChatFilter('');
                                 setOnlineFilter('');
                                 setPlatformFilter('');

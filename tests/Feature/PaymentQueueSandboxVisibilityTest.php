@@ -368,6 +368,42 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('meta.total_review', 0);
     }
 
+    public function test_payment_workspace_can_filter_by_resolution_code(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'RESOLUTION-REV-001',
+            'reference_number' => 'RESOLUTION-REV-001',
+            'status' => 'completed',
+            'resolution_code' => 'reversed',
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'RESOLUTION-INV-001',
+            'reference_number' => 'RESOLUTION-INV-001',
+            'status' => 'failed',
+            'resolution_code' => 'invalid_reference',
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'RESOLUTION-LIVE-001',
+            'reference_number' => 'RESOLUTION-LIVE-001',
+            'status' => 'completed',
+            'resolution_code' => null,
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&resolution_code=reversed');
+
+        $response->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'RESOLUTION-REV-001')
+            ->assertJsonPath('data.0.resolution_code', 'reversed');
+    }
+
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform
     {
         return Platform::query()->create([

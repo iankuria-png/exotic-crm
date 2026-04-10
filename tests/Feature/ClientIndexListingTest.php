@@ -107,41 +107,75 @@ class ClientIndexListingTest extends TestCase
         $platform = $this->createPlatform();
         $admin = $this->createAdminUser();
         $timezone = config('app.timezone');
+        Carbon::setTestNow(Carbon::create(2026, 4, 7, 12, 0, 0, $timezone));
 
-        $inRangeStart = Client::factory()->create([
+        try {
+            $inRangeStart = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'Range Start Client',
+                'created_at' => Carbon::create(2026, 4, 1, 0, 0, 0, $timezone),
+                'updated_at' => Carbon::create(2026, 4, 1, 0, 0, 0, $timezone),
+            ]);
+            $inRangeEnd = Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'Range End Client',
+                'created_at' => Carbon::create(2026, 4, 7, 23, 59, 59, $timezone),
+                'updated_at' => Carbon::create(2026, 4, 7, 23, 59, 59, $timezone),
+            ]);
+            Client::factory()->create([
+                'platform_id' => $platform->id,
+                'name' => 'Outside Range Client',
+                'created_at' => Carbon::create(2026, 3, 31, 23, 59, 59, $timezone),
+                'updated_at' => Carbon::create(2026, 3, 31, 23, 59, 59, $timezone),
+            ]);
+
+            Sanctum::actingAs($admin);
+
+            $filteredResponse = $this->getJson("/api/crm/clients?platform_id={$platform->id}&created_from=2026-04-01&created_to=2026-04-07");
+            $filteredResponse->assertOk()
+                ->assertJsonPath('stats.new_users', 2)
+                ->assertJsonPath('stats.total', 2);
+
+            $this->assertEqualsCanonicalizing(
+                [$inRangeStart->id, $inRangeEnd->id],
+                collect($filteredResponse->json('data'))->pluck('id')->all()
+            );
+
+            $defaultStatsResponse = $this->getJson("/api/crm/clients?platform_id={$platform->id}");
+            $defaultStatsResponse->assertOk()
+                ->assertJsonPath('stats.new_users', 2);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_clients_index_can_filter_high_risk_clients(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+
+        $highRiskClient = Client::factory()->create([
             'platform_id' => $platform->id,
-            'name' => 'Range Start Client',
-            'created_at' => Carbon::create(2026, 4, 1, 0, 0, 0, $timezone),
-            'updated_at' => Carbon::create(2026, 4, 1, 0, 0, 0, $timezone),
-        ]);
-        $inRangeEnd = Client::factory()->create([
-            'platform_id' => $platform->id,
-            'name' => 'Range End Client',
-            'created_at' => Carbon::create(2026, 4, 7, 23, 59, 59, $timezone),
-            'updated_at' => Carbon::create(2026, 4, 7, 23, 59, 59, $timezone),
+            'name' => 'High Risk Client',
+            'is_high_risk' => true,
+            'risk_reason_code' => 'fraud_suspected',
         ]);
         Client::factory()->create([
             'platform_id' => $platform->id,
-            'name' => 'Outside Range Client',
-            'created_at' => Carbon::create(2026, 3, 31, 23, 59, 59, $timezone),
-            'updated_at' => Carbon::create(2026, 3, 31, 23, 59, 59, $timezone),
+            'name' => 'Normal Client',
+            'is_high_risk' => false,
         ]);
 
         Sanctum::actingAs($admin);
 
-        $filteredResponse = $this->getJson("/api/crm/clients?platform_id={$platform->id}&created_from=2026-04-01&created_to=2026-04-07");
-        $filteredResponse->assertOk()
-            ->assertJsonPath('stats.new_users', 2)
-            ->assertJsonPath('stats.total', 2);
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}&high_risk=1");
 
-        $this->assertEqualsCanonicalizing(
-            [$inRangeStart->id, $inRangeEnd->id],
-            collect($filteredResponse->json('data'))->pluck('id')->all()
-        );
-
-        $defaultStatsResponse = $this->getJson("/api/crm/clients?platform_id={$platform->id}");
-        $defaultStatsResponse->assertOk()
-            ->assertJsonPath('stats.new_users', 2);
+        $response->assertOk()
+            ->assertJsonPath('stats.total', 1)
+            ->assertJsonPath('stats.high_risk', 1)
+            ->assertJsonPath('data.0.id', $highRiskClient->id)
+            ->assertJsonPath('data.0.is_high_risk', true)
+            ->assertJsonPath('data.0.risk_reason_code', 'fraud_suspected');
     }
 
     public function test_clients_index_supports_name_and_signup_sorting(): void

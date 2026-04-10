@@ -80,6 +80,7 @@ class PaymentQueueController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'environment' => 'nullable|in:production,sandbox',
             'test_visibility' => 'nullable|in:hide,include,only',
+            'resolution_code' => 'nullable|in:reversed,invalid_reference',
         ]);
 
         $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -164,6 +165,10 @@ class PaymentQueueController extends Controller
 
         if ($request->filled('review_state')) {
             $query->where('reconciliation_state', $request->review_state);
+        }
+
+        if (!empty($validated['resolution_code'])) {
+            $query->where('resolution_code', (string) $validated['resolution_code']);
         }
 
         // Date range filtering — defaults to baseline cutoff → now

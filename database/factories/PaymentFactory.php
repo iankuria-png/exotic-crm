@@ -47,6 +47,8 @@ class PaymentFactory extends Factory
             'provider_key' => null,
             'provider_environment' => null,
             'record_classification' => Payment::RECORD_CLASSIFICATION_LIVE,
+            'resolution_code' => null,
+            'resolution_meta_json' => null,
             'test_reason' => null,
             'test_marked_at' => null,
             'test_marked_by' => null,

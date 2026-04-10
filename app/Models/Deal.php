@@ -28,7 +28,7 @@ class Deal extends Model
         'assigned_to', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
         'discount_percentage', 'original_amount', 'discount_approved_by',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
-        'origin',
+        'origin', 'cancellation_reason_code', 'cancellation_notes', 'cancelled_payment_id',
     ];
 
     protected $casts = [
@@ -60,6 +60,11 @@ class Deal extends Model
     public function payment()
     {
         return $this->belongsTo(Payment::class);
+    }
+
+    public function cancelledPayment()
+    {
+        return $this->belongsTo(Payment::class, 'cancelled_payment_id');
     }
 
     public function product()
