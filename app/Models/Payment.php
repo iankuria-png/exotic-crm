@@ -313,7 +313,7 @@ class Payment extends Model
                     $subQuery->selectRaw('1')
                         ->from('manual_payment_bundles')
                         ->whereColumn('manual_payment_bundles.id', 'payments.manual_payment_bundle_id')
-                        ->whereIn('manual_payment_bundles.status', ['committing', 'compensation_failed']);
+                        ->whereIn('manual_payment_bundles.status', ['committing', 'compensation_failed', 'voided']);
                 });
         });
     }

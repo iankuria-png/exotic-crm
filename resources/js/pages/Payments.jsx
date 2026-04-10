@@ -164,6 +164,7 @@ function renderPaymentStatusBadges(payment) {
     const status = String(payment?.status || '').toLowerCase();
     const customLabel = sandboxStatusLabel(payment);
     const testBadge = paymentTestBadge(payment);
+    const isBundlePayment = Boolean(payment?.manual_payment_bundle_id);
 
     return (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -173,6 +174,11 @@ function renderPaymentStatusBadges(payment) {
                 <StatusBadge status={status} label={customLabel} />
             )}
             {testBadge ? <StatusBadge status={testBadge.status} label={testBadge.label} tone={testBadge.tone} /> : null}
+            {isBundlePayment ? (
+                <span className="inline-flex items-center rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-violet-700">
+                    Bundle
+                </span>
+            ) : null}
         </div>
     );
 }
@@ -603,6 +609,13 @@ export default function Payments() {
         payment: null,
         reason: 'Permanently remove non-business test payment after audit snapshot review.',
     });
+    const [bundleDetailDialog, setBundleDetailDialog] = useState({ open: false, bundleId: null });
+    const [voidBundleDialog, setVoidBundleDialog] = useState({
+        open: false,
+        bundleId: null,
+        reasonCode: 'fraud_suspected',
+        notes: '',
+    });
     const [importDrawerOpen, setImportDrawerOpen] = useState(false);
 
     const { data: integrationData } = useQuery({
@@ -675,6 +688,38 @@ export default function Payments() {
         queryKey: ['payment-diagnostics', diagnosticsDrawer.payment?.id],
         queryFn: () => api.get(`/crm/payments/${diagnosticsDrawer.payment.id}/diagnostics`).then((response) => response.data),
         enabled: diagnosticsDrawer.open && !!diagnosticsDrawer.payment?.id,
+    });
+
+    const {
+        data: bundleDetailData,
+        isLoading: bundleDetailLoading,
+    } = useQuery({
+        queryKey: ['bundle-detail', bundleDetailDialog.bundleId],
+        queryFn: () => api.get(`/crm/manual-payment-bundles/${bundleDetailDialog.bundleId}`).then((response) => response.data),
+        enabled: bundleDetailDialog.open && !!bundleDetailDialog.bundleId,
+    });
+
+    const voidBundleMutation = useMutation({
+        mutationFn: ({ bundleId, reason_code, notes }) =>
+            api.post(`/crm/manual-payment-bundles/${bundleId}/void`, { reason_code, notes }).then((response) => response.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['bundle-detail', voidBundleDialog.bundleId] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setVoidBundleDialog({ open: false, bundleId: null, reasonCode: 'fraud_suspected', notes: '' });
+            setBundleDetailDialog({ open: false, bundleId: null });
+            toast.success('Bundle voided successfully. All child subscriptions deactivated.');
+        },
+        onError: (error) => {
+            const divergence = error?.response?.data?.errors?.divergence;
+            if (divergence && Array.isArray(divergence)) {
+                const divergentDeals = divergence.map((d) => typeof d === 'object' ? `Deal #${d.deal_id}: ${d.reason}` : String(d)).join('\n');
+                toast.error(`Cannot void: child subscriptions have diverged.\n${divergentDeals}`);
+            } else {
+                toast.error(error?.response?.data?.message || 'Failed to void bundle.');
+            }
+        },
     });
 
     const autoMatchMutation = useMutation({
@@ -2268,6 +2313,26 @@ export default function Payments() {
                                             </section>
                                         ) : null}
 
+                                        {diagnosticsPayment?.manual_payment_bundle_id ? (
+                                            <section className="rounded-xl border border-violet-200 bg-violet-50/40 p-4">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div>
+                                                        <h4 className="text-sm font-semibold text-violet-900">Shared Manual Payment Bundle</h4>
+                                                        <p className="mt-1 text-xs text-violet-700">
+                                                            This payment belongs to bundle #{diagnosticsPayment.manual_payment_bundle_id}. All payments in the bundle share the same base reference.
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setBundleDetailDialog({ open: true, bundleId: diagnosticsPayment.manual_payment_bundle_id })}
+                                                        className="whitespace-nowrap rounded-md border border-violet-300 bg-white px-3 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+                                                    >
+                                                        View bundle
+                                                    </button>
+                                                </div>
+                                            </section>
+                                        ) : null}
+
                                         {providerCheckEligible || providerStatusDisplay ? (
                                             <section className="rounded-xl border border-slate-200 bg-white p-4">
                                                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3131,6 +3196,222 @@ export default function Payments() {
                     queryClient.invalidateQueries({ queryKey: ['payments'] });
                 }}
             />
+
+            {bundleDetailDialog.open ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50" onClick={() => setBundleDetailDialog({ open: false, bundleId: null })}>
+                    <div
+                        className="relative mx-4 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/95 px-5 py-4 backdrop-blur">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <h3 className="text-base font-semibold text-slate-900">Bundle Detail</h3>
+                                    <p className="mt-0.5 text-xs text-slate-500">
+                                        Bundle #{bundleDetailDialog.bundleId}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setBundleDetailDialog({ open: false, bundleId: null })}
+                                    className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                                >
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="p-5">
+                            {bundleDetailLoading ? (
+                                <div className="animate-pulse space-y-3">
+                                    <div className="h-4 w-3/5 rounded bg-slate-200" />
+                                    <div className="h-20 rounded-lg bg-slate-100" />
+                                    <div className="h-32 rounded-lg bg-slate-100" />
+                                </div>
+                            ) : bundleDetailData?.bundle ? (
+                                <div className="space-y-4">
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            <span className="font-semibold text-slate-800">Reference:</span>{' '}
+                                            <span className="crm-mono">{bundleDetailData.bundle.reference_root}</span>
+                                        </p>
+                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            <span className="font-semibold text-slate-800">Status:</span>{' '}
+                                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${
+                                                bundleDetailData.bundle.status === 'committed' ? 'bg-emerald-100 text-emerald-700' :
+                                                bundleDetailData.bundle.status === 'voided' ? 'bg-rose-100 text-rose-700' :
+                                                bundleDetailData.bundle.status === 'compensation_failed' ? 'bg-amber-100 text-amber-700' :
+                                                'bg-slate-100 text-slate-600'
+                                            }`}>{bundleDetailData.bundle.status}</span>
+                                        </p>
+                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            <span className="font-semibold text-slate-800">Total paid:</span>{' '}
+                                            {formatCurrency(bundleDetailData.bundle.total_amount, bundleDetailData.bundle.currency || 'KES')}
+                                        </p>
+                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            <span className="font-semibold text-slate-800">Allocated:</span>{' '}
+                                            {formatCurrency(bundleDetailData.bundle.allocated_amount, bundleDetailData.bundle.currency || 'KES')}
+                                        </p>
+                                        {Number(bundleDetailData.bundle.unallocated_amount) > 0 ? (
+                                            <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                                                <span className="font-semibold">Unallocated:</span>{' '}
+                                                {formatCurrency(bundleDetailData.bundle.unallocated_amount, bundleDetailData.bundle.currency || 'KES')}
+                                            </p>
+                                        ) : null}
+                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            <span className="font-semibold text-slate-800">Audit:</span>{' '}
+                                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${
+                                                bundleDetailData.bundle.audit_state === 'resolved' ? 'bg-emerald-100 text-emerald-700' :
+                                                bundleDetailData.bundle.audit_state === 'voided' ? 'bg-rose-100 text-rose-700' :
+                                                'bg-amber-100 text-amber-700'
+                                            }`}>{bundleDetailData.bundle.audit_state?.replace(/_/g, ' ')}</span>
+                                        </p>
+                                        {bundleDetailData.bundle.created_by ? (
+                                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                                <span className="font-semibold text-slate-800">Created by:</span>{' '}
+                                                {bundleDetailData.bundle.created_by.name}
+                                            </p>
+                                        ) : null}
+                                    </div>
+
+                                    {bundleDetailData.bundle.reason ? (
+                                        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                            <span className="font-semibold text-slate-800">Reason:</span> {bundleDetailData.bundle.reason}
+                                        </p>
+                                    ) : null}
+
+                                    <div>
+                                        <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Child Payments ({bundleDetailData.bundle.payments?.length || 0})</h4>
+                                        <div className="space-y-1.5">
+                                            {(bundleDetailData.bundle.payments || []).map((p) => (
+                                                <div key={p.id} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
+                                                    <div className="min-w-0">
+                                                        <p className="crm-mono text-xs text-slate-700">{p.transaction_reference || `#${p.id}`}</p>
+                                                        <p className="text-[11px] text-slate-500">{p.client_name || `Client #${p.client_id || '?'}`}</p>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs font-medium text-slate-700">{formatCurrency(p.amount, bundleDetailData.bundle.currency || 'KES')}</span>
+                                                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${
+                                                            p.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                                                            p.status === 'failed' ? 'bg-rose-100 text-rose-700' :
+                                                            'bg-slate-100 text-slate-600'
+                                                        }`}>{p.status}</span>
+                                                        {p.resolution_code ? (
+                                                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${
+                                                                p.resolution_code === 'reversed' ? 'bg-rose-100 text-rose-700' :
+                                                                'bg-amber-100 text-amber-700'
+                                                            }`}>{p.resolution_code}</span>
+                                                        ) : null}
+                                                        {p.deal_status ? (
+                                                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${
+                                                                p.deal_status === 'active' ? 'bg-emerald-100 text-emerald-700' :
+                                                                p.deal_status === 'cancelled' ? 'bg-rose-100 text-rose-700' :
+                                                                'bg-slate-100 text-slate-600'
+                                                            }`}>sub: {p.deal_status}</span>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {bundleDetailData.divergence && bundleDetailData.divergence.length > 0 ? (
+                                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                            <h4 className="text-xs font-semibold text-amber-800">Divergence Detected</h4>
+                                            <p className="mt-1 text-xs text-amber-700">
+                                                Some child subscriptions have changed since bundle creation. Bundle void is blocked until these are resolved manually.
+                                            </p>
+                                            <ul className="mt-2 space-y-1">
+                                                {bundleDetailData.divergence.map((d, i) => (
+                                                    <li key={i} className="text-xs text-amber-700">
+                                                        <span className="crm-mono font-semibold">Deal #{d.deal_id}:</span> {d.reason}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    ) : null}
+
+                                    {user?.role === 'admin' && bundleDetailData.bundle.status !== 'voided' && (!bundleDetailData.divergence || bundleDetailData.divergence.length === 0) ? (
+                                        <div className="border-t border-slate-100 pt-4">
+                                            <button
+                                                type="button"
+                                                onClick={() => setVoidBundleDialog({
+                                                    open: true,
+                                                    bundleId: bundleDetailData.bundle.id,
+                                                    reasonCode: 'fraud_suspected',
+                                                    notes: '',
+                                                })}
+                                                className="w-full rounded-md border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                                            >
+                                                Void entire bundle
+                                            </button>
+                                            <p className="mt-2 text-center text-[11px] text-slate-500">
+                                                Voids all child payments, deactivates all linked subscriptions, and deactivates WordPress profiles. This action cannot be undone.
+                                            </p>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-slate-500">Bundle not found.</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
+            <ConfirmDialog
+                open={voidBundleDialog.open && !!voidBundleDialog.bundleId}
+                title="Void payment bundle"
+                message={`This will reverse all child payments, deactivate all linked subscriptions, deactivate WordPress profiles, and may mark clients as high risk. This cannot be undone.`}
+                confirmLabel="Void bundle"
+                variant="danger"
+                onCancel={() => setVoidBundleDialog({ open: false, bundleId: null, reasonCode: 'fraud_suspected', notes: '' })}
+                onConfirm={() => {
+                    if (voidBundleDialog.bundleId) {
+                        voidBundleMutation.mutate({
+                            bundleId: voidBundleDialog.bundleId,
+                            reason_code: voidBundleDialog.reasonCode,
+                            notes: voidBundleDialog.notes.trim(),
+                        });
+                    }
+                }}
+                confirmDisabled={voidBundleMutation.isPending || !voidBundleDialog.reasonCode}
+                isPending={voidBundleMutation.isPending}
+            >
+                <div className="space-y-3">
+                    <div>
+                        <label htmlFor="void-bundle-reason-code" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                        <select
+                            id="void-bundle-reason-code"
+                            value={voidBundleDialog.reasonCode}
+                            onChange={(event) => setVoidBundleDialog((current) => ({ ...current, reasonCode: event.target.value }))}
+                            className="crm-select"
+                        >
+                            <option value="fraud_suspected">Fraud suspected</option>
+                            <option value="payment_reversed">Payment reversed</option>
+                            <option value="duplicate_entry">Duplicate entry</option>
+                            <option value="invalid_reference">Invalid reference</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label htmlFor="void-bundle-notes" className="mb-1 block text-sm font-medium text-slate-700">Notes</label>
+                        <textarea
+                            id="void-bundle-notes"
+                            rows={3}
+                            value={voidBundleDialog.notes}
+                            onChange={(event) => setVoidBundleDialog((current) => ({ ...current, notes: event.target.value }))}
+                            className="crm-input"
+                            placeholder="Provide additional context for the void action."
+                        />
+                    </div>
+                    <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                        {voidBundleDialog.reasonCode === 'fraud_suspected' || voidBundleDialog.reasonCode === 'payment_reversed'
+                            ? 'All clients in this bundle will be flagged as high risk.'
+                            : 'Client risk flags will not be changed for this reason code.'}
+                    </p>
+                </div>
+            </ConfirmDialog>
         </div>
     );
 }

@@ -263,6 +263,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         // Shared manual payment bundles
         Route::post('/manual-payment-bundles/preview', [ManualPaymentBundleController::class, 'preview']);
         Route::post('/manual-payment-bundles/commit', [ManualPaymentBundleController::class, 'commit']);
+        Route::get('/manual-payment-bundles/{bundle}', [ManualPaymentBundleController::class, 'show']);
+        Route::post('/manual-payment-bundles/{bundle}/void', [ManualPaymentBundleController::class, 'void'])->middleware('role:admin');
     });
 
     // Settings

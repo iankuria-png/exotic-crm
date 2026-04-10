@@ -9,6 +9,9 @@ use App\Models\ManualPaymentBundle;
 use App\Models\Payment;
 use App\Models\TimelineEvent;
 use App\Support\CrmAuditAction;
+use App\Support\DeactivationRequest;
+use App\Support\DealDeactivationReason;
+use App\Support\LinkedPaymentAction;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -21,7 +24,8 @@ class ManualPaymentBundleService
     public function __construct(
         private readonly DealPaymentService $dealPaymentService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly SubscriptionDeactivationService $subscriptionDeactivationService
     ) {
     }
 
@@ -315,6 +319,334 @@ class ManualPaymentBundleService
             'found' => $bundles->count(),
             'swept' => $swept,
         ];
+    }
+
+    /**
+     * Check bundle children for material divergence that would prevent a clean void.
+     *
+     * @return list<array{deal_id: int, reason: string}>
+     */
+    public function detectDivergence(ManualPaymentBundle $bundle): array
+    {
+        $bundle->loadMissing(['payments']);
+        $divergent = [];
+
+        foreach ($bundle->payments as $payment) {
+            $dealId = (int) $payment->deal_id;
+            if ($dealId <= 0) {
+                continue;
+            }
+
+            $deal = Deal::query()->find($dealId);
+            if (!$deal) {
+                $divergent[] = [
+                    'deal_id' => $dealId,
+                    'reason' => 'Deal no longer exists.',
+                ];
+                continue;
+            }
+
+            // Renewed: a newer deal references this deal's client + was created after the bundle
+            $renewed = Deal::query()
+                ->where('client_id', (int) $deal->client_id)
+                ->where('origin', 'manual_payment_bundle')
+                ->where('id', '>', $deal->id)
+                ->where('created_at', '>', $bundle->created_at)
+                ->exists();
+
+            if (!$renewed) {
+                $renewed = Deal::query()
+                    ->where('client_id', (int) $deal->client_id)
+                    ->where('status', 'active')
+                    ->where('id', '!=', $deal->id)
+                    ->where('activated_at', '>', $bundle->created_at)
+                    ->exists();
+            }
+
+            if ($renewed) {
+                $divergent[] = [
+                    'deal_id' => $dealId,
+                    'reason' => 'Deal has been renewed since bundle creation.',
+                ];
+                continue;
+            }
+
+            // Extended: expires_at moved forward after bundle creation
+            if ($deal->expires_at && $deal->activated_at && $bundle->created_at) {
+                $originalExpiry = Carbon::parse($deal->activated_at)->addDays(
+                    $this->resolveOriginalDurationDays($payment)
+                );
+                $currentExpiry = Carbon::parse($deal->expires_at);
+                if ($currentExpiry->gt($originalExpiry->addMinutes(5))) {
+                    $divergent[] = [
+                        'deal_id' => $dealId,
+                        'reason' => 'Deal has been extended since bundle creation.',
+                    ];
+                    continue;
+                }
+            }
+
+            // Already independently deactivated for a different reason
+            if ($deal->status === 'cancelled') {
+                $cancelledByBundle = $deal->cancelled_payment_id
+                    && $bundle->payments->contains('id', $deal->cancelled_payment_id);
+                if (!$cancelledByBundle) {
+                    $divergent[] = [
+                        'deal_id' => $dealId,
+                        'reason' => "Deal was already deactivated (reason: {$deal->cancellation_reason_code}).",
+                    ];
+                    continue;
+                }
+            }
+
+            // Re-linked to a different payment
+            if ($deal->payment_id && (int) $deal->payment_id !== (int) $payment->id) {
+                $divergent[] = [
+                    'deal_id' => $dealId,
+                    'reason' => 'Deal is now linked to a different payment.',
+                ];
+            }
+        }
+
+        return $divergent;
+    }
+
+    /**
+     * Void a committed bundle: deactivate all child deals + mark child payments reversed/invalid.
+     *
+     * @param  array{reason_code: string, notes: string}  $params
+     * @return array<string, mixed>
+     */
+    public function voidBundle(ManualPaymentBundle $bundle, array $params, int $actorId): array
+    {
+        $bundle->loadMissing(['payments.deal.client.platform', 'payments.client']);
+
+        $allowedStatuses = [
+            ManualPaymentBundle::STATUS_COMMITTED,
+            ManualPaymentBundle::STATUS_COMPENSATION_FAILED,
+        ];
+
+        if (!in_array($bundle->status, $allowedStatuses, true)) {
+            throw ValidationException::withMessages([
+                'bundle' => "Bundle cannot be voided from status '{$bundle->status}'.",
+            ]);
+        }
+
+        $reasonCode = DealDeactivationReason::tryFrom((string) ($params['reason_code'] ?? ''));
+        if (!$reasonCode) {
+            throw ValidationException::withMessages([
+                'reason_code' => 'A valid reason code is required.',
+            ]);
+        }
+
+        $notes = trim((string) ($params['notes'] ?? ''));
+
+        $divergent = $this->detectDivergence($bundle);
+        if ($divergent !== []) {
+            throw ValidationException::withMessages([
+                'divergence' => $divergent,
+            ]);
+        }
+
+        $deactivationRequest = new DeactivationRequest(
+            reasonCode: $reasonCode,
+            reasonNotes: $notes ?: "Bundle void: {$bundle->reference_root}",
+            linkedPaymentAction: $this->resolveVoidPaymentAction($reasonCode)
+        );
+
+        $beforeState = [
+            'status' => $bundle->status,
+            'audit_state' => $bundle->audit_state,
+        ];
+
+        DB::transaction(function () use ($bundle, $deactivationRequest, $actorId) {
+            foreach ($bundle->payments as $payment) {
+                $deal = $payment->deal;
+
+                if ($deal && in_array($deal->status, ['active', 'pending', 'awaiting_payment', 'paid'], true)) {
+                    $this->subscriptionDeactivationService->deactivateDeal(
+                        $deal,
+                        $deactivationRequest,
+                        $actorId
+                    );
+                } elseif ($deal && $deal->status !== 'cancelled') {
+                    // Deal in non-active state (expired, etc.) — mark cancelled directly
+                    $deal->forceFill([
+                        'status' => 'cancelled',
+                        'cancellation_reason_code' => $deactivationRequest->reasonCode->value,
+                        'cancellation_notes' => $deactivationRequest->reasonNotes,
+                        'cancelled_payment_id' => (int) $payment->id,
+                    ])->save();
+                }
+
+                // Ensure payment resolution is applied even if deal was already cancelled
+                $this->applyVoidPaymentResolution($payment, $deactivationRequest, $actorId);
+            }
+
+            $bundle->forceFill([
+                'status' => ManualPaymentBundle::STATUS_VOIDED,
+                'audit_state' => ManualPaymentBundle::AUDIT_VOIDED,
+            ])->save();
+
+            // Apply risk flags to all unique clients if reason warrants it
+            if ($deactivationRequest->shouldFlagClientHighRisk()) {
+                $this->applyBundleWideRiskFlags($bundle, $deactivationRequest, $actorId);
+            }
+
+            // Write a timeline event on each child payment to record the void
+            foreach ($bundle->payments as $voidedPayment) {
+                TimelineEvent::create([
+                    'platform_id' => (int) $bundle->platform_id,
+                    'entity_type' => 'payment',
+                    'entity_id' => (int) $voidedPayment->id,
+                    'event_type' => 'manual_payment_bundle_voided',
+                    'actor_id' => $actorId,
+                    'content' => [
+                        'bundle_id' => (int) $bundle->id,
+                        'reference_root' => $bundle->reference_root,
+                        'reason_code' => $deactivationRequest->reasonCode->value,
+                        'reason_notes' => $deactivationRequest->reasonNotes,
+                        'payment_count' => $bundle->payments->count(),
+                    ],
+                    'created_at' => now(),
+                ]);
+            }
+        });
+
+        $this->auditService->record([
+            'platform_id' => (int) $bundle->platform_id,
+            'actor_id' => $actorId,
+            'action' => CrmAuditAction::MANUAL_PAYMENT_BUNDLE_VOID,
+            'entity_type' => 'manual_payment_bundle',
+            'entity_id' => (int) $bundle->id,
+            'before_state' => $beforeState,
+            'after_state' => [
+                'status' => ManualPaymentBundle::STATUS_VOIDED,
+                'audit_state' => ManualPaymentBundle::AUDIT_VOIDED,
+                'reason_code' => $deactivationRequest->reasonCode->value,
+                'reason_notes' => $deactivationRequest->reasonNotes,
+            ],
+            'reason' => $deactivationRequest->auditReason(),
+        ]);
+
+        return $this->serializeCommittedBundle(
+            $bundle->fresh(['payments.client', 'payments.deal']),
+            false
+        );
+    }
+
+    private function resolveVoidPaymentAction(DealDeactivationReason $reason): LinkedPaymentAction
+    {
+        return match ($reason) {
+            DealDeactivationReason::PAYMENT_REVERSED => LinkedPaymentAction::REVERSE,
+            DealDeactivationReason::INVALID_REFERENCE => LinkedPaymentAction::INVALIDATE,
+            default => LinkedPaymentAction::REVERSE,
+        };
+    }
+
+    private function applyVoidPaymentResolution(Payment $payment, DeactivationRequest $request, ?int $actorId): void
+    {
+        $action = $request->resolvedLinkedPaymentAction();
+
+        if ($action === LinkedPaymentAction::NONE) {
+            return;
+        }
+
+        // Skip if already resolved
+        if ($payment->resolution_code !== null) {
+            return;
+        }
+
+        $meta = [
+            'bundle_void' => true,
+            'reason_code' => $request->reasonCode->value,
+            'reason_notes' => $request->reasonNotes,
+            'actor_id' => $actorId,
+            'applied_at' => now()->toDateTimeString(),
+            'previous_status' => (string) $payment->status,
+        ];
+
+        if ($action === LinkedPaymentAction::REVERSE) {
+            $payment->forceFill([
+                'resolution_code' => Payment::RESOLUTION_REVERSED,
+                'resolution_meta_json' => $meta,
+            ])->save();
+        } elseif ($action === LinkedPaymentAction::INVALIDATE) {
+            $payment->forceFill([
+                'status' => 'failed',
+                'resolution_code' => Payment::RESOLUTION_INVALID_REFERENCE,
+                'resolution_meta_json' => $meta,
+                'failure_reason' => $request->reasonNotes ?: 'Invalid reference (bundle void).',
+            ])->save();
+        }
+    }
+
+    private function applyBundleWideRiskFlags(ManualPaymentBundle $bundle, DeactivationRequest $request, int $actorId): void
+    {
+        $clientIds = $bundle->payments
+            ->pluck('client_id')
+            ->filter(fn ($id) => (int) $id > 0)
+            ->unique()
+            ->values();
+
+        foreach ($clientIds as $clientId) {
+            $client = \App\Models\Client::query()->find((int) $clientId);
+            if (!$client) {
+                continue;
+            }
+
+            if ((bool) $client->is_high_risk) {
+                TimelineEvent::create([
+                    'platform_id' => (int) $client->platform_id,
+                    'entity_type' => 'client',
+                    'entity_id' => (int) $client->id,
+                    'event_type' => 'client_risk_reaffirmed',
+                    'actor_id' => $actorId,
+                    'content' => [
+                        'bundle_id' => (int) $bundle->id,
+                        'reason_code' => $request->reasonCode->value,
+                        'original_risk_reason_code' => $client->risk_reason_code,
+                        'original_risk_marked_at' => optional($client->risk_marked_at)->toDateTimeString(),
+                    ],
+                    'created_at' => now(),
+                ]);
+                continue;
+            }
+
+            $client->forceFill([
+                'is_high_risk' => true,
+                'risk_reason_code' => $request->reasonCode->value,
+                'risk_marked_at' => now(),
+                'risk_marked_by' => $actorId,
+            ])->save();
+
+            TimelineEvent::create([
+                'platform_id' => (int) $client->platform_id,
+                'entity_type' => 'client',
+                'entity_id' => (int) $client->id,
+                'event_type' => 'client_risk_marked',
+                'actor_id' => $actorId,
+                'content' => [
+                    'bundle_id' => (int) $bundle->id,
+                    'reason_code' => $request->reasonCode->value,
+                    'reason_notes' => $request->reasonNotes,
+                ],
+                'created_at' => now(),
+            ]);
+        }
+    }
+
+    private function resolveOriginalDurationDays(Payment $payment): int
+    {
+        $durationDays = (int) data_get($payment->payment_data, 'duration_days', 0);
+        if ($durationDays > 0) {
+            return $durationDays;
+        }
+
+        $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
+        $durationDays = (int) data_get($rawPayload, 'duration_days', 0);
+
+        return $durationDays > 0 ? $durationDays : 30;
     }
 
     public function normalizeReferenceRoot(string $reference): string
