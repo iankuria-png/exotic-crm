@@ -168,6 +168,8 @@ export default function Deals() {
         items: [],
         preview: null,
         idempotencyKey: createBundleIdempotencyKey(),
+        subscriptionSearchInput: '',
+        subscriptionSearch: '',
     });
 
     const [mpesaPlanSelections, setMpesaPlanSelections] = useState({});
@@ -544,6 +546,26 @@ export default function Deals() {
             }
             toast.error(error?.response?.data?.message || 'Shared payment commit failed.');
         },
+    });
+
+    // Live subscription search inside the shared bundle modal step 1
+    const { data: bundleSubscriptionSearchResults, isFetching: bundleSubscriptionSearchLoading } = useQuery({
+        queryKey: ['bundle-subscription-search', sharedBundleDialog.platformId, sharedBundleDialog.subscriptionSearch],
+        queryFn: () =>
+            api.get('/crm/deals', {
+                params: {
+                    page: 1,
+                    per_page: 10,
+                    search: sharedBundleDialog.subscriptionSearch,
+                    platform_id: Number(sharedBundleDialog.platformId),
+                    status: 'pending,awaiting_payment,expired,cancelled',
+                },
+            }).then((response) => response.data),
+        enabled: sharedBundleDialog.open
+            && sharedBundleDialog.step === 1
+            && !!sharedBundleDialog.platformId
+            && sharedBundleDialog.subscriptionSearch.trim().length >= 2,
+        staleTime: 10_000,
     });
 
     const handleSearch = (event) => {
@@ -1324,6 +1346,37 @@ export default function Deals() {
                         </button>
                     ) : null}
                 </div>
+
+                {platformFilter && !isMpesaBucket ? (
+                    <div className="mt-3 flex items-center justify-end border-t border-slate-100 pt-3">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setSharedBundleDialog({
+                                    open: true,
+                                    step: 1,
+                                    selection: [],
+                                    platformId: String(platformFilter),
+                                    referenceRoot: '',
+                                    totalAmount: '',
+                                    reason: 'Shared manual payment from subscriptions page',
+                                    discountPin: '',
+                                    items: [],
+                                    preview: null,
+                                    idempotencyKey: createBundleIdempotencyKey(),
+                                    subscriptionSearchInput: '',
+                                    subscriptionSearch: '',
+                                });
+                            }}
+                            className="flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                        >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            Record shared manual payment
+                        </button>
+                    </div>
+                ) : null}
             </section>
 
             {isMpesaBucket ? (
@@ -1881,25 +1934,132 @@ export default function Deals() {
                                         </div>
                                     </div>
 
-                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                                        <p className="text-sm font-semibold text-slate-800">Selected subscriptions</p>
-                                        <div className="mt-3 space-y-2">
-                                            {sharedBundleDialog.items.map((item) => (
-                                                <div key={item.deal_id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <div>
-                                                            <p className="text-sm font-semibold text-slate-900">{item.client_name}</p>
-                                                            <p className="text-xs text-slate-500">
+                                    <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-800">
+                                                Add subscriptions
+                                                {sharedBundleDialog.items.length > 0 ? (
+                                                    <span className="ml-1.5 inline-flex items-center rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
+                                                        {sharedBundleDialog.items.length}
+                                                    </span>
+                                                ) : null}
+                                            </p>
+                                            <p className="mt-0.5 text-[11px] text-slate-500">Search by client name or phone to add subscriptions to this bundle.</p>
+                                        </div>
+
+                                        {/* Search input */}
+                                        <div className="relative">
+                                            <input
+                                                type="text"
+                                                value={sharedBundleDialog.subscriptionSearchInput}
+                                                onChange={(event) => {
+                                                    const value = event.target.value;
+                                                    setSharedBundleDialog((current) => ({
+                                                        ...current,
+                                                        subscriptionSearchInput: value,
+                                                        subscriptionSearch: value.trim().length >= 2 ? value.trim() : '',
+                                                    }));
+                                                }}
+                                                placeholder="Search client name or phone..."
+                                                className="crm-input pr-8 text-sm"
+                                            />
+                                            {bundleSubscriptionSearchLoading ? (
+                                                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">
+                                                    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                                    </svg>
+                                                </span>
+                                            ) : (
+                                                <svg className="absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                                </svg>
+                                            )}
+                                        </div>
+
+                                        {/* Search results dropdown */}
+                                        {sharedBundleDialog.subscriptionSearch.length >= 2 && bundleSubscriptionSearchResults?.targets?.data?.length > 0 ? (
+                                            <div className="max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-sm">
+                                                {bundleSubscriptionSearchResults.targets.data
+                                                    .filter((row) => !sharedBundleDialog.items.some((item) => item.deal_id === row.id))
+                                                    .map((row) => (
+                                                        <button
+                                                            key={row.id}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                const newItem = buildSharedBundleItems([row])[0];
+                                                                setSharedBundleDialog((current) => ({
+                                                                    ...current,
+                                                                    items: [...current.items, newItem],
+                                                                    totalAmount: String(
+                                                                        [...current.items, newItem].reduce((sum, item) => sum + toBundleNumber(item.allocated_amount), 0)
+                                                                    ),
+                                                                    subscriptionSearchInput: '',
+                                                                    subscriptionSearch: '',
+                                                                    preview: null,
+                                                                }));
+                                                            }}
+                                                            className="flex w-full items-center justify-between px-3 py-2.5 text-left transition hover:bg-teal-50 focus-visible:bg-teal-50 focus-visible:outline-none"
+                                                        >
+                                                            <div className="min-w-0">
+                                                                <p className="truncate text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</p>
+                                                                <p className="truncate text-xs text-slate-500">{row.product?.name || row.plan_type} • {row.status}</p>
+                                                            </div>
+                                                            <div className="ml-3 flex flex-shrink-0 items-center gap-2">
+                                                                <span className="text-sm font-medium text-slate-700">{formatCurrency(row.amount, selectedPlatformCurrency || 'KES')}</span>
+                                                                <svg className="h-4 w-4 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                                                </svg>
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                            </div>
+                                        ) : sharedBundleDialog.subscriptionSearch.length >= 2 && !bundleSubscriptionSearchLoading && bundleSubscriptionSearchResults?.targets?.data?.length === 0 ? (
+                                            <p className="rounded-md border border-slate-100 bg-white px-3 py-2 text-xs text-slate-400">No eligible subscriptions found for that search.</p>
+                                        ) : null}
+
+                                        {/* Selected items */}
+                                        {sharedBundleDialog.items.length > 0 ? (
+                                            <div className="space-y-1.5">
+                                                {sharedBundleDialog.items.map((item) => (
+                                                    <div key={item.deal_id} className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                        <div className="min-w-0">
+                                                            <p className="truncate text-sm font-semibold text-slate-900">{item.client_name}</p>
+                                                            <p className="truncate text-xs text-slate-500">
                                                                 {item.product_name} • {item.status}
                                                             </p>
                                                         </div>
-                                                        <span className="text-sm font-semibold text-slate-700">
-                                                            {formatCurrency(item.allocated_amount, selectedPlatformCurrency || 'KES')}
-                                                        </span>
+                                                        <div className="flex flex-shrink-0 items-center gap-2">
+                                                            <span className="text-sm font-semibold text-slate-700">
+                                                                {formatCurrency(item.allocated_amount, selectedPlatformCurrency || 'KES')}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSharedBundleDialog((current) => {
+                                                                    const updated = current.items.filter((i) => i.deal_id !== item.deal_id);
+                                                                    return {
+                                                                        ...current,
+                                                                        items: updated,
+                                                                        totalAmount: String(updated.reduce((sum, i) => sum + toBundleNumber(i.allocated_amount), 0)),
+                                                                        preview: null,
+                                                                    };
+                                                                })}
+                                                                className="rounded p-0.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-rose-400"
+                                                                aria-label={`Remove ${item.client_name}`}
+                                                            >
+                                                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                                </svg>
+                                                            </button>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            ))}
-                                        </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+                                                No subscriptions added yet. Search above to add clients.
+                                            </p>
+                                        )}
                                     </div>
                                 </div>
                             ) : null}
