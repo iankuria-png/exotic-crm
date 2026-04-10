@@ -10,6 +10,7 @@ import SupportBoardChat from '../components/SupportBoardChat';
 import { useToast } from '../components/ToastProvider';
 import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../utils/billingMethodPolicy';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
+import { DEAL_DEACTIVATION_REASON_OPTIONS, LINKED_PAYMENT_ACTION_OPTIONS, defaultLinkedPaymentAction } from '../utils/deactivationOptions';
 import ClientHealthSection from '../components/ClientHealthSection';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 
@@ -419,7 +420,9 @@ export default function ClientDetail() {
     const [updatePhoneValue, setUpdatePhoneValue] = useState('');
     const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
     const [dealActionDialog, setDealActionDialog] = useState({ type: null, deal: null });
-    const [deactivateReason, setDeactivateReason] = useState('Deactivated from client profile');
+    const [deactivationReasonCode, setDeactivationReasonCode] = useState('other');
+    const [deactivationReasonNotes, setDeactivationReasonNotes] = useState('Deactivated from client profile');
+    const [deactivationLinkedPaymentAction, setDeactivationLinkedPaymentAction] = useState('none');
     const [extendDays, setExtendDays] = useState('7');
     const [extendReason, setExtendReason] = useState('Extended from client profile');
     const [renewDays, setRenewDays] = useState('30');
@@ -691,9 +694,11 @@ export default function ClientDetail() {
     });
 
     const deactivateDealMutation = useMutation({
-        mutationFn: ({ dealId, deactivateReason: reason, shouldNotify, templateId, message }) =>
+        mutationFn: ({ dealId, reasonCode, reasonNotes, linkedPaymentAction, shouldNotify, templateId, message }) =>
             api.post(`/crm/deals/${dealId}/deactivate`, {
-                reason,
+                reason_code: reasonCode,
+                reason_notes: reasonNotes,
+                linked_payment_action: linkedPaymentAction,
                 notify_client: Boolean(shouldNotify),
                 notification_template_id: templateId || null,
                 notification_message: message || null,
@@ -702,7 +707,9 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             setDealActionDialog({ type: null, deal: null });
-            setDeactivateReason('Deactivated from client profile');
+            setDeactivationReasonCode('other');
+            setDeactivationReasonNotes('Deactivated from client profile');
+            setDeactivationLinkedPaymentAction('none');
             setNotifyClient(false);
             setNotificationTemplateId('');
             setNotificationMessage('');
@@ -1256,7 +1263,9 @@ export default function ClientDetail() {
         setDealDiscountPercentage('');
         setDealDiscountPin('');
         if (type === 'deactivate') {
-            setDeactivateReason('Deactivated from client profile');
+            setDeactivationReasonCode('other');
+            setDeactivationReasonNotes('Deactivated from client profile');
+            setDeactivationLinkedPaymentAction('none');
             setNotifyClient(false);
             setNotificationTemplateId('');
             setNotificationMessage('');
@@ -1984,8 +1993,43 @@ export default function ClientDetail() {
 
                             {dealActionDialog.type === 'deactivate' ? (
                                 <>
-                                    <label className="block text-sm font-medium text-slate-700">Reason</label>
-                                    <textarea rows={3} value={deactivateReason} onChange={(e) => setDeactivateReason(e.target.value)} className="crm-input" />
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-reason-code">Reason</label>
+                                    <select
+                                        id="deactivate-reason-code"
+                                        value={deactivationReasonCode}
+                                        onChange={(e) => {
+                                            setDeactivationReasonCode(e.target.value);
+                                            setDeactivationLinkedPaymentAction(defaultLinkedPaymentAction(e.target.value));
+                                        }}
+                                        className="crm-select"
+                                    >
+                                        {DEAL_DEACTIVATION_REASON_OPTIONS.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-linked-payment-action">Linked payment action</label>
+                                    <select
+                                        id="deactivate-linked-payment-action"
+                                        value={deactivationLinkedPaymentAction}
+                                        onChange={(e) => setDeactivationLinkedPaymentAction(e.target.value)}
+                                        className="crm-select"
+                                    >
+                                        {LINKED_PAYMENT_ACTION_OPTIONS.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+
+                                    <label className="block text-sm font-medium text-slate-700" htmlFor="deactivate-reason-notes">Notes</label>
+                                    <textarea
+                                        id="deactivate-reason-notes"
+                                        rows={3}
+                                        value={deactivationReasonNotes}
+                                        onChange={(e) => setDeactivationReasonNotes(e.target.value)}
+                                        className="crm-input"
+                                        placeholder="Explain why this subscription is being deactivated."
+                                    />
+
                                     <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
                                         <label className="flex items-center gap-2 text-sm text-slate-700">
                                             <input type="checkbox" checked={notifyClient} onChange={(e) => setNotifyClient(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200" />
@@ -2069,10 +2113,12 @@ export default function ClientDetail() {
                             {dealActionDialog.type === 'deactivate' ? (
                                 <button
                                     type="button"
-                                    disabled={!deactivateReason.trim() || deactivateDealMutation.isPending}
+                                    disabled={!deactivationReasonCode || deactivateDealMutation.isPending}
                                     onClick={() => deactivateDealMutation.mutate({
                                         dealId: dealActionDialog.deal.id,
-                                        deactivateReason,
+                                        reasonCode: deactivationReasonCode,
+                                        reasonNotes: deactivationReasonNotes,
+                                        linkedPaymentAction: deactivationLinkedPaymentAction,
                                         shouldNotify: notifyClient,
                                         templateId: notificationTemplateId,
                                         message: notificationMessage,

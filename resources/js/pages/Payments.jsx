@@ -165,6 +165,7 @@ function renderPaymentStatusBadges(payment) {
     const customLabel = sandboxStatusLabel(payment);
     const testBadge = paymentTestBadge(payment);
     const isBundlePayment = Boolean(payment?.manual_payment_bundle_id);
+    const resolutionBadge = paymentResolutionBadge(payment?.resolution_code);
 
     return (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -173,6 +174,11 @@ function renderPaymentStatusBadges(payment) {
             ) : (
                 <StatusBadge status={status} label={customLabel} />
             )}
+            {resolutionBadge ? (
+                <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${resolutionBadge.className}`}>
+                    {resolutionBadge.label}
+                </span>
+            ) : null}
             {testBadge ? <StatusBadge status={testBadge.status} label={testBadge.label} tone={testBadge.tone} /> : null}
             {isExplicitTestPayment(payment) ? (
                 <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-300">
