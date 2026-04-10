@@ -52,6 +52,9 @@ final class CrmAuditAction
     public const PAYMENT_IMPORT_PREVIEW = 'payment_import_preview';
     public const PAYMENT_IMPORT_COMMIT = 'payment_import_commit';
     public const PAYMENT_REVIEW_STATE_UPDATE = 'payment_review_state_update';
+    public const MANUAL_PAYMENT_BUNDLE_PREVIEW = 'manual_payment_bundle_preview';
+    public const MANUAL_PAYMENT_BUNDLE_COMMIT = 'manual_payment_bundle_commit';
+    public const MANUAL_PAYMENT_BUNDLE_COMPENSATION_FAILED = 'manual_payment_bundle_compensation_failed';
     public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
     public const CLIENT_SUPPORT_BOARD_PROFILE_SYNC = 'client_support_board_profile_sync';
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';

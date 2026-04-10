@@ -503,6 +503,7 @@ export default function Payments() {
     const toast = useToast();
     const { user, isLoading: authLoading } = useAuth();
     const canViewTests = user?.role === 'admin';
+    const canManageBundleFinanceReview = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
     const [search, setSearch] = useState('');
@@ -1506,7 +1507,8 @@ export default function Payments() {
                 const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id && !testRow;
                 const isLowConfidence = row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review';
                 const isManualReview = row.reconciliation_state === 'manual_review';
-                const manualAction = manualSubmissionAction(row);
+                const isBundleReviewRestricted = Boolean(row.manual_payment_bundle_id) && !canManageBundleFinanceReview;
+                const manualAction = isBundleReviewRestricted ? null : manualSubmissionAction(row);
 
                 let primary = null;
                 if (manualAction?.key === 'manual_approve') {
@@ -1527,7 +1529,7 @@ export default function Payments() {
                             reason: 'Manual payment verified from payment queue',
                         }),
                     };
-                } else if (isManualReview) {
+                } else if (isManualReview && !isBundleReviewRestricted) {
                     primary = { label: 'Resolve', variant: 'success', onClick: () => reviewStateMutation.mutate({ paymentId: row.id, state: 'resolved', reason: 'Manual review resolved from payment queue' }) };
                 } else if (isFailed) {
                     primary = { label: 'Retry STK', variant: 'warning', onClick: () => setRetryStkDialog({ open: true, payment: row, reason: 'Retry STK from payment queue' }) };
@@ -1550,7 +1552,7 @@ export default function Payments() {
                 }
 
                 const overflow = [
-                    isManualSubmissionPayment(row) && isManualReview && {
+                    isManualSubmissionPayment(row) && isManualReview && !isBundleReviewRestricted && {
                         key: 'manual-reject',
                         label: 'Reject',
                         onClick: () => setManualRejectDialog({
@@ -2128,7 +2130,7 @@ export default function Payments() {
                                                                 View proof
                                                             </button>
                                                         ) : null}
-                                                        {manualSubmissionActionState?.key === 'manual_approve' ? (
+                                                        {manualSubmissionActionState?.key === 'manual_approve' && (!diagnosticsPayment?.manual_payment_bundle_id || canManageBundleFinanceReview) ? (
                                                             <button
                                                                 type="button"
                                                                 onClick={() => manualApproveMutation.mutate({
@@ -2141,7 +2143,7 @@ export default function Payments() {
                                                                 {manualApproveMutation.isPending ? 'Approving…' : 'Approve & activate'}
                                                             </button>
                                                         ) : null}
-                                                        {manualSubmissionActionState?.key === 'manual_verify' ? (
+                                                        {manualSubmissionActionState?.key === 'manual_verify' && (!diagnosticsPayment?.manual_payment_bundle_id || canManageBundleFinanceReview) ? (
                                                             <button
                                                                 type="button"
                                                                 onClick={() => manualVerifyMutation.mutate({
@@ -2154,7 +2156,7 @@ export default function Payments() {
                                                                 {manualVerifyMutation.isPending ? 'Verifying…' : 'Mark verified'}
                                                             </button>
                                                         ) : null}
-                                                        {diagnosticsPayment?.reconciliation_state === 'manual_review' ? (
+                                                        {diagnosticsPayment?.reconciliation_state === 'manual_review' && (!diagnosticsPayment?.manual_payment_bundle_id || canManageBundleFinanceReview) ? (
                                                             <button
                                                                 type="button"
                                                                 onClick={() => setManualRejectDialog({

@@ -17,6 +17,7 @@ use App\Services\DealPaymentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\SubscriptionDeactivationService;
+use App\Services\ManualPaymentBundleService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\DeactivationRequest;
@@ -37,6 +38,7 @@ class DealController extends Controller
         private readonly DealPaymentService $dealPaymentService,
         private readonly NotificationService $notificationService,
         private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
+        private readonly ManualPaymentBundleService $manualPaymentBundleService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly WalletSettingsService $walletSettingsService
     ) {
@@ -237,6 +239,9 @@ class DealController extends Controller
         $paymentMethod = (string) $validated['payment_method'];
         if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'activation', $paymentMethod)) {
             return $methodGuard;
+        }
+        if ($referenceGuard = $this->referenceRootGuardResponse((int) $client->platform_id, $paymentMethod, $validated['payment_reference'] ?? null)) {
+            return $referenceGuard;
         }
         $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
         if ($discountGuard = $this->discountPermissionResponse(
@@ -640,6 +645,9 @@ class DealController extends Controller
         if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'renewal', $paymentMethod)) {
             return $methodGuard;
         }
+        if ($referenceGuard = $this->referenceRootGuardResponse((int) $client->platform_id, $paymentMethod, $validated['payment_reference'] ?? null)) {
+            return $referenceGuard;
+        }
         $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
         if ($discountGuard = $this->discountPermissionResponse(
             $request,
@@ -829,6 +837,9 @@ class DealController extends Controller
         $paymentMethod = (string) $validated['payment_method'];
         if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'renewal', $paymentMethod)) {
             return $methodGuard;
+        }
+        if ($referenceGuard = $this->referenceRootGuardResponse((int) $client->platform_id, $paymentMethod, $validated['payment_reference'] ?? null)) {
+            return $referenceGuard;
         }
         $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
         if ($discountGuard = $this->discountPermissionResponse(
@@ -1270,6 +1281,34 @@ class DealController extends Controller
             'allowed_methods' => $allowedMethods,
             'policy' => $policy,
         ], 422);
+    }
+
+    private function referenceRootGuardResponse(
+        int $platformId,
+        string $paymentMethod,
+        ?string $paymentReference = null
+    ): ?\Illuminate\Http\JsonResponse {
+        if (strtolower(trim($paymentMethod)) !== 'manual') {
+            return null;
+        }
+
+        $reference = trim((string) $paymentReference);
+        if ($reference === '') {
+            return null;
+        }
+
+        $conflict = $this->manualPaymentBundleService->findReferenceConflict($platformId, $reference);
+        if (!$conflict) {
+            return null;
+        }
+
+        return response()->json([
+            'message' => 'This manual reference root is already in use. Open the shared manual payment flow instead.',
+            'reference_root' => $conflict['reference_root'] ?? null,
+            'existing_bundle_id' => $conflict['existing_bundle_id'] ?? null,
+            'existing_payment_id' => $conflict['existing_payment_id'] ?? null,
+            'status' => $conflict['status'] ?? null,
+        ], 409);
     }
 
     private function normalizedDiscountPercentage(mixed $value): ?float

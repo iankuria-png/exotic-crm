@@ -29,6 +29,7 @@ const LINKED_PAYMENT_ACTION_OPTIONS = [
     { value: 'reverse', label: 'Mark payment reversed' },
     { value: 'invalidate', label: 'Invalidate payment' },
 ];
+const SHARED_BUNDLE_ELIGIBLE_STATUSES = new Set(['pending', 'awaiting_payment', 'expired', 'cancelled']);
 
 function formatCurrency(amount, currency = 'KES') {
     if (amount === null || amount === undefined || amount === '') {
@@ -68,6 +69,31 @@ function formatReasonLabel(value) {
     return String(value || '')
         .replaceAll('_', ' ')
         .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function createBundleIdempotencyKey() {
+    if (typeof window !== 'undefined' && window.crypto?.randomUUID) {
+        return window.crypto.randomUUID();
+    }
+
+    return `bundle-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function toBundleNumber(value) {
+    const amount = Number(value || 0);
+    return Number.isFinite(amount) ? amount : 0;
+}
+
+function buildSharedBundleItems(selection) {
+    return selection.map((row) => ({
+        deal_id: row.id,
+        client_id: row.client?.id || row.client_id || null,
+        client_name: row.client?.name || 'Unknown client',
+        status: row.status,
+        product_name: row.product?.name || row.plan_type || 'Subscription',
+        duration: row.duration || 'monthly',
+        allocated_amount: String(toBundleNumber(row.amount || 0)),
+    }));
 }
 
 export default function Deals() {
@@ -129,6 +155,19 @@ export default function Deals() {
         reasonNotes: 'Bulk deactivation from subscriptions page',
         linkedPaymentAction: 'none',
         notifyClient: false,
+    });
+    const [sharedBundleDialog, setSharedBundleDialog] = useState({
+        open: false,
+        step: 1,
+        selection: [],
+        platformId: '',
+        referenceRoot: '',
+        totalAmount: '',
+        reason: 'Shared manual payment from subscriptions page',
+        discountPin: '',
+        items: [],
+        preview: null,
+        idempotencyKey: createBundleIdempotencyKey(),
     });
 
     const [mpesaPlanSelections, setMpesaPlanSelections] = useState({});
@@ -268,6 +307,10 @@ export default function Deals() {
             toast.success('Subscription activated successfully.');
         },
         onError: (error) => {
+            if (error?.response?.status === 409 && error?.response?.data?.reference_root) {
+                toast.warning(`Reference root ${error.response.data.reference_root} is already attached to a shared manual payment bundle.`);
+                return;
+            }
             toast.error(error?.response?.data?.message || 'Subscription activation failed.');
         },
     });
@@ -322,6 +365,10 @@ export default function Deals() {
             toast.success('Subscription extension saved.');
         },
         onError: (error) => {
+            if (error?.response?.status === 409 && error?.response?.data?.reference_root) {
+                toast.warning(`Reference root ${error.response.data.reference_root} is already attached to a shared manual payment bundle.`);
+                return;
+            }
             toast.error(error?.response?.data?.message || 'Subscription extension failed.');
         },
     });
@@ -349,6 +396,10 @@ export default function Deals() {
             toast.success('Subscription renewed successfully.');
         },
         onError: (error) => {
+            if (error?.response?.status === 409 && error?.response?.data?.reference_root) {
+                toast.warning(`Reference root ${error.response.data.reference_root} is already attached to a shared manual payment bundle.`);
+                return;
+            }
             toast.error(error?.response?.data?.message || 'Subscription renewal failed.');
         },
     });
@@ -434,6 +485,67 @@ export default function Deals() {
         },
     });
 
+    const sharedBundlePreviewMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/manual-payment-bundles/preview', payload).then((response) => response.data),
+        onSuccess: (result) => {
+            setSharedBundleDialog((current) => ({
+                ...current,
+                step: 3,
+                preview: result,
+                items: result.items.map((item) => ({
+                    ...current.items.find((entry) => Number(entry.deal_id) === Number(item.source_deal_id)),
+                    deal_id: item.source_deal_id,
+                    client_id: item.client_id,
+                    client_name: item.client_name,
+                    status: item.deal_status,
+                    product_name: item.product_name || item.plan_type || 'Subscription',
+                    duration: item.duration,
+                    allocated_amount: String(item.allocated_amount),
+                })),
+            }));
+        },
+        onError: (error) => {
+            const conflictRoot = error?.response?.data?.conflict?.reference_root;
+            if (error?.response?.status === 409 && conflictRoot) {
+                toast.warning(`Reference root ${conflictRoot} is already in use. Re-open the existing shared payment instead.`);
+                return;
+            }
+            toast.error(error?.response?.data?.message || 'Shared payment preview failed.');
+        },
+    });
+
+    const sharedBundleCommitMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/manual-payment-bundles/commit', payload).then((response) => response.data),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setClearSelectionKey((value) => value + 1);
+            setSharedBundleDialog({
+                open: false,
+                step: 1,
+                selection: [],
+                platformId: '',
+                referenceRoot: '',
+                totalAmount: '',
+                reason: 'Shared manual payment from subscriptions page',
+                discountPin: '',
+                items: [],
+                preview: null,
+                idempotencyKey: createBundleIdempotencyKey(),
+            });
+            toast.success(`Shared manual payment committed as bundle #${result.bundle?.id}.`);
+        },
+        onError: (error) => {
+            const conflictRoot = error?.response?.data?.conflict?.reference_root;
+            if (error?.response?.status === 409 && conflictRoot) {
+                toast.warning(`Reference root ${conflictRoot} is already in use. Use the existing shared payment instead.`);
+                return;
+            }
+            toast.error(error?.response?.data?.message || 'Shared payment commit failed.');
+        },
+    });
+
     const handleSearch = (event) => {
         event.preventDefault();
         setSearch(searchInput.trim());
@@ -488,6 +600,23 @@ export default function Deals() {
     };
 
     const selectedClientPhone = selectedClientData?.phone_normalized || selectedDeal?.client?.phone_normalized || '';
+    const sharedBundleAllocatedTotal = sharedBundleDialog.items.reduce(
+        (sum, item) => sum + toBundleNumber(item.allocated_amount),
+        0,
+    );
+    const sharedBundlePaidTotal = toBundleNumber(sharedBundleDialog.totalAmount);
+    const sharedBundleShortfall = Math.max(0, sharedBundleAllocatedTotal - sharedBundlePaidTotal);
+    const sharedBundleUnallocated = Math.max(0, sharedBundlePaidTotal - sharedBundleAllocatedTotal);
+    const sharedBundlePayload = sharedBundleDialog.platformId ? {
+        platform_id: Number(sharedBundleDialog.platformId),
+        reference_root: sharedBundleDialog.referenceRoot.trim(),
+        total_amount: sharedBundlePaidTotal,
+        reason: sharedBundleDialog.reason.trim(),
+        items: sharedBundleDialog.items.map((item) => ({
+            deal_id: Number(item.deal_id),
+            allocated_amount: toBundleNumber(item.allocated_amount),
+        })),
+    } : null;
 
     const smsTemplates = useMemo(() => {
         const templates = templatesData?.templates || templatesData?.data || [];
@@ -730,6 +859,48 @@ export default function Deals() {
     ];
 
     const bulkActions = [
+        {
+            key: 'record-shared-manual-payment',
+            label: 'Record shared manual payment',
+            loadingLabel: 'Preparing...',
+            variant: 'primary',
+            onClick: (rowsSelection) => {
+                if (!platformFilter) {
+                    toast.warning('Choose one market first, then select the subscriptions you want to settle together.');
+                    return;
+                }
+
+                const eligibleRows = rowsSelection.filter((row) => SHARED_BUNDLE_ELIGIBLE_STATUSES.has(String(row.status || '').toLowerCase()));
+                if (!eligibleRows.length) {
+                    toast.warning('Select pending, awaiting payment, expired, or cancelled subscriptions for a shared manual payment.');
+                    return;
+                }
+
+                const marketIds = [...new Set(eligibleRows.map((row) => String(row.platform_id || row.client?.platform_id || '')))];
+                if (marketIds.length !== 1 || String(marketIds[0]) !== String(platformFilter)) {
+                    toast.warning('Shared manual payments can only be recorded for one filtered market at a time.');
+                    return;
+                }
+
+                setSharedBundleDialog({
+                    open: true,
+                    step: 1,
+                    selection: eligibleRows,
+                    platformId: String(platformFilter),
+                    referenceRoot: '',
+                    totalAmount: String(eligibleRows.reduce((sum, row) => sum + toBundleNumber(row.amount), 0)),
+                    reason: 'Shared manual payment from subscriptions page',
+                    discountPin: '',
+                    items: buildSharedBundleItems(eligibleRows),
+                    preview: null,
+                    idempotencyKey: createBundleIdempotencyKey(),
+                });
+
+                if (eligibleRows.length !== rowsSelection.length) {
+                    toast.warning('Some selected rows were skipped because shared manual payment currently supports pending, awaiting payment, expired, or cancelled subscriptions only.');
+                }
+            },
+        },
         {
             key: 'bulk-deactivate',
             label: 'Deactivate selected',
@@ -1658,6 +1829,245 @@ export default function Deals() {
                     Notify clients via SMS
                 </label>
             </ConfirmDialog>
+
+            {sharedBundleDialog.open ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setSharedBundleDialog((current) => ({ ...current, open: false }))}>
+                    <div className="w-full max-w-4xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Record Shared Manual Payment</h3>
+                                <p className="crm-panel-subtitle">
+                                    Step {sharedBundleDialog.step} of 3 • {sharedBundleDialog.selection.length} selected subscription{sharedBundleDialog.selection.length === 1 ? '' : 's'}
+                                </p>
+                            </div>
+                        </header>
+
+                        <div className="space-y-4 p-4">
+                            {sharedBundleDialog.step === 1 ? (
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="shared-bundle-reference-root">Reference root</label>
+                                            <input
+                                                id="shared-bundle-reference-root"
+                                                type="text"
+                                                value={sharedBundleDialog.referenceRoot}
+                                                onChange={(event) => setSharedBundleDialog((current) => ({ ...current, referenceRoot: event.target.value, preview: null }))}
+                                                className="crm-input"
+                                                placeholder="e.g. UABMDKDB"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="shared-bundle-total-amount">Paid total</label>
+                                            <input
+                                                id="shared-bundle-total-amount"
+                                                type="number"
+                                                min="0"
+                                                step="0.01"
+                                                value={sharedBundleDialog.totalAmount}
+                                                onChange={(event) => setSharedBundleDialog((current) => ({ ...current, totalAmount: event.target.value, preview: null }))}
+                                                className="crm-input"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="shared-bundle-reason">Reason</label>
+                                            <textarea
+                                                id="shared-bundle-reason"
+                                                rows={3}
+                                                value={sharedBundleDialog.reason}
+                                                onChange={(event) => setSharedBundleDialog((current) => ({ ...current, reason: event.target.value }))}
+                                                className="crm-input"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-sm font-semibold text-slate-800">Selected subscriptions</p>
+                                        <div className="mt-3 space-y-2">
+                                            {sharedBundleDialog.items.map((item) => (
+                                                <div key={item.deal_id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div>
+                                                            <p className="text-sm font-semibold text-slate-900">{item.client_name}</p>
+                                                            <p className="text-xs text-slate-500">
+                                                                {item.product_name} • {item.status}
+                                                            </p>
+                                                        </div>
+                                                        <span className="text-sm font-semibold text-slate-700">
+                                                            {formatCurrency(item.allocated_amount, selectedPlatformCurrency || 'KES')}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : null}
+
+                            {sharedBundleDialog.step === 2 ? (
+                                <div className="space-y-4">
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                                        Adjust each allocation before the bundle is previewed. Review will show any shortfall discount or unallocated remainder.
+                                    </div>
+                                    <div className="space-y-3">
+                                        {sharedBundleDialog.items.map((item, index) => (
+                                            <div key={item.deal_id} className="grid gap-3 rounded-lg border border-slate-200 p-3 md:grid-cols-[1.5fr_1fr_1fr]">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-slate-900">{item.client_name}</p>
+                                                    <p className="text-xs text-slate-500">
+                                                        {item.product_name} • {item.duration}
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Allocated</label>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.01"
+                                                        value={item.allocated_amount}
+                                                        onChange={(event) => setSharedBundleDialog((current) => ({
+                                                            ...current,
+                                                            preview: null,
+                                                            items: current.items.map((entry, itemIndex) => itemIndex === index
+                                                                ? { ...entry, allocated_amount: event.target.value }
+                                                                : entry),
+                                                        }))}
+                                                        className="crm-input"
+                                                    />
+                                                </div>
+                                                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Child reference</p>
+                                                    <p className="crm-mono mt-1 text-sm text-slate-700">
+                                                        {sharedBundleDialog.referenceRoot.trim()
+                                                            ? `${sharedBundleDialog.referenceRoot.trim().toUpperCase()}-${index + 1}`
+                                                            : `REF-${index + 1}`}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
+
+                            {sharedBundleDialog.step === 3 ? (
+                                <div className="space-y-4">
+                                    <div className="grid gap-3 md:grid-cols-3">
+                                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Paid total</p>
+                                            <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(sharedBundlePaidTotal, sharedBundleDialog.preview?.currency || selectedPlatformCurrency || 'KES')}</p>
+                                        </div>
+                                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Allocated total</p>
+                                            <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(sharedBundleAllocatedTotal, sharedBundleDialog.preview?.currency || selectedPlatformCurrency || 'KES')}</p>
+                                        </div>
+                                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reference root</p>
+                                            <p className="crm-mono mt-1 text-lg font-semibold text-slate-900">{sharedBundleDialog.preview?.reference_root || sharedBundleDialog.referenceRoot.trim().toUpperCase()}</p>
+                                        </div>
+                                    </div>
+
+                                    {sharedBundleShortfall > 0 ? (
+                                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                                            <p className="text-sm font-semibold text-amber-900">Shortfall will be treated as discount.</p>
+                                            <p className="mt-1 text-sm text-amber-800">
+                                                Allocated total is {formatCurrency(sharedBundleAllocatedTotal, sharedBundleDialog.preview?.currency || selectedPlatformCurrency || 'KES')}, which is {formatCurrency(sharedBundleShortfall, sharedBundleDialog.preview?.currency || selectedPlatformCurrency || 'KES')} above the paid total. A single discount PIN is required for this bundle.
+                                            </p>
+                                            <input
+                                                type="password"
+                                                inputMode="numeric"
+                                                maxLength={6}
+                                                value={sharedBundleDialog.discountPin}
+                                                onChange={(event) => setSharedBundleDialog((current) => ({ ...current, discountPin: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                                className="crm-input mt-3"
+                                                placeholder="Discount PIN"
+                                            />
+                                        </div>
+                                    ) : null}
+
+                                    {sharedBundleUnallocated > 0 ? (
+                                        <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
+                                            This bundle has an unallocated remainder of {formatCurrency(sharedBundleUnallocated, sharedBundleDialog.preview?.currency || selectedPlatformCurrency || 'KES')}. Finance review will still be required after commit.
+                                        </div>
+                                    ) : null}
+
+                                    <div className="space-y-2">
+                                        {(sharedBundleDialog.preview?.items || []).map((item) => (
+                                            <div key={item.source_deal_id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-slate-900">{item.client_name}</p>
+                                                    <p className="text-xs text-slate-500">
+                                                        {item.action === 'renew' ? 'Renew with new active row' : 'Activate existing row'} • {item.child_reference}
+                                                    </p>
+                                                </div>
+                                                <span className="text-sm font-semibold text-slate-700">
+                                                    {formatCurrency(item.allocated_amount, sharedBundleDialog.preview?.currency || selectedPlatformCurrency || 'KES')}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+
+                        <footer className="flex items-center justify-between gap-3 border-t border-slate-100 p-4">
+                            <div className="text-xs text-slate-500">
+                                {sharedBundleDialog.step < 3
+                                    ? 'Shared manual payment bundles stay out of business KPIs until finance review resolves the child payments.'
+                                    : `Idempotency key: ${sharedBundleDialog.idempotencyKey}`}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    className="crm-btn-secondary"
+                                    onClick={() => setSharedBundleDialog((current) => current.step > 1
+                                        ? { ...current, step: current.step - 1 }
+                                        : { ...current, open: false })}
+                                >
+                                    {sharedBundleDialog.step > 1 ? 'Back' : 'Cancel'}
+                                </button>
+
+                                {sharedBundleDialog.step === 1 ? (
+                                    <button
+                                        type="button"
+                                        className="crm-btn-primary"
+                                        onClick={() => setSharedBundleDialog((current) => ({ ...current, step: 2 }))}
+                                        disabled={!sharedBundleDialog.referenceRoot.trim() || sharedBundlePaidTotal <= 0 || !sharedBundleDialog.items.length}
+                                    >
+                                        Next
+                                    </button>
+                                ) : null}
+
+                                {sharedBundleDialog.step === 2 ? (
+                                    <button
+                                        type="button"
+                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={() => sharedBundlePayload && sharedBundlePreviewMutation.mutate(sharedBundlePayload)}
+                                        disabled={!sharedBundlePayload || sharedBundlePreviewMutation.isPending || !sharedBundleDialog.referenceRoot.trim() || sharedBundlePaidTotal <= 0}
+                                    >
+                                        {sharedBundlePreviewMutation.isPending ? 'Reviewing...' : 'Review bundle'}
+                                    </button>
+                                ) : null}
+
+                                {sharedBundleDialog.step === 3 ? (
+                                    <button
+                                        type="button"
+                                        className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={() => sharedBundlePayload && sharedBundleCommitMutation.mutate({
+                                            ...sharedBundlePayload,
+                                            idempotency_key: sharedBundleDialog.idempotencyKey,
+                                            ...(sharedBundleDialog.discountPin ? { discount_pin: sharedBundleDialog.discountPin } : {}),
+                                        })}
+                                        disabled={sharedBundleCommitMutation.isPending || !sharedBundleDialog.preview || (sharedBundleShortfall > 0 && sharedBundleDialog.discountPin.trim().length < 4)}
+                                    >
+                                        {sharedBundleCommitMutation.isPending ? 'Committing...' : 'Commit bundle'}
+                                    </button>
+                                ) : null}
+                            </div>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

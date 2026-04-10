@@ -43,6 +43,7 @@ class Payment extends Model
         'product_id',
         'platform_id',
         'escort_post_id',
+        'manual_payment_bundle_id',
         'deal_id',
         'client_id',
         'match_confidence',
@@ -54,6 +55,8 @@ class Payment extends Model
         'transaction_uuid',
         'transaction_reference',
         'reference_number',
+        'reference_root',
+        'reference_sequence',
         'status',
         'purpose',
         'failure_reason',
@@ -121,6 +124,11 @@ class Payment extends Model
     public function deal()
     {
         return $this->belongsTo(Deal::class);
+    }
+
+    public function manualPaymentBundle()
+    {
+        return $this->belongsTo(ManualPaymentBundle::class, 'manual_payment_bundle_id');
     }
 
     public function walletTransaction()

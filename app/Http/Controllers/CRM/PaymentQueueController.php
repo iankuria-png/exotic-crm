@@ -47,6 +47,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 use App\Services\ManualPaymentSubmissionService;
+use App\Services\ManualPaymentBundleService;
 use App\Services\SubscriptionDeactivationService;
 
 class PaymentQueueController extends Controller
@@ -69,6 +70,7 @@ class PaymentQueueController extends Controller
         private readonly PaymentDiagnosticsPayloadPresenter $paymentDiagnosticsPayloadPresenter,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly ManualPaymentSubmissionService $manualPaymentSubmissionService,
+        private readonly ManualPaymentBundleService $manualPaymentBundleService,
         private readonly SubscriptionDeactivationService $subscriptionDeactivationService
     ) {
     }
@@ -98,7 +100,7 @@ class PaymentQueueController extends Controller
             abort(403, 'Only admin users can view test payments.');
         }
 
-        $baseQuery = Payment::query()->with(['platform', 'product', 'client', 'manualSubmission']);
+        $baseQuery = Payment::query()->with(['platform', 'product', 'client', 'manualSubmission', 'manualPaymentBundle']);
         $this->marketAuthorizationService->applyPlatformScope($baseQuery, $request->user());
 
         if ($request->filled('platform_id')) {
@@ -1390,6 +1392,7 @@ class PaymentQueueController extends Controller
     public function updateReviewState(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
+        $this->ensureBundleFinanceReviewAccess($request, $payment);
 
         $validated = $request->validate([
             'state' => 'required|in:open,manual_review,resolved',
@@ -1526,6 +1529,7 @@ class PaymentQueueController extends Controller
     public function approveManualSubmission(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
+        $this->ensureBundleFinanceReviewAccess($request, $payment);
 
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
@@ -1615,6 +1619,7 @@ class PaymentQueueController extends Controller
     public function verifyManualSubmission(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
+        $this->ensureBundleFinanceReviewAccess($request, $payment);
 
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
@@ -1682,6 +1687,7 @@ class PaymentQueueController extends Controller
     public function rejectManualSubmission(Request $request, Payment $payment)
     {
         $this->authorizePaymentAccess($request, $payment);
+        $this->ensureBundleFinanceReviewAccess($request, $payment);
 
         $validated = $request->validate([
             'reason' => 'required|string|max:500',
@@ -2108,6 +2114,22 @@ class PaymentQueueController extends Controller
         }
 
         return 'unknown';
+    }
+
+    private function ensureBundleFinanceReviewAccess(Request $request, Payment $payment): void
+    {
+        if (!$payment->manual_payment_bundle_id) {
+            return;
+        }
+
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [
+                MarketAuthorizationService::ROLE_ADMIN,
+                MarketAuthorizationService::ROLE_SUB_ADMIN,
+            ],
+            'Only admin or sub-admin users can review shared manual payment bundles.'
+        );
     }
 
     private function buildRecommendations(Payment $payment, ?array $linkProxy = null): array

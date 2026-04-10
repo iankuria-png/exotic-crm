@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\ManualPaymentBundle;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
@@ -402,6 +403,44 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.reference_number', 'RESOLUTION-REV-001')
             ->assertJsonPath('data.0.resolution_code', 'reversed');
+    }
+
+    public function test_business_visible_scope_hides_committing_bundle_rows_from_workspace_and_stats(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+        $bundle = ManualPaymentBundle::factory()->create([
+            'platform_id' => $platform->id,
+            'status' => ManualPaymentBundle::STATUS_COMMITTING,
+            'audit_state' => ManualPaymentBundle::AUDIT_PENDING_FINANCE_REVIEW,
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'LIVE-VISIBLE-001',
+            'reference_number' => 'LIVE-VISIBLE-001',
+            'status' => 'completed',
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'BUNDLE-HIDDEN-001',
+            'reference_number' => 'BUNDLE-HIDDEN-001',
+            'reference_root' => $bundle->reference_root,
+            'reference_sequence' => 1,
+            'manual_payment_bundle_id' => $bundle->id,
+            'status' => 'completed',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('stats.confirmed', 1);
+
+        $references = collect($response->json('data'))->pluck('reference_number')->all();
+        $this->assertContains('LIVE-VISIBLE-001', $references);
+        $this->assertNotContains('BUNDLE-HIDDEN-001', $references);
     }
 
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform

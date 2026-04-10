@@ -106,32 +106,53 @@ class DealPaymentService
         return $deal;
     }
 
-    public function createManualPaymentForDeal(Deal $deal, Client $client, string $paymentReference, int $actorId): Payment
+    public function createManualPaymentForDeal(
+        Deal $deal,
+        Client $client,
+        string $paymentReference,
+        int $actorId,
+        array $overrides = []
+    ): Payment
     {
         $reference = trim($paymentReference);
         if ($reference === '') {
             throw new \InvalidArgumentException('Manual payment reference is required.');
         }
 
+        $referenceRoot = $overrides['reference_root'] ?? $this->normalizeReferenceRoot($reference);
+        $transactionUuid = trim((string) ($overrides['transaction_uuid'] ?? ''));
+        if ($transactionUuid === '') {
+            $transactionUuid = 'manual_' . $deal->id . '_' . now()->timestamp;
+        }
+
+        $rawPayload = is_array($overrides['raw_payload'] ?? null)
+            ? $overrides['raw_payload']
+            : [
+                'source' => 'deal_manual_payment',
+                'deal_id' => (int) $deal->id,
+            ];
+
         return Payment::create([
             'platform_id' => (int) $deal->platform_id,
             'product_id' => $deal->product_id,
+            'manual_payment_bundle_id' => $overrides['manual_payment_bundle_id'] ?? null,
             'deal_id' => (int) $deal->id,
             'client_id' => (int) $client->id,
             'phone' => $client->phone_normalized,
-            'amount' => (float) ($deal->amount ?? 0),
-            'currency' => $deal->currency ?: ($client->platform?->currency_code ?: 'KES'),
-            'transaction_uuid' => 'manual_' . $deal->id . '_' . now()->timestamp,
+            'amount' => (float) ($overrides['amount'] ?? ($deal->amount ?? 0)),
+            'currency' => $overrides['currency'] ?? ($deal->currency ?: ($client->platform?->currency_code ?: 'KES')),
+            'transaction_uuid' => $transactionUuid,
             'transaction_reference' => $reference,
-            'status' => 'completed',
+            'reference_number' => $overrides['reference_number'] ?? $reference,
+            'reference_root' => $referenceRoot,
+            'reference_sequence' => $overrides['reference_sequence'] ?? null,
+            'status' => $overrides['status'] ?? 'completed',
             'duration' => $deal->duration,
-            'raw_payload' => [
-                'source' => 'deal_manual_payment',
-                'deal_id' => (int) $deal->id,
-            ],
-            'match_confidence' => 'manual',
-            'confirmed_by' => $actorId,
-            'confirmed_at' => now(),
+            'raw_payload' => $rawPayload,
+            'match_confidence' => $overrides['match_confidence'] ?? 'manual',
+            'confirmed_by' => $overrides['confirmed_by'] ?? $actorId,
+            'confirmed_at' => $overrides['confirmed_at'] ?? now(),
+            'reconciliation_state' => $overrides['reconciliation_state'] ?? 'open',
         ]);
     }
 
@@ -604,5 +625,14 @@ class DealPaymentService
             'manual' => 30,
             default => 30,
         };
+    }
+
+    public function normalizeReferenceRoot(string $reference): string
+    {
+        $normalized = strtoupper(trim($reference));
+        $normalized = preg_replace('/\s+/', '', $normalized) ?? '';
+        $normalized = preg_replace('/-\d+$/', '', $normalized) ?? $normalized;
+
+        return trim($normalized, '-');
     }
 }

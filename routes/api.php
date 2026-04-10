@@ -20,6 +20,7 @@ use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
+use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
 use App\Http\Controllers\CRM\ImageProxyController;
@@ -231,6 +232,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
         // Payments
         Route::get('/payments', [PaymentQueueController::class, 'index']);
+        Route::get('/payments/reference-check', [ManualPaymentBundleController::class, 'referenceCheck']);
         Route::post('/payments/import/preview', [PaymentQueueController::class, 'importPreview']);
         Route::post('/payments/import/commit', [PaymentQueueController::class, 'importCommit']);
         Route::get('/payments/import/template', [PaymentQueueController::class, 'importTemplate']);
@@ -257,6 +259,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         Route::post('/payments/batch-match', [PaymentQueueController::class, 'batchMatch']);
         Route::get('/payments/mpesa-review', [PaymentQueueController::class, 'mpesaReview']);
         Route::post('/payments/mpesa-confirm-subscriptions', [PaymentQueueController::class, 'mpesaConfirmSubscriptions']);
+
+        // Shared manual payment bundles
+        Route::post('/manual-payment-bundles/preview', [ManualPaymentBundleController::class, 'preview']);
+        Route::post('/manual-payment-bundles/commit', [ManualPaymentBundleController::class, 'commit']);
     });
 
     // Settings

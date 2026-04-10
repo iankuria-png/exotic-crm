@@ -49,6 +49,13 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping(1)
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_close_stale_sessions.log'));
+
+        $schedule->command('crm:sweep-stuck-bundles')
+            ->name('crm_sweep_stuck_bundles')
+            ->everyFiveMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_sweep_stuck_bundles.log'));
                  
         // Payment timeout handler - RUNS EVERY 5 MINUTES
         $schedule->call(function () {
