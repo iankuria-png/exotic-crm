@@ -174,6 +174,11 @@ function renderPaymentStatusBadges(payment) {
                 <StatusBadge status={status} label={customLabel} />
             )}
             {testBadge ? <StatusBadge status={testBadge.status} label={testBadge.label} tone={testBadge.tone} /> : null}
+            {isExplicitTestPayment(payment) ? (
+                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-300">
+                    Admin test
+                </span>
+            ) : null}
             {isBundlePayment ? (
                 <span className="inline-flex items-center rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-violet-700">
                     Bundle
@@ -609,6 +614,16 @@ export default function Payments() {
         payment: null,
         reason: 'Permanently remove non-business test payment after audit snapshot review.',
     });
+    const [bulkMarkTestDialog, setBulkMarkTestDialog] = useState({
+        open: false,
+        payments: [],
+        reason: 'Exclude non-business or QA payments from sales-facing metrics.',
+    });
+    const [markAndDeleteDialog, setMarkAndDeleteDialog] = useState({
+        open: false,
+        payments: [],
+        reason: 'Permanently remove non-business test payment.',
+    });
     const [bundleDetailDialog, setBundleDetailDialog] = useState({ open: false, bundleId: null });
     const [voidBundleDialog, setVoidBundleDialog] = useState({
         open: false,
@@ -931,6 +946,72 @@ export default function Payments() {
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Deleting the test payment failed.');
         },
+    });
+
+    const bulkMarkTestMutation = useMutation({
+        mutationFn: async ({ payments, reason }) => {
+            const toMark = payments.filter((p) => !isExplicitTestPayment(p));
+            const skipped = payments.length - toMark.length;
+            const results = await Promise.allSettled(
+                toMark.map((p) => api.post(`/crm/payments/${p.id}/mark-test`, { reason }))
+            );
+            const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+            const failed = results.filter((r) => r.status === 'rejected').length;
+            return { succeeded, failed, skipped };
+        },
+        onSuccess: ({ succeeded, failed, skipped }) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setClearSelectionKey((v) => v + 1);
+            setBulkMarkTestDialog((d) => ({ ...d, open: false }));
+            const parts = [];
+            if (succeeded) parts.push(`${succeeded} marked as test`);
+            if (skipped) parts.push(`${skipped} already test`);
+            if (failed) parts.push(`${failed} failed`);
+            toast[failed ? 'warning' : 'success'](parts.join(', ') + '.');
+        },
+        onError: () => toast.error('Bulk mark-as-test failed.'),
+    });
+
+    const markAndDeleteMutation = useMutation({
+        mutationFn: async ({ payments, reason }) => {
+            const tally = { deleted: 0, keptAsTest: 0, errors: 0 };
+            for (const p of payments) {
+                if (!isExplicitTestPayment(p)) {
+                    try {
+                        await api.post(`/crm/payments/${p.id}/mark-test`, { reason });
+                    } catch {
+                        tally.errors++;
+                        continue;
+                    }
+                }
+                try {
+                    await api.delete(`/crm/payments/${p.id}/delete-test`, { data: { reason } });
+                    tally.deleted++;
+                } catch (err) {
+                    const blockers = err?.response?.data?.blockers;
+                    if (err?.response?.status === 422 && blockers?.length) {
+                        tally.keptAsTest++;
+                    } else {
+                        tally.errors++;
+                    }
+                }
+            }
+            return tally;
+        },
+        onSuccess: ({ deleted, keptAsTest, errors }) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            setClearSelectionKey((v) => v + 1);
+            setMarkAndDeleteDialog((d) => ({ ...d, open: false }));
+            const parts = [];
+            if (deleted) parts.push(`${deleted} deleted`);
+            if (keptAsTest) parts.push(`${keptAsTest} kept as test (linked to live records)`);
+            if (errors) parts.push(`${errors} failed`);
+            toast[errors || keptAsTest ? 'warning' : 'success'](parts.join(', ') + '.');
+            if (keptAsTest) {
+                toast.info('Some payments were marked as test but not deleted because they are linked to active deals or transactions.');
+            }
+        },
+        onError: () => toast.error('Mark & delete failed.'),
     });
 
     const providerStatusMutation = useMutation({
@@ -1408,6 +1489,39 @@ export default function Payments() {
                 openManualMatch(rowsSelection[0]);
             },
         },
+        ...(canViewTests ? [
+            {
+                key: 'bulk-mark-test',
+                label: 'Mark as test',
+                loadingLabel: 'Marking…',
+                variant: 'secondary',
+                onClick: (rows) => {
+                    const eligible = rows.filter((r) => !isExplicitTestPayment(r));
+                    if (!eligible.length) {
+                        toast.warning('All selected payments are already marked as test.');
+                        return;
+                    }
+                    setBulkMarkTestDialog({
+                        open: true,
+                        payments: rows,
+                        reason: 'Exclude non-business or QA payments from sales-facing metrics.',
+                    });
+                },
+            },
+            {
+                key: 'bulk-mark-and-delete-test',
+                label: 'Mark as test & delete',
+                loadingLabel: 'Processing…',
+                variant: 'danger',
+                onClick: (rows) => {
+                    setMarkAndDeleteDialog({
+                        open: true,
+                        payments: rows,
+                        reason: 'Permanently remove non-business test payments.',
+                    });
+                },
+            },
+        ] : []),
     ];
 
     useEffect(() => {
@@ -1621,14 +1735,16 @@ export default function Payments() {
                             reason: 'Exclude non-business or QA payment from sales-facing metrics.',
                         }),
                     },
-                    canViewTests && isExplicitTestPayment(row) && {
-                        key: 'delete-test',
-                        label: 'Delete test payment',
+                    canViewTests && {
+                        key: 'mark-and-delete-test',
+                        label: isExplicitTestPayment(row) ? 'Delete test payment' : 'Mark as test & delete',
                         variant: 'danger',
-                        onClick: () => setDeleteTestDialog({
+                        onClick: () => setMarkAndDeleteDialog({
                             open: true,
-                            payment: row,
-                            reason: 'Permanently remove non-business test payment after audit snapshot review.',
+                            payments: [row],
+                            reason: isExplicitTestPayment(row)
+                                ? 'Permanently remove non-business test payment after audit snapshot review.'
+                                : 'Permanently remove non-business test payment.',
                         }),
                     },
                     isFailed && { key: 'send-link', label: 'Send payment link', onClick: () => setSendLinkDialog({ open: true, payment: row, channel: 'sms', provider: '', phone: row.phone || '', reason: 'Send payment link from CRM' }) },
@@ -3093,46 +3209,67 @@ export default function Payments() {
             </ConfirmDialog>
 
             <ConfirmDialog
-                open={deleteTestDialog.open && !!deleteTestDialog.payment}
-                title="Delete test payment"
-                message={deleteTestDialog.payment
-                    ? `Permanently delete test payment #${deleteTestDialog.payment.id}. This action is admin-only and cannot be undone.`
-                    : ''}
-                confirmLabel="Delete permanently"
-                tone="danger"
-                onCancel={() => setDeleteTestDialog({ open: false, payment: null, reason: 'Permanently remove non-business test payment after audit snapshot review.' })}
-                onConfirm={() => {
-                    if (deleteTestDialog.payment) {
-                        deleteTestMutation.mutate({
-                            paymentId: deleteTestDialog.payment.id,
-                            reason: deleteTestDialog.reason.trim(),
-                        });
-                    }
-                }}
-                confirmDisabled={deleteTestMutation.isPending || !deleteTestDialog.reason.trim()}
-                isPending={deleteTestMutation.isPending}
+                open={bulkMarkTestDialog.open && bulkMarkTestDialog.payments.length > 0}
+                title="Mark payments as test"
+                message={`Mark ${bulkMarkTestDialog.payments.filter((p) => !isExplicitTestPayment(p)).length} payment(s) as test. They will be hidden from all business views immediately.`}
+                tone="warning"
+                confirmLabel="Mark as test"
+                onCancel={() => setBulkMarkTestDialog((d) => ({ ...d, open: false }))}
+                onConfirm={() => bulkMarkTestMutation.mutate(bulkMarkTestDialog)}
+                confirmDisabled={bulkMarkTestMutation.isPending || !bulkMarkTestDialog.reason.trim()}
+                isPending={bulkMarkTestMutation.isPending}
             >
                 <div className="space-y-3">
-                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                        CRM will keep an audit snapshot first, then remove the test row and its cascading test telemetry records.
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        These payments will be excluded from dashboards, reports, and sales-facing tables immediately and preserved for audit review.
                     </div>
-                    {deleteTestDialog.payment ? (
+                    <div>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                        <textarea
+                            rows={2}
+                            value={bulkMarkTestDialog.reason}
+                            onChange={(e) => setBulkMarkTestDialog((d) => ({ ...d, reason: e.target.value }))}
+                            className="crm-input"
+                        />
+                    </div>
+                </div>
+            </ConfirmDialog>
+
+            <ConfirmDialog
+                open={markAndDeleteDialog.open && markAndDeleteDialog.payments.length > 0}
+                title={markAndDeleteDialog.payments.length === 1 && isExplicitTestPayment(markAndDeleteDialog.payments[0])
+                    ? 'Delete test payment'
+                    : markAndDeleteDialog.payments.length === 1
+                        ? 'Mark as test & delete'
+                        : `Mark ${markAndDeleteDialog.payments.length} payments as test & delete`}
+                message={`${markAndDeleteDialog.payments.length} payment(s) will be marked as test and permanently deleted. Payments linked to live deals or transactions will be kept as test-only instead of being deleted.`}
+                tone="danger"
+                confirmLabel="Mark & delete"
+                onCancel={() => setMarkAndDeleteDialog((d) => ({ ...d, open: false }))}
+                onConfirm={() => markAndDeleteMutation.mutate(markAndDeleteDialog)}
+                confirmDisabled={markAndDeleteMutation.isPending || !markAndDeleteDialog.reason.trim()}
+                isPending={markAndDeleteMutation.isPending}
+            >
+                <div className="space-y-3">
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        CRM keeps a full audit snapshot before deletion. Payments blocked by live records will be hidden as test-only instead of deleted.
+                    </div>
+                    {markAndDeleteDialog.payments.length === 1 ? (
                         <div className="grid gap-2 sm:grid-cols-2">
-                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Reference:</span> {deleteTestDialog.payment.transaction_reference || '—'}</p>
-                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Amount:</span> {formatCurrency(deleteTestDialog.payment.amount, resolveCurrency(deleteTestDialog.payment.currency))}</p>
-                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Client:</span> {deleteTestDialog.payment.client?.name || 'Unmatched'}</p>
-                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Classification:</span> {isExplicitTestPayment(deleteTestDialog.payment) ? 'Admin-marked test' : 'Sandbox/Test'}</p>
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Reference:</span> {markAndDeleteDialog.payments[0]?.transaction_reference || '—'}</p>
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Amount:</span> {formatCurrency(markAndDeleteDialog.payments[0]?.amount, resolveCurrency(markAndDeleteDialog.payments[0]?.currency))}</p>
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Client:</span> {markAndDeleteDialog.payments[0]?.client?.name || 'Unmatched'}</p>
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold text-slate-900">Classification:</span> {isExplicitTestPayment(markAndDeleteDialog.payments[0]) ? 'Admin-marked test' : 'Not yet marked'}</p>
                         </div>
                     ) : null}
                     <div>
-                        <label htmlFor="delete-test-reason" className="mb-1 block text-sm font-medium text-slate-700">Deletion reason</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
                         <textarea
-                            id="delete-test-reason"
-                            rows={3}
-                            value={deleteTestDialog.reason}
-                            onChange={(event) => setDeleteTestDialog((current) => ({ ...current, reason: event.target.value }))}
+                            rows={2}
+                            value={markAndDeleteDialog.reason}
+                            onChange={(e) => setMarkAndDeleteDialog((d) => ({ ...d, reason: e.target.value }))}
                             className="crm-input"
-                            placeholder="Explain why this test payment should be permanently removed."
+                            placeholder="Explain why these test payments should be permanently removed."
                         />
                     </div>
                 </div>
