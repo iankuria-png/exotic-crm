@@ -195,6 +195,7 @@ class PaymentQueueController extends Controller
         $threeDaysAgo = Carbon::now()->subDays(3);
         $confirmedStatsQuery = (clone $statsQuery)
             ->whereIn('status', $successfulStatuses)
+            ->whereNull('resolution_code')
             ->where(function (Builder $builder) {
                 $builder->whereNull('reconciliation_state')
                     ->orWhere('reconciliation_state', '!=', 'manual_review');
