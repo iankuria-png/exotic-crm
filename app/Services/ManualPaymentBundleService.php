@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Exceptions\ManualPaymentReferenceConflictException;
+use App\Models\Client;
 use App\Models\ClientNote;
 use App\Models\Deal;
 use App\Models\ManualPaymentBundle;
 use App\Models\Payment;
+use App\Models\Product;
 use App\Models\TimelineEvent;
 use App\Support\CrmAuditAction;
 use App\Support\DeactivationRequest;
@@ -109,39 +111,31 @@ class ManualPaymentBundleService
             $draftItems = [];
 
             foreach ($preview['items'] as $item) {
-                $sourceDeal = Deal::query()
-                    ->with(['client.platform'])
-                    ->findOrFail((int) $item['source_deal_id']);
+                $client = Client::query()
+                    ->with('platform')
+                    ->findOrFail((int) $item['client_id']);
 
-                $targetDeal = $sourceDeal;
-                $newDealCreated = false;
+                $targetDeal = $this->dealPaymentService->createPendingDealFromCatalog(
+                    $client,
+                    (int) $item['product_id'],
+                    $item['product_price_id'] ? (int) $item['product_price_id'] : null,
+                    $item['duration'] ?? null,
+                    $actorId,
+                    null
+                );
 
-                if (($item['action'] ?? 'activate') === 'renew') {
-                    $targetDeal = Deal::query()->create([
-                        'platform_id' => (int) $sourceDeal->platform_id,
-                        'client_id' => (int) $sourceDeal->client_id,
-                        'lead_id' => $sourceDeal->lead_id,
-                        'product_id' => $sourceDeal->product_id,
-                        'plan_type' => $sourceDeal->plan_type,
-                        'amount' => (float) $item['allocated_amount'],
-                        'currency' => $sourceDeal->currency,
-                        'duration' => $sourceDeal->duration,
-                        'status' => 'pending',
-                        'assigned_to' => $actorId,
-                        'is_free_trial' => false,
-                        'free_trial_approved_by' => null,
-                        'payment_reference' => (string) $item['child_reference'],
-                        'discount_percentage' => $item['discount_percentage'] > 0 ? (float) $item['discount_percentage'] : null,
-                        'original_amount' => $item['discount_percentage'] > 0 ? (float) $item['base_amount'] : null,
-                        'discount_approved_by' => $item['discount_percentage'] > 0 ? $actorId : null,
-                        'origin' => 'manual_payment_bundle',
-                    ]);
-                    $newDealCreated = true;
-                }
+                // Stamp origin and child reference on the newly created pending deal
+                $targetDeal->forceFill([
+                    'origin' => 'manual_payment_bundle',
+                    'payment_reference' => (string) $item['child_reference'],
+                    'discount_percentage' => (float) $item['discount_percentage'] > 0 ? (float) $item['discount_percentage'] : null,
+                    'original_amount' => (float) $item['discount_percentage'] > 0 ? (float) $item['base_amount'] : null,
+                    'discount_approved_by' => (float) $item['discount_percentage'] > 0 ? $actorId : null,
+                ])->save();
 
                 $payment = $this->dealPaymentService->createManualPaymentForDeal(
                     $targetDeal,
-                    $sourceDeal->client,
+                    $client,
                     (string) $item['child_reference'],
                     $actorId,
                     [
@@ -156,20 +150,19 @@ class ManualPaymentBundleService
                         'raw_payload' => [
                             'source' => 'manual_payment_bundle',
                             'bundle_id' => (int) $bundle->id,
-                            'source_deal_id' => (int) $sourceDeal->id,
-                            'target_action' => (string) $item['action'],
+                            'target_action' => 'new_deal',
                         ],
                     ]
                 );
 
                 $draftItems[] = [
-                    'source_deal_id' => (int) $sourceDeal->id,
+                    'source_deal_id' => 0,
                     'target_deal_id' => (int) $targetDeal->id,
-                    'new_deal_created' => $newDealCreated,
+                    'new_deal_created' => true,
                     'payment_id' => (int) $payment->id,
-                    'client_id' => (int) $sourceDeal->client_id,
-                    'client_wp_post_id' => (int) ($sourceDeal->client?->wp_post_id ?? 0),
-                    'action' => (string) $item['action'],
+                    'client_id' => (int) $client->id,
+                    'client_wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                    'action' => 'new_deal',
                     'duration_days' => (int) $item['duration_days'],
                     'allocated_amount' => (float) $item['allocated_amount'],
                     'base_amount' => (float) $item['base_amount'],
@@ -730,27 +723,39 @@ class ManualPaymentBundleService
             ]);
         }
 
-        $dealIds = $items
-            ->pluck('deal_id')
+        $clientIds = $items
+            ->pluck('client_id')
             ->filter(fn ($value) => (int) $value > 0)
             ->map(fn ($value) => (int) $value)
             ->values();
 
-        if ($dealIds->count() !== $items->count() || $dealIds->duplicates()->isNotEmpty()) {
+        $productIds = $items
+            ->pluck('product_id')
+            ->filter(fn ($value) => (int) $value > 0)
+            ->map(fn ($value) => (int) $value)
+            ->values();
+
+        if ($clientIds->count() !== $items->count() || $clientIds->duplicates()->isNotEmpty()) {
             throw ValidationException::withMessages([
-                'items' => 'Each bundle item must reference a unique deal.',
+                'items' => 'Each bundle item must reference a unique client.',
             ]);
         }
 
-        $deals = Deal::query()
-            ->with(['client.platform', 'product'])
-            ->whereIn('id', $dealIds->all())
+        $clients = Client::query()
+            ->with(['platform'])
+            ->whereIn('id', $clientIds->all())
             ->get()
             ->keyBy('id');
 
-        if ($deals->count() !== $dealIds->count()) {
+        $products = Product::query()
+            ->with(['activePrices'])
+            ->whereIn('id', $productIds->all())
+            ->get()
+            ->keyBy('id');
+
+        if ($clients->count() !== $clientIds->count()) {
             throw ValidationException::withMessages([
-                'items' => 'One or more selected subscriptions could not be found.',
+                'items' => 'One or more selected clients could not be found.',
             ]);
         }
 
@@ -764,20 +769,21 @@ class ManualPaymentBundleService
         }
 
         $previewItems = [];
+        $resolvedCurrency = null;
 
         foreach ($items as $index => $item) {
-            $deal = $deals->get((int) $item['deal_id']);
-            $client = $deal?->client;
+            $client = $clients->get((int) $item['client_id']);
+            $product = $products->get((int) $item['product_id']);
 
-            if (!$deal || !$client) {
+            if (!$client) {
                 throw ValidationException::withMessages([
-                    'items' => 'Each bundle item must belong to a valid client subscription.',
+                    'items' => 'Each bundle item must belong to a valid client.',
                 ]);
             }
 
-            if ((int) $deal->platform_id !== $platformId) {
+            if ((int) $client->platform_id !== $platformId) {
                 throw ValidationException::withMessages([
-                    'items' => 'All selected subscriptions must belong to the same market.',
+                    'items' => 'All selected clients must belong to the same market.',
                 ]);
             }
 
@@ -787,44 +793,80 @@ class ManualPaymentBundleService
                 ]);
             }
 
-            $status = (string) $deal->status;
-            if (!in_array($status, ['pending', 'awaiting_payment', 'expired', 'cancelled'], true)) {
+            if (!$product) {
                 throw ValidationException::withMessages([
-                    'items' => "Subscription #{$deal->id} is not eligible for shared manual payment.",
+                    'items' => 'Each bundle item must specify a valid product/plan.',
                 ]);
             }
 
-            $baseAmount = round((float) ($deal->original_amount ?? $deal->amount ?? 0), 2);
+            if ((int) $product->platform_id !== $platformId) {
+                throw ValidationException::withMessages([
+                    'items' => 'All selected products must belong to the same market.',
+                ]);
+            }
+
+            $duration = (string) ($item['duration'] ?? 'monthly');
+            $productPriceId = isset($item['product_price_id']) && (int) $item['product_price_id'] > 0
+                ? (int) $item['product_price_id']
+                : null;
+
+            // Resolve product price row (modern path first, then by duration_key, then legacy)
+            $productPrice = null;
+            if ($productPriceId) {
+                $productPrice = $product->activePrices->firstWhere('id', $productPriceId);
+            }
+
+            if (!$productPrice) {
+                $productPrice = $product->activePrices->firstWhere('duration_key', $duration);
+            }
+
+            if ($productPrice) {
+                $baseAmount = round((float) $productPrice->price, 2);
+                $durationDays = (int) $productPrice->duration_days;
+                $resolvedDuration = $this->dealPaymentService->mapDurationKeyToLegacy($productPrice->duration_key);
+            } else {
+                // Legacy fallback: use product price columns
+                $resolvedDuration = $duration;
+                $baseAmount = round((float) $this->dealPaymentService->resolveAmountForDuration($product, $resolvedDuration), 2);
+                $durationDays = match ($resolvedDuration) {
+                    'weekly' => 7,
+                    'biweekly' => 14,
+                    'quarterly' => 90,
+                    'annually' => 365,
+                    default => 30,
+                };
+            }
+
             $allocatedAmount = array_key_exists('allocated_amount', $item)
                 ? round((float) $item['allocated_amount'], 2)
-                : round((float) ($deal->amount ?? 0), 2);
+                : $baseAmount;
 
             if ($allocatedAmount <= 0) {
                 throw ValidationException::withMessages([
-                    'items' => "Allocated amount for subscription #{$deal->id} must be greater than zero.",
+                    'items' => "Allocated amount for client #{$client->id} must be greater than zero.",
                 ]);
             }
-
-            $durationDays = array_key_exists('duration_days', $item)
-                ? max(1, (int) $item['duration_days'])
-                : $this->dealPaymentService->resolveDurationDaysFromCatalog($deal);
 
             $discountPercentage = 0.0;
             if ($baseAmount > 0 && $allocatedAmount < $baseAmount) {
                 $discountPercentage = round((($baseAmount - $allocatedAmount) / $baseAmount) * 100, 2);
             }
 
+            $planType = $this->dealPaymentService->derivePlanTypeFromProduct($product);
+
+            if ($resolvedCurrency === null) {
+                $resolvedCurrency = $product->currency ?: ($client->platform?->currency_code ?? 'KES');
+            }
+
             $previewItems[] = [
                 'reference_sequence' => $index + 1,
-                'source_deal_id' => (int) $deal->id,
                 'client_id' => (int) $client->id,
                 'client_name' => (string) ($client->name ?: 'Unknown'),
-                'action' => in_array($status, ['expired', 'cancelled'], true) ? 'renew' : 'activate',
-                'deal_status' => $status,
-                'product_id' => $deal->product_id ? (int) $deal->product_id : null,
-                'product_name' => $deal->product?->name,
-                'plan_type' => (string) $deal->plan_type,
-                'duration' => (string) $deal->duration,
+                'product_id' => (int) $product->id,
+                'product_name' => (string) ($product->display_name ?: $product->name),
+                'product_price_id' => $productPrice ? (int) $productPrice->id : null,
+                'plan_type' => $planType,
+                'duration' => $resolvedDuration,
                 'duration_days' => $durationDays,
                 'base_amount' => $baseAmount,
                 'allocated_amount' => $allocatedAmount,
@@ -839,7 +881,7 @@ class ManualPaymentBundleService
 
         $currency = $configuredCurrency !== ''
             ? $configuredCurrency
-            : (string) ($deals->first()?->currency ?: 'KES');
+            : (string) ($resolvedCurrency ?? 'KES');
 
         $this->assertDiscountCaps($platformId, $previewItems);
 

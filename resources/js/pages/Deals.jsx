@@ -29,7 +29,13 @@ const LINKED_PAYMENT_ACTION_OPTIONS = [
     { value: 'reverse', label: 'Mark payment reversed' },
     { value: 'invalidate', label: 'Invalidate payment' },
 ];
-const SHARED_BUNDLE_ELIGIBLE_STATUSES = new Set(['pending', 'awaiting_payment', 'expired', 'cancelled']);
+const SHARED_BUNDLE_DURATION_OPTIONS = [
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'biweekly', label: 'Bi-weekly' },
+    { value: 'monthly', label: 'Monthly' },
+    { value: 'quarterly', label: 'Quarterly' },
+    { value: 'annually', label: 'Annually' },
+];
 
 function formatCurrency(amount, currency = 'KES') {
     if (amount === null || amount === undefined || amount === '') {
@@ -84,16 +90,16 @@ function toBundleNumber(value) {
     return Number.isFinite(amount) ? amount : 0;
 }
 
-function buildSharedBundleItems(selection) {
-    return selection.map((row) => ({
-        deal_id: row.id,
-        client_id: row.client?.id || row.client_id || null,
-        client_name: row.client?.name || 'Unknown client',
-        status: row.status,
-        product_name: row.product?.name || row.plan_type || 'Subscription',
-        duration: row.duration || 'monthly',
-        allocated_amount: String(toBundleNumber(row.amount || 0)),
-    }));
+function resolveProductPrice(product, duration) {
+    if (!product?.activePrices?.length) return null;
+    return product.activePrices.find((p) => p.duration_key === duration || p.duration_key === duration?.toLowerCase()) || null;
+}
+
+function resolveBasePrice(product, duration) {
+    const priceRow = resolveProductPrice(product, duration);
+    if (priceRow) return Number(priceRow.price || 0);
+    const legacyMap = { weekly: 'weekly_price', biweekly: 'biweekly_price', monthly: 'monthly_price' };
+    return Number(product?.[legacyMap[duration] || 'monthly_price'] || 0);
 }
 
 export default function Deals() {
@@ -159,7 +165,6 @@ export default function Deals() {
     const [sharedBundleDialog, setSharedBundleDialog] = useState({
         open: false,
         step: 1,
-        selection: [],
         platformId: '',
         referenceRoot: '',
         totalAmount: '',
@@ -168,8 +173,8 @@ export default function Deals() {
         items: [],
         preview: null,
         idempotencyKey: createBundleIdempotencyKey(),
-        subscriptionSearchInput: '',
-        subscriptionSearch: '',
+        clientSearchInput: '',
+        clientSearch: '',
     });
 
     const [mpesaPlanSelections, setMpesaPlanSelections] = useState({});
@@ -495,12 +500,11 @@ export default function Deals() {
                 step: 3,
                 preview: result,
                 items: result.items.map((item) => ({
-                    ...current.items.find((entry) => Number(entry.deal_id) === Number(item.source_deal_id)),
-                    deal_id: item.source_deal_id,
+                    ...current.items.find((entry) => Number(entry.client_id) === Number(item.client_id)),
                     client_id: item.client_id,
                     client_name: item.client_name,
-                    status: item.deal_status,
-                    product_name: item.product_name || item.plan_type || 'Subscription',
+                    product_id: item.product_id,
+                    product_name: item.product_name,
                     duration: item.duration,
                     allocated_amount: String(item.allocated_amount),
                 })),
@@ -526,7 +530,6 @@ export default function Deals() {
             setSharedBundleDialog({
                 open: false,
                 step: 1,
-                selection: [],
                 platformId: '',
                 referenceRoot: '',
                 totalAmount: '',
@@ -535,6 +538,8 @@ export default function Deals() {
                 items: [],
                 preview: null,
                 idempotencyKey: createBundleIdempotencyKey(),
+                clientSearchInput: '',
+                clientSearch: '',
             });
             toast.success(`Shared manual payment committed as bundle #${result.bundle?.id}.`);
         },
@@ -548,24 +553,33 @@ export default function Deals() {
         },
     });
 
-    // Live subscription search inside the shared bundle modal step 1
-    const { data: bundleSubscriptionSearchResults, isFetching: bundleSubscriptionSearchLoading } = useQuery({
-        queryKey: ['bundle-subscription-search', sharedBundleDialog.platformId, sharedBundleDialog.subscriptionSearch],
+    // Live client search inside the shared bundle modal step 1
+    const { data: bundleClientSearchResults, isFetching: bundleClientSearchLoading } = useQuery({
+        queryKey: ['bundle-client-search', sharedBundleDialog.platformId, sharedBundleDialog.clientSearch],
         queryFn: () =>
-            api.get('/crm/deals', {
+            api.get('/crm/clients', {
                 params: {
-                    page: 1,
-                    per_page: 10,
-                    search: sharedBundleDialog.subscriptionSearch,
                     platform_id: Number(sharedBundleDialog.platformId),
-                    status: 'pending,awaiting_payment,expired,cancelled',
+                    search: sharedBundleDialog.clientSearch,
+                    per_page: 10,
                 },
             }).then((response) => response.data),
         enabled: sharedBundleDialog.open
             && sharedBundleDialog.step === 1
             && !!sharedBundleDialog.platformId
-            && sharedBundleDialog.subscriptionSearch.trim().length >= 2,
+            && sharedBundleDialog.clientSearch.trim().length >= 2,
         staleTime: 10_000,
+    });
+
+    // Products catalog for step 2 plan assignment
+    const { data: bundleProductsData } = useQuery({
+        queryKey: ['bundle-products', sharedBundleDialog.platformId],
+        queryFn: () =>
+            api.get('/crm/products', {
+                params: { platform_id: Number(sharedBundleDialog.platformId) },
+            }).then((response) => response.data),
+        enabled: sharedBundleDialog.open && sharedBundleDialog.step === 2 && !!sharedBundleDialog.platformId,
+        staleTime: 60_000,
     });
 
     const handleSearch = (event) => {
@@ -629,13 +643,18 @@ export default function Deals() {
     const sharedBundlePaidTotal = toBundleNumber(sharedBundleDialog.totalAmount);
     const sharedBundleShortfall = Math.max(0, sharedBundleAllocatedTotal - sharedBundlePaidTotal);
     const sharedBundleUnallocated = Math.max(0, sharedBundlePaidTotal - sharedBundleAllocatedTotal);
-    const sharedBundlePayload = sharedBundleDialog.platformId ? {
+    const sharedBundleItemsValid = sharedBundleDialog.items.length > 0
+        && sharedBundleDialog.items.every((item) => item.client_id && item.product_id && item.duration);
+    const sharedBundlePayload = sharedBundleDialog.platformId && sharedBundleItemsValid ? {
         platform_id: Number(sharedBundleDialog.platformId),
         reference_root: sharedBundleDialog.referenceRoot.trim(),
         total_amount: sharedBundlePaidTotal,
         reason: sharedBundleDialog.reason.trim(),
         items: sharedBundleDialog.items.map((item) => ({
-            deal_id: Number(item.deal_id),
+            client_id: Number(item.client_id),
+            product_id: Number(item.product_id),
+            duration: item.duration || 'monthly',
+            ...(item.product_price_id ? { product_price_id: Number(item.product_price_id) } : {}),
             allocated_amount: toBundleNumber(item.allocated_amount),
         })),
     } : null;
@@ -888,39 +907,48 @@ export default function Deals() {
             variant: 'primary',
             onClick: (rowsSelection) => {
                 if (!platformFilter) {
-                    toast.warning('Choose one market first, then select the subscriptions you want to settle together.');
+                    toast.warning('Choose one market first, then select the clients you want to settle together.');
                     return;
                 }
 
-                const eligibleRows = rowsSelection.filter((row) => SHARED_BUNDLE_ELIGIBLE_STATUSES.has(String(row.status || '').toLowerCase()));
-                if (!eligibleRows.length) {
-                    toast.warning('Select pending, awaiting payment, expired, or cancelled subscriptions for a shared manual payment.');
-                    return;
-                }
-
-                const marketIds = [...new Set(eligibleRows.map((row) => String(row.platform_id || row.client?.platform_id || '')))];
+                const marketIds = [...new Set(rowsSelection.map((row) => String(row.platform_id || row.client?.platform_id || '')))];
                 if (marketIds.length !== 1 || String(marketIds[0]) !== String(platformFilter)) {
                     toast.warning('Shared manual payments can only be recorded for one filtered market at a time.');
+                    return;
+                }
+
+                // Pre-populate clients from selected rows (product must still be chosen in step 2)
+                const preItems = rowsSelection.map((row) => ({
+                    client_id: row.client?.id || row.client_id || null,
+                    client_name: row.client?.name || 'Unknown client',
+                    client_phone: row.client?.phone_normalized || '',
+                    product_id: null,
+                    product_name: '',
+                    product_price_id: null,
+                    duration: 'monthly',
+                    base_price: 0,
+                    allocated_amount: '',
+                })).filter((item) => item.client_id);
+
+                if (!preItems.length) {
+                    toast.warning('None of the selected rows have a linked client.');
                     return;
                 }
 
                 setSharedBundleDialog({
                     open: true,
                     step: 1,
-                    selection: eligibleRows,
                     platformId: String(platformFilter),
                     referenceRoot: '',
-                    totalAmount: String(eligibleRows.reduce((sum, row) => sum + toBundleNumber(row.amount), 0)),
+                    totalAmount: '',
                     reason: 'Shared manual payment from subscriptions page',
                     discountPin: '',
-                    items: buildSharedBundleItems(eligibleRows),
+                    items: preItems,
                     preview: null,
                     idempotencyKey: createBundleIdempotencyKey(),
+                    clientSearchInput: '',
+                    clientSearch: '',
                 });
-
-                if (eligibleRows.length !== rowsSelection.length) {
-                    toast.warning('Some selected rows were skipped because shared manual payment currently supports pending, awaiting payment, expired, or cancelled subscriptions only.');
-                }
             },
         },
         {
@@ -1364,8 +1392,8 @@ export default function Deals() {
                                     items: [],
                                     preview: null,
                                     idempotencyKey: createBundleIdempotencyKey(),
-                                    subscriptionSearchInput: '',
-                                    subscriptionSearch: '',
+                                    clientSearchInput: '',
+                                    clientSearch: '',
                                 });
                             }}
                             className="flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
@@ -1890,7 +1918,7 @@ export default function Deals() {
                             <div>
                                 <h3 className="crm-panel-title">Record Shared Manual Payment</h3>
                                 <p className="crm-panel-subtitle">
-                                    Step {sharedBundleDialog.step} of 3 • {sharedBundleDialog.selection.length} selected subscription{sharedBundleDialog.selection.length === 1 ? '' : 's'}
+                                    Step {sharedBundleDialog.step} of 3 • {sharedBundleDialog.items.length} client{sharedBundleDialog.items.length === 1 ? '' : 's'} added
                                 </p>
                             </div>
                         </header>
@@ -1937,33 +1965,33 @@ export default function Deals() {
                                     <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
                                         <div>
                                             <p className="text-sm font-semibold text-slate-800">
-                                                Add subscriptions
+                                                Add clients
                                                 {sharedBundleDialog.items.length > 0 ? (
                                                     <span className="ml-1.5 inline-flex items-center rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
                                                         {sharedBundleDialog.items.length}
                                                     </span>
                                                 ) : null}
                                             </p>
-                                            <p className="mt-0.5 text-[11px] text-slate-500">Search by client name or phone to add subscriptions to this bundle.</p>
+                                            <p className="mt-0.5 text-[11px] text-slate-500">Search by name or phone. You'll assign a plan to each client in step 2.</p>
                                         </div>
 
-                                        {/* Search input */}
+                                        {/* Client search input */}
                                         <div className="relative">
                                             <input
                                                 type="text"
-                                                value={sharedBundleDialog.subscriptionSearchInput}
+                                                value={sharedBundleDialog.clientSearchInput}
                                                 onChange={(event) => {
                                                     const value = event.target.value;
                                                     setSharedBundleDialog((current) => ({
                                                         ...current,
-                                                        subscriptionSearchInput: value,
-                                                        subscriptionSearch: value.trim().length >= 2 ? value.trim() : '',
+                                                        clientSearchInput: value,
+                                                        clientSearch: value.trim().length >= 2 ? value.trim() : '',
                                                     }));
                                                 }}
                                                 placeholder="Search client name or phone..."
                                                 className="crm-input pr-8 text-sm"
                                             />
-                                            {bundleSubscriptionSearchLoading ? (
+                                            {bundleClientSearchLoading ? (
                                                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">
                                                     <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                                                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -1977,87 +2005,80 @@ export default function Deals() {
                                             )}
                                         </div>
 
-                                        {/* Search results dropdown */}
-                                        {sharedBundleDialog.subscriptionSearch.length >= 2 && bundleSubscriptionSearchResults?.targets?.data?.length > 0 ? (
+                                        {/* Client search results */}
+                                        {sharedBundleDialog.clientSearch.length >= 2 && bundleClientSearchResults?.data?.length > 0 ? (
                                             <div className="max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-sm">
-                                                {bundleSubscriptionSearchResults.targets.data
-                                                    .filter((row) => !sharedBundleDialog.items.some((item) => item.deal_id === row.id))
-                                                    .map((row) => (
+                                                {bundleClientSearchResults.data
+                                                    .filter((client) => !sharedBundleDialog.items.some((item) => Number(item.client_id) === Number(client.id)))
+                                                    .map((client) => (
                                                         <button
-                                                            key={row.id}
+                                                            key={client.id}
                                                             type="button"
                                                             onClick={() => {
-                                                                const newItem = buildSharedBundleItems([row])[0];
+                                                                const newItem = {
+                                                                    client_id: client.id,
+                                                                    client_name: client.name || 'Unknown',
+                                                                    client_phone: client.phone_normalized || '',
+                                                                    product_id: null,
+                                                                    product_name: '',
+                                                                    product_price_id: null,
+                                                                    duration: 'monthly',
+                                                                    base_price: 0,
+                                                                    allocated_amount: '',
+                                                                };
                                                                 setSharedBundleDialog((current) => ({
                                                                     ...current,
                                                                     items: [...current.items, newItem],
-                                                                    totalAmount: String(
-                                                                        [...current.items, newItem].reduce((sum, item) => sum + toBundleNumber(item.allocated_amount), 0)
-                                                                    ),
-                                                                    subscriptionSearchInput: '',
-                                                                    subscriptionSearch: '',
+                                                                    clientSearchInput: '',
+                                                                    clientSearch: '',
                                                                     preview: null,
                                                                 }));
                                                             }}
                                                             className="flex w-full items-center justify-between px-3 py-2.5 text-left transition hover:bg-teal-50 focus-visible:bg-teal-50 focus-visible:outline-none"
                                                         >
                                                             <div className="min-w-0">
-                                                                <p className="truncate text-sm font-semibold text-slate-900">{row.client?.name || 'Unknown'}</p>
-                                                                <p className="truncate text-xs text-slate-500">{row.product?.name || row.plan_type} • {row.status}</p>
+                                                                <p className="truncate text-sm font-semibold text-slate-900">{client.name}</p>
+                                                                <p className="truncate text-xs text-slate-500">{client.phone_normalized}</p>
                                                             </div>
-                                                            <div className="ml-3 flex flex-shrink-0 items-center gap-2">
-                                                                <span className="text-sm font-medium text-slate-700">{formatCurrency(row.amount, selectedPlatformCurrency || 'KES')}</span>
-                                                                <svg className="h-4 w-4 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                                                </svg>
-                                                            </div>
+                                                            <svg className="ml-3 h-4 w-4 flex-shrink-0 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                                            </svg>
                                                         </button>
                                                     ))}
                                             </div>
-                                        ) : sharedBundleDialog.subscriptionSearch.length >= 2 && !bundleSubscriptionSearchLoading && bundleSubscriptionSearchResults?.targets?.data?.length === 0 ? (
-                                            <p className="rounded-md border border-slate-100 bg-white px-3 py-2 text-xs text-slate-400">No eligible subscriptions found for that search.</p>
+                                        ) : sharedBundleDialog.clientSearch.length >= 2 && !bundleClientSearchLoading && bundleClientSearchResults?.data?.length === 0 ? (
+                                            <p className="rounded-md border border-slate-100 bg-white px-3 py-2 text-xs text-slate-400">No clients found for that search.</p>
                                         ) : null}
 
-                                        {/* Selected items */}
+                                        {/* Added clients */}
                                         {sharedBundleDialog.items.length > 0 ? (
                                             <div className="space-y-1.5">
                                                 {sharedBundleDialog.items.map((item) => (
-                                                    <div key={item.deal_id} className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                                    <div key={item.client_id} className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
                                                         <div className="min-w-0">
                                                             <p className="truncate text-sm font-semibold text-slate-900">{item.client_name}</p>
-                                                            <p className="truncate text-xs text-slate-500">
-                                                                {item.product_name} • {item.status}
-                                                            </p>
+                                                            <p className="truncate text-xs text-slate-500">{item.client_phone || 'Plan assigned in step 2'}</p>
                                                         </div>
-                                                        <div className="flex flex-shrink-0 items-center gap-2">
-                                                            <span className="text-sm font-semibold text-slate-700">
-                                                                {formatCurrency(item.allocated_amount, selectedPlatformCurrency || 'KES')}
-                                                            </span>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setSharedBundleDialog((current) => {
-                                                                    const updated = current.items.filter((i) => i.deal_id !== item.deal_id);
-                                                                    return {
-                                                                        ...current,
-                                                                        items: updated,
-                                                                        totalAmount: String(updated.reduce((sum, i) => sum + toBundleNumber(i.allocated_amount), 0)),
-                                                                        preview: null,
-                                                                    };
-                                                                })}
-                                                                className="rounded p-0.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-rose-400"
-                                                                aria-label={`Remove ${item.client_name}`}
-                                                            >
-                                                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                                                </svg>
-                                                            </button>
-                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSharedBundleDialog((current) => ({
+                                                                ...current,
+                                                                items: current.items.filter((i) => i.client_id !== item.client_id),
+                                                                preview: null,
+                                                            }))}
+                                                            className="rounded p-0.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-rose-400"
+                                                            aria-label={`Remove ${item.client_name}`}
+                                                        >
+                                                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                            </svg>
+                                                        </button>
                                                     </div>
                                                 ))}
                                             </div>
                                         ) : (
                                             <p className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
-                                                No subscriptions added yet. Search above to add clients.
+                                                No clients added yet. Search above to add clients.
                                             </p>
                                         )}
                                     </div>
@@ -2067,44 +2088,122 @@ export default function Deals() {
                             {sharedBundleDialog.step === 2 ? (
                                 <div className="space-y-4">
                                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                                        Adjust each allocation before the bundle is previewed. Review will show any shortfall discount or unallocated remainder.
+                                        Assign a plan and amount to each client. The plan dropdown is filtered to this market's active products.
                                     </div>
                                     <div className="space-y-3">
-                                        {sharedBundleDialog.items.map((item, index) => (
-                                            <div key={item.deal_id} className="grid gap-3 rounded-lg border border-slate-200 p-3 md:grid-cols-[1.5fr_1fr_1fr]">
-                                                <div>
-                                                    <p className="text-sm font-semibold text-slate-900">{item.client_name}</p>
-                                                    <p className="text-xs text-slate-500">
-                                                        {item.product_name} • {item.duration}
-                                                    </p>
+                                        {sharedBundleDialog.items.map((item, index) => {
+                                            const products = Array.isArray(bundleProductsData) ? bundleProductsData : [];
+                                            const selectedProduct = products.find((p) => Number(p.id) === Number(item.product_id)) || null;
+                                            const pricingOptions = selectedProduct?.activePrices?.length
+                                                ? selectedProduct.activePrices.map((p) => ({
+                                                    value: p.duration_key,
+                                                    label: `${SHARED_BUNDLE_DURATION_OPTIONS.find((d) => d.value === p.duration_key)?.label || p.duration_key} — ${formatCurrency(p.price, selectedPlatformCurrency || 'KES')}`,
+                                                    price: p.price,
+                                                    product_price_id: p.id,
+                                                }))
+                                                : SHARED_BUNDLE_DURATION_OPTIONS;
+
+                                            return (
+                                                <div key={item.client_id} className="rounded-lg border border-slate-200 p-3 space-y-3">
+                                                    <div className="flex items-center justify-between">
+                                                        <div>
+                                                            <p className="text-sm font-semibold text-slate-900">{item.client_name}</p>
+                                                            <p className="text-xs text-slate-500">{item.client_phone}</p>
+                                                        </div>
+                                                        <p className="crm-mono text-xs text-slate-500">
+                                                            {sharedBundleDialog.referenceRoot.trim()
+                                                                ? `${sharedBundleDialog.referenceRoot.trim().toUpperCase()}-${index + 1}`
+                                                                : `REF-${index + 1}`}
+                                                        </p>
+                                                    </div>
+                                                    <div className="grid gap-3 md:grid-cols-3">
+                                                        <div>
+                                                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Plan</label>
+                                                            <select
+                                                                value={item.product_id || ''}
+                                                                onChange={(event) => {
+                                                                    const pid = Number(event.target.value) || null;
+                                                                    const prod = products.find((p) => Number(p.id) === pid) || null;
+                                                                    const firstPrice = prod?.activePrices?.[0] || null;
+                                                                    const dur = firstPrice?.duration_key || 'monthly';
+                                                                    const baseAmt = firstPrice ? Number(firstPrice.price) : resolveBasePrice(prod, dur);
+                                                                    setSharedBundleDialog((current) => ({
+                                                                        ...current,
+                                                                        preview: null,
+                                                                        items: current.items.map((entry, i) => i !== index ? entry : {
+                                                                            ...entry,
+                                                                            product_id: pid,
+                                                                            product_name: prod?.display_name || prod?.name || '',
+                                                                            duration: dur,
+                                                                            product_price_id: firstPrice?.id || null,
+                                                                            base_price: baseAmt,
+                                                                            allocated_amount: String(baseAmt),
+                                                                        }),
+                                                                    }));
+                                                                }}
+                                                                className="crm-input"
+                                                            >
+                                                                <option value="">Select plan…</option>
+                                                                {products.map((p) => (
+                                                                    <option key={p.id} value={p.id}>{p.display_name || p.name}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Duration</label>
+                                                            <select
+                                                                value={item.duration || 'monthly'}
+                                                                onChange={(event) => {
+                                                                    const dur = event.target.value;
+                                                                    const priceOpt = pricingOptions.find((p) => p.value === dur);
+                                                                    const baseAmt = priceOpt?.price != null ? Number(priceOpt.price) : resolveBasePrice(selectedProduct, dur);
+                                                                    setSharedBundleDialog((current) => ({
+                                                                        ...current,
+                                                                        preview: null,
+                                                                        items: current.items.map((entry, i) => i !== index ? entry : {
+                                                                            ...entry,
+                                                                            duration: dur,
+                                                                            product_price_id: priceOpt?.product_price_id || null,
+                                                                            base_price: baseAmt,
+                                                                            allocated_amount: String(baseAmt),
+                                                                        }),
+                                                                    }));
+                                                                }}
+                                                                className="crm-input"
+                                                                disabled={!item.product_id}
+                                                            >
+                                                                {pricingOptions.map((opt) => (
+                                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Allocated</label>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.01"
+                                                                value={item.allocated_amount}
+                                                                onChange={(event) => setSharedBundleDialog((current) => ({
+                                                                    ...current,
+                                                                    preview: null,
+                                                                    items: current.items.map((entry, i) => i !== index
+                                                                        ? entry
+                                                                        : { ...entry, allocated_amount: event.target.value }),
+                                                                }))}
+                                                                className="crm-input"
+                                                                disabled={!item.product_id}
+                                                            />
+                                                            {item.base_price > 0 && toBundleNumber(item.allocated_amount) < item.base_price ? (
+                                                                <p className="mt-0.5 text-[11px] text-amber-600">
+                                                                    {Math.round((1 - toBundleNumber(item.allocated_amount) / item.base_price) * 100)}% discount
+                                                                </p>
+                                                            ) : null}
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Allocated</label>
-                                                    <input
-                                                        type="number"
-                                                        min="0"
-                                                        step="0.01"
-                                                        value={item.allocated_amount}
-                                                        onChange={(event) => setSharedBundleDialog((current) => ({
-                                                            ...current,
-                                                            preview: null,
-                                                            items: current.items.map((entry, itemIndex) => itemIndex === index
-                                                                ? { ...entry, allocated_amount: event.target.value }
-                                                                : entry),
-                                                        }))}
-                                                        className="crm-input"
-                                                    />
-                                                </div>
-                                                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Child reference</p>
-                                                    <p className="crm-mono mt-1 text-sm text-slate-700">
-                                                        {sharedBundleDialog.referenceRoot.trim()
-                                                            ? `${sharedBundleDialog.referenceRoot.trim().toUpperCase()}-${index + 1}`
-                                                            : `REF-${index + 1}`}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             ) : null}
@@ -2152,11 +2251,11 @@ export default function Deals() {
 
                                     <div className="space-y-2">
                                         {(sharedBundleDialog.preview?.items || []).map((item) => (
-                                            <div key={item.source_deal_id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                                            <div key={item.client_id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
                                                 <div>
                                                     <p className="text-sm font-semibold text-slate-900">{item.client_name}</p>
                                                     <p className="text-xs text-slate-500">
-                                                        {item.action === 'renew' ? 'Renew with new active row' : 'Activate existing row'} • {item.child_reference}
+                                                        {item.product_name} • {item.duration} • {item.child_reference}
                                                     </p>
                                                 </div>
                                                 <span className="text-sm font-semibold text-slate-700">
@@ -2194,7 +2293,7 @@ export default function Deals() {
                                         onClick={() => setSharedBundleDialog((current) => ({ ...current, step: 2 }))}
                                         disabled={!sharedBundleDialog.referenceRoot.trim() || sharedBundlePaidTotal <= 0 || !sharedBundleDialog.items.length}
                                     >
-                                        Next
+                                        Next — assign plans
                                     </button>
                                 ) : null}
 
@@ -2203,7 +2302,7 @@ export default function Deals() {
                                         type="button"
                                         className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                         onClick={() => sharedBundlePayload && sharedBundlePreviewMutation.mutate(sharedBundlePayload)}
-                                        disabled={!sharedBundlePayload || sharedBundlePreviewMutation.isPending || !sharedBundleDialog.referenceRoot.trim() || sharedBundlePaidTotal <= 0}
+                                        disabled={!sharedBundlePayload || sharedBundlePreviewMutation.isPending || !sharedBundleDialog.referenceRoot.trim() || sharedBundlePaidTotal <= 0 || !sharedBundleItemsValid}
                                     >
                                         {sharedBundlePreviewMutation.isPending ? 'Reviewing...' : 'Review bundle'}
                                     </button>

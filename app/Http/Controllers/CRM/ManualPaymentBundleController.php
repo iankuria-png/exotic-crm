@@ -32,9 +32,11 @@ class ManualPaymentBundleController extends Controller
             'currency' => 'nullable|string|max:10',
             'reason' => 'nullable|string|max:500',
             'items' => 'required|array|min:1',
-            'items.*.deal_id' => 'required|integer|exists:deals,id',
+            'items.*.client_id' => 'required|integer|exists:clients,id',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.duration' => 'nullable|string|in:weekly,biweekly,monthly,quarterly,annually',
+            'items.*.product_price_id' => 'nullable|integer|exists:product_prices,id',
             'items.*.allocated_amount' => 'nullable|numeric|min:0.01',
-            'items.*.duration_days' => 'nullable|integer|min:1|max:365',
         ]);
 
         $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -83,9 +85,11 @@ class ManualPaymentBundleController extends Controller
             'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'idempotency_key' => 'required|string|max:191',
             'items' => 'required|array|min:1',
-            'items.*.deal_id' => 'required|integer|exists:deals,id',
+            'items.*.client_id' => 'required|integer|exists:clients,id',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.duration' => 'nullable|string|in:weekly,biweekly,monthly,quarterly,annually',
+            'items.*.product_price_id' => 'nullable|integer|exists:product_prices,id',
             'items.*.allocated_amount' => 'nullable|numeric|min:0.01',
-            'items.*.duration_days' => 'nullable|integer|min:1|max:365',
         ]);
 
         $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
