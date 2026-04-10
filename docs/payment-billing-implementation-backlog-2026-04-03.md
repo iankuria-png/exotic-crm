@@ -1663,7 +1663,7 @@ Phase exit gate:
 
 - all target providers can be configured via profiles and resolved through the registry
 
-### BILL-501: Build Pesapal compatibility adapter
+### BILL-501: Build Pesapal compatibility adapter 
 
 Primary write scope:
 

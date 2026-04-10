@@ -1817,6 +1817,89 @@ HTML,
         $this->assertStringStartsWith('ambiguous_match:', (string) $fresh->error_message);
     }
 
+    public function test_extraction_recovers_redirected_homepage_url_when_a_clear_crm_match_exists(): void
+    {
+        $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.kenya.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Redirect home recovery',
+            'platform_id' => $platform->id,
+            'status' => 'processing',
+            'upload_batch_id' => 'batch-redirect-home',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 2293,
+            'name' => 'Miracle Massage',
+            'phone_normalized' => '254700002293',
+            'profile_status' => 'publish',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://kenya.example/escort/mira/',
+            'custom_message' => 'Hello',
+            'status' => 'pending_extraction',
+        ]);
+
+        Http::fake([
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/2293' => Http::response([
+                'client' => [
+                    'name' => 'Miracle Massage',
+                    'phone' => '254711002293',
+                    'main_image_url' => 'https://cdn.kenya.test/miracle.jpg',
+                    'meta' => [
+                        'age' => '25',
+                    ],
+                ],
+            ], 200),
+            'https://wp.kenya.test/wp-json/exotic-crm/v1/clients/2293/media' => Http::response([], 200),
+        ]);
+
+        $extractor = new class(app(PushCampaignItemMatchService::class)) extends ProfileExtractionService {
+            public function __construct(PushCampaignItemMatchService $matchService)
+            {
+                parent::__construct($matchService);
+            }
+
+            protected function fetchHtml(string $url): array
+            {
+                if ($url === 'https://kenya.example/escort/mira/') {
+                    return [
+                        'status' => 200,
+                        'content_type' => 'text/html',
+                        'html' => '<html><body class="home page postid-2038"></body></html>',
+                        'requested_url' => $url,
+                        'effective_url' => 'https://kenya.example',
+                        'redirected' => true,
+                        'link_header' => '',
+                    ];
+                }
+
+                return parent::fetchHtml($url);
+            }
+        };
+
+        $extractor->extractProfileBatch(collect([$item]), $platform);
+
+        $fresh = $item->fresh();
+        $this->assertSame('pending', (string) $fresh->status);
+        $this->assertSame($client->id, (int) $fresh->client_id);
+        $this->assertSame(2293, (int) $fresh->wp_post_id);
+        $this->assertSame('https://kenya.example/?p=2293', (string) $fresh->profile_url);
+        $this->assertSame('254711002293', (string) $fresh->profile_phone);
+        $this->assertSame('https://cdn.kenya.test/miracle.jpg', (string) $fresh->profile_image_url);
+        $this->assertSame('25', (string) $fresh->profile_age);
+        $this->assertNull($fresh->error_message);
+    }
+
     public function test_match_candidates_endpoint_returns_paginated_candidates(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');

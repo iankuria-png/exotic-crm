@@ -282,7 +282,10 @@ class ProfileExtractionService
     private function extractViaWp(PushCampaignItem $item, Platform $platform, ?WpSyncService $wpSync): array
     {
         $resolution = $this->resolveWpPostIdForUrl((string) $item->profile_url);
-        $wpPostId = (int) ($resolution['wp_post_id'] ?? 0);
+        $resolutionFailureCode = $this->resolveWpFailureCode($resolution);
+        $redirectedHome = $resolutionFailureCode === 'redirect_home';
+        $wpPostId = $redirectedHome ? 0 : (int) ($resolution['wp_post_id'] ?? 0);
+        $wpPayloadInvalid = false;
 
         if ($wpPostId > 0) {
             $client = Client::query()
@@ -323,11 +326,7 @@ class ProfileExtractionService
                         return $updates;
                     }
 
-                    return [
-                        'wp_post_id' => $wpPostId,
-                        'status' => 'failed',
-                        'error_message' => 'wp_payload_invalid: WordPress profile payload is missing required profile fields.',
-                    ];
+                    $wpPayloadInvalid = true;
                 }
             }
         }
@@ -365,7 +364,9 @@ class ProfileExtractionService
             }
         }
 
-        $reasonCode = $this->resolveWpFailureCode($resolution, (string) ($autoMatch['reason'] ?? ''));
+        $reasonCode = $wpPayloadInvalid
+            ? 'wp_payload_invalid'
+            : $this->resolveWpFailureCode($resolution, (string) ($autoMatch['reason'] ?? ''));
 
         return [
             'wp_post_id' => $wpPostId > 0 ? $wpPostId : null,
@@ -654,8 +655,9 @@ class ProfileExtractionService
     {
         return match ($reasonCode) {
             'http_404' => 'http_404: Profile URL returned HTTP 404. Match this item to a CRM profile or update the URL.',
-            'redirect_home' => 'redirect_home: URL redirected to homepage. Match this item to a CRM profile.',
+            'redirect_home' => 'redirect_home: Imported profile URL redirected to homepage, which usually means the slug is stale or wrong. Review the suggested CRM match or update the URL.',
             'ambiguous_match' => 'ambiguous_match: Multiple CRM profiles matched this URL. Choose one profile manually.',
+            'wp_payload_invalid' => 'wp_payload_invalid: WordPress returned a page, but it did not look like a valid profile. Review the suggested CRM match or update the URL.',
             default => 'no_post_id: Could not resolve profile ID from URL. Match this item to a CRM profile or edit the URL.',
         };
     }

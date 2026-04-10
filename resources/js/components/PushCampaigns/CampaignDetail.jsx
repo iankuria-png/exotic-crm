@@ -88,12 +88,23 @@ function extractionReason(item) {
     if (!rest.length) {
         return {
             code: 'issue',
+            kind: 'issue',
             message,
         };
     }
 
+    const normalizedCode = code.trim();
+    const codeLabels = {
+        redirect_home: 'stale URL',
+        no_post_id: 'unresolved URL',
+        ambiguous_match: 'review match',
+        http_404: 'missing page',
+        wp_payload_invalid: 'profile data issue',
+    };
+
     return {
-        code: code.trim().replaceAll('_', ' '),
+        code: codeLabels[normalizedCode] || normalizedCode.replaceAll('_', ' '),
+        kind: normalizedCode,
         message: rest.join(':').trim(),
     };
 }
@@ -982,6 +993,11 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                             <span className="inline-flex max-w-[250px] truncate rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-700" title={reason.message}>
                                                                 {reason.code}
                                                             </span>
+                                                        ) : null}
+                                                        {reason?.kind === 'redirect_home' ? (
+                                                            <p className="max-w-[250px] text-[10px] text-amber-700">
+                                                                Imported URL looks stale or wrong. Review the suggested CRM match.
+                                                            </p>
                                                         ) : null}
                                                     </td>
                                                     <td className="px-2 py-1">
