@@ -12,6 +12,7 @@ use App\Models\PushCampaignItem;
 use App\Models\PushSubscriberSnapshot;
 use App\Models\User;
 use App\Services\PushCampaign\ProfileExtractionService;
+use App\Services\PushCampaign\PushCampaignItemMatchService;
 use App\Services\PushCampaign\PushCampaignService;
 use App\Services\PushCampaign\UploadBatchStatusService;
 use App\Services\PushNotification\PushProviderService;
@@ -806,6 +807,29 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame('2026-01-07 09:00:00', Carbon::parse($rows[1]['scheduled_at'], 'UTC')->format('Y-m-d H:i:s'));
     }
 
+    public function test_parser_normalizes_legacy_market_timezone_alias_during_import_parsing(): void
+    {
+        $this->createPlatform("Côte d'Ivoire", 'ivoire.example', "Côte d'Ivoire", 'Africa/Yamoussoukro');
+        $service = app(ProfileExtractionService::class);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle("Côte d'Ivoire");
+        $sheet->setCellValue('A1', 'DATE');
+        $sheet->setCellValue('B1', 'PROFILE URL');
+        $sheet->setCellValue('C1', '2026 MESSAGES');
+        $sheet->setCellValue('D1', 'TIME');
+        $sheet->setCellValue('A2', '10th April');
+        $sheet->setCellValue('B2', 'https://www.exoticivoire.com/escorte/ami/');
+        $sheet->setCellValue('C2', 'Message one');
+        $sheet->setCellValue('D2', '12:00:00');
+
+        $rows = $service->parseSheet($sheet, "Côte d'Ivoire", 2026);
+
+        $this->assertCount(1, $rows);
+        $this->assertSame('2026-04-10 12:00:00', Carbon::parse($rows[0]['scheduled_at'], 'UTC')->format('Y-m-d H:i:s'));
+    }
+
     public function test_sheet_alias_mapping_resolves_ivoire_to_ivory_coast(): void
     {
         $platform = $this->createPlatform('Ivory Coast', 'ivoire.example', 'Ivory Coast');
@@ -1085,6 +1109,45 @@ class CrmPushCampaignTest extends TestCase
         $response->assertStatus(422)
             ->assertJsonPath('can_activate', false)
             ->assertJsonPath('counts.overdue', 1);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_schedule_endpoint_uses_campaign_market_timezone_and_keeps_outside_window_items_valid(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-03 08:00:00', 'UTC')->utc());
+
+        $platform = $this->createPlatform("Côte d'Ivoire", 'ivoire.example', "Côte d'Ivoire", 'Africa/Abidjan');
+        $user = $this->createUser('marketing', [$platform->id]);
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Ivoire schedule',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-ivoire-schedule',
+        ]);
+
+        PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://www.exoticivoire.com/escorte/ami/',
+            'custom_message' => 'Bonsoir',
+            'scheduled_at' => Carbon::parse('2026-03-06 10:00:00', 'Africa/Abidjan')->utc(),
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/push-campaigns/{$campaign->id}/schedule", [
+            'scheduled_at' => '2026-03-04 12:00:00',
+            'timezone' => 'Africa/Nairobi',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('dispatch_plan.can_activate', true)
+            ->assertJsonPath('dispatch_plan.counts.outside_dispatch_window', 1)
+            ->assertJsonPath('dispatch_plan.activation_timezone', 'Africa/Abidjan');
+
+        $this->assertSame('2026-03-04 12:00:00', $campaign->fresh()->scheduled_at?->copy()->utc()->format('Y-m-d H:i:s'));
 
         Carbon::setTestNow();
     }
@@ -1383,6 +1446,38 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame('2026-01-07 07:00:00', optional($items->first()->scheduled_at)->setTimezone('UTC')->format('Y-m-d H:i:s'));
     }
 
+    public function test_marketing_user_can_create_campaign_from_selected_crm_escorts_using_market_timezone(): void
+    {
+        $platform = $this->createPlatform("Côte d'Ivoire", 'ivoire.example', "Côte d'Ivoire", 'Africa/Abidjan');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $escort = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 10136,
+            'name' => 'Ami',
+            'phone_normalized' => '22570123456',
+            'client_type' => 'escort',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/crm/push-campaigns/from-crm', [
+            'platform_id' => $platform->id,
+            'client_ids' => [$escort->id],
+            'message' => 'Bonsoir.',
+            'campaign_name' => 'Ivoire CRM Select',
+            'scheduled_at' => '2026-04-10 12:00:00',
+            'timezone' => 'Africa/Nairobi',
+        ]);
+
+        $response->assertStatus(201)->assertJsonPath('created_items', 1);
+
+        $campaignId = (int) $response->json('campaign.id');
+        $item = PushCampaignItem::query()->where('campaign_id', $campaignId)->firstOrFail();
+
+        $this->assertSame('2026-04-10 12:00:00', $item->scheduled_at?->copy()->utc()->format('Y-m-d H:i:s'));
+    }
+
     public function test_marketing_user_can_update_campaign_item_message(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
@@ -1464,6 +1559,40 @@ class CrmPushCampaignTest extends TestCase
         $this->assertNull($fresh->error_message);
     }
 
+    public function test_marketing_user_can_update_campaign_item_schedule_using_campaign_market_timezone(): void
+    {
+        $platform = $this->createPlatform("Côte d'Ivoire", 'ivoire.example', "Côte d'Ivoire", 'Africa/Abidjan');
+        $user = $this->createUser('marketing', [$platform->id]);
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Editable timezone item',
+            'platform_id' => $platform->id,
+            'status' => 'draft',
+            'created_by' => $user->id,
+            'upload_batch_id' => 'batch-edit-item-timezone',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://www.exoticivoire.com/escorte/ami/',
+            'custom_message' => 'Bonsoir',
+            'status' => 'pending',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->patchJson("/api/crm/push-campaigns/{$campaign->id}/items/{$item->id}", [
+            'custom_message' => 'Updated message body',
+            'scheduled_at' => '2026-04-10 12:00:00',
+            'timezone' => 'Africa/Nairobi',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('item.custom_message', 'Updated message body');
+
+        $this->assertSame('2026-04-10 12:00:00', $item->fresh()->scheduled_at?->copy()->utc()->format('Y-m-d H:i:s'));
+    }
+
     public function test_extraction_resolves_wp_post_id_from_link_header_shortlink(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');
@@ -1515,6 +1644,89 @@ class CrmPushCampaignTest extends TestCase
         $this->assertSame(624, (int) $fresh->wp_post_id);
         $this->assertSame('pending', (string) $fresh->status);
         $this->assertNull($fresh->error_message);
+    }
+
+    public function test_extraction_resolves_wp_post_id_from_embedded_html_markers(): void
+    {
+        $platform = $this->createPlatform("Côte d'Ivoire", 'ivoire.example', "Côte d'Ivoire", 'Africa/Abidjan');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.ivoire.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+        ])->save();
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'Marker extraction',
+            'platform_id' => $platform->id,
+            'status' => 'processing',
+            'upload_batch_id' => 'batch-marker-extraction',
+        ]);
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 10136,
+            'name' => 'Ami',
+            'phone_normalized' => '2257010136',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://www.exoticivoire.com/escorte/ami/',
+            'custom_message' => 'Bonsoir',
+            'status' => 'pending_extraction',
+        ]);
+
+        Http::fake([
+            'https://www.exoticivoire.com/escorte/ami/' => Http::response(
+                <<<'HTML'
+<html>
+    <head><title>Ami</title></head>
+    <body class="single single-escorte postid-10136">
+        <input type="hidden" name="profile_id" value="10136" />
+        <script>
+            var CURRENT_ID = 10136;
+            var pid = 10136;
+            window.__page = {"cachePurgePostId":10136};
+        </script>
+    </body>
+</html>
+HTML,
+                200,
+                ['content-type' => 'text/html; charset=utf-8']
+            ),
+            'https://wp.ivoire.test/*' => Http::response([], 404),
+        ]);
+
+        app(ProfileExtractionService::class)->extractProfileBatch(collect([$item]), $platform);
+
+        $fresh = $item->fresh();
+        $this->assertSame((int) $client->id, (int) $fresh->client_id);
+        $this->assertSame(10136, (int) $fresh->wp_post_id);
+        $this->assertSame('pending', (string) $fresh->status);
+        $this->assertNull($fresh->error_message);
+    }
+
+    public function test_auto_match_supports_escorte_profile_urls(): void
+    {
+        $platform = $this->createPlatform("Côte d'Ivoire", 'ivoire.example', "Côte d'Ivoire", 'Africa/Abidjan');
+
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'client_type' => 'escort',
+            'wp_post_id' => 6085,
+            'name' => 'Vera',
+            'phone_normalized' => '22570006085',
+        ]);
+
+        $match = app(PushCampaignItemMatchService::class)->resolveAutoMatch(
+            (int) $platform->id,
+            'https://www.exoticivoire.com/escorte/vera/'
+        );
+
+        $this->assertSame('matched', (string) ($match['reason'] ?? ''));
+        $this->assertSame((int) $client->id, (int) data_get($match, 'candidate.id'));
+        $this->assertSame(6085, (int) data_get($match, 'candidate.wp_post_id'));
     }
 
     public function test_extraction_classifies_http_404_as_actionable_failure(): void

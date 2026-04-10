@@ -4,6 +4,7 @@ namespace App\Services\PushCampaign;
 
 use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
+use App\Support\MarketTimezone;
 use Carbon\Carbon;
 
 class PushCampaignDispatchReadinessService
@@ -25,7 +26,10 @@ class PushCampaignDispatchReadinessService
         $pushCampaign->loadMissing('platform:id,timezone');
 
         $activationAt = ($activationAtUtc?->copy() ?? now())->utc();
-        $timezone = trim((string) ($activationTimezone ?: ($pushCampaign->platform?->timezone ?: config('app.timezone', 'UTC'))));
+        $timezone = MarketTimezone::resolve(
+            $pushCampaign->platform?->timezone,
+            $activationTimezone ?: config('app.timezone', 'UTC')
+        );
         $dispatchUntil = $activationAt->copy()->addHours(self::DISPATCH_WINDOW_HOURS);
         $graceThreshold = $activationAt->copy()->subMinutes(self::LATE_GRACE_MINUTES);
 
@@ -123,7 +127,7 @@ class PushCampaignDispatchReadinessService
         ?Carbon $referenceAtUtc = null,
         ?string $referenceTimezone = null
     ): array {
-        $timezone = trim((string) ($referenceTimezone ?: config('app.timezone', 'UTC')));
+        $timezone = MarketTimezone::resolve($referenceTimezone, config('app.timezone', 'UTC'));
         $referenceAt = ($referenceAtUtc?->copy() ?? now())->utc();
 
         if ((string) $item->status !== 'pending') {

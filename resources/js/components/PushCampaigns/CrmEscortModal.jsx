@@ -52,6 +52,12 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
         }).then((response) => response.data),
     });
 
+    const selectedPlatform = useMemo(
+        () => platformOptions.find((platform) => Number(platform.platform_id) === Number(platformId)) || null,
+        [platformId, platformOptions]
+    );
+    const selectedTimezone = selectedPlatform?.timezone || 'UTC';
+
     const createMutation = useMutation({
         mutationFn: () => api.post('/crm/push-campaigns/from-crm', {
             platform_id: Number(platformId),
@@ -59,7 +65,7 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
             message: message.trim(),
             campaign_name: campaignName.trim() || undefined,
             scheduled_at: scheduledAt || undefined,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+            timezone: selectedTimezone,
         }).then((response) => response.data),
         onSuccess: (response) => {
             toast.success(`Created campaign with ${response?.created_items || 0} selected escorts.`);
@@ -238,6 +244,9 @@ export default function CrmEscortModal({ open, onClose, onCreated, platformOptio
                             onChange={(event) => setScheduledAt(event.target.value)}
                             className="crm-input"
                         />
+                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                            Market local time: <span className="font-semibold text-slate-800">{selectedTimezone}</span>
+                        </div>
                         <input
                             value={message}
                             onChange={(event) => setMessage(event.target.value)}

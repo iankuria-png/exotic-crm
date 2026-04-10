@@ -8,6 +8,7 @@ use App\Models\PushCampaignItem;
 use App\Models\ScraperProfilePreset;
 use App\Services\WpSyncService;
 use App\Support\DomParserTrait;
+use App\Support\MarketTimezone;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
@@ -440,7 +441,7 @@ class ProfileExtractionService
     {
         $normalizedDate = preg_replace('/(\d+)(st|nd|rd|th)\b/i', '$1', trim($dateLabel)) ?? trim($dateLabel);
         $normalizedTime = trim($timeValue) !== '' ? trim($timeValue) : '00:00:00';
-        $timezone = trim((string) ($platform->timezone ?: 'Africa/Nairobi'));
+        $timezone = MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'));
 
         try {
             return Carbon::parse(sprintf('%s %d %s', $normalizedDate, $year, $normalizedTime), $timezone)->utc();
@@ -535,6 +536,9 @@ class ProfileExtractionService
             if (!$resolvedPostId) {
                 $resolvedPostId = $this->parseWpPostIdFromHtmlShortlink((string) ($payload['html'] ?? ''));
             }
+            if (!$resolvedPostId) {
+                $resolvedPostId = $this->parseWpPostIdFromHtmlMarkers((string) ($payload['html'] ?? ''));
+            }
 
             return [
                 ...$context,
@@ -597,6 +601,33 @@ class ProfileExtractionService
 
         if (preg_match('/<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']shortlink["\']/i', $normalized, $match)) {
             return $this->parseWpPostIdFromUrl((string) ($match[1] ?? ''));
+        }
+
+        return null;
+    }
+
+    private function parseWpPostIdFromHtmlMarkers(string $html): ?int
+    {
+        $normalized = trim($html);
+        if ($normalized === '') {
+            return null;
+        }
+
+        $patterns = [
+            '/\bpostid-(\d+)\b/i',
+            '/\bprofile_id\b[^>]*\bvalue=["\']?(\d+)["\']?/i',
+            '/\bCURRENT_ID\b\s*=\s*(\d+)/i',
+            '/\bpid\b\s*=\s*(\d+)/i',
+            '/\bcachePurgePostId\b["\']?\s*:\s*(\d+)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $normalized, $match)) {
+                $postId = (int) ($match[1] ?? 0);
+                if ($postId > 0) {
+                    return $postId;
+                }
+            }
         }
 
         return null;
@@ -736,7 +767,7 @@ class ProfileExtractionService
             $profileAge = $this->deriveAgeFromBirthday(
                 (string) $fields['birthday'],
                 $this->resolveItemAgeReferenceDate($item, $platform),
-                (string) ($platform->timezone ?: config('app.timezone', 'UTC'))
+                MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'))
             );
         }
 
@@ -802,7 +833,7 @@ class ProfileExtractionService
             $derivedAge = $this->deriveAgeFromBirthday(
                 (string) $fields['birthday'],
                 $this->resolveItemAgeReferenceDate($item, $platform),
-                (string) ($platform->timezone ?: config('app.timezone', 'UTC'))
+                MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'))
             );
             if ($derivedAge !== null) {
                 $updates['profile_age'] = $derivedAge;
@@ -885,7 +916,7 @@ class ProfileExtractionService
 
     private function resolveItemAgeReferenceDate(PushCampaignItem $item, Platform $platform): Carbon
     {
-        $timezone = (string) ($platform->timezone ?: config('app.timezone', 'UTC'));
+        $timezone = MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'));
         $scheduledAt = $item->scheduled_at;
 
         if ($scheduledAt instanceof Carbon) {

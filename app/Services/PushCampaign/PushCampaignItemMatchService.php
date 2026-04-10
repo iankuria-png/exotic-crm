@@ -197,10 +197,7 @@ class PushCampaignItemMatchService
      */
     private function buildMatchContext(string $profileUrl): array
     {
-        $slug = '';
-        if (preg_match('#/escort/([^/?\\#]+)#i', $profileUrl, $match)) {
-            $slug = strtolower(trim((string) ($match[1] ?? '')));
-        }
+        $slug = $this->extractProfileSlug($profileUrl);
 
         $slugTokens = array_values(array_filter(
             preg_split('/[^a-z0-9]+/i', $slug) ?: [],
@@ -213,6 +210,34 @@ class PushCampaignItemMatchService
             'slug_normalized' => $this->normalizeText($slug),
             'url_wp_post_id' => $this->parseWpPostIdFromUrl($profileUrl),
         ];
+    }
+
+    private function extractProfileSlug(string $profileUrl): string
+    {
+        $path = trim((string) parse_url($profileUrl, PHP_URL_PATH));
+        if ($path === '') {
+            return '';
+        }
+
+        $segments = array_values(array_filter(
+            explode('/', trim($path, '/')),
+            static fn($segment): bool => is_string($segment) && trim($segment) !== ''
+        ));
+
+        if (empty($segments)) {
+            return '';
+        }
+
+        $lastSegment = strtolower(trim((string) end($segments)));
+        $previousSegment = count($segments) > 1
+            ? strtolower(trim((string) ($segments[count($segments) - 2] ?? '')))
+            : '';
+
+        if (in_array($previousSegment, ['escort', 'escorte'], true)) {
+            return $lastSegment;
+        }
+
+        return $lastSegment;
     }
 
     /**

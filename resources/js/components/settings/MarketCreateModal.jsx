@@ -25,7 +25,7 @@ export default function MarketCreateModal({
                     <input value={createForm.country} onChange={(event) => onUpdateForm((current) => ({ ...current, country: event.target.value }))} className="crm-input" placeholder="Country" />
                     <input value={createForm.phone_prefix} onChange={(event) => onUpdateForm((current) => ({ ...current, phone_prefix: event.target.value }))} className="crm-input" placeholder="Phone prefix" />
                     <input value={createForm.currency_code} onChange={(event) => onUpdateForm((current) => ({ ...current, currency_code: event.target.value.toUpperCase() }))} className="crm-input" placeholder="Currency code" />
-                    <input value={createForm.timezone} onChange={(event) => onUpdateForm((current) => ({ ...current, timezone: event.target.value }))} className="crm-input" placeholder="Timezone" />
+                    <input value={createForm.timezone} onChange={(event) => onUpdateForm((current) => ({ ...current, timezone: event.target.value }))} className="crm-input" placeholder="PHP/IANA timezone, e.g. Africa/Nairobi" />
                     <input value={createForm.wp_api_url} onChange={(event) => onUpdateForm((current) => ({ ...current, wp_api_url: event.target.value }))} className="crm-input md:col-span-2" placeholder="WordPress Sync API URL" />
                     <input value={createForm.support_chat_url} onChange={(event) => onUpdateForm((current) => ({ ...current, support_chat_url: event.target.value }))} className="crm-input md:col-span-2" placeholder="Support board URL" />
                     <input value={createForm.wp_api_user} onChange={(event) => onUpdateForm((current) => ({ ...current, wp_api_user: event.target.value }))} className="crm-input" placeholder="WordPress API user" />
@@ -54,7 +54,7 @@ export default function MarketCreateModal({
                             ...createForm,
                             reason: 'Created from integrations workspace',
                         })}
-                        disabled={createPlatformMutation.isPending || !createForm.name.trim() || !createForm.domain.trim() || !createForm.country.trim()}
+                        disabled={createPlatformMutation.isPending || !createForm.name.trim() || !createForm.domain.trim() || !createForm.country.trim() || !createForm.timezone.trim()}
                         className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         {createPlatformMutation.isPending ? 'Creating...' : 'Create market'}

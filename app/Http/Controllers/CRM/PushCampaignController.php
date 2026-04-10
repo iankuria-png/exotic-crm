@@ -20,6 +20,7 @@ use App\Services\PushNotification\PushProviderService;
 use App\Services\PushNotification\SubscriberSyncService;
 use App\Services\AuditService;
 use App\Services\WpSyncService;
+use App\Support\MarketTimezone;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -811,6 +812,7 @@ class PushCampaignController extends Controller
         );
 
         $platform = Platform::query()->findOrFail($platformId);
+        $platformTimezone = MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'));
         $clientIds = collect((array) $validated['client_ids'])
             ->map(fn($id) => (int) $id)
             ->filter(fn($id) => $id > 0)
@@ -831,9 +833,8 @@ class PushCampaignController extends Controller
             ], 422);
         }
 
-        $timezone = trim((string) ($validated['timezone'] ?? ($platform->timezone ?: config('app.timezone', 'UTC'))));
         $scheduledAt = !empty($validated['scheduled_at'])
-            ? Carbon::parse((string) $validated['scheduled_at'], $timezone)->utc()
+            ? Carbon::parse((string) $validated['scheduled_at'], $platformTimezone)->utc()
             : null;
 
         $campaign = PushCampaign::query()->create([
@@ -852,7 +853,7 @@ class PushCampaignController extends Controller
         $skippedClientIds = [];
         $now = now();
         $scheduledAtString = $scheduledAt?->toDateTimeString();
-        $dateLabel = $scheduledAt ? $scheduledAt->copy()->setTimezone($timezone)->toDateString() : null;
+        $dateLabel = $scheduledAt ? $scheduledAt->copy()->setTimezone($platformTimezone)->toDateString() : null;
 
         foreach ($clients as $client) {
             $profileUrl = $this->resolveClientProfileUrl($client, $platform);
@@ -894,7 +895,10 @@ class PushCampaignController extends Controller
             'status' => 'draft',
         ])->save();
 
-        $campaign->load('platform:id,name,country');
+        $campaign->load('platform:id,name,country,timezone');
+        if ($campaign->platform) {
+            $campaign->platform->setAttribute('timezone', $platformTimezone);
+        }
 
         return response()->json([
             'campaign' => $campaign,
@@ -934,6 +938,12 @@ class PushCampaignController extends Controller
             'platform:id,name,country,timezone',
             'creator:id,name,email',
         ]);
+        if ($pushCampaign->platform) {
+            $pushCampaign->platform->setAttribute(
+                'timezone',
+                MarketTimezone::resolve($pushCampaign->platform->timezone, config('app.timezone', 'UTC'))
+            );
+        }
 
         $itemsQuery = PushCampaignItem::query()
             ->where('campaign_id', (int) $pushCampaign->id)
@@ -946,7 +956,7 @@ class PushCampaignController extends Controller
 
         $items = $itemsQuery->paginate((int) ($validated['per_page'] ?? 50));
         $timingReferenceUtc = now()->utc();
-        $timingTimezone = (string) ($pushCampaign->platform?->timezone ?: config('app.timezone', 'UTC'));
+        $timingTimezone = MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'));
         $items->getCollection()->transform(function (PushCampaignItem $item) use ($timingReferenceUtc, $timingTimezone): PushCampaignItem {
             $timing = $this->pushCampaignDispatchReadinessService->describeItemTimingState(
                 $item,
@@ -972,6 +982,7 @@ class PushCampaignController extends Controller
         $this->ensureCampaignAccess($request, $pushCampaign);
         $this->ensureCampaignItemBelongsToCampaign($pushCampaign, $pushCampaignItem);
         $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be edited.');
+        $pushCampaign->loadMissing('platform:id,timezone');
 
         $validated = $request->validate([
             'custom_message' => 'sometimes|required|string|max:255',
@@ -1039,7 +1050,7 @@ class PushCampaignController extends Controller
         }
 
         if (array_key_exists('scheduled_at', $validated)) {
-            $timezone = trim((string) ($validated['timezone'] ?? config('app.timezone', 'UTC')));
+            $timezone = MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'));
             $scheduledAt = $validated['scheduled_at']
                 ? Carbon::parse((string) $validated['scheduled_at'], $timezone)->utc()
                 : null;
@@ -1357,8 +1368,9 @@ class PushCampaignController extends Controller
             'timezone' => 'nullable|string|max:64',
         ]);
 
+        $pushCampaign->loadMissing('platform:id,timezone');
         $mode = (string) ($validated['mode'] ?? 'execute_now');
-        $timezone = trim((string) ($validated['timezone'] ?? ($pushCampaign->platform?->timezone ?: config('app.timezone', 'UTC'))));
+        $timezone = MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'));
         $activationAt = now()->utc();
 
         if ($mode === 'schedule') {
@@ -1407,7 +1419,7 @@ class PushCampaignController extends Controller
         $readiness = $this->pushCampaignDispatchReadinessService->analyzeActivation(
             $pushCampaign,
             now()->utc(),
-            (string) ($pushCampaign->platform?->timezone ?: config('app.timezone', 'UTC'))
+            MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'))
         );
 
         if (!(bool) ($readiness['can_activate'] ?? false)) {
@@ -1425,13 +1437,14 @@ class PushCampaignController extends Controller
     public function schedule(Request $request, PushCampaign $pushCampaign)
     {
         $this->ensureCampaignAccess($request, $pushCampaign);
+        $pushCampaign->loadMissing('platform:id,timezone');
 
         $validated = $request->validate([
             'scheduled_at' => 'required|date',
             'timezone' => 'nullable|string|max:64',
         ]);
 
-        $timezone = trim((string) ($validated['timezone'] ?? config('app.timezone', 'UTC')));
+        $timezone = MarketTimezone::resolve($pushCampaign->platform?->timezone, config('app.timezone', 'UTC'));
         $scheduledAt = Carbon::parse((string) $validated['scheduled_at'], $timezone)->utc();
 
         if ($scheduledAt->lessThanOrEqualTo(now())) {
@@ -2770,7 +2783,7 @@ class PushCampaignController extends Controller
                         $derivedAge = $this->deriveAgeFromBirthday(
                             (string) $fields['birthday'],
                             $this->resolveItemAgeReferenceDate($pushCampaignItem, $platform),
-                            (string) ($platform->timezone ?: config('app.timezone', 'UTC'))
+                            MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'))
                         );
                         if ($derivedAge !== null) {
                             $payload['profile_age'] = $derivedAge;
@@ -2951,7 +2964,7 @@ class PushCampaignController extends Controller
 
     private function resolveItemAgeReferenceDate(PushCampaignItem $pushCampaignItem, Platform $platform): Carbon
     {
-        $timezone = (string) ($platform->timezone ?: config('app.timezone', 'UTC'));
+        $timezone = MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC'));
         $scheduledAt = $pushCampaignItem->scheduled_at;
 
         if ($scheduledAt instanceof Carbon) {

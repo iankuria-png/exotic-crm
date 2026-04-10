@@ -165,7 +165,7 @@ function buildPlatformEditor(platform) {
         db_prefix: platform.wp_provisioning?.db_prefix || 'wp_',
         db_pass_configured: Boolean(platform.wp_provisioning?.db_pass_configured),
         currency_code: platform.currency || 'KES',
-        timezone: platform.timezone || 'Africa/Nairobi',
+        timezone: platform.timezone || '',
         phone_prefix: platform.phone_prefix || '254',
         support_chat_url: platform.support_chat_url || '',
         support_board_api_url: platform.support_board_api_url || '',
@@ -190,7 +190,7 @@ function defaultPlatformForm() {
         db_pass: '',
         db_prefix: 'wp_',
         currency_code: 'KES',
-        timezone: 'Africa/Nairobi',
+        timezone: '',
         phone_prefix: '254',
         support_chat_url: '',
     };

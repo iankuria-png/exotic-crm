@@ -1057,6 +1057,82 @@ CSV;
         ]);
     }
 
+    public function test_admin_can_create_market_with_legacy_timezone_alias_and_it_is_normalized(): void
+    {
+        $admin = $this->createUser('admin', []);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/settings/integrations/platforms', [
+            'name' => "Exotic Côte d'Ivoire",
+            'domain' => 'ivoire-market.test',
+            'country' => "Côte d'Ivoire",
+            'timezone' => 'Africa/Yamoussoukro',
+            'phone_prefix' => '225',
+            'currency_code' => 'xof',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('platform.timezone', 'Africa/Abidjan')
+            ->assertJsonPath('platform.currency', 'XOF');
+
+        $platformId = (int) $response->json('platform.platform_id');
+        $this->assertSame('Africa/Abidjan', Platform::query()->findOrFail($platformId)->timezone);
+    }
+
+    public function test_admin_cannot_create_market_without_timezone(): void
+    {
+        $admin = $this->createUser('admin', []);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/settings/integrations/platforms', [
+            'name' => 'Timezone Missing',
+            'domain' => 'timezone-missing.test',
+            'country' => 'Kenya',
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors(['timezone']);
+    }
+
+    public function test_admin_cannot_create_market_with_invalid_timezone(): void
+    {
+        $admin = $this->createUser('admin', []);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/settings/integrations/platforms', [
+            'name' => 'Timezone Invalid',
+            'domain' => 'timezone-invalid.test',
+            'country' => 'Kenya',
+            'timezone' => 'Africa/Definitely-Invalid',
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors(['timezone']);
+    }
+
+    public function test_admin_can_update_market_timezone_alias_and_it_is_normalized(): void
+    {
+        $admin = $this->createUser('admin', []);
+        $platform = Platform::query()->create([
+            'name' => 'Exotic Ivoire',
+            'domain' => 'ivoire-update.test',
+            'country' => "Côte d'Ivoire",
+            'timezone' => 'Africa/Nairobi',
+            'currency_code' => 'XOF',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}", [
+            'timezone' => 'Africa/Yamoussoukro',
+            'reason' => 'Normalize legacy timezone',
+        ]);
+
+        $response->assertOk()->assertJsonPath('platform.timezone', 'Africa/Abidjan');
+        $this->assertSame('Africa/Abidjan', $platform->fresh()->timezone);
+    }
+
     public function test_sub_admin_can_run_leads_sync_for_owned_market_and_blocked_for_out_of_scope_market(): void
     {
         $platformA = $this->createPlatform('Kenya');

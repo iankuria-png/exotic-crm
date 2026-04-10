@@ -8,7 +8,7 @@ function prettyStatus(status) {
     return (status || 'unknown').replaceAll('_', ' ');
 }
 
-function formatDateTime(value, fallback = '--') {
+function formatDateTime(value, fallback = '--', timeZone = undefined) {
     if (!value) {
         return fallback;
     }
@@ -18,16 +18,27 @@ function formatDateTime(value, fallback = '--') {
         return String(value);
     }
 
-    return new Intl.DateTimeFormat(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-    }).format(date);
+    try {
+        return new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            ...(timeZone ? { timeZone } : {}),
+        }).format(date);
+    } catch (error) {
+        return new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        }).format(date);
+    }
 }
 
-function toDateTimeLocal(value) {
+function toDateTimeLocal(value, timeZone = 'UTC') {
     if (!value) {
         return '';
     }
@@ -35,6 +46,28 @@ function toDateTimeLocal(value) {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) {
         return '';
+    }
+
+    try {
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23',
+        });
+        const parts = formatter.formatToParts(parsed).reduce((acc, part) => {
+            acc[part.type] = part.value;
+            return acc;
+        }, {});
+
+        if (parts.year && parts.month && parts.day && parts.hour && parts.minute) {
+            return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+        }
+    } catch (error) {
+        // Fall back to browser-local rendering if the timezone is unavailable.
     }
 
     const tzOffsetMs = parsed.getTimezoneOffset() * 60 * 1000;
@@ -90,7 +123,7 @@ function timingStateMeta(timingState) {
 
     if (state === 'outside_window') {
         return {
-            label: 'Outside 24h queue',
+            label: 'Queues later',
             className: 'bg-slate-100 text-slate-700',
         };
     }
@@ -108,7 +141,7 @@ const EMPTY_EDIT_FORM = {
     scheduled_at: '',
 };
 
-function itemToEditForm(item) {
+function itemToEditForm(item, timeZone) {
     return {
         profile_url: item?.profile_url || '',
         profile_name: item?.profile_name || '',
@@ -116,13 +149,13 @@ function itemToEditForm(item) {
         profile_image_url: item?.profile_image_url || '',
         profile_age: item?.profile_age || '',
         custom_message: item?.custom_message || '',
-        scheduled_at: toDateTimeLocal(item?.scheduled_at),
+        scheduled_at: toDateTimeLocal(item?.scheduled_at, timeZone),
     };
 }
 
-function mergeHydratedItemIntoForm(form, item) {
+function mergeHydratedItemIntoForm(form, item, timeZone) {
     const next = { ...form };
-    const hydrated = itemToEditForm(item);
+    const hydrated = itemToEditForm(item, timeZone);
 
     ['profile_url', 'profile_name', 'profile_phone', 'profile_image_url', 'profile_age', 'scheduled_at'].forEach((field) => {
         if (!next[field] && hydrated[field]) {
@@ -228,7 +261,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                 }));
 
                 if (editingItemId === hydratedItem.id) {
-                    setEditForm((prev) => mergeHydratedItemIntoForm(prev, hydratedItem));
+                    setEditForm((prev) => mergeHydratedItemIntoForm(prev, hydratedItem, campaign?.platform?.timezone || 'UTC'));
                 }
             }
 
@@ -474,6 +507,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const campaign = data?.campaign || null;
     const items = data?.items?.data || [];
     const pagination = data?.items || null;
+    const marketTimezone = campaign?.platform?.timezone || 'UTC';
 
     useEffect(() => {
         if (!items.length) {
@@ -532,7 +566,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
     const startEditing = (item) => {
         setEditingItemId(item.id);
         setMatchingItemId(null);
-        setEditForm(itemToEditForm(item));
+        setEditForm(itemToEditForm(item, marketTimezone));
         setMediaUploadFile(null);
         hydrateItemProfile({
             itemId: item.id,
@@ -567,8 +601,6 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
             return;
         }
 
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-
         updateItemMutation.mutate({
             itemId: activeEditItem.id,
             payload: {
@@ -579,7 +611,6 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                 profile_age: editForm.profile_age.trim() || null,
                 custom_message: editForm.custom_message.trim(),
                 scheduled_at: editForm.scheduled_at || null,
-                timezone,
             },
         });
     };
@@ -611,11 +642,11 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                         </article>
                         <article className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                             <p className="font-semibold text-slate-800">Scheduled at</p>
-                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(campaign?.scheduled_at, 'Not scheduled')}</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(campaign?.scheduled_at, 'Not scheduled', marketTimezone)}</p>
                         </article>
                         <article className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                             <p className="font-semibold text-slate-800">Confirmed</p>
-                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(campaign?.confirmed_at, 'No')}</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(campaign?.confirmed_at, 'No', marketTimezone)}</p>
                         </article>
                     </section>
 
@@ -779,6 +810,9 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                         <p className="mt-2 text-[11px] text-slate-500">
                             Campaign schedule sets activation time only. Each item still sends at its own date/time.
                         </p>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                            Market local time: <span className="font-semibold text-slate-700">{marketTimezone}</span>
+                        </p>
 
                         {/* Reschedule: only show for campaigns with failed/skipped items */}
                         {['partial', 'failed', 'completed', 'running'].includes(campaign?.status) &&
@@ -927,7 +961,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                                     className={`border-t border-slate-100 ${previewItem?.id === item.id ? 'bg-teal-50/60' : ''}`}
                                                     onClick={() => setPreviewItemId(item.id)}
                                                 >
-                                                    <td className="whitespace-nowrap px-2 py-1">{formatDateTime(item.scheduled_at, item.date_label || '--')}</td>
+                                                    <td className="whitespace-nowrap px-2 py-1">{formatDateTime(item.scheduled_at, item.date_label || '--', item.timing_reference_timezone || marketTimezone)}</td>
                                                     <td className="px-2 py-1">
                                                         <p className="font-medium text-slate-700">{item.profile_name || 'Unknown'}{item.profile_city ? ` — ${item.profile_city}` : ''}</p>
                                                         <p className="max-w-[250px] truncate text-slate-500">{item.profile_url}</p>
@@ -1206,6 +1240,9 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                     onChange={(event) => setEditForm((prev) => ({ ...prev, scheduled_at: event.target.value }))}
                                     className="crm-input"
                                 />
+                                <p className="text-[11px] text-slate-500 md:col-span-2">
+                                    Enter this item time in <span className="font-semibold text-slate-700">{marketTimezone}</span>.
+                                </p>
                                 <textarea
                                     value={editForm.custom_message}
                                     onChange={(event) => setEditForm((prev) => ({ ...prev, custom_message: event.target.value }))}
@@ -1400,10 +1437,13 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                     <p className="mt-1 text-lg font-semibold text-slate-900">{executeCounts?.queue_with_delay || 0}</p>
                                 </article>
                                 <article className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
-                                    <p className="font-semibold text-slate-800">Outside 24h queue</p>
+                                    <p className="font-semibold text-slate-800">Queues later</p>
                                     <p className="mt-1 text-lg font-semibold text-slate-900">{executeCounts?.outside_dispatch_window || 0}</p>
                                 </article>
                             </div>
+                            <p className="text-xs text-slate-500">
+                                Items outside the next 24 hours remain valid and will queue automatically when they enter the dispatch window.
+                            </p>
 
                             <p className={`rounded-md border px-3 py-2 text-sm ${
                                 executeReadiness?.can_activate
@@ -1419,7 +1459,7 @@ export default function CampaignDetail({ campaignId, onClose, onChanged }) {
                                     <div className="mt-2 space-y-1">
                                         {executeSampleOverdue.map((item) => (
                                             <p key={item.id} className="text-xs text-rose-800">
-                                                #{item.id} {item.profile_name || 'Unknown'} • {formatDateTime(item.scheduled_at_local || item.scheduled_at, '--')}
+                                                #{item.id} {item.profile_name || 'Unknown'} • {formatDateTime(item.scheduled_at || item.scheduled_at_local, '--', executeReadiness?.activation_timezone || marketTimezone)}
                                             </p>
                                         ))}
                                     </div>

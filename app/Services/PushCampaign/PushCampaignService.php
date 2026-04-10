@@ -8,6 +8,7 @@ use App\Models\PushCampaign;
 use App\Models\PushCampaignItem;
 use App\Services\AuditService;
 use App\Services\PushNotification\PushProviderService;
+use App\Support\MarketTimezone;
 use App\Support\CrmAuditAction;
 use Carbon\Carbon;
 
@@ -63,7 +64,7 @@ class PushCampaignService
     {
         $campaign->loadMissing('platform:id,timezone');
         $activationAt = now()->utc();
-        $timezone = (string) ($campaign->platform?->timezone ?: config('app.timezone', 'UTC'));
+        $timezone = MarketTimezone::resolve($campaign->platform?->timezone, config('app.timezone', 'UTC'));
         $readiness = $this->pushCampaignDispatchReadinessService->analyzeActivation($campaign, $activationAt, $timezone);
 
         if (!(bool) ($readiness['can_activate'] ?? false)) {

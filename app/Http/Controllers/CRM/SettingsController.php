@@ -45,6 +45,7 @@ use App\Services\WalletSyncService;
 use App\Services\WalletSettingsService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
+use App\Support\MarketTimezone;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -784,7 +785,7 @@ class SettingsController extends Controller
             'wp_api_user' => 'nullable|string|max:100',
             'wp_api_password' => 'nullable|string|max:255',
             'phone_prefix' => ['nullable', 'string', 'max:5', 'regex:/^\d{1,5}$/'],
-            'timezone' => 'nullable|string|max:50',
+            'timezone' => 'required|string|max:64',
             'currency_code' => 'nullable|string|size:3',
             'db_host' => 'nullable|string|max:255',
             'db_name' => 'nullable|string|max:255',
@@ -2407,7 +2408,7 @@ class SettingsController extends Controller
             'wp_api_user' => 'sometimes|nullable|string|max:100',
             'wp_api_password' => 'sometimes|nullable|string|max:255',
             'phone_prefix' => ['sometimes', 'nullable', 'string', 'max:5', 'regex:/^\d{1,5}$/'],
-            'timezone' => 'sometimes|nullable|string|max:50',
+            'timezone' => 'sometimes|required|string|max:64',
             'currency_code' => 'sometimes|nullable|string|size:3',
             'db_host' => 'sometimes|nullable|string|max:255',
             'db_name' => 'sometimes|nullable|string|max:255',
@@ -2423,12 +2424,10 @@ class SettingsController extends Controller
 
         $beforeState = $this->platformAuditState($platform);
         $payload = $this->platformWritePayload($validated, true);
-        $wantsToBeActive = array_key_exists('is_active', $payload)
-            ? (bool) $payload['is_active']
-            : (bool) $platform->is_active;
+        $activationRequested = array_key_exists('is_active', $payload) && (bool) $payload['is_active'];
         $currencyUpdated = array_key_exists('currency_code', $payload);
 
-        DB::transaction(function () use ($platform, $payload, $wantsToBeActive, $currencyUpdated): void {
+        DB::transaction(function () use ($platform, $payload, $activationRequested, $currencyUpdated): void {
             $platform->fill($payload)->save();
             $platform->refresh();
 
@@ -2438,7 +2437,7 @@ class SettingsController extends Controller
 
             $this->ensureDefaultPackagesForPlatform($platform);
             $packageSetup = $this->platformPackageSetup($platform);
-            if ($wantsToBeActive && !$packageSetup['can_go_live']) {
+            if ($activationRequested && !$packageSetup['can_go_live']) {
                 throw ValidationException::withMessages([
                     'is_active' => 'Package setup is incomplete. Configure at least one active priced package before activating this market.',
                 ]);
@@ -4264,7 +4263,7 @@ class SettingsController extends Controller
             'country' => $platform->country,
             'is_active' => (bool) $platform->is_active,
             'currency' => $platform->currency_code ?: 'KES',
-            'timezone' => $platform->timezone ?: 'Africa/Nairobi',
+            'timezone' => MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC')),
             'phone_prefix' => $platform->phone_prefix ?: '254',
             'support_chat_url' => $platform->support_chat_url,
             'support_board_api_url' => $platform->support_board_api_url,
@@ -4332,9 +4331,25 @@ class SettingsController extends Controller
         if (!$isPatch) {
             $payload['is_active'] = array_key_exists('is_active', $payload) ? (bool) $payload['is_active'] : false;
             $payload['phone_prefix'] = $payload['phone_prefix'] ?? '254';
-            $payload['timezone'] = $payload['timezone'] ?? 'Africa/Nairobi';
             $payload['currency_code'] = $payload['currency_code'] ?? 'KES';
             $payload['db_prefix'] = $payload['db_prefix'] ?? 'wp_';
+        }
+
+        if (array_key_exists('timezone', $payload)) {
+            $normalizedTimezone = MarketTimezone::normalize(is_string($payload['timezone']) ? $payload['timezone'] : null);
+            if ($normalizedTimezone === null) {
+                throw ValidationException::withMessages([
+                    'timezone' => $isPatch
+                        ? MarketTimezone::validationMessage()
+                        : MarketTimezone::requiredValidationMessage(),
+                ]);
+            }
+
+            $payload['timezone'] = $normalizedTimezone;
+        } elseif (!$isPatch) {
+            throw ValidationException::withMessages([
+                'timezone' => MarketTimezone::requiredValidationMessage(),
+            ]);
         }
 
         return $payload;
@@ -4350,7 +4365,7 @@ class SettingsController extends Controller
             'wp_api_url' => $platform->wp_api_url,
             'wp_api_user' => $platform->wp_api_user,
             'phone_prefix' => $platform->phone_prefix,
-            'timezone' => $platform->timezone,
+            'timezone' => MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC')),
             'currency_code' => $platform->currency_code,
             'support_chat_url' => $platform->support_chat_url,
             'support_board_api_url' => $platform->support_board_api_url,

@@ -141,7 +141,7 @@ export default function Setup() {
         db_pass: '',
         db_prefix: 'wp_',
         currency_code: 'KES',
-        timezone: 'Africa/Nairobi',
+        timezone: '',
         phone_prefix: '254',
         support_chat_url: '',
         reason: 'Created first market from installation wizard',
@@ -697,7 +697,7 @@ export default function Setup() {
                                         <button type="button" onClick={goBack} className="crm-btn-secondary">
                                             Back
                                         </button>
-                                        <button type="button" onClick={createMarket} disabled={marketState.loading} className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60">
+                                        <button type="button" onClick={createMarket} disabled={marketState.loading || !marketForm.timezone.trim()} className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60">
                                             {marketState.loading ? 'Creating market...' : 'Create market'}
                                         </button>
                                         <button type="button" onClick={testMarket} disabled={marketState.testing || !selectedPlatformId} className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60">
@@ -732,7 +732,7 @@ export default function Setup() {
                                 </div>
                                 <div>
                                     <label className="mb-1 block text-sm font-medium text-slate-700">Timezone</label>
-                                    <input value={marketForm.timezone} onChange={(event) => setMarketForm((current) => ({ ...current, timezone: event.target.value }))} className="crm-input" placeholder="Africa/Nairobi" />
+                                    <input value={marketForm.timezone} onChange={(event) => setMarketForm((current) => ({ ...current, timezone: event.target.value }))} className="crm-input" placeholder="PHP/IANA timezone, e.g. Africa/Nairobi" />
                                 </div>
                                 <div>
                                     <label className="mb-1 block text-sm font-medium text-slate-700">Phone prefix</label>
