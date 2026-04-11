@@ -87,6 +87,41 @@ function formatDateTime(value) {
     return date.toLocaleString();
 }
 
+function formatPaymentDateTime(timestamp, timezone) {
+    if (!timestamp) return { date: '—', time: null };
+
+    const dateValue = new Date(timestamp);
+    if (Number.isNaN(dateValue.getTime())) return { date: '—', time: null };
+
+    const resolvedTimezone = timezone || 'UTC';
+    const date = new Intl.DateTimeFormat('en-GB', {
+        timeZone: resolvedTimezone,
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+    }).format(dateValue);
+
+    const timeParts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: resolvedTimezone,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZoneName: 'short',
+    }).formatToParts(dateValue);
+
+    const hhmm = timeParts
+        .filter((part) => ['hour', 'literal', 'minute'].includes(part.type))
+        .map((part) => part.value)
+        .join('')
+        .trim();
+    const timezoneLabel = timeParts.find((part) => part.type === 'timeZoneName')?.value || '';
+
+    return {
+        date,
+        time: `${hhmm} ${timezoneLabel}`.trim() || null,
+    };
+}
+
 function titleize(value) {
     if (!value) return '—';
     return String(value)
@@ -586,6 +621,7 @@ export default function Payments() {
         preview: null,
         step: 'reason', // 'reason' | 'preview'
     });
+    const [failedAutoMatchDialog, setFailedAutoMatchDialog] = useState({ open: false, payment: null });
     const [retryStkDialog, setRetryStkDialog] = useState({ open: false, payment: null, reason: 'Retry STK from payment queue' });
     const [sendLinkDialog, setSendLinkDialog] = useState({
         open: false,
@@ -1660,7 +1696,17 @@ export default function Payments() {
             label: 'Matched Client',
             render: (row) => (
                 row.client
-                    ? <span className="text-xs text-slate-700">{row.client.name || `Client #${row.client.id}`}</span>
+                    ? (
+                        <a
+                            href={`/clients/${row.client.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            className="text-xs text-teal-700 hover:text-teal-900 hover:underline"
+                        >
+                            {row.client.name || `Client #${row.client.id}`}
+                        </a>
+                    )
                     : <span className="text-xs text-slate-400">Unmatched</span>
             ),
         },
@@ -1672,7 +1718,16 @@ export default function Payments() {
         {
             key: 'created_at',
             label: 'Date',
-            render: (row) => <span className="text-xs text-slate-500">{new Date(row.created_at).toLocaleDateString()}</span>,
+            render: (row) => {
+                const { date, time } = formatPaymentDateTime(row.created_at, row.platform?.timezone || 'UTC');
+
+                return (
+                    <div className="text-xs leading-tight text-slate-500">
+                        <div>{date}</div>
+                        {time ? <div className="text-slate-400">{time}</div> : null}
+                    </div>
+                );
+            },
         },
         {
             key: 'actions',
@@ -1681,6 +1736,7 @@ export default function Payments() {
                 const testRow = isTestPayment(row);
                 const isFailed = row.status === 'failed' || row.status === 'initiated' || row.status === 'pending';
                 const isCompletedUnmatched = row.status === 'completed' && !row.client_id;
+                const isFailedUnmatched = row.status === 'failed' && !row.client_id;
                 const isMatchedNoDeal = row.status === 'completed' && row.client_id && !row.deal_id && !testRow;
                 const isLowConfidence = row.status === 'completed' && row.reconciliation_confidence === 'low' && row.reconciliation_state !== 'manual_review';
                 const isManualReview = row.reconciliation_state === 'manual_review';
@@ -1766,7 +1822,19 @@ export default function Payments() {
                         }),
                     },
                     isFailed && { key: 'send-link', label: 'Send payment link', onClick: () => setSendLinkDialog({ open: true, payment: row, channel: 'sms', provider: '', phone: row.phone || '', reason: 'Send payment link from CRM' }) },
-                    isCompletedUnmatched && { key: 'manual-match', label: 'Match manually', onClick: () => openManualMatch(row) },
+                    (isCompletedUnmatched || isFailedUnmatched) && {
+                        key: 'auto-match',
+                        label: 'Auto-match',
+                        onClick: () => {
+                            if (isCompletedUnmatched) {
+                                autoMatchMutation.mutate(row.id);
+                                return;
+                            }
+
+                            setFailedAutoMatchDialog({ open: true, payment: row });
+                        },
+                    },
+                    (isCompletedUnmatched || isFailedUnmatched) && { key: 'manual-match', label: 'Match manually', onClick: () => openManualMatch(row) },
                     { key: 'diagnose', label: 'Diagnose', onClick: () => openDiagnostics(row) },
                 ].filter(Boolean);
 
@@ -3024,6 +3092,23 @@ export default function Payments() {
                     <p className="text-sm text-slate-500">No matchable payments found.</p>
                 )}
             </ConfirmDialog>
+
+            <ConfirmDialog
+                open={failedAutoMatchDialog.open && !!failedAutoMatchDialog.payment}
+                title="Auto-match failed payment?"
+                message="This payment has not completed. Matching links the client for tracking only and will not create a subscription."
+                confirmLabel="Auto-match anyway"
+                tone="warning"
+                onCancel={() => setFailedAutoMatchDialog({ open: false, payment: null })}
+                onConfirm={() => {
+                    const payment = failedAutoMatchDialog.payment;
+                    if (payment) {
+                        autoMatchMutation.mutate(payment.id);
+                    }
+                    setFailedAutoMatchDialog({ open: false, payment: null });
+                }}
+                isPending={autoMatchMutation.isPending}
+            />
 
             <ConfirmDialog
                 open={retryStkDialog.open && !!retryStkDialog.payment}
