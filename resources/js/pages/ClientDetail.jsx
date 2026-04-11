@@ -38,6 +38,30 @@ function formatDateTime(value) {
     return date.toLocaleString();
 }
 
+function titleize(value) {
+    if (!value) return '—';
+    return String(value)
+        .replaceAll('_', ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function paymentResolutionBadge(resolutionCode) {
+    const normalized = String(resolutionCode || '').toLowerCase();
+    if (!normalized) {
+        return null;
+    }
+
+    if (normalized === 'reversed') {
+        return { label: 'Reversed', className: 'bg-rose-50 text-rose-700 ring-rose-200' };
+    }
+
+    if (normalized === 'invalid_reference') {
+        return { label: 'Invalid Ref', className: 'bg-amber-50 text-amber-700 ring-amber-200' };
+    }
+
+    return { label: titleize(normalized), className: 'bg-slate-100 text-slate-600 ring-slate-200' };
+}
+
 function formatRelativeFromUnix(unixTs) {
     const ts = Number(unixTs || 0);
     if (!ts) return '—';
@@ -1484,6 +1508,7 @@ export default function ClientDetail() {
                         <div>
                             <h2 className="crm-page-title">{client.name || 'Unnamed'}</h2>
                             <div className="mt-2 flex flex-wrap items-center gap-2">
+                                {client.is_high_risk ? <span className="inline-flex shrink-0 items-center rounded-md bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">High Risk</span> : null}
                                 <StatusBadge status={client.profile_status} />
                                 {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
                                 {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
@@ -2431,7 +2456,17 @@ export default function ClientDetail() {
                                 </p>
                             </div>
                             <div className="text-right">
-                                <StatusBadge status={payment.status} />
+                                <div className="flex flex-wrap justify-end gap-1">
+                                    <StatusBadge status={payment.status} />
+                                    {payment.resolution_code ? (() => {
+                                        const badge = paymentResolutionBadge(payment.resolution_code);
+                                        return badge ? (
+                                            <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${badge.className}`}>
+                                                {badge.label}
+                                            </span>
+                                        ) : null;
+                                    })() : null}
+                                </div>
                                 <p className="mt-1 text-xs text-slate-400">{formatDateTime(payment.created_at)}</p>
                             </div>
                         </section>

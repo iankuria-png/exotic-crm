@@ -506,7 +506,7 @@ function StructuredDiagnosticsSection({ section }) {
 }
 
 export default function Payments() {
-    const allowedStatuses = new Set(['awaiting_payment', 'completed', 'expired', 'initiated', 'pending', 'failed', 'recovery_queue']);
+    const allowedStatuses = new Set(['awaiting_payment', 'completed', 'expired', 'initiated', 'pending', 'failed', 'recovery_queue', 'reversed']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
@@ -1276,6 +1276,9 @@ export default function Payments() {
                 confirmedCount: Number(data.stats.confirmed || 0),
                 confirmedAmount: toAmount(data.stats.confirmed_amount),
                 confirmedBreakdown: data.stats.confirmed_amount_breakdown ?? {},
+                reversedCount: Number(data.stats.reversed || 0),
+                reversedAmount: toAmount(data.stats.reversed_amount),
+                reversedBreakdown: data.stats.reversed_amount_breakdown ?? {},
                 unmatchedCount: Number((data.stats.unmatched_review ?? data.stats.unmatched) || 0),
                 unmatchedAmount: toAmount(data.stats.unmatched_review_amount),
                 unmatchedBreakdown: data.stats.unmatched_review_amount_breakdown ?? {},
@@ -1287,6 +1290,8 @@ export default function Payments() {
 
         const awaitingRows = rows.filter((row) => ['initiated', 'pending'].includes(row.status));
         const completedRows = rows.filter((row) => SUCCESSFUL_PAYMENT_STATUSES.includes(row.status));
+        const reversedRows = rows.filter((row) => row.status === 'reversed'
+            || (SUCCESSFUL_PAYMENT_STATUSES.includes(row.status) && String(row.resolution_code || '').toLowerCase() === 'reversed'));
         const unmatchedRows = completedRows.filter((row) => !row.client_id);
         const failedRows = rows.filter((row) => row.status === 'failed');
         const sumAmount = (list) => list.reduce((sum, row) => sum + toAmount(row.amount), 0);
@@ -1296,6 +1301,9 @@ export default function Payments() {
             awaitingAmount: sumAmount(awaitingRows),
             confirmedCount: completedRows.length,
             confirmedAmount: sumAmount(completedRows),
+            reversedCount: reversedRows.length,
+            reversedAmount: sumAmount(reversedRows),
+            reversedBreakdown: {},
             unmatchedCount: unmatchedRows.length,
             unmatchedAmount: sumAmount(unmatchedRows),
             failedCount: failedRows.length,
@@ -1309,6 +1317,7 @@ export default function Payments() {
     const activeMetric = useMemo(() => {
         if (statusFilter === 'awaiting_payment') return 'awaiting';
         if (statusFilter === 'completed' && matchFilter === '') return 'confirmed';
+        if (statusFilter === 'reversed') return 'reversed';
         if (statusFilter === 'completed' && matchFilter === 'unmatched') return 'unmatched';
         if (statusFilter === 'failed') return 'failed';
         return '';
@@ -1320,6 +1329,9 @@ export default function Payments() {
             setMatchFilter('');
         } else if (metricKey === 'confirmed') {
             setStatusFilter('completed');
+            setMatchFilter('');
+        } else if (metricKey === 'reversed') {
+            setStatusFilter('reversed');
             setMatchFilter('');
         } else if (metricKey === 'unmatched') {
             setStatusFilter('completed');
@@ -1820,14 +1832,22 @@ export default function Payments() {
                     <p className="mt-1 text-xs text-slate-500">Initiated + pending transactions</p>
                 </button>
 
-                <button
-                    type="button"
+                <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => applyMetricFilter('confirmed')}
-                    className={`h-full rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            applyMetricFilter('confirmed');
+                        }
+                    }}
+                    className={`h-full cursor-pointer rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                         activeMetric === 'confirmed'
                             ? 'border-emerald-300 bg-emerald-50/60'
                             : 'border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/30'
                     }`}
+                    aria-pressed={activeMetric === 'confirmed'}
                 >
                     <div className="flex items-center gap-2">
                         <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
@@ -1836,7 +1856,32 @@ export default function Payments() {
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
                     <CurrencyAmount breakdown={summary.confirmedBreakdown} scalarAmount={summary.confirmedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
                     <p className="mt-1 text-xs text-slate-500">Completed + expired successful payments</p>
-                </button>
+                    {summary.reversedCount > 0 ? (
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                applyMetricFilter('reversed');
+                            }}
+                            aria-pressed={activeMetric === 'reversed'}
+                            className={`mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 ${
+                                activeMetric === 'reversed'
+                                    ? 'bg-orange-100 text-orange-800'
+                                    : 'text-orange-700 hover:bg-orange-50 hover:text-orange-800'
+                            }`}
+                        >
+                            <span aria-hidden="true" className="text-sm leading-none text-orange-500">↳</span>
+                            <span>{summary.reversedCount} reversed</span>
+                            <CurrencyAmount
+                                breakdown={summary.reversedBreakdown}
+                                scalarAmount={summary.reversedAmount}
+                                fallbackCurrency={resolveCurrency(null)}
+                                className="text-xs font-semibold text-orange-700"
+                                stackClassName="leading-snug"
+                            />
+                        </button>
+                    ) : null}
+                </div>
 
                 <button
                     type="button"

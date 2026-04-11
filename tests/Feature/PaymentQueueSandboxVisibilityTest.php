@@ -405,6 +405,56 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('data.0.resolution_code', 'reversed');
     }
 
+    public function test_reversed_stats_surface_resolved_reversals_and_reversed_status_rows(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'REVERSAL-COMPLETED-001',
+            'reference_number' => 'REVERSAL-COMPLETED-001',
+            'amount' => 460,
+            'status' => 'completed',
+            'resolution_code' => Payment::RESOLUTION_REVERSED,
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'REVERSAL-STATUS-001',
+            'reference_number' => 'REVERSAL-STATUS-001',
+            'amount' => 320,
+            'status' => 'reversed',
+            'resolution_code' => null,
+        ]);
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'CONFIRMED-LIVE-001',
+            'reference_number' => 'CONFIRMED-LIVE-001',
+            'amount' => 1520,
+            'status' => 'completed',
+            'resolution_code' => null,
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $summaryResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+
+        $summaryResponse->assertOk()
+            ->assertJsonPath('stats.confirmed', 1)
+            ->assertJsonPath('stats.confirmed_amount', 1520)
+            ->assertJsonPath('stats.reversed', 2)
+            ->assertJsonPath('stats.reversed_amount', 780);
+
+        $reversedFilterResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&status=reversed');
+
+        $reversedFilterResponse->assertOk()
+            ->assertJsonPath('total', 2);
+
+        $references = collect($reversedFilterResponse->json('data'))->pluck('reference_number')->all();
+        $this->assertContains('REVERSAL-COMPLETED-001', $references);
+        $this->assertContains('REVERSAL-STATUS-001', $references);
+        $this->assertNotContains('CONFIRMED-LIVE-001', $references);
+    }
+
     public function test_business_visible_scope_hides_committing_bundle_rows_from_workspace_and_stats(): void
     {
         $platform = $this->createPlatform();

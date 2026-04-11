@@ -139,6 +139,14 @@ class PaymentQueueController extends Controller
                                 ->whereNull('client_id');
                         });
                 });
+            } elseif ($statusFilter === 'reversed') {
+                $query->where(function ($builder) use ($successfulStatuses) {
+                    $builder->where('status', 'reversed')
+                        ->orWhere(function ($inner) use ($successfulStatuses) {
+                            $inner->whereIn('status', $successfulStatuses)
+                                ->where('resolution_code', Payment::RESOLUTION_REVERSED);
+                        });
+                });
             } else {
                 $query->where('status', $statusFilter);
             }
@@ -200,12 +208,21 @@ class PaymentQueueController extends Controller
                 $builder->whereNull('reconciliation_state')
                     ->orWhere('reconciliation_state', '!=', 'manual_review');
             });
+        $reversedStatsQuery = (clone $statsQuery)
+            ->where(function (Builder $builder) use ($successfulStatuses) {
+                $builder->where('status', 'reversed')
+                    ->orWhere(function (Builder $inner) use ($successfulStatuses) {
+                        $inner->whereIn('status', $successfulStatuses)
+                            ->where('resolution_code', Payment::RESOLUTION_REVERSED);
+                    });
+            });
 
         // Per-status currency breakdowns — each returns breakdown[], currency_count, scalar_amount.
         // scalar_amount is null when multiple currencies are in scope so the UI cannot
         // silently display a meaningless mixed-currency total.
         $pendingBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
         $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $confirmedStatsQuery);
+        $reversedBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
         $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
 
@@ -225,6 +242,9 @@ class PaymentQueueController extends Controller
             'confirmed_amount' => $confirmedBreakdown['scalar_amount'],
             'confirmed_amount_breakdown' => $confirmedBreakdown['breakdown'],
             'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
+            'reversed' => (clone $reversedStatsQuery)->count(),
+            'reversed_amount' => $reversedBreakdown['scalar_amount'],
+            'reversed_amount_breakdown' => $reversedBreakdown['breakdown'],
             'failed' => (clone $statsQuery)->where('status', 'failed')->count(),
             'failed_amount' => $failedBreakdown['scalar_amount'],
             'failed_amount_breakdown' => $failedBreakdown['breakdown'],
