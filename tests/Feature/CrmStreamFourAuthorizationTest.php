@@ -982,6 +982,281 @@ CSV;
         ]);
     }
 
+    public function test_admin_can_set_market_sms_provider_override(): void
+    {
+        $platform = $this->createPlatform('Ethiopia');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson('/api/crm/settings/integrations/sms-provider', [
+            'enabled' => true,
+            'active_provider' => 'legacy_gateway',
+            'fallback_provider' => 'none',
+            'default_prefix' => '251',
+            'legacy_gateway' => [
+                'gateway_url' => 'https://legacy-sms.test/send',
+                'org_code' => '76',
+            ],
+            'africastalking' => [
+                'endpoint' => 'https://api.africastalking.com/version1/messaging',
+                'username' => 'global-user',
+                'api_key' => 'global-key',
+                'sender_id' => 'EXOTIC',
+            ],
+            'markets' => [
+                (string) $platform->id => [
+                    'active_provider' => 'africastalking',
+                    'fallback_provider' => 'none',
+                    'africastalking' => [
+                        'username' => 'et-user',
+                        'api_key' => 'et-key',
+                        'sender_id' => 'ETSMS',
+                    ],
+                    'legacy_gateway' => [
+                        'gateway_url' => '',
+                        'org_code' => '',
+                    ],
+                ],
+            ],
+            'reason' => 'Add market-specific AT credentials',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath("sms_provider.markets.{$platform->id}.active_provider", 'africastalking')
+            ->assertJsonPath("sms_provider.markets.{$platform->id}.africastalking.username", 'et-user')
+            ->assertJsonPath("sms_provider.markets.{$platform->id}.africastalking.api_key_configured", true);
+
+        $setting = IntegrationSetting::query()->where('key', 'sms_provider_config')->first();
+        $this->assertNotNull($setting);
+        $this->assertSame('africastalking', $setting->value['markets'][(string) $platform->id]['active_provider'] ?? null);
+        $this->assertSame('et-user', $setting->value['markets'][(string) $platform->id]['africastalking']['username'] ?? null);
+        $this->assertSame('et-key', $setting->value['markets'][(string) $platform->id]['africastalking']['api_key'] ?? null);
+    }
+
+    public function test_market_sms_api_key_preserved_when_market_update_omits_secret(): void
+    {
+        $platform = $this->createPlatform('Ethiopia');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        $this->seedSmsProviderConfig([
+            'markets' => [
+                (string) $platform->id => [
+                    'active_provider' => 'africastalking',
+                    'fallback_provider' => 'none',
+                    'africastalking' => [
+                        'username' => 'et-user',
+                        'api_key' => 'et-key',
+                        'sender_id' => 'ETSMS',
+                    ],
+                    'legacy_gateway' => [
+                        'gateway_url' => '',
+                        'org_code' => '',
+                    ],
+                ],
+            ],
+        ], $admin->id);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson('/api/crm/settings/integrations/sms-provider', [
+            'enabled' => true,
+            'active_provider' => 'legacy_gateway',
+            'fallback_provider' => 'none',
+            'default_prefix' => '251',
+            'legacy_gateway' => [
+                'gateway_url' => 'https://legacy-sms.test/send',
+                'org_code' => '76',
+            ],
+            'africastalking' => [
+                'endpoint' => 'https://api.africastalking.com/version1/messaging',
+                'username' => 'global-user',
+                'sender_id' => 'EXOTIC',
+            ],
+            'markets' => [
+                (string) $platform->id => [
+                    'active_provider' => 'africastalking',
+                    'fallback_provider' => 'none',
+                    'africastalking' => [
+                        'username' => 'et-user-updated',
+                        'sender_id' => 'ETSMS2',
+                    ],
+                    'legacy_gateway' => [
+                        'gateway_url' => '',
+                        'org_code' => '',
+                    ],
+                ],
+            ],
+            'reason' => 'Update market username without rotating secret',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath("sms_provider.markets.{$platform->id}.africastalking.username", 'et-user-updated')
+            ->assertJsonPath("sms_provider.markets.{$platform->id}.africastalking.api_key_configured", true);
+
+        $setting = IntegrationSetting::query()->where('key', 'sms_provider_config')->firstOrFail();
+        $this->assertSame('et-key', $setting->value['markets'][(string) $platform->id]['africastalking']['api_key'] ?? null);
+        $this->assertSame('ETSMS2', $setting->value['markets'][(string) $platform->id]['africastalking']['sender_id'] ?? null);
+    }
+
+    public function test_clear_market_sms_override_removes_the_market_entry(): void
+    {
+        $platform = $this->createPlatform('Ethiopia');
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        $this->seedSmsProviderConfig([
+            'markets' => [
+                (string) $platform->id => [
+                    'active_provider' => 'africastalking',
+                    'fallback_provider' => 'none',
+                    'africastalking' => [
+                        'username' => 'et-user',
+                        'api_key' => 'et-key',
+                        'sender_id' => 'ETSMS',
+                    ],
+                    'legacy_gateway' => [
+                        'gateway_url' => '',
+                        'org_code' => '',
+                    ],
+                ],
+            ],
+        ], $admin->id);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->patchJson('/api/crm/settings/integrations/sms-provider', [
+            'enabled' => true,
+            'active_provider' => 'legacy_gateway',
+            'fallback_provider' => 'none',
+            'default_prefix' => '251',
+            'legacy_gateway' => [
+                'gateway_url' => 'https://legacy-sms.test/send',
+                'org_code' => '76',
+            ],
+            'africastalking' => [
+                'endpoint' => 'https://api.africastalking.com/version1/messaging',
+                'username' => 'global-user',
+                'sender_id' => 'EXOTIC',
+            ],
+            'markets' => [],
+            'reason' => 'Clear market-specific override',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('sms_provider.markets', []);
+
+        $setting = IntegrationSetting::query()->where('key', 'sms_provider_config')->firstOrFail();
+        $this->assertSame([], $setting->value['markets'] ?? null);
+    }
+
+    public function test_sms_provider_test_dispatch_uses_market_specific_configuration(): void
+    {
+        $platform = $this->createPlatform('Ethiopia');
+        $platform->update(['phone_prefix' => '251']);
+        $admin = $this->createUser('admin', [$platform->id]);
+
+        $this->seedSmsProviderConfig([
+            'active_provider' => 'legacy_gateway',
+            'markets' => [
+                (string) $platform->id => [
+                    'active_provider' => 'africastalking',
+                    'fallback_provider' => 'none',
+                    'africastalking' => [
+                        'username' => 'et-user',
+                        'api_key' => 'et-key',
+                        'sender_id' => 'ETSMS',
+                    ],
+                    'legacy_gateway' => [
+                        'gateway_url' => '',
+                        'org_code' => '',
+                    ],
+                ],
+            ],
+        ], $admin->id);
+
+        Http::fake([
+            'https://api.africastalking.com/version1/messaging' => Http::response('AT-OK', 201),
+            'https://legacy-sms.test/send' => Http::response('LEGACY-OK', 200),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/settings/integrations/sms-provider/test', [
+            'market_id' => $platform->id,
+            'phone' => '0912000001',
+            'message' => 'Testing Ethiopia routing',
+            'reason' => 'Validate market routing',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('result.success', true)
+            ->assertJsonPath('result.provider', 'africastalking')
+            ->assertJsonPath('result.status', 'sent')
+            ->assertJsonPath('result.phone', '251912000001');
+
+        Http::assertSent(function ($request) {
+            return $request->url() === 'https://api.africastalking.com/version1/messaging'
+                && $request->hasHeader('apiKey', 'et-key')
+                && ($request['username'] ?? null) === 'et-user'
+                && ($request['from'] ?? null) === 'ETSMS'
+                && ($request['to'] ?? null) === '251912000001';
+        });
+
+        Http::assertNotSent(function ($request) {
+            return $request->url() === 'https://legacy-sms.test/send';
+        });
+    }
+
+    public function test_market_sms_config_is_scoped_for_sub_admin_on_integrations_and_billing_diagnostics(): void
+    {
+        $platformA = $this->createPlatform('Kenya');
+        $platformB = $this->createPlatform('Uganda');
+        $subAdmin = $this->createUser('sub_admin', [$platformA->id]);
+
+        $this->seedSmsProviderConfig([
+            'markets' => [
+                (string) $platformA->id => [
+                    'active_provider' => 'africastalking',
+                    'fallback_provider' => 'none',
+                    'africastalking' => [
+                        'username' => 'ke-user',
+                        'api_key' => 'ke-key',
+                        'sender_id' => 'KENYA',
+                    ],
+                    'legacy_gateway' => [
+                        'gateway_url' => '',
+                        'org_code' => '',
+                    ],
+                ],
+                (string) $platformB->id => [
+                    'active_provider' => 'africastalking',
+                    'fallback_provider' => 'none',
+                    'africastalking' => [
+                        'username' => 'ug-user',
+                        'api_key' => 'ug-key',
+                        'sender_id' => 'UGANDA',
+                    ],
+                    'legacy_gateway' => [
+                        'gateway_url' => '',
+                        'org_code' => '',
+                    ],
+                ],
+            ],
+        ], $subAdmin->id);
+
+        Sanctum::actingAs($subAdmin);
+
+        $integrationsResponse = $this->getJson('/api/crm/settings/integrations');
+        $integrationsResponse->assertOk()
+            ->assertJsonPath("services.sms_provider.markets.{$platformA->id}.africastalking.username", 'ke-user')
+            ->assertJsonMissingPath("services.sms_provider.markets.{$platformB->id}");
+
+        $diagnosticsResponse = $this->getJson('/api/crm/settings/billing/diagnostics-summary');
+        $diagnosticsResponse->assertOk()
+            ->assertJsonPath("services.sms_provider.markets.{$platformA->id}.africastalking.username", 'ke-user')
+            ->assertJsonMissingPath("services.sms_provider.markets.{$platformB->id}");
+    }
+
     public function test_admin_can_create_update_and_test_market_integration_profile(): void
     {
         $admin = $this->createUser('admin', []);
@@ -1647,6 +1922,35 @@ HTML,
             'status' => 'active',
             'assigned_market_ids' => $assignedMarketIds,
         ]);
+    }
+
+    private function seedSmsProviderConfig(array $overrides = [], ?int $updatedBy = null): void
+    {
+        $base = [
+            'enabled' => true,
+            'active_provider' => 'legacy_gateway',
+            'fallback_provider' => 'none',
+            'default_prefix' => '254',
+            'legacy_gateway' => [
+                'gateway_url' => 'https://legacy-sms.test/send',
+                'org_code' => '76',
+            ],
+            'africastalking' => [
+                'endpoint' => 'https://api.africastalking.com/version1/messaging',
+                'username' => 'global-user',
+                'api_key' => 'global-key',
+                'sender_id' => 'EXOTIC',
+            ],
+            'markets' => [],
+        ];
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => 'sms_provider_config'],
+            [
+                'value' => array_replace_recursive($base, $overrides),
+                'updated_by' => $updatedBy,
+            ]
+        );
     }
 
     private function createPlatform(string $name, string $currencyCode = 'KES'): Platform

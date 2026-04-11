@@ -266,40 +266,81 @@ function defaultSmsProviderForm() {
             endpoint: 'https://api.africastalking.com/version1/messaging',
             username: '',
             api_key: '',
+            api_key_configured: false,
             sender_id: '',
         },
+        markets: {},
     };
 }
 
 function buildSmsProviderForm(smsProvider) {
     const fallback = defaultSmsProviderForm();
     if (!smsProvider) {
-        return {
-            form: fallback,
-            apiKeyConfigured: false,
-        };
+        return fallback;
     }
 
+    const rawMarkets = smsProvider.markets && typeof smsProvider.markets === 'object'
+        ? smsProvider.markets
+        : {};
+
+    const markets = Object.fromEntries(
+        Object.entries(rawMarkets).map(([platformId, entry]) => [
+            platformId,
+            {
+                active_provider: entry?.active_provider ?? null,
+                fallback_provider: entry?.fallback_provider ?? null,
+                africastalking: {
+                    username: entry?.africastalking?.username ?? '',
+                    api_key: '',
+                    api_key_configured: Boolean(entry?.africastalking?.api_key_configured),
+                    sender_id: entry?.africastalking?.sender_id ?? '',
+                },
+                legacy_gateway: {
+                    gateway_url: entry?.legacy_gateway?.gateway_url ?? '',
+                    org_code: entry?.legacy_gateway?.org_code ?? '',
+                },
+            },
+        ])
+    );
+
     return {
-        form: {
-            ...fallback,
-            enabled: Boolean(smsProvider.enabled),
-            active_provider: smsProvider.active_provider || 'legacy_gateway',
-            fallback_provider: smsProvider.fallback_provider || 'none',
-            default_prefix: smsProvider.default_prefix || '254',
-            legacy_gateway: {
-                gateway_url: smsProvider.legacy_gateway?.gateway_url || '',
-                org_code: smsProvider.legacy_gateway?.org_code || '76',
-            },
-            africastalking: {
-                endpoint: smsProvider.africastalking?.endpoint || fallback.africastalking.endpoint,
-                username: smsProvider.africastalking?.username || '',
-                api_key: '',
-                sender_id: smsProvider.africastalking?.sender_id || '',
-            },
+        ...fallback,
+        enabled: Boolean(smsProvider.enabled),
+        active_provider: smsProvider.active_provider || 'legacy_gateway',
+        fallback_provider: smsProvider.fallback_provider || 'none',
+        default_prefix: smsProvider.default_prefix || '254',
+        legacy_gateway: {
+            gateway_url: smsProvider.legacy_gateway?.gateway_url || '',
+            org_code: smsProvider.legacy_gateway?.org_code || '76',
         },
-        apiKeyConfigured: Boolean(smsProvider.africastalking?.api_key_configured),
+        africastalking: {
+            endpoint: smsProvider.africastalking?.endpoint || fallback.africastalking.endpoint,
+            username: smsProvider.africastalking?.username || '',
+            api_key: '',
+            api_key_configured: Boolean(smsProvider.africastalking?.api_key_configured),
+            sender_id: smsProvider.africastalking?.sender_id || '',
+        },
+        markets,
     };
+}
+
+function smsConfigReady(globalForm, marketEntry = null) {
+    const provider = marketEntry?.active_provider || globalForm.active_provider;
+
+    if (provider === 'africastalking') {
+        const username = marketEntry?.africastalking?.username?.trim() || globalForm.africastalking.username.trim();
+        const keyConfigured = marketEntry?.africastalking?.api_key_configured
+            || marketEntry?.africastalking?.api_key?.trim()
+            || globalForm.africastalking.api_key_configured
+            || globalForm.africastalking.api_key?.trim();
+
+        return Boolean(username) && Boolean(keyConfigured);
+    }
+
+    const gatewayUrl = marketEntry?.legacy_gateway?.gateway_url?.trim() || globalForm.legacy_gateway.gateway_url.trim();
+    const orgCode = marketEntry?.legacy_gateway?.org_code?.trim() || globalForm.legacy_gateway.org_code.trim();
+
+    return Boolean(gatewayUrl) && Boolean(orgCode);
 }
 
 function pushProviderLabel(providerId) {
@@ -985,8 +1026,8 @@ function IntegrationsWorkspace({
     const [sbLeadImportConfirmOpen, setSbLeadImportConfirmOpen] = useState(false);
     const [latestSbLeadImportResult, setLatestSbLeadImportResult] = useState(null);
     const [smsProviderForm, setSmsProviderForm] = useState(defaultSmsProviderForm());
-    const [smsProviderApiKeyConfigured, setSmsProviderApiKeyConfigured] = useState(false);
     const [smsTestForm, setSmsTestForm] = useState({
+        market_id: null,
         phone: '',
         message: 'This is a test message from ExoticCRM settings.',
         reason: 'SMS provider test dispatch',
@@ -1278,9 +1319,7 @@ function IntegrationsWorkspace({
     }, [scraperCreateOpen, scraperCreateForm.platform_id, platformRows]);
 
     useEffect(() => {
-        const smsState = buildSmsProviderForm(smsProviderConfig);
-        setSmsProviderForm(smsState.form);
-        setSmsProviderApiKeyConfigured(smsState.apiKeyConfigured);
+        setSmsProviderForm(buildSmsProviderForm(smsProviderConfig));
     }, [smsProviderConfig]);
 
     useEffect(() => {
@@ -1513,9 +1552,7 @@ function IntegrationsWorkspace({
         mutationFn: (payload) => api.patch('/crm/settings/integrations/sms-provider', payload).then((response) => response.data),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
-            const smsState = buildSmsProviderForm(response?.sms_provider || null);
-            setSmsProviderForm(smsState.form);
-            setSmsProviderApiKeyConfigured(smsState.apiKeyConfigured);
+            setSmsProviderForm(buildSmsProviderForm(response?.sms_provider || null));
             toast.success('SMS provider settings saved.');
         },
         onError: (error) => {
@@ -2172,6 +2209,30 @@ function IntegrationsWorkspace({
                 username: smsProviderForm.africastalking.username.trim(),
                 sender_id: smsProviderForm.africastalking.sender_id.trim(),
             },
+            markets: Object.fromEntries(
+                Object.entries(smsProviderForm.markets || {}).map(([platformId, entry]) => {
+                    const marketAt = entry.africastalking ?? {};
+                    const marketLegacy = entry.legacy_gateway ?? {};
+                    const atPayload = {
+                        username: (marketAt.username ?? '').trim(),
+                        sender_id: (marketAt.sender_id ?? '').trim(),
+                    };
+                    const rotatedApiKey = (marketAt.api_key ?? '').trim();
+                    if (rotatedApiKey) {
+                        atPayload.api_key = rotatedApiKey;
+                    }
+
+                    return [platformId, {
+                        active_provider: entry.active_provider ?? null,
+                        fallback_provider: entry.fallback_provider ?? null,
+                        africastalking: atPayload,
+                        legacy_gateway: {
+                            gateway_url: (marketLegacy.gateway_url ?? '').trim(),
+                            org_code: (marketLegacy.org_code ?? '').trim(),
+                        },
+                    }];
+                })
+            ),
             reason: smsProviderForm.reason.trim(),
         };
 
@@ -2619,9 +2680,15 @@ function IntegrationsWorkspace({
     const wpReadyMarkets = platformRows.filter((item) => item.wp_sync?.credentials_ready).length;
     const syncErrors = platformRows.filter((item) => item.sync?.last_status === 'error').length;
     const packageReadyMarkets = platformRows.filter((item) => item.package_setup?.can_go_live).length;
-    const smsReady = smsProviderForm.active_provider === 'africastalking'
-        ? Boolean(smsProviderForm.africastalking.username.trim()) && (smsProviderApiKeyConfigured || Boolean(smsProviderForm.africastalking.api_key.trim()))
-        : Boolean(smsProviderForm.legacy_gateway.gateway_url.trim()) && Boolean(smsProviderForm.legacy_gateway.org_code.trim());
+    const smsReady = smsConfigReady(smsProviderForm);
+    const selectedSmsTestMarket = smsTestForm.market_id
+        ? (smsProviderForm.markets?.[String(smsTestForm.market_id)] || null)
+        : null;
+    const selectedSmsTestPlatform = smsTestForm.market_id
+        ? (platformRows.find((platform) => String(platform.platform_id) === String(smsTestForm.market_id)) || null)
+        : null;
+    const smsTestReady = smsConfigReady(smsProviderForm, selectedSmsTestMarket);
+    const smsTestProvider = selectedSmsTestMarket?.active_provider || smsProviderForm.active_provider;
     const fallbackInvalid = smsProviderForm.fallback_provider !== 'none'
         && smsProviderForm.fallback_provider === smsProviderForm.active_provider;
     const fallbackOptions = [
@@ -2790,16 +2857,23 @@ function IntegrationsWorkspace({
                     fallbackInvalid={fallbackInvalid}
                     fallbackOptions={fallbackOptions}
                     latestSmsTestResult={latestSmsTestResult}
+                    markets={smsProviderForm.markets ?? {}}
+                    onMarketsChange={(updated) => setSmsProviderForm((current) => ({ ...current, markets: updated }))}
+                    platforms={platformRows.map((platform) => ({
+                        id: platform.platform_id,
+                        name: platform.platform_name,
+                        country: platform.country,
+                    }))}
                     saveSmsProviderConfig={saveSmsProviderConfig}
                     saveSmsProviderMutation={saveSmsProviderMutation}
                     setSmsProviderForm={setSmsProviderForm}
                     setSmsTestConfirmOpen={setSmsTestConfirmOpen}
                     setSmsTestForm={setSmsTestForm}
-                    smsProviderApiKeyConfigured={smsProviderApiKeyConfigured}
                     smsProviderForm={smsProviderForm}
                     smsProviderLabel={smsProviderLabel}
                     smsReady={smsReady}
                     smsTestForm={smsTestForm}
+                    smsTestReady={smsTestReady}
                     statusChip={statusChip}
                     testSmsProviderMutation={testSmsProviderMutation}
                     updateSmsProviderField={updateSmsProviderField}
@@ -5270,17 +5344,18 @@ function IntegrationsWorkspace({
                 onCancel={() => setSmsTestConfirmOpen(false)}
                 onConfirm={() => {
                     testSmsProviderMutation.mutate({
+                        market_id: smsTestForm.market_id || null,
                         phone: smsTestForm.phone.trim(),
                         message: smsTestForm.message.trim(),
                         reason: smsTestForm.reason.trim(),
                     });
                 }}
-                confirmDisabled={!smsTestForm.phone.trim() || !smsTestForm.message.trim() || !smsTestForm.reason.trim() || !smsProviderForm.enabled || !smsReady}
+                confirmDisabled={!smsTestForm.phone.trim() || !smsTestForm.message.trim() || !smsTestForm.reason.trim() || !smsProviderForm.enabled || !smsTestReady}
                 isPending={testSmsProviderMutation.isPending}
             >
                 <div className="space-y-1 text-sm text-slate-600">
-                    <p><span className="font-semibold text-slate-800">Active provider:</span> {smsProviderLabel(smsProviderForm.active_provider)}</p>
-                    <p><span className="font-semibold text-slate-800">Fallback:</span> {smsProviderLabel(smsProviderForm.fallback_provider)}</p>
+                    <p><span className="font-semibold text-slate-800">Active provider:</span> {smsProviderLabel(smsTestProvider)}</p>
+                    <p><span className="font-semibold text-slate-800">Market:</span> {selectedSmsTestPlatform?.platform_name || 'Global routing'}</p>
                     <p><span className="font-semibold text-slate-800">Phone:</span> {smsTestForm.phone}</p>
                     <p className="line-clamp-2"><span className="font-semibold text-slate-800">Message:</span> {smsTestForm.message}</p>
                 </div>

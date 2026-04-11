@@ -108,7 +108,10 @@ class SettingsController extends Controller
     {
         [$platforms, $platformStatuses, $allowedPlatformIds] = $this->accessiblePlatformsAndStatuses($request);
 
-        $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
+        $smsProvider = $this->scopeSmsConfigForUser(
+            $this->notificationService->currentSmsConfig(masked: true),
+            $request->user()
+        );
         $pushProvider = $this->scopePushConfigForUser(
             $this->pushProviderService->currentPushConfig(masked: true),
             $request->user()
@@ -538,6 +541,17 @@ class SettingsController extends Controller
             'africastalking.username' => 'nullable|string|max:100',
             'africastalking.api_key' => 'nullable|string|max:255',
             'africastalking.sender_id' => 'nullable|string|max:20',
+            'markets' => 'sometimes|array',
+            'markets.*' => 'array',
+            'markets.*.active_provider' => 'nullable|in:legacy_gateway,africastalking',
+            'markets.*.fallback_provider' => 'nullable|in:none,legacy_gateway,africastalking',
+            'markets.*.legacy_gateway' => 'nullable|array',
+            'markets.*.legacy_gateway.gateway_url' => 'nullable|url|max:255',
+            'markets.*.legacy_gateway.org_code' => 'nullable|string|max:20',
+            'markets.*.africastalking' => 'nullable|array',
+            'markets.*.africastalking.username' => 'nullable|string|max:100',
+            'markets.*.africastalking.api_key' => 'nullable|string|max:255',
+            'markets.*.africastalking.sender_id' => 'nullable|string|max:20',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -551,8 +565,22 @@ class SettingsController extends Controller
             ], 422);
         }
 
+        foreach ($validated['markets'] ?? [] as $platformId => $marketConfig) {
+            $marketActive = $marketConfig['active_provider'] ?? null;
+            $marketFallback = $marketConfig['fallback_provider'] ?? null;
+
+            if ($marketActive && $marketFallback && $marketFallback !== 'none' && $marketActive === $marketFallback) {
+                return response()->json([
+                    'message' => "Market {$platformId}: active and fallback provider cannot be the same.",
+                ], 422);
+            }
+        }
+
         $before = $this->notificationService->currentSmsConfig(masked: true);
-        $saved = $this->notificationService->saveSmsConfig($validated, (int) $request->user()->id);
+        $saved = $this->scopeSmsConfigForUser(
+            $this->notificationService->saveSmsConfig($validated, (int) $request->user()->id),
+            $request->user()
+        );
 
         $this->auditService->fromRequest(
             $request,
@@ -581,20 +609,27 @@ class SettingsController extends Controller
         $validated = $request->validate([
             'phone' => 'required|string|max:20',
             'message' => 'required|string|max:500',
+            'market_id' => 'nullable|integer|exists:platforms,id',
             'reason' => 'nullable|string|max:500',
         ]);
+
+        $market = !empty($validated['market_id'])
+            ? Platform::query()->find((int) $validated['market_id'])
+            : null;
 
         $result = $this->notificationService->sendSms(
             $validated['phone'],
             $validated['message'],
             [
+                'platform_id' => $market?->id,
+                'phone_prefix' => $market?->phone_prefix ?: null,
                 'purpose' => 'settings_provider_test',
             ]
         );
 
         $this->auditService->fromRequest(
             $request,
-            $this->resolveAuditPlatformId([]) ?? 1,
+            $market?->id ?? ($this->resolveAuditPlatformId([]) ?? 1),
             CrmAuditAction::INTEGRATION_CONNECTION_TEST,
             'integration_setting',
             1,
@@ -4412,7 +4447,10 @@ class SettingsController extends Controller
 
     private function billingDiagnosticsServices(Request $request, $platformStatuses): array
     {
-        $smsProvider = $this->notificationService->currentSmsConfig(masked: true);
+        $smsProvider = $this->scopeSmsConfigForUser(
+            $this->notificationService->currentSmsConfig(masked: true),
+            $request->user()
+        );
         $pushProvider = $this->scopePushConfigForUser(
             $this->pushProviderService->currentPushConfig(masked: true),
             $request->user()
@@ -5059,6 +5097,36 @@ class SettingsController extends Controller
         }
 
         $config['platforms'] = $scopedPlatforms;
+
+        return $config;
+    }
+
+    private function scopeSmsConfigForUser(array $config, User $user): array
+    {
+        if ($user->role === MarketAuthorizationService::ROLE_ADMIN) {
+            return $config;
+        }
+
+        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($user);
+        if (!is_array($allowedPlatformIds)) {
+            return $config;
+        }
+
+        $markets = is_array($config['markets'] ?? null) ? $config['markets'] : [];
+        $scopedMarkets = [];
+
+        foreach ($markets as $platformId => $marketConfig) {
+            $numericPlatformId = (int) $platformId;
+            if ($numericPlatformId <= 0) {
+                continue;
+            }
+
+            if (in_array($numericPlatformId, $allowedPlatformIds, true)) {
+                $scopedMarkets[(string) $numericPlatformId] = is_array($marketConfig) ? $marketConfig : [];
+            }
+        }
+
+        $config['markets'] = $scopedMarkets;
 
         return $config;
     }

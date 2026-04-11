@@ -1,19 +1,235 @@
-import React from 'react';
+import React, { useState } from 'react';
+
+function hasMarketOverride(entry) {
+    return Boolean(
+        entry?.active_provider
+        || entry?.fallback_provider
+        || entry?.africastalking?.username
+        || entry?.africastalking?.api_key_configured
+        || entry?.africastalking?.api_key
+        || entry?.africastalking?.sender_id
+        || entry?.legacy_gateway?.gateway_url
+        || entry?.legacy_gateway?.org_code
+    );
+}
+
+function marketIsReady(entry, globalForm) {
+    const provider = entry?.active_provider || globalForm.active_provider;
+
+    if (provider === 'africastalking') {
+        const username = entry?.africastalking?.username?.trim() || globalForm.africastalking.username.trim();
+        const keyConfigured = entry?.africastalking?.api_key_configured
+            || entry?.africastalking?.api_key?.trim()
+            || globalForm.africastalking.api_key_configured
+            || globalForm.africastalking.api_key?.trim();
+
+        return Boolean(username) && Boolean(keyConfigured);
+    }
+
+    if (provider === 'legacy_gateway') {
+        const gatewayUrl = entry?.legacy_gateway?.gateway_url?.trim() || globalForm.legacy_gateway.gateway_url.trim();
+        const orgCode = entry?.legacy_gateway?.org_code?.trim() || globalForm.legacy_gateway.org_code.trim();
+
+        return Boolean(gatewayUrl) && Boolean(orgCode);
+    }
+
+    return true;
+}
+
+function MarketSmsRoutingRow({
+    onEntryChange,
+    platform,
+    smsProviderForm,
+    smsProviderLabel,
+    entry = {},
+}) {
+    const [expanded, setExpanded] = useState(false);
+
+    const hasOverride = hasMarketOverride(entry);
+    const isReady = marketIsReady(entry, smsProviderForm);
+    const effectiveProvider = entry.active_provider || smsProviderForm.active_provider;
+
+    const patch = (updates) => onEntryChange({ ...entry, ...updates });
+    const patchAt = (field, value) => patch({
+        africastalking: {
+            ...(entry.africastalking ?? {}),
+            [field]: value,
+        },
+    });
+    const patchLegacy = (field, value) => patch({
+        legacy_gateway: {
+            ...(entry.legacy_gateway ?? {}),
+            [field]: value,
+        },
+    });
+
+    return (
+        <div className="py-3">
+            <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-slate-800">{platform.name}</span>
+                        {hasOverride ? (
+                            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-200">Custom</span>
+                        ) : (
+                            <span className="text-xs text-slate-400">Using global</span>
+                        )}
+                        {hasOverride && !isReady ? (
+                            <span className="text-xs text-amber-600">Provider not ready</span>
+                        ) : null}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                        Active provider: {smsProviderLabel(effectiveProvider)}{entry.active_provider ? ' (override)' : ' (global)'}
+                    </p>
+                </div>
+
+                <select
+                    value={entry.active_provider ?? ''}
+                    onChange={(event) => patch({ active_provider: event.target.value || null })}
+                    className="crm-select text-sm"
+                    aria-label={`${platform.name} active provider`}
+                >
+                    <option value="">Global default</option>
+                    <option value="legacy_gateway">Legacy Gateway</option>
+                    <option value="africastalking">Africa&apos;s Talking</option>
+                </select>
+
+                <button
+                    type="button"
+                    onClick={() => setExpanded((current) => !current)}
+                    className="text-xs text-teal-700 hover:underline whitespace-nowrap"
+                    aria-expanded={expanded}
+                >
+                    {expanded ? 'Less' : 'Configure'}
+                </button>
+            </div>
+
+            {expanded ? (
+                <div className="mt-3 space-y-4 border-l-2 border-slate-100 ml-2 pl-3">
+                    <div>
+                        <label htmlFor={`sms-market-fallback-${platform.id}`} className="mb-1 block text-xs font-medium text-slate-600">
+                            Fallback provider
+                        </label>
+                        <select
+                            id={`sms-market-fallback-${platform.id}`}
+                            value={entry.fallback_provider ?? ''}
+                            onChange={(event) => patch({ fallback_provider: event.target.value || null })}
+                            className="crm-select text-sm"
+                        >
+                            <option value="">Global default</option>
+                            <option value="none">None</option>
+                            <option value="legacy_gateway">Legacy Gateway</option>
+                            <option value="africastalking">Africa&apos;s Talking</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <p className="text-xs font-semibold text-slate-700 mb-1">Africa&apos;s Talking</p>
+                        <p className="text-xs text-slate-400 mb-2">Leave blank to use global credentials.</p>
+                        <div className="grid gap-2 md:grid-cols-2">
+                            <div>
+                                <label htmlFor={`sms-market-at-username-${platform.id}`} className="mb-1 block text-xs text-slate-600">Username</label>
+                                <input
+                                    id={`sms-market-at-username-${platform.id}`}
+                                    value={entry.africastalking?.username ?? ''}
+                                    onChange={(event) => patchAt('username', event.target.value)}
+                                    className="crm-input text-sm"
+                                    placeholder={`Global: ${smsProviderForm.africastalking.username || '(not set)'}`}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor={`sms-market-at-sender-${platform.id}`} className="mb-1 block text-xs text-slate-600">Sender ID</label>
+                                <input
+                                    id={`sms-market-at-sender-${platform.id}`}
+                                    value={entry.africastalking?.sender_id ?? ''}
+                                    onChange={(event) => patchAt('sender_id', event.target.value)}
+                                    className="crm-input text-sm"
+                                    placeholder="Optional sender ID override"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label htmlFor={`sms-market-at-key-${platform.id}`} className="mb-1 block text-xs text-slate-600">API key</label>
+                                <input
+                                    id={`sms-market-at-key-${platform.id}`}
+                                    type="password"
+                                    value={entry.africastalking?.api_key ?? ''}
+                                    onChange={(event) => patchAt('api_key', event.target.value)}
+                                    className="crm-input text-sm"
+                                    placeholder="Leave blank to use global API key"
+                                />
+                                <p className={`mt-1 text-xs ${entry.africastalking?.api_key_configured ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                    {entry.africastalking?.api_key_configured
+                                        ? 'Custom key stored. Enter a new value only when rotating it.'
+                                        : 'No custom key stored. This market will inherit the global key.'}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <p className="text-xs font-semibold text-slate-700 mb-1">Legacy Gateway</p>
+                        <p className="text-xs text-slate-400 mb-2">Leave blank to use global credentials.</p>
+                        <div className="grid gap-2 md:grid-cols-2">
+                            <div className="md:col-span-2">
+                                <label htmlFor={`sms-market-legacy-url-${platform.id}`} className="mb-1 block text-xs text-slate-600">Gateway URL</label>
+                                <input
+                                    id={`sms-market-legacy-url-${platform.id}`}
+                                    value={entry.legacy_gateway?.gateway_url ?? ''}
+                                    onChange={(event) => patchLegacy('gateway_url', event.target.value)}
+                                    className="crm-input text-sm"
+                                    placeholder={`Global: ${smsProviderForm.legacy_gateway.gateway_url || '(not set)'}`}
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor={`sms-market-legacy-org-${platform.id}`} className="mb-1 block text-xs text-slate-600">Org code</label>
+                                <input
+                                    id={`sms-market-legacy-org-${platform.id}`}
+                                    value={entry.legacy_gateway?.org_code ?? ''}
+                                    onChange={(event) => patchLegacy('org_code', event.target.value)}
+                                    className="crm-input text-sm"
+                                    placeholder={`Global: ${smsProviderForm.legacy_gateway.org_code || '76'}`}
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {hasOverride ? (
+                        <div className="flex justify-end pt-1">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    onEntryChange(null);
+                                    setExpanded(false);
+                                }}
+                                className="text-xs text-rose-600 hover:underline"
+                            >
+                                Clear all overrides for {platform.name}
+                            </button>
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
+        </div>
+    );
+}
 
 export default function SmsRoutingPanel({
     fallbackInvalid,
     fallbackOptions,
     latestSmsTestResult,
+    markets,
+    onMarketsChange,
+    platforms,
     saveSmsProviderConfig,
     saveSmsProviderMutation,
     setSmsProviderForm,
     setSmsTestConfirmOpen,
     setSmsTestForm,
-    smsProviderApiKeyConfigured,
     smsProviderForm,
     smsProviderLabel,
     smsReady,
     smsTestForm,
+    smsTestReady,
     statusChip,
     testSmsProviderMutation,
     updateSmsProviderField,
@@ -151,11 +367,47 @@ export default function SmsRoutingPanel({
                                 placeholder="API key (leave blank to keep current key)"
                             />
                         </div>
-                        <p className={`mt-2 text-xs ${smsProviderApiKeyConfigured ? 'text-emerald-700' : 'text-amber-700'}`}>
-                            {smsProviderApiKeyConfigured
+                        <p className={`mt-2 text-xs ${smsProviderForm.africastalking.api_key_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                            {smsProviderForm.africastalking.api_key_configured
                                 ? 'API key is already stored. Add a new value only when rotating credentials.'
                                 : 'No API key is currently configured for Africa\'s Talking.'}
                         </p>
+                    </section>
+
+                    <section className="rounded-lg border border-slate-200 bg-white p-3">
+                        <h4 className="text-sm font-semibold text-slate-900">Market Provider Routing</h4>
+                        <p className="mt-1 text-xs text-slate-500">
+                            Markets inherit global settings by default. Configure overrides to use a different provider or separate credentials per market.
+                        </p>
+                        {(platforms ?? []).length === 0 ? (
+                            <p className="mt-3 text-xs text-slate-400">No markets configured.</p>
+                        ) : (
+                            <div className="mt-2 divide-y divide-slate-100">
+                                {(platforms ?? []).map((platform) => (
+                                    <MarketSmsRoutingRow
+                                        key={platform.id}
+                                        platform={platform}
+                                        entry={markets?.[String(platform.id)] ?? {}}
+                                        smsProviderForm={smsProviderForm}
+                                        smsProviderLabel={smsProviderLabel}
+                                        onEntryChange={(updated) => {
+                                            const platformKey = String(platform.id);
+                                            if (updated === null) {
+                                                const nextMarkets = { ...(markets || {}) };
+                                                delete nextMarkets[platformKey];
+                                                onMarketsChange(nextMarkets);
+                                                return;
+                                            }
+
+                                            onMarketsChange({
+                                                ...(markets || {}),
+                                                [platformKey]: updated,
+                                            });
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        )}
                     </section>
 
                     {fallbackInvalid ? (
@@ -187,6 +439,22 @@ export default function SmsRoutingPanel({
                         <h4 className="text-sm font-semibold text-slate-900">Test Dispatch</h4>
                         <p className="mt-1 text-xs text-slate-500">Send a controlled SMS to verify routing and provider response in real time.</p>
                         <div className="mt-3 space-y-3">
+                            <div>
+                                <label htmlFor="sms-test-market" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Test for market <span className="text-slate-400 font-normal">(optional)</span>
+                                </label>
+                                <select
+                                    id="sms-test-market"
+                                    value={smsTestForm.market_id ?? ''}
+                                    onChange={(event) => setSmsTestForm((current) => ({ ...current, market_id: event.target.value || null }))}
+                                    className="crm-select w-full"
+                                >
+                                    <option value="">Global routing</option>
+                                    {(platforms ?? []).map((platform) => (
+                                        <option key={platform.id} value={platform.id}>{platform.name}</option>
+                                    ))}
+                                </select>
+                            </div>
                             <input
                                 value={smsTestForm.phone}
                                 onChange={(event) => setSmsTestForm((current) => ({ ...current, phone: event.target.value }))}
@@ -211,7 +479,7 @@ export default function SmsRoutingPanel({
                             <button
                                 type="button"
                                 onClick={() => setSmsTestConfirmOpen(true)}
-                                disabled={testSmsProviderMutation.isPending || !smsReady || !smsProviderForm.enabled || !smsTestForm.phone.trim() || !smsTestForm.message.trim() || !smsTestForm.reason.trim()}
+                                disabled={testSmsProviderMutation.isPending || !smsTestReady || !smsProviderForm.enabled || !smsTestForm.phone.trim() || !smsTestForm.message.trim() || !smsTestForm.reason.trim()}
                                 className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 {testSmsProviderMutation.isPending ? 'Sending...' : 'Send test SMS'}

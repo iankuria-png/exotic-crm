@@ -35,6 +35,8 @@ class NotificationService
     public function sendSms(?string $phone, string $message, array $context = []): array
     {
         $smsConfig = $this->resolveSmsConfig();
+        $platformId = isset($context['platform_id']) ? (int) $context['platform_id'] : null;
+        $smsConfig = $this->resolveMarketConfig($smsConfig, $platformId);
         $prefix = (string) ($context['phone_prefix'] ?? $smsConfig['default_prefix'] ?? '254');
         $normalizedPhone = $this->normalizePhone($phone, $prefix);
 
@@ -121,6 +123,24 @@ class NotificationService
             $config['africastalking']['api_key_configured'] = false;
         }
 
+        $maskedMarkets = [];
+        foreach ($config['markets'] ?? [] as $platformId => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $maskedEntry = $entry;
+            if (!empty($maskedEntry['africastalking']['api_key'])) {
+                $maskedEntry['africastalking']['api_key'] = '••••••••';
+                $maskedEntry['africastalking']['api_key_configured'] = true;
+            } else {
+                $maskedEntry['africastalking']['api_key_configured'] = false;
+            }
+
+            $maskedMarkets[(string) $platformId] = $maskedEntry;
+        }
+        $config['markets'] = $maskedMarkets;
+
         return $config;
     }
 
@@ -157,6 +177,7 @@ class NotificationService
                 'api_key' => (string) config('services.africastalking.api_key', ''),
                 'sender_id' => (string) config('services.africastalking.sender_id', ''),
             ],
+            'markets' => [],
         ];
 
         $stored = IntegrationSetting::query()
@@ -204,7 +225,134 @@ class NotificationService
             }
         }
 
+        if (array_key_exists('markets', $incoming)) {
+            $incomingMarkets = is_array($incoming['markets']) ? $incoming['markets'] : [];
+            $existingMarkets = is_array($base['markets'] ?? null) ? $base['markets'] : [];
+            $merged['markets'] = [];
+
+            foreach ($incomingMarkets as $platformId => $marketData) {
+                if (!is_array($marketData)) {
+                    continue;
+                }
+
+                $existingMarket = $existingMarkets[(string) $platformId] ?? $existingMarkets[$platformId] ?? $this->defaultMarketConfig();
+                if (!is_array($existingMarket)) {
+                    $existingMarket = $this->defaultMarketConfig();
+                }
+
+                $merged['markets'][(string) $platformId] = $this->mergeMarketConfig($existingMarket, $marketData);
+            }
+        } else {
+            $merged['markets'] = is_array($base['markets'] ?? null) ? $base['markets'] : [];
+        }
+
         return $merged;
+    }
+
+    private function defaultMarketConfig(): array
+    {
+        return [
+            'active_provider' => null,
+            'fallback_provider' => null,
+            'legacy_gateway' => [
+                'gateway_url' => '',
+                'org_code' => '',
+            ],
+            'africastalking' => [
+                'username' => '',
+                'api_key' => '',
+                'sender_id' => '',
+            ],
+        ];
+    }
+
+    private function mergeMarketConfig(array $base, array $incoming): array
+    {
+        $merged = $this->defaultMarketConfig();
+        $merged['active_provider'] = $base['active_provider'] ?? null;
+        $merged['fallback_provider'] = $base['fallback_provider'] ?? null;
+        $merged['legacy_gateway'] = array_merge($merged['legacy_gateway'], is_array($base['legacy_gateway'] ?? null) ? $base['legacy_gateway'] : []);
+        $merged['africastalking'] = array_merge($merged['africastalking'], is_array($base['africastalking'] ?? null) ? $base['africastalking'] : []);
+
+        if (array_key_exists('active_provider', $incoming)) {
+            $merged['active_provider'] = filled($incoming['active_provider']) ? (string) $incoming['active_provider'] : null;
+        }
+
+        if (array_key_exists('fallback_provider', $incoming)) {
+            $merged['fallback_provider'] = filled($incoming['fallback_provider']) ? (string) $incoming['fallback_provider'] : null;
+        }
+
+        $incomingLegacy = $incoming['legacy_gateway'] ?? null;
+        if (is_array($incomingLegacy)) {
+            if (array_key_exists('gateway_url', $incomingLegacy)) {
+                $merged['legacy_gateway']['gateway_url'] = (string) $incomingLegacy['gateway_url'];
+            }
+            if (array_key_exists('org_code', $incomingLegacy)) {
+                $merged['legacy_gateway']['org_code'] = (string) $incomingLegacy['org_code'];
+            }
+        }
+
+        $incomingAt = $incoming['africastalking'] ?? null;
+        if (is_array($incomingAt)) {
+            if (array_key_exists('username', $incomingAt)) {
+                $merged['africastalking']['username'] = (string) $incomingAt['username'];
+            }
+            if (array_key_exists('sender_id', $incomingAt)) {
+                $merged['africastalking']['sender_id'] = (string) $incomingAt['sender_id'];
+            }
+            if (array_key_exists('api_key', $incomingAt) && trim((string) $incomingAt['api_key']) !== '') {
+                $merged['africastalking']['api_key'] = (string) $incomingAt['api_key'];
+            }
+        }
+
+        return $merged;
+    }
+
+    private function resolveMarketConfig(array $config, ?int $platformId): array
+    {
+        if (!$platformId) {
+            return $config;
+        }
+
+        $markets = is_array($config['markets'] ?? null) ? $config['markets'] : [];
+        $market = $markets[(string) $platformId] ?? $markets[$platformId] ?? null;
+
+        if (!is_array($market)) {
+            return $config;
+        }
+
+        if (!empty($market['active_provider'])) {
+            $config['active_provider'] = (string) $market['active_provider'];
+        }
+
+        if (array_key_exists('fallback_provider', $market) && $market['fallback_provider'] !== null) {
+            $config['fallback_provider'] = (string) $market['fallback_provider'];
+        }
+
+        $marketLegacy = $market['legacy_gateway'] ?? null;
+        if (is_array($marketLegacy)) {
+            if (!empty($marketLegacy['gateway_url'])) {
+                $config['legacy_gateway']['gateway_url'] = (string) $marketLegacy['gateway_url'];
+            }
+            if (!empty($marketLegacy['org_code'])) {
+                $config['legacy_gateway']['org_code'] = (string) $marketLegacy['org_code'];
+            }
+        }
+
+        $marketAt = $market['africastalking'] ?? null;
+        if (is_array($marketAt)) {
+            if (!empty($marketAt['username'])) {
+                $config['africastalking']['username'] = (string) $marketAt['username'];
+            }
+            if (!empty($marketAt['api_key'])) {
+                $config['africastalking']['api_key'] = (string) $marketAt['api_key'];
+            }
+            if (!empty($marketAt['sender_id'])) {
+                $config['africastalking']['sender_id'] = (string) $marketAt['sender_id'];
+            }
+        }
+
+        return $config;
     }
 
     private function dispatchViaProvider(string $providerId, string $phone, string $message, array $smsConfig, array $context = []): array
