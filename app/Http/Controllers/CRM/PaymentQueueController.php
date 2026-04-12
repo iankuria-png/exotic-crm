@@ -1531,20 +1531,146 @@ class PaymentQueueController extends Controller
         $disk = trim((string) ($submission->proof_disk ?: 'local'));
         $path = trim((string) $submission->proof_path);
 
-        if ($path === '' || !Storage::disk($disk)->exists($path)) {
+        if ($path === '') {
             return response()->json([
                 'message' => 'Proof image could not be found.',
             ], 404);
         }
 
-        return Storage::disk($disk)->response(
-            $path,
-            basename($path),
-            [
-                'Content-Type' => $submission->proof_mime ?: 'application/octet-stream',
-                'Cache-Control' => 'private, no-store, no-cache',
-            ]
-        );
+        $headers = [
+            'Content-Type' => $submission->proof_mime ?: 'application/octet-stream',
+            'Cache-Control' => 'private, no-store, no-cache',
+        ];
+
+        $configuredDisks = (array) config('filesystems.disks', []);
+
+        if (array_key_exists($disk, $configuredDisks)) {
+            try {
+                $filesystem = Storage::disk($disk);
+
+                if ($filesystem->exists($path)) {
+                    $response = $filesystem->response($path, basename($path), $headers);
+                    $response->headers->set('Cache-Control', 'private, no-store, no-cache');
+
+                    return $response;
+                }
+            } catch (\Throwable $exception) {
+                Log::warning('Manual submission proof stream failed on configured disk.', [
+                    'submission_id' => $submission->id,
+                    'payment_id' => $submission->payment_id,
+                    'disk' => $disk,
+                    'path' => $path,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        } elseif ($disk !== '') {
+            Log::warning('Manual submission proof requested with unknown disk.', [
+                'submission_id' => $submission->id,
+                'payment_id' => $submission->payment_id,
+                'disk' => $disk,
+                'path' => $path,
+            ]);
+        }
+
+        $absolutePath = $this->resolveManualSubmissionProofAbsolutePath($disk, $path);
+
+        if ($absolutePath !== null) {
+            try {
+                $response = response()->file($absolutePath, $headers);
+                $response->headers->set('Cache-Control', 'private, no-store, no-cache');
+
+                return $response;
+            } catch (\Throwable $exception) {
+                Log::warning('Manual submission proof fallback stream failed.', [
+                    'submission_id' => $submission->id,
+                    'payment_id' => $submission->payment_id,
+                    'disk' => $disk,
+                    'path' => $path,
+                    'absolute_path' => $absolutePath,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Proof image could not be found.',
+        ], 404);
+    }
+
+    private function resolveManualSubmissionProofAbsolutePath(string $disk, string $path): ?string
+    {
+        $path = trim($path);
+
+        if ($path === '') {
+            return null;
+        }
+
+        $candidates = [];
+        $pushCandidate = static function (?string $candidate) use (&$candidates): void {
+            $candidate = trim((string) $candidate);
+
+            if ($candidate === '') {
+                return;
+            }
+
+            $candidates[$candidate] = $candidate;
+        };
+
+        if ($this->isAbsoluteFilesystemPath($path)) {
+            $pushCandidate($path);
+        }
+
+        $pathVariants = [$path];
+
+        if (preg_match('#^https?://#i', $path) === 1) {
+            $parsedPath = parse_url($path, PHP_URL_PATH);
+
+            if (is_string($parsedPath) && trim($parsedPath) !== '') {
+                $pathVariants[] = $parsedPath;
+            }
+        }
+
+        $diskRoot = trim((string) config("filesystems.disks.{$disk}.root", ''));
+
+        foreach ($pathVariants as $variant) {
+            $relativePath = ltrim(trim((string) $variant), '/');
+
+            if ($relativePath === '') {
+                continue;
+            }
+
+            if ($diskRoot !== '') {
+                $pushCandidate(rtrim($diskRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $relativePath);
+            }
+
+            $pushCandidate(storage_path('app/' . $relativePath));
+
+            if (!str_starts_with($relativePath, 'public/')) {
+                $pushCandidate(storage_path('app/public/' . $relativePath));
+            }
+
+            if (str_starts_with($relativePath, 'storage/')) {
+                $pushCandidate(storage_path('app/public/' . ltrim(substr($relativePath, 8), '/')));
+            }
+
+            if (str_starts_with($relativePath, 'app/')) {
+                $pushCandidate(storage_path($relativePath));
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function isAbsoluteFilesystemPath(string $path): bool
+    {
+        return str_starts_with($path, DIRECTORY_SEPARATOR)
+            || preg_match('/^[A-Za-z]:[\\\\\\/]/', $path) === 1;
     }
 
     public function approveManualSubmission(Request $request, Payment $payment)
