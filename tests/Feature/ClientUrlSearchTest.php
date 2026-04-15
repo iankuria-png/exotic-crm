@@ -97,6 +97,24 @@ class ClientUrlSearchTest extends TestCase
             ->assertJsonCount(1, 'data');
     }
 
+    public function test_client_search_falls_back_to_slug_derived_name_match_when_wp_lookup_tables_miss(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $client = $this->createClient($ghana, [
+            'wp_post_id' => 99017,
+            'name' => 'Venessa',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/venessa-5/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonCount(1, 'data');
+    }
+
     public function test_client_search_returns_empty_for_url_from_different_market_when_market_is_selected(): void
     {
         $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');

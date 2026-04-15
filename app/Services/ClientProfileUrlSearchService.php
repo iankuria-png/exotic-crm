@@ -18,7 +18,7 @@ class ClientProfileUrlSearchService
     ) {
     }
 
-    public function resolveClientIds(string $search, User $user, ?int $requestedPlatformId = null): ?array
+    public function resolveClientSearch(string $search, User $user, ?int $requestedPlatformId = null): ?array
     {
         $normalizedUrl = $this->normalizeSearchUrl($search);
         if ($normalizedUrl === null) {
@@ -27,11 +27,17 @@ class ClientProfileUrlSearchService
 
         $candidatePlatforms = $this->resolveCandidatePlatforms($normalizedUrl['host'], $user, $requestedPlatformId);
         if ($candidatePlatforms->isEmpty()) {
-            return [];
+            return [
+                'client_ids' => [],
+                'fallback_terms' => [],
+            ];
         }
 
         if ($normalizedUrl['wp_post_id'] !== null) {
-            return $this->findClientIdsByPostId($candidatePlatforms, $normalizedUrl['wp_post_id']);
+            return [
+                'client_ids' => $this->findClientIdsByPostId($candidatePlatforms, $normalizedUrl['wp_post_id']),
+                'fallback_terms' => [],
+            ];
         }
 
         $matches = [];
@@ -53,21 +59,44 @@ class ClientProfileUrlSearchService
         }
 
         if ($matches === []) {
+            return [
+                'client_ids' => [],
+                'fallback_terms' => $this->buildFallbackTerms($normalizedUrl['slug_candidates']),
+            ];
+        }
+
+        return [
+            'client_ids' => Client::query()
+                ->where(function ($query) use ($matches) {
+                    foreach ($matches as $match) {
+                        $query->orWhere(function ($nested) use ($match) {
+                            $nested->where('platform_id', $match['platform_id'])
+                                ->where('wp_post_id', $match['wp_post_id']);
+                        });
+                    }
+                })
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all(),
+            'fallback_terms' => [],
+        ];
+    }
+
+    public function resolveClientIds(string $search, User $user, ?int $requestedPlatformId = null): ?array
+    {
+        $resolved = $this->resolveClientSearch($search, $user, $requestedPlatformId);
+
+        return $resolved['client_ids'] ?? $resolved;
+    }
+
+    public function extractFallbackTerms(string $search): array
+    {
+        $normalizedUrl = $this->normalizeSearchUrl($search);
+        if ($normalizedUrl === null) {
             return [];
         }
 
-        return Client::query()
-            ->where(function ($query) use ($matches) {
-                foreach ($matches as $match) {
-                    $query->orWhere(function ($nested) use ($match) {
-                        $nested->where('platform_id', $match['platform_id'])
-                            ->where('wp_post_id', $match['wp_post_id']);
-                    });
-                }
-            })
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
+        return $this->buildFallbackTerms($normalizedUrl['slug_candidates']);
     }
 
     private function normalizeSearchUrl(string $search): ?array
@@ -287,5 +316,33 @@ class ClientProfileUrlSearchService
         }
 
         return array_values(array_unique(array_filter($slugCandidates)));
+    }
+
+    private function buildFallbackTerms(array $slugCandidates): array
+    {
+        $fallbackTerms = [];
+
+        foreach ($slugCandidates as $slugCandidate) {
+            $slug = strtolower(trim((string) $slugCandidate));
+            if ($slug === '') {
+                continue;
+            }
+
+            $label = preg_replace('/[-_]+/', ' ', $slug) ?: '';
+            $label = preg_replace('/\s+/', ' ', trim((string) $label)) ?: '';
+
+            if ($label !== '' && preg_match('/[a-z]/i', $label)) {
+                $fallbackTerms[] = $label;
+            }
+
+            $withoutTrailingNumber = preg_replace('/(?:\s+|-+)\d+$/', '', $label) ?: '';
+            $withoutTrailingNumber = preg_replace('/\s+/', ' ', trim((string) $withoutTrailingNumber)) ?: '';
+
+            if ($withoutTrailingNumber !== '' && $withoutTrailingNumber !== $label && preg_match('/[a-z]/i', $withoutTrailingNumber)) {
+                $fallbackTerms[] = $withoutTrailingNumber;
+            }
+        }
+
+        return array_values(array_unique(array_filter($fallbackTerms)));
     }
 }

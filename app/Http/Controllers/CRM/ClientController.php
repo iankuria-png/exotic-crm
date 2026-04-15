@@ -70,31 +70,31 @@ class ClientController extends Controller
 
         if ($request->filled('search')) {
             $search = trim((string) $request->search);
-            $resolvedClientIds = $this->clientProfileUrlSearchService->resolveClientIds(
+            $resolvedClientSearch = $this->clientProfileUrlSearchService->resolveClientSearch(
                 $search,
                 $request->user(),
                 $requestedPlatformId
             );
 
-            if (is_array($resolvedClientIds)) {
-                if ($resolvedClientIds === []) {
-                    $query->whereRaw('1 = 0');
-                } else {
+            if (is_array($resolvedClientSearch)) {
+                $resolvedClientIds = array_values(array_filter(
+                    array_map('intval', (array) ($resolvedClientSearch['client_ids'] ?? [])),
+                    fn (int $id) => $id > 0
+                ));
+                $fallbackTerms = array_values(array_filter(array_map(
+                    static fn ($term) => trim((string) $term),
+                    (array) ($resolvedClientSearch['fallback_terms'] ?? [])
+                )));
+
+                if ($resolvedClientIds !== []) {
                     $query->whereIn('id', $resolvedClientIds);
+                } elseif ($fallbackTerms !== []) {
+                    $this->applyClientTextSearch($query, $fallbackTerms);
+                } else {
+                    $query->whereRaw('1 = 0');
                 }
             } else {
-                $query->where(function ($q) use ($search) {
-                    $q->where('name', 'like', "%{$search}%")
-                      ->orWhere('phone_normalized', 'like', "%{$search}%")
-                      ->orWhere('email', 'like', "%{$search}%");
-
-                    if (ctype_digit($search)) {
-                        $numeric = (int) $search;
-                        $q->orWhere('id', $numeric)
-                            ->orWhere('wp_post_id', $numeric)
-                            ->orWhere('wp_user_id', $numeric);
-                    }
-                });
+                $this->applyClientTextSearch($query, [$search]);
             }
         }
 
@@ -209,6 +209,35 @@ class ClientController extends Controller
         $payload['stats'] = $stats;
 
         return response()->json($payload);
+    }
+
+    private function applyClientTextSearch($query, array $terms): void
+    {
+        $normalizedTerms = array_values(array_unique(array_filter(array_map(
+            static fn ($term) => trim((string) $term),
+            $terms
+        ))));
+
+        if ($normalizedTerms === []) {
+            return;
+        }
+
+        $query->where(function ($builder) use ($normalizedTerms) {
+            foreach ($normalizedTerms as $term) {
+                $builder->orWhere(function ($nested) use ($term) {
+                    $nested->where('name', 'like', "%{$term}%")
+                        ->orWhere('phone_normalized', 'like', "%{$term}%")
+                        ->orWhere('email', 'like', "%{$term}%");
+
+                    if (ctype_digit($term)) {
+                        $numeric = (int) $term;
+                        $nested->orWhere('id', $numeric)
+                            ->orWhere('wp_post_id', $numeric)
+                            ->orWhere('wp_user_id', $numeric);
+                    }
+                });
+            }
+        });
     }
 
     private function applyCanonicalPlanFilter($query, string $planKey): void
