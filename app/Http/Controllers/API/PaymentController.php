@@ -2495,6 +2495,7 @@ class PaymentController extends Controller
                 'pawapay' => $this->hostedCheckoutService->initializePawaPay($payment, $context, [
                     'callback_url' => $checkoutCompletionUrl,
                     'description' => 'Subscription payment',
+                    'prefill_phone' => false,
                 ]),
                 default => throw new \InvalidArgumentException('Unsupported hosted checkout provider.'),
             };
