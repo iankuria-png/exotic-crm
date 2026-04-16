@@ -266,17 +266,6 @@ class SelfCheckoutApiTest extends TestCase
         ]);
 
         Http::fake([
-            'https://api.sandbox.pawapay.io/v2/predict-provider' => function ($request) {
-                $payload = json_decode($request->body(), true);
-
-                TestCase::assertSame('254748612016', $payload['phoneNumber'] ?? null);
-
-                return Http::response([
-                    'country' => 'KEN',
-                    'provider' => 'SAFARICOM_M_PESA_KE',
-                    'phoneNumber' => '254748612016',
-                ], 200);
-            },
             'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) {
                 $payload = json_decode($request->body(), true);
 
@@ -321,7 +310,7 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('success', $attempt->status);
         $this->assertSame('pawapay', $attempt->provider);
 
-        Http::assertSentCount(2);
+        Http::assertSentCount(1);
     }
 
     public function test_self_checkout_currently_rejects_non_card_proxy_wallet_provider_aliases(): void

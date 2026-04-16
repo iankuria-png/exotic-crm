@@ -218,11 +218,6 @@ class ProviderRoutingDispatcherIntegrationTest extends TestCase
     public function dispatcher_can_route_pawapay_as_profile_backed_hosted_checkout()
     {
         Http::fake([
-            'https://api.sandbox.pawapay.io/v2/predict-provider' => Http::response([
-                'country' => 'KEN',
-                'provider' => 'SAFARICOM_M_PESA_KE',
-                'phoneNumber' => '254701234567',
-            ], 200),
             'https://api.sandbox.pawapay.io/v2/paymentpage' => Http::response([
                 'depositId' => 'f4401bd2-1568-4140-bf2d-eb77d2b2b639',
                 'redirectUrl' => 'https://sandbox.paywith.pawapay.io/session/test-001',

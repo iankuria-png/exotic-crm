@@ -156,17 +156,6 @@ class PaymentLinkProxyRouteTest extends TestCase
         ]);
 
         Http::fake([
-            'https://api.sandbox.pawapay.io/v2/predict-provider' => function ($request) use ($payment) {
-                $payload = json_decode($request->body(), true);
-
-                TestCase::assertSame((string) $payment->phone, $payload['phoneNumber'] ?? null);
-
-                return Http::response([
-                    'country' => 'KEN',
-                    'provider' => 'SAFARICOM_M_PESA_KE',
-                    'phoneNumber' => (string) $payment->phone,
-                ], 200);
-            },
             'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) use ($payment) {
                 $payload = json_decode($request->body(), true);
                 $depositId = (string) ($payload['depositId'] ?? '');
@@ -273,11 +262,6 @@ class PaymentLinkProxyRouteTest extends TestCase
         $longRedirectUrl = 'https://sandbox.paywith.pawapay.io/v2?' . str_repeat('token=abc1234567890&', 90);
 
         Http::fake([
-            'https://api.sandbox.pawapay.io/v2/predict-provider' => Http::response([
-                'country' => 'KEN',
-                'provider' => 'SAFARICOM_M_PESA_KE',
-                'phoneNumber' => (string) $payment->phone,
-            ], 200),
             'https://api.sandbox.pawapay.io/v2/paymentpage' => Http::response([
                 'depositId' => (string) \Illuminate\Support\Str::uuid(),
                 'redirectUrl' => $longRedirectUrl,

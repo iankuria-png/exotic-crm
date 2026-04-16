@@ -2393,20 +2393,6 @@ class PaymentController extends Controller
                 (string) $validated['phone'],
                 $platform
             );
-            $validatedPawaPayPhone = null;
-
-            if ($providerKey === 'pawapay') {
-                $validatedPawaPayPhone = $this->hostedCheckoutService->sanitizePawaPayPhone(
-                    $normalizedPhone,
-                    array_merge($context, [
-                        'phone_prefix' => (string) ($platform->phone_prefix ?: '254'),
-                    ]),
-                    (string) ($platform->country ?? '')
-                );
-
-                $normalizedPhone = trim((string) ($validatedPawaPayPhone['phoneNumber'] ?? $normalizedPhone));
-            }
-
             $client = $this->resolveSubscriptionCheckoutClient(
                 (int) $platform->id,
                 (int) $validated['user_id'],
@@ -2509,7 +2495,6 @@ class PaymentController extends Controller
                 'pawapay' => $this->hostedCheckoutService->initializePawaPay($payment, $context, [
                     'callback_url' => $checkoutCompletionUrl,
                     'description' => 'Subscription payment',
-                    'validated_phone_details' => $validatedPawaPayPhone,
                 ]),
                 default => throw new \InvalidArgumentException('Unsupported hosted checkout provider.'),
             };

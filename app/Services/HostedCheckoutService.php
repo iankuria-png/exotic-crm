@@ -132,26 +132,13 @@ class HostedCheckoutService
             ],
         ];
 
-        $validatedPhoneDetails = is_array($options['validated_phone_details'] ?? null)
-            ? $options['validated_phone_details']
-            : $this->sanitizePawaPayPhone(
-                (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')),
-                array_merge($context, [
-                    'phone_prefix' => (string) ($payment->platform?->phone_prefix ?: '254'),
-                ]),
-                (string) ($payment->platform?->country ?? '')
-            );
-
-        $phoneNumber = trim((string) ($validatedPhoneDetails['phoneNumber'] ?? ''));
-        if ($phoneNumber !== '') {
+        $phoneNumber = preg_replace('/\D+/', '', (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')));
+        if (is_string($phoneNumber) && $phoneNumber !== '') {
             $payload['phoneNumber'] = $phoneNumber;
         }
 
-        $countryCode = trim((string) ($validatedPhoneDetails['country'] ?? ''));
-        if ($countryCode === '') {
-            $countryCode = (string) ($this->pawaPayCountryCode((string) ($payment->platform?->country ?? '')) ?? '');
-        }
-        if ($countryCode !== '') {
+        $countryCode = $this->pawaPayCountryCode((string) ($payment->platform?->country ?? ''));
+        if ($countryCode !== null) {
             $payload['country'] = $countryCode;
         }
 
@@ -185,10 +172,7 @@ class HostedCheckoutService
             'type' => 'redirect',
             'url' => $redirectUrl,
             'provider_reference' => (string) $response->json('depositId', $depositId),
-            'provider_payload' => [
-                'predict_provider' => $validatedPhoneDetails['prediction'] ?? null,
-                'payment_page' => $response->json(),
-            ],
+            'provider_payload' => $response->json(),
         ];
     }
 

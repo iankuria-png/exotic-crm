@@ -21,4 +21,9 @@ class PhoneNormalizerTest extends TestCase
     {
         $this->assertSame('254748612016', PhoneNormalizer::normalize('+254748612016', '254'));
     }
+
+    public function test_it_keeps_plain_international_numbers_in_digit_format(): void
+    {
+        $this->assertSame('254748612016', PhoneNormalizer::normalize('254748612016', '254'));
+    }
 }
