@@ -15,6 +15,7 @@ use App\Models\Platform;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\ClientDeletionService;
+use App\Services\ClientWpLinkRepairService;
 use App\Services\ClientRetentionInsightService;
 use App\Services\DealPaymentService;
 use App\Services\LeadAssignmentService;
@@ -35,6 +36,7 @@ use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 
 class ClientController extends Controller
 {
@@ -43,6 +45,7 @@ class ClientController extends Controller
         private readonly LeadAssignmentService $leadAssignmentService,
         private readonly AuditService $auditService,
         private readonly CredentialDeliveryService $credentialDeliveryService,
+        private readonly ClientWpLinkRepairService $clientWpLinkRepairService,
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
         private readonly ClientDeletionService $clientDeletionService,
         private readonly DealPaymentService $dealPaymentService,
@@ -992,6 +995,8 @@ class ClientController extends Controller
             return response()->json([
                 'wp_profile' => $profile,
             ]);
+        } catch (RequestException $exception) {
+            return $this->handleWpReadRequestException($exception, $client, 'Failed to fetch WordPress profile.');
         } catch (\Throwable $exception) {
             return response()->json([
                 'message' => 'Failed to fetch WordPress profile.',
@@ -1173,12 +1178,89 @@ class ClientController extends Controller
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
             return response()->json($wpSync->getClientMedia((int) $client->wp_post_id));
+        } catch (RequestException $exception) {
+            return $this->handleWpReadRequestException($exception, $client, 'Failed to fetch client media.');
         } catch (\Throwable $exception) {
             return response()->json([
                 'message' => 'Failed to fetch client media.',
                 'error' => $exception->getMessage(),
             ], 502);
         }
+    }
+
+    public function repairWpLink(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        try {
+            $result = $this->clientWpLinkRepairService->repair($client);
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (RequestException $exception) {
+            $payload = $exception->response?->json();
+            $error = is_array($payload)
+                ? ($payload['message'] ?? $exception->getMessage())
+                : ($exception->response?->body() ?: $exception->getMessage());
+
+            return response()->json([
+                'message' => 'WordPress link repair could not be synchronized.',
+                'error' => $error,
+            ], 502);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'WordPress link repair failed.',
+                'error' => $exception->getMessage(),
+            ], 500);
+        }
+
+        if (($result['status'] ?? '') !== 'repaired') {
+            return response()->json([
+                'message' => $result['message'] ?? 'WordPress link repair could not be completed.',
+                'repair' => [
+                    'status' => $result['status'] ?? 'unknown',
+                    'candidate_post_ids' => $result['candidate_post_ids'] ?? [],
+                    'conflict_client_id' => $result['conflict_client_id'] ?? null,
+                    'profile_post_type' => $result['profile_post_type'] ?? null,
+                ],
+            ], 422);
+        }
+
+        /** @var Client $repairedClient */
+        $repairedClient = $result['client'];
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $repairedClient->platform_id,
+            CrmAuditAction::CLIENT_PROFILE_EDIT,
+            'client',
+            (int) $repairedClient->id,
+            [
+                'wp_post_id' => $result['previous_wp_post_id'] ?? null,
+            ],
+            [
+                'wp_post_id' => $result['wp_post_id'] ?? null,
+                'repair' => [
+                    'status' => $result['status'],
+                    'candidate_post_ids' => $result['candidate_post_ids'] ?? [],
+                    'profile_post_type' => $result['profile_post_type'] ?? null,
+                ],
+            ],
+            'Repaired stale WordPress profile link from CRM'
+        );
+
+        return response()->json([
+            'message' => $result['message'],
+            'client' => $repairedClient,
+            'repair' => [
+                'status' => $result['status'],
+                'wp_post_id' => $result['wp_post_id'] ?? null,
+                'previous_wp_post_id' => $result['previous_wp_post_id'] ?? null,
+                'candidate_post_ids' => $result['candidate_post_ids'] ?? [],
+                'profile_post_type' => $result['profile_post_type'] ?? null,
+            ],
+        ]);
     }
 
     public function uploadMedia(Request $request, Client $client)
@@ -2287,6 +2369,57 @@ class ClientController extends Controller
             && !empty($platform->db_name)
             && !empty($platform->db_user)
             && !empty($platform->db_pass);
+    }
+
+    private function handleWpReadRequestException(RequestException $exception, Client $client, string $failureMessage)
+    {
+        $status = $exception->response?->status() ?? 502;
+        $payload = $exception->response?->json();
+
+        if (!is_array($payload)) {
+            $payload = [
+                'message' => $exception->response?->body() ?: $failureMessage,
+            ];
+        }
+
+        if ($status === 404 && $this->isMissingWpClientPayload($payload)) {
+            return response()->json([
+                'message' => 'The linked WordPress profile could not be found for this client.',
+                'error' => $payload['message'] ?? 'Client not found',
+                'stale_link' => $this->buildStaleWpLinkPayload($client),
+            ], 404);
+        }
+
+        if ($status >= 400 && $status < 500) {
+            return response()->json($payload, $status);
+        }
+
+        return response()->json([
+            'message' => $failureMessage,
+            'error' => $payload['message'] ?? $exception->getMessage(),
+        ], 502);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function isMissingWpClientPayload(array $payload): bool
+    {
+        $code = strtolower(trim((string) ($payload['code'] ?? '')));
+        $message = strtolower(trim((string) ($payload['message'] ?? '')));
+
+        return ($code === 'not_found' && str_contains($message, 'client not found'))
+            || $message === 'client not found';
+    }
+
+    private function buildStaleWpLinkPayload(Client $client): array
+    {
+        return [
+            'client_id' => (int) $client->id,
+            'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+            'wp_user_id' => (int) ($client->wp_user_id ?? 0),
+            'repairable' => $this->clientWpLinkRepairService->canAttemptRepair($client),
+        ];
     }
 
     private function buildCredentialDispatchRecommendation(ClientCredentialDispatch $dispatch): array

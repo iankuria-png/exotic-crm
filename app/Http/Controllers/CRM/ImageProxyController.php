@@ -41,14 +41,16 @@ class ImageProxyController extends Controller
             $upstreamHeaders['If-Modified-Since'] = $request->header('If-Modified-Since');
         }
 
+        $method = $request->isMethod('head') ? 'HEAD' : 'GET';
+
         try {
             $upstream = Http::withHeaders(array_merge([
                 'User-Agent' => 'ExoticCRM-ImageProxy/1.0',
-                'Accept'     => 'image/*,*/*;q=0.8',
+                'Accept'     => 'image/*,video/*,*/*;q=0.8',
             ], $upstreamHeaders))
                 ->withOptions(['stream' => true, 'allow_redirects' => true])
                 ->timeout(15)
-                ->get($rawUrl);
+                ->send($method, $rawUrl);
         } catch (\Throwable $e) {
             return response('Upstream fetch failed.', 502);
         }
@@ -60,7 +62,7 @@ class ImageProxyController extends Controller
         }
 
         if ($status >= 400) {
-            return response('Upstream returned ' . $status . '.', 502);
+            return response('Upstream returned ' . $status . '.', $status);
         }
 
         $contentType = $upstream->header('Content-Type') ?: 'application/octet-stream';
@@ -79,6 +81,10 @@ class ImageProxyController extends Controller
 
         if (!isset($responseHeaders['Cache-Control'])) {
             $responseHeaders['Cache-Control'] = 'public, max-age=3600';
+        }
+
+        if ($request->isMethod('head')) {
+            return response('', $status, $responseHeaders);
         }
 
         $body = $upstream->toPsrResponse()->getBody();

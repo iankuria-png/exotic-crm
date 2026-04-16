@@ -35,6 +35,9 @@ use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
+use App\Support\DeactivationRequest;
+use App\Support\DealDeactivationReason;
+use App\Support\LinkedPaymentAction;
 use App\Support\PhoneNormalizer;
 use App\Models\BillingRoutingDecision;
 use App\Models\PaymentManualSubmission;
@@ -1866,7 +1869,11 @@ class PaymentQueueController extends Controller
                 if ($payment->deal && (string) $payment->deal->status === 'active') {
                     $this->subscriptionDeactivationService->deactivateDeal(
                         $payment->deal,
-                        (string) $validated['reason'],
+                        new DeactivationRequest(
+                            DealDeactivationReason::INVALID_REFERENCE,
+                            trim((string) $validated['reason']) ?: null,
+                            LinkedPaymentAction::INVALIDATE
+                        ),
                         optional($request->user())->id
                     );
                 }

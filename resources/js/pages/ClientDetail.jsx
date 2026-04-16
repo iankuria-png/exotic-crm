@@ -13,6 +13,7 @@ import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from
 import { DEAL_DEACTIVATION_REASON_OPTIONS, LINKED_PAYMENT_ACTION_OPTIONS, defaultLinkedPaymentAction } from '../utils/deactivationOptions';
 import ClientHealthSection from '../components/ClientHealthSection';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
+import { proxyImageUrl } from '../utils/imageProxy';
 
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -502,16 +503,20 @@ export default function ClientDetail() {
         enabled: clientPlatformId > 0,
     });
 
-    const { data: wpProfileData } = useQuery({
+    const { data: wpProfileData, error: wpProfileError } = useQuery({
         queryKey: ['client-wp-profile', id],
         queryFn: () => api.get(`/crm/clients/${id}/wp-profile`).then((r) => r.data),
         enabled: activeTab === 'edit_profile' && Number(client?.wp_post_id || 0) > 0,
+        retry: false,
+        refetchOnWindowFocus: false,
     });
 
-    const { data: mediaData, isLoading: mediaLoading } = useQuery({
+    const { data: mediaData, isLoading: mediaLoading, error: mediaError } = useQuery({
         queryKey: ['client-media', id],
         queryFn: () => api.get(`/crm/clients/${id}/media`).then((r) => r.data),
         enabled: activeTab === 'edit_profile' && profileSection === 'media' && Number(client?.wp_post_id || 0) > 0,
+        retry: false,
+        refetchOnWindowFocus: false,
     });
 
     const { data: healthData, isLoading: healthLoading } = useQuery({
@@ -903,6 +908,19 @@ export default function ClientDetail() {
         },
     });
 
+    const repairWpLinkMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/repair-wp-link`).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-wp-profile', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            toast.success(payload?.message || 'WordPress link repaired.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'WordPress link repair failed.');
+        },
+    });
+
     const resolveHealthMutation = useMutation({
         mutationFn: (payload) => api.post(`/crm/clients/${id}/health/resolve`, payload).then((response) => response.data),
         onSuccess: () => {
@@ -1144,6 +1162,10 @@ export default function ClientDetail() {
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canOpenClientAccess = Boolean(client?.id);
     const mediaItems = mediaData?.data || [];
+    const wpProfileErrorData = wpProfileError?.response?.data || null;
+    const mediaErrorData = mediaError?.response?.data || null;
+    const staleWpLink = mediaErrorData?.stale_link || wpProfileErrorData?.stale_link || null;
+    const repairableWpLink = Boolean(staleWpLink?.repairable);
     const healthDuplicates = healthData?.duplicates || [];
     const walletSummary = walletData?.wallet || null;
     const walletTransactions = walletSummary?.transactions || [];
@@ -2522,6 +2544,34 @@ export default function ClientDetail() {
                                 </div>
                             ) : null}
 
+                            {wpProfileErrorData ? (
+                                <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+                                    <p className="font-semibold">
+                                        {staleWpLink
+                                            ? 'This CRM client is linked to a missing WordPress profile.'
+                                            : 'WordPress profile data could not be loaded.'}
+                                    </p>
+                                    <p className="mt-1">{wpProfileErrorData.message || 'Failed to load WordPress profile data.'}</p>
+                                    {staleWpLink ? (
+                                        <p className="mt-1 text-xs text-rose-700">
+                                            WP Post ID: {staleWpLink.wp_post_id || '—'} • WP User ID: {staleWpLink.wp_user_id || '—'}
+                                        </p>
+                                    ) : null}
+                                    {repairableWpLink && !isReadOnly ? (
+                                        <div className="mt-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => repairWpLinkMutation.mutate()}
+                                                disabled={repairWpLinkMutation.isPending}
+                                                className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {repairWpLinkMutation.isPending ? 'Repairing WordPress link...' : 'Repair WordPress link'}
+                                            </button>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : null}
+
                             {profileSection === 'personal' ? (
                                 <div className="space-y-3">
                                     <p className="text-xs text-slate-500">Use the dropdown options with visible codes. CRM saves the WordPress code value automatically.</p>
@@ -2875,43 +2925,43 @@ export default function ClientDetail() {
 
                                     {mediaLoading ? (
                                         <p className="text-sm text-slate-500">Loading media...</p>
+                                    ) : mediaErrorData ? (
+                                        <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+                                            <p className="font-semibold">
+                                                {staleWpLink
+                                                    ? 'Media could not be loaded because the WordPress profile link is stale.'
+                                                    : 'Media could not be loaded from WordPress.'}
+                                            </p>
+                                            <p className="mt-1">{mediaErrorData.message || 'Failed to load WordPress media.'}</p>
+                                            {repairableWpLink && !isReadOnly ? (
+                                                <div className="mt-3">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => repairWpLinkMutation.mutate()}
+                                                        disabled={repairWpLinkMutation.isPending}
+                                                        className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        {repairWpLinkMutation.isPending ? 'Repairing WordPress link...' : 'Repair WordPress link'}
+                                                    </button>
+                                                </div>
+                                            ) : null}
+                                        </div>
                                     ) : mediaItems.length > 0 ? (
                                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                             {mediaItems.map((media) => (
-                                                <div
+                                                <ClientMediaCard
                                                     key={media.id}
-                                                    className={`rounded-md border bg-white p-2 ${media.is_main ? 'border-amber-300 ring-1 ring-amber-200' : 'border-slate-200'}`}
-                                                >
-                                                    <img src={media.url} alt="" className="h-40 w-full rounded object-cover" />
-                                                    <p className="mt-2 truncate text-xs text-slate-600">{media.filename}</p>
-                                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                                        {!media.is_main ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setMainMediaMutation.mutate(media.id)}
-                                                                disabled={setMainMediaMutation.isPending}
-                                                                className="rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-700 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                            >
-                                                                Set main
-                                                            </button>
-                                                        ) : (
-                                                            <span className="rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700">Main image</span>
-                                                        )}
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => deleteMediaMutation.mutate(media.id)}
-                                                            disabled={deleteMediaMutation.isPending}
-                                                            className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                        >
-                                                            Delete
-                                                        </button>
-                                                    </div>
-                                                </div>
+                                                    media={media}
+                                                    setMainPending={setMainMediaMutation.isPending}
+                                                    deletePending={deleteMediaMutation.isPending}
+                                                    onSetMain={() => setMainMediaMutation.mutate(media.id)}
+                                                    onDelete={() => deleteMediaMutation.mutate(media.id)}
+                                                />
                                             ))}
                                         </div>
                                     ) : (
                                         <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
-                                            No images uploaded. Drag and drop or click to upload.
+                                            No media uploaded yet. Drag and drop or click to upload an image.
                                         </p>
                                     )}
                                 </div>
@@ -3370,6 +3420,179 @@ export default function ClientDetail() {
                     }}
                 />
             ) : null}
+        </div>
+    );
+}
+
+function resolveMediaUnavailableMessage(status) {
+    if (status === 404) {
+        return 'File missing on market site';
+    }
+
+    if (status === 403 || status === 502 || status === 503 || status === 504) {
+        return 'File blocked or unavailable';
+    }
+
+    return 'File unavailable';
+}
+
+function resolveMediaKind(media) {
+    const mimeType = String(media?.mime_type || '').toLowerCase();
+    if (mimeType.startsWith('video/')) {
+        return 'video';
+    }
+
+    if (mimeType.startsWith('image/')) {
+        return 'image';
+    }
+
+    const url = String(media?.url || '').toLowerCase();
+    if (/\.(mp4|m4v|mov|webm|ogg)(?:$|[?#])/.test(url)) {
+        return 'video';
+    }
+
+    return 'image';
+}
+
+function ClientMediaCard({
+    media,
+    setMainPending,
+    deletePending,
+    onSetMain,
+    onDelete,
+}) {
+    const displayName = media.file_name || media.filename || 'Untitled media';
+    const mediaKind = resolveMediaKind(media);
+    const proxiedUrl = proxyImageUrl(media?.url || '');
+    const hasAssetUrl = proxiedUrl.trim() !== '';
+    const [assetState, setAssetState] = useState(hasAssetUrl ? 'checking' : 'unavailable');
+    const [assetStatus, setAssetStatus] = useState(hasAssetUrl ? null : 404);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        if (!hasAssetUrl) {
+            setAssetState('unavailable');
+            setAssetStatus(404);
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        setAssetState('checking');
+        setAssetStatus(null);
+
+        fetch(proxiedUrl, {
+            method: 'HEAD',
+            cache: 'no-store',
+            credentials: 'same-origin',
+        })
+            .then((response) => {
+                if (cancelled) {
+                    return;
+                }
+
+                if (response.ok) {
+                    setAssetState('ready');
+                    setAssetStatus(response.status);
+                    return;
+                }
+
+                setAssetState('unavailable');
+                setAssetStatus(response.status);
+            })
+            .catch(() => {
+                if (cancelled) {
+                    return;
+                }
+
+                setAssetState('unavailable');
+                setAssetStatus(null);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [hasAssetUrl, proxiedUrl]);
+
+    const unavailableMessage = resolveMediaUnavailableMessage(assetStatus);
+
+    return (
+        <div className={`rounded-lg border p-3 ${media.is_main ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200 bg-white'}`}>
+            <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+                <div className="aspect-[4/3]">
+                    {assetState === 'checking' ? (
+                        <div className="flex h-full items-center justify-center bg-slate-100 text-sm text-slate-500">
+                            Checking file…
+                        </div>
+                    ) : assetState === 'ready' && mediaKind === 'video' ? (
+                        <video
+                            src={proxiedUrl}
+                            controls
+                            playsInline
+                            preload="metadata"
+                            className="h-full w-full bg-slate-950 object-contain"
+                            onError={() => {
+                                setAssetState('unavailable');
+                                setAssetStatus(null);
+                            }}
+                        />
+                    ) : assetState === 'ready' ? (
+                        <img
+                            src={proxiedUrl}
+                            alt={displayName}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                            onError={() => {
+                                setAssetState('unavailable');
+                                setAssetStatus(null);
+                            }}
+                        />
+                    ) : (
+                        <div className="flex h-full flex-col items-center justify-center gap-2 bg-slate-100 px-4 text-center">
+                            <span className="text-sm font-medium text-slate-700">{unavailableMessage}</span>
+                            <span className="text-xs text-slate-500">
+                                {mediaKind === 'video' ? 'The video could not be loaded from the market site.' : 'The image could not be loaded from the market site.'}
+                            </span>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="mt-3 space-y-3">
+                <div>
+                    <p className="truncate text-sm font-medium text-slate-900">{displayName}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                        {media.mime_type || (mediaKind === 'video' ? 'video' : 'image')}
+                    </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                    {media.is_main ? (
+                        <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                            Main image
+                        </span>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={onSetMain}
+                            disabled={setMainPending}
+                            className="rounded-md border border-teal-200 bg-teal-50 px-3 py-1.5 text-sm font-medium text-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Set main
+                        </button>
+                    )}
+
+                    <button
+                        type="button"
+                        onClick={onDelete}
+                        disabled={deletePending}
+                        className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Delete
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
