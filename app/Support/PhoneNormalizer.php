@@ -16,6 +16,9 @@ class PhoneNormalizer
         }
 
         $normalized = ltrim($normalized, '+');
+        if (str_starts_with($normalized, '00')) {
+            $normalized = substr($normalized, 2);
+        }
         if ($normalized === '') {
             return null;
         }
@@ -26,7 +29,9 @@ class PhoneNormalizer
         }
 
         if (str_starts_with($normalized, '0')) {
-            $normalized = $normalizedPrefix . substr($normalized, 1);
+            $normalized = $normalizedPrefix . ltrim(substr($normalized, 1), '0');
+        } elseif (!str_starts_with($normalized, $normalizedPrefix) && strlen($normalized) <= 10) {
+            $normalized = $normalizedPrefix . ltrim($normalized, '0');
         }
 
         return $normalized !== '' ? $normalized : null;

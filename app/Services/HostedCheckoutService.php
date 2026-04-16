@@ -3,8 +3,10 @@
 namespace App\Services;
 
 use App\Models\Payment;
+use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 use RuntimeException;
 
 class HostedCheckoutService
@@ -130,13 +132,26 @@ class HostedCheckoutService
             ],
         ];
 
-        $phoneNumber = preg_replace('/\D+/', '', (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')));
-        if (is_string($phoneNumber) && $phoneNumber !== '') {
+        $validatedPhoneDetails = is_array($options['validated_phone_details'] ?? null)
+            ? $options['validated_phone_details']
+            : $this->sanitizePawaPayPhone(
+                (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')),
+                array_merge($context, [
+                    'phone_prefix' => (string) ($payment->platform?->phone_prefix ?: '254'),
+                ]),
+                (string) ($payment->platform?->country ?? '')
+            );
+
+        $phoneNumber = trim((string) ($validatedPhoneDetails['phoneNumber'] ?? ''));
+        if ($phoneNumber !== '') {
             $payload['phoneNumber'] = $phoneNumber;
         }
 
-        $countryCode = $this->pawaPayCountryCode((string) ($payment->platform?->country ?? ''));
-        if ($countryCode !== null) {
+        $countryCode = trim((string) ($validatedPhoneDetails['country'] ?? ''));
+        if ($countryCode === '') {
+            $countryCode = (string) ($this->pawaPayCountryCode((string) ($payment->platform?->country ?? '')) ?? '');
+        }
+        if ($countryCode !== '') {
             $payload['country'] = $countryCode;
         }
 
@@ -170,7 +185,66 @@ class HostedCheckoutService
             'type' => 'redirect',
             'url' => $redirectUrl,
             'provider_reference' => (string) $response->json('depositId', $depositId),
-            'provider_payload' => $response->json(),
+            'provider_payload' => [
+                'predict_provider' => $validatedPhoneDetails['prediction'] ?? null,
+                'payment_page' => $response->json(),
+            ],
+        ];
+    }
+
+    public function sanitizePawaPayPhone(?string $phone, array $context, string $expectedCountry = ''): array
+    {
+        $normalizedPhone = PhoneNormalizer::normalize(
+            $phone,
+            (string) ($context['phone_prefix'] ?? data_get($context, 'wallet.market.phone_prefix', '254'))
+        );
+
+        if ($normalizedPhone === null || $normalizedPhone === '') {
+            return [];
+        }
+
+        $apiKey = trim((string) data_get($context, 'provider_credentials.api_key', ''));
+        if ($apiKey === '') {
+            throw new RuntimeException('pawaPay credentials are incomplete for the active environment.');
+        }
+
+        $expectedCountryCode = $this->pawaPayCountryCode($expectedCountry);
+        $response = Http::timeout(10)
+            ->connectTimeout(5)
+            ->withToken($apiKey)
+            ->post($this->pawaPayBaseUrl($context) . '/v2/predict-provider', [
+                'phoneNumber' => $normalizedPhone,
+            ]);
+
+        if (!$response->successful()) {
+            $message = (string) (
+                $response->json('failureReason.failureMessage')
+                ?? $response->json('message')
+                ?? 'Please enter a valid phone number for this market.'
+            );
+
+            if ($response->status() >= 500) {
+                throw new RuntimeException($message !== '' ? $message : 'pawaPay phone validation failed.');
+            }
+
+            throw new InvalidArgumentException($message !== '' ? $message : 'Please enter a valid phone number for this market.');
+        }
+
+        $sanitizedPhone = trim((string) $response->json('phoneNumber', ''));
+        if ($sanitizedPhone === '') {
+            throw new InvalidArgumentException('Please enter a valid phone number for this market.');
+        }
+
+        $resolvedCountry = strtoupper(trim((string) $response->json('country', '')));
+        if ($expectedCountryCode !== null && $resolvedCountry !== '' && $resolvedCountry !== $expectedCountryCode) {
+            throw new InvalidArgumentException('Please enter a valid phone number for this market.');
+        }
+
+        return [
+            'phoneNumber' => $sanitizedPhone,
+            'country' => $resolvedCountry !== '' ? $resolvedCountry : $expectedCountryCode,
+            'provider' => trim((string) $response->json('provider', '')),
+            'prediction' => $response->json(),
         ];
     }
 

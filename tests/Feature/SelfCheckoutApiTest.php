@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\BillingSubscriptionRule;
+use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingProviderProfile;
 use App\Models\Client;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
@@ -174,6 +176,152 @@ class SelfCheckoutApiTest extends TestCase
                 && $request['amount'] === 1575000
                 && $request['reference'] === $payment->reference_number;
         });
+    }
+
+    public function test_self_checkout_normalizes_local_kenya_numbers_before_pawapay_initialization(): void
+    {
+        config([
+            'app.url' => 'https://crm.example.test',
+        ]);
+
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'domain' => 'kenya.example.test',
+            'phone_prefix' => '254',
+            'currency_code' => 'KES',
+            'payment_link_providers' => [
+                'active_provider' => 'primary',
+                'providers' => [
+                    'primary' => [
+                        'label' => 'Primary',
+                        'mode' => 'proxy_hosted_checkout',
+                        'enabled' => true,
+                        'wallet_provider_key' => 'pawapay',
+                        'environment' => 'sandbox',
+                    ],
+                ],
+            ],
+        ]);
+
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 6601,
+            'wp_user_id' => 9911,
+            'name' => 'Kenya Client',
+            'phone_normalized' => '254748612016',
+            'email' => 'kenya-pawapay@example.test',
+            'profile_status' => 'draft',
+        ]);
+
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Premium',
+            'display_name' => 'Premium',
+            'currency' => 'KES',
+            'monthly_price' => 3000,
+            'biweekly_price' => 1500,
+            'weekly_price' => 750,
+        ]);
+
+        ProductPrice::factory()->create([
+            'product_id' => $product->id,
+            'duration_key' => '1_month',
+            'duration_label' => '1 Month',
+            'duration_days' => 30,
+            'price' => 3000,
+            'currency' => 'KES',
+            'is_active' => true,
+            'sort_order' => 10,
+        ]);
+
+        $this->seedWalletBillingContext($platform);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://api.sandbox.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-sandbox-key',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'self_checkout',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+            'restriction_json' => [],
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.pawapay.io/v2/predict-provider' => function ($request) {
+                $payload = json_decode($request->body(), true);
+
+                TestCase::assertSame('254748612016', $payload['phoneNumber'] ?? null);
+
+                return Http::response([
+                    'country' => 'KEN',
+                    'provider' => 'SAFARICOM_M_PESA_KE',
+                    'phoneNumber' => '254748612016',
+                ], 200);
+            },
+            'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) {
+                $payload = json_decode($request->body(), true);
+
+                TestCase::assertSame('254748612016', $payload['phoneNumber'] ?? null);
+                TestCase::assertSame('KEN', $payload['country'] ?? null);
+
+                return Http::response([
+                    'depositId' => $payload['depositId'] ?? null,
+                    'redirectUrl' => 'https://sandbox.paywith.pawapay.io/session/self-checkout-001',
+                ], 200);
+            },
+        ]);
+
+        $response = $this->postJson('/api/self-checkout', [
+            'product_id' => $product->id,
+            'platform_id' => $platform->id,
+            'user_id' => $client->wp_user_id,
+            'first_name' => 'Zuri',
+            'last_name' => 'User',
+            'phone' => '0748612016',
+            'email' => $client->email,
+            'duration' => 'monthly',
+        ], [
+            'Origin' => 'https://www.exotickenya.com',
+            'Referer' => 'https://www.exotickenya.com/escort/zuri-10/',
+            'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Chrome/136.0.0.0 Safari/537.36',
+            'X-Request-Id' => 'wp-self-checkout-pawapay-req-001',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('status', true)
+            ->assertJsonPath('provider', 'pawapay')
+            ->assertJsonPath('checkout_url', 'https://sandbox.paywith.pawapay.io/session/self-checkout-001');
+
+        $payment = Payment::query()->firstOrFail();
+        $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->firstOrFail();
+
+        $this->assertSame('254748612016', $payment->phone);
+        $this->assertSame('254748612016', data_get($payment->payment_data, 'customer.phone'));
+        $this->assertSame('pawapay', $payment->provider_key);
+        $this->assertSame('https://sandbox.paywith.pawapay.io/session/self-checkout-001', data_get($payment->payment_data, 'checkout_url'));
+        $this->assertSame('success', $attempt->status);
+        $this->assertSame('pawapay', $attempt->provider);
+
+        Http::assertSentCount(2);
     }
 
     public function test_self_checkout_currently_rejects_non_card_proxy_wallet_provider_aliases(): void

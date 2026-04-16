@@ -15,6 +15,7 @@ use App\Models\Deal;
 use App\Models\Activation;
 use App\Models\SmsLog;
 use App\Models\WordpressPost;
+use App\Support\PhoneNormalizer;
 use App\Services\DynamicDatabaseService;
 use App\Services\BillingModeService;
 use App\Services\HostedCheckoutService;
@@ -2388,17 +2389,22 @@ class PaymentController extends Controller
                 surface: 'self_checkout'
             );
 
-            $normalizedPhone = preg_replace('/\D+/', '', (string) $validated['phone']);
-            if ($normalizedPhone === '') {
-                $normalizedPhone = trim((string) $validated['phone']);
-            }
+            $normalizedPhone = $this->normalizeSubscriptionCheckoutPhone(
+                (string) $validated['phone'],
+                $platform
+            );
+            $validatedPawaPayPhone = null;
 
-            if (
-                strtoupper((string) ($pricing['currency'] ?? $platform->currency_code ?? '')) === 'KES'
-                && strlen($normalizedPhone) === 9
-                && str_starts_with($normalizedPhone, '7')
-            ) {
-                $normalizedPhone = '254' . $normalizedPhone;
+            if ($providerKey === 'pawapay') {
+                $validatedPawaPayPhone = $this->hostedCheckoutService->sanitizePawaPayPhone(
+                    $normalizedPhone,
+                    array_merge($context, [
+                        'phone_prefix' => (string) ($platform->phone_prefix ?: '254'),
+                    ]),
+                    (string) ($platform->country ?? '')
+                );
+
+                $normalizedPhone = trim((string) ($validatedPawaPayPhone['phoneNumber'] ?? $normalizedPhone));
             }
 
             $client = $this->resolveSubscriptionCheckoutClient(
@@ -2503,6 +2509,7 @@ class PaymentController extends Controller
                 'pawapay' => $this->hostedCheckoutService->initializePawaPay($payment, $context, [
                     'callback_url' => $checkoutCompletionUrl,
                     'description' => 'Subscription payment',
+                    'validated_phone_details' => $validatedPawaPayPhone,
                 ]),
                 default => throw new \InvalidArgumentException('Unsupported hosted checkout provider.'),
             };
@@ -2684,10 +2691,10 @@ class PaymentController extends Controller
             }
 
             $pricing = $this->walletCheckoutService->resolveSubscriptionPricing($product, (string) $validated['duration']);
-            $normalizedPhone = preg_replace('/\D+/', '', (string) $validated['phone']);
-            if ($normalizedPhone === '') {
-                $normalizedPhone = trim((string) $validated['phone']);
-            }
+            $normalizedPhone = $this->normalizeSubscriptionCheckoutPhone(
+                (string) $validated['phone'],
+                $platform
+            );
 
             $client = $this->resolveSubscriptionCheckoutClient(
                 (int) $platform->id,
@@ -2844,6 +2851,25 @@ class PaymentController extends Controller
         ])), 0, 18));
 
         return 'SUB-' . $hash;
+    }
+
+    private function normalizeSubscriptionCheckoutPhone(string $phone, Platform $platform): string
+    {
+        $phonePrefix = (string) ($platform->phone_prefix ?: '254');
+        $digitsOnlyPrefix = preg_replace('/\D+/', '', $phonePrefix) ?: '254';
+        $normalizedPhone = PhoneNormalizer::normalize($phone, $phonePrefix);
+
+        if (
+            $normalizedPhone === null
+            || $normalizedPhone === ''
+            || !str_starts_with($normalizedPhone, $digitsOnlyPrefix)
+            || strlen($normalizedPhone) <= strlen($digitsOnlyPrefix)
+            || strlen($normalizedPhone) < 10
+        ) {
+            throw new \InvalidArgumentException('Please enter a valid phone number for this market.');
+        }
+
+        return $normalizedPhone;
     }
 
 

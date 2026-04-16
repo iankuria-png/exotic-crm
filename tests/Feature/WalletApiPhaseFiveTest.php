@@ -1213,6 +1213,17 @@ class WalletApiPhaseFiveTest extends TestCase
         ]);
 
         Http::fake([
+            'https://api.sandbox.pawapay.io/v2/predict-provider' => function ($request) use ($client) {
+                $payload = json_decode($request->body(), true);
+
+                TestCase::assertSame($client->phone_normalized, $payload['phoneNumber'] ?? null);
+
+                return Http::response([
+                    'country' => 'KEN',
+                    'provider' => 'SAFARICOM_M_PESA_KE',
+                    'phoneNumber' => $client->phone_normalized,
+                ], 200);
+            },
             'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) use ($client) {
                 $payload = json_decode($request->body(), true);
 
