@@ -819,7 +819,9 @@ class BillingGatewayService
         $attemptStartedAt = microtime(true);
 
         try {
-            $action = $this->pawaPayCompatibilityAdapter->initialize($payment, $context, $options);
+            $action = $this->pawaPayCompatibilityAdapter->initialize($payment, $context, array_merge($options, [
+                'prefill_phone' => false,
+            ]));
         } catch (RuntimeException $exception) {
             $this->failPayment($payment, $exception->getMessage());
             $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
