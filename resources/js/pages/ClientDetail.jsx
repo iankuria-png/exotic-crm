@@ -14,6 +14,7 @@ import { DEAL_DEACTIVATION_REASON_OPTIONS, LINKED_PAYMENT_ACTION_OPTIONS, defaul
 import ClientHealthSection from '../components/ClientHealthSection';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 import { proxyImageUrl } from '../utils/imageProxy';
+import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
 
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -1143,12 +1144,9 @@ export default function ClientDetail() {
         return <p className="py-12 text-center text-sm text-slate-500">Client not found.</p>;
     }
 
+    const profileState = deriveClientProfileState(client);
     const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
-    const isUntrackedForeverPlan = client.profile_status === 'publish'
-        && Number(client.deals?.length || 0) === 0
-        && !client.escort_expire
-        && !client.premium_expire
-        && !client.featured_expire;
+    const isUntrackedForeverPlan = isClientTrueForeverPlan(client);
     const activeSubscriptionLabel = client.active_deal
         ? (client.active_deal.product?.name || client.active_deal.plan_type)
         : (isUntrackedForeverPlan ? 'Forever plan' : 'None');
@@ -1531,7 +1529,7 @@ export default function ClientDetail() {
                             <h2 className="crm-page-title">{client.name || 'Unnamed'}</h2>
                             <div className="mt-2 flex flex-wrap items-center gap-2">
                                 {client.is_high_risk ? <span className="inline-flex shrink-0 items-center rounded-md bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">High Risk</span> : null}
-                                <StatusBadge status={client.profile_status} />
+                                <StatusBadge status={profileState.status} tone={profileState.tone} label={profileState.label} />
                                 {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
                                 {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
                                 {client.verified ? <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
@@ -1544,6 +1542,11 @@ export default function ClientDetail() {
                                     </span>
                                 ) : null}
                             </div>
+                            {profileState.isConflict ? (
+                                <p className="mt-2 max-w-2xl text-xs font-medium text-amber-700">
+                                    {profileState.detail}
+                                </p>
+                            ) : null}
                         </div>
                     </div>
 
@@ -1609,6 +1612,7 @@ export default function ClientDetail() {
 
                 <ProfileInfoCard title="Subscription">
                     <dl className="space-y-2.5">
+                        <DefinitionRow label="Profile State" value={profileState.detail} />
                         <DefinitionRow
                             label="Active Subscription"
                             value={isUntrackedForeverPlan && !client.active_deal ? (
@@ -2855,7 +2859,7 @@ export default function ClientDetail() {
                                 <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
                                     <p className="text-sm text-slate-700">Subscription fields are read-only in profile editor. Manage activation, extension, and deactivation from subscriptions workflows.</p>
                                     <div className="grid gap-2 md:grid-cols-2">
-                                        <p className="text-xs text-slate-600">Status: <span className="font-semibold text-slate-900">{client.profile_status}</span></p>
+                                        <p className="text-xs text-slate-600">Status: <span className="font-semibold text-slate-900">{profileState.label}</span></p>
                                         <p className="text-xs text-slate-600">Plan: <span className="font-semibold text-slate-900">{client.plan_label || 'Basic'}</span></p>
                                         <p className="text-xs text-slate-600">Expires: <span className="font-semibold text-slate-900">{subscriptionExpiryDetailLabel}</span></p>
                                         <p className="text-xs text-slate-600">

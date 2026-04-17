@@ -25,6 +25,8 @@ class ClientFactory extends Factory
             'email' => fake()->safeEmail(),
             'city' => fake()->city(),
             'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
             'is_high_risk' => false,
             'risk_reason_code' => null,
             'risk_marked_at' => null,

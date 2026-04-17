@@ -25,6 +25,18 @@ const SHARED_BUNDLE_DURATION_OPTIONS = [
     { value: 'annually', label: 'Annually' },
 ];
 
+function canBulkDeactivateRow(row) {
+    if (!row) {
+        return false;
+    }
+
+    if (!row.is_virtual && (row.status === 'active' || row.status === 'expired')) {
+        return true;
+    }
+
+    return Boolean(row.can_deactivate_without_deal && Number(row.client_id || 0) > 0);
+}
+
 function formatCurrency(amount, currency = 'KES') {
     if (amount === null || amount === undefined || amount === '') {
         return '—';
@@ -401,18 +413,28 @@ export default function Deals() {
 
     const bulkDeactivateMutation = useMutation({
         mutationFn: async ({ selection, reasonCode, reasonNotes, linkedPaymentAction, notifyClient }) => {
-            const targets = selection.filter((row) => row.status === 'active' || row.status === 'expired');
-            const skipped = selection.length - targets.length;
+            const dealTargets = selection.filter((row) => !row.is_virtual && (row.status === 'active' || row.status === 'expired'));
+            const clientTargets = selection.filter((row) => row.is_virtual && row.can_deactivate_without_deal && Number(row.client_id || 0) > 0);
+            const skipped = selection.length - dealTargets.length - clientTargets.length;
 
             const results = await Promise.allSettled(
-                targets.map((row) =>
-                    api.post(`/crm/deals/${row.id}/deactivate`, {
-                        reason_code: reasonCode,
-                        reason_notes: reasonNotes,
-                        linked_payment_action: linkedPaymentAction,
-                        notify_client: notifyClient,
-                    }),
-                ),
+                [
+                    ...dealTargets.map((row) =>
+                        api.post(`/crm/deals/${row.id}/deactivate`, {
+                            reason_code: reasonCode,
+                            reason_notes: reasonNotes,
+                            linked_payment_action: linkedPaymentAction,
+                            notify_client: notifyClient,
+                        }),
+                    ),
+                    ...clientTargets.map((row) =>
+                        api.post(`/crm/clients/${row.client_id}/deactivate-subscription`, {
+                            reason_code: reasonCode,
+                            reason_notes: reasonNotes,
+                            notify_client: notifyClient,
+                        }),
+                    ),
+                ].map((request) => request),
             );
 
             const success = results.filter((result) => result.status === 'fulfilled').length;
@@ -432,8 +454,8 @@ export default function Deals() {
                 reasonNotes: 'Bulk deactivation from subscriptions page',
                 linkedPaymentAction: 'none',
             }));
-            if (result.failed > 0) {
-                toast.warning(`Bulk deactivate: ${result.success}/${result.total} succeeded.`);
+            if (result.failed > 0 || result.skipped > 0) {
+                toast.warning(`Bulk deactivate: ${result.success}/${result.total} processed (${result.skipped} skipped, ${result.failed} failed).`);
                 return;
             }
             toast.success(`Bulk deactivate: ${result.success}/${result.total} processed.`);
@@ -776,6 +798,13 @@ export default function Deals() {
             render: (row) => (
                 <div className="flex flex-col items-start gap-1">
                     <StatusBadge status={row.status} />
+                    {row.has_wp_state_conflict ? (
+                        <StatusBadge
+                            status="manual_review"
+                            tone="manual_review"
+                            label={row.wp_profile_state_label || 'WP State Conflict'}
+                        />
+                    ) : null}
                     {row.payment_status === 'verified' && (
                         <span className="flex items-center gap-0.5 text-[10px] font-medium text-teal-600">
                             <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1831,12 +1860,12 @@ export default function Deals() {
             <ConfirmDialog
                 open={bulkDeactivateDialog.open}
                 title="Bulk Deactivate Subscriptions"
-                message={`This will deactivate ${bulkDeactivateDialog.selection.filter((r) => r.status === 'active' || r.status === 'expired').length} eligible subscription(s). WordPress profiles will be set to private.`}
+                message={`This will deactivate ${bulkDeactivateDialog.selection.filter((row) => canBulkDeactivateRow(row)).length} eligible subscription(s). WordPress profiles will be set to private.`}
                 confirmLabel="Deactivate"
                 tone="danger"
                 onCancel={() => setBulkDeactivateDialog((d) => ({ ...d, open: false }))}
                 onConfirm={() => bulkDeactivateMutation.mutate(bulkDeactivateDialog)}
-                confirmDisabled={!bulkDeactivateDialog.reasonNotes.trim() || bulkDeactivateMutation.isPending}
+                confirmDisabled={!bulkDeactivateDialog.reasonNotes.trim() || bulkDeactivateMutation.isPending || !bulkDeactivateDialog.selection.some((row) => canBulkDeactivateRow(row))}
                 isPending={bulkDeactivateMutation.isPending}
             >
                 <label className="mb-1 block text-sm font-medium text-slate-700">Reason code</label>

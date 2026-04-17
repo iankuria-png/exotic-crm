@@ -35,6 +35,8 @@ class Client extends Model
         'sb_matched_by',
         'city',
         'profile_status',
+        'needs_payment',
+        'notactive',
         'is_high_risk',
         'risk_reason_code',
         'risk_marked_at',
@@ -57,6 +59,8 @@ class Client extends Model
     ];
 
     protected $casts = [
+        'needs_payment' => 'boolean',
+        'notactive' => 'boolean',
         'premium' => 'boolean',
         'is_high_risk' => 'boolean',
         'featured' => 'boolean',
@@ -152,12 +156,18 @@ class Client extends Model
 
     public function scopeActive($query)
     {
-        return $query->where('profile_status', 'publish');
+        return $query->where('profile_status', 'publish')
+            ->where(function ($builder) {
+                $builder->whereNull('needs_payment')->orWhere('needs_payment', false);
+            })
+            ->where(function ($builder) {
+                $builder->whereNull('notactive')->orWhere('notactive', false);
+            });
     }
 
     public function scopeNeedsPayment($query)
     {
-        return $query->where('profile_status', 'private');
+        return $query->where('needs_payment', true);
     }
 
     public function scopeForPlatform($query, $platformId)

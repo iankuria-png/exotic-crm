@@ -152,7 +152,14 @@ class RenewalService
                 );
                 $daysLeft = $this->daysUntil($expiryDate);
 
-                $isUntracked = !$client->deal_id && !$expiryDate && $client->profile_status === 'publish';
+                $hasWpStateConflict = !$client->deal_id
+                    && !$expiryDate
+                    && $client->profile_status === 'publish'
+                    && ((bool) $client->needs_payment || (bool) $client->notactive);
+                $isUntracked = !$client->deal_id
+                    && !$expiryDate
+                    && $client->profile_status === 'publish'
+                    && !$hasWpStateConflict;
                 $status = $client->deal_status ?: ($daysLeft !== null && $daysLeft < 0 ? 'expired' : 'active');
                 $remindersPaused = $client->activeDeal ? $this->isReminderPaused($client->activeDeal) : false;
 
@@ -172,7 +179,7 @@ class RenewalService
                     $status = 'untracked';
                 }
 
-                $originType = $isUntracked
+                $originType = ($isUntracked || $hasWpStateConflict)
                     ? 'untracked'
                     : ($client->deal_id
                         ? ($client->deal_origin === 'mpesa_import' ? 'mpesa_import' : 'modern')
@@ -229,6 +236,14 @@ class RenewalService
                     'client' => $record,
                     'is_virtual' => !$client->deal_id,
                     'is_untracked' => $isUntracked,
+                    'has_wp_state_conflict' => $hasWpStateConflict,
+                    'wp_profile_state_label' => $hasWpStateConflict ? 'WP state conflict' : null,
+                    'wp_profile_state_detail' => $hasWpStateConflict
+                        ? ((bool) $client->needs_payment
+                            ? 'WordPress says this profile is public but also marked payment required.'
+                            : 'WordPress says this profile is public but also awaiting admin activation.')
+                        : null,
+                    'can_deactivate_without_deal' => !$client->deal_id && ($isUntracked || $hasWpStateConflict),
                     'origin_type' => $originType,
                     'payment_status' => $paymentStatus,
                     'plan_type' => $client->deal_plan_type ?? $inferredPlanType,
@@ -327,7 +342,7 @@ class RenewalService
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as pending,
                  SUM(CASE WHEN deals.renewal_reminders_paused = 1 THEN 1 ELSE 0 END) as paused_reminders,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as expired_deals,
-                 SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' THEN 1 ELSE 0 END) as untracked_active,
+                 SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' AND COALESCE(clients.needs_payment, 0) = 0 AND COALESCE(clients.notactive, 0) = 0 THEN 1 ELSE 0 END) as untracked_active,
                  SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL AND clients.premium_expire IS NULL AND clients.featured_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
                  SUM(CASE WHEN deals.status IN ('pending','awaiting_payment','paid','active') THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
                  SUM(CASE WHEN deals.status = 'active' AND deals.payment_id IS NOT NULL THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
@@ -460,7 +475,7 @@ class RenewalService
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as pending,
                  SUM(CASE WHEN deals.renewal_reminders_paused = 1 THEN 1 ELSE 0 END) as paused_reminders,
                  SUM(CASE WHEN {$dateExpr} BETWEEN ? AND ? THEN 1 ELSE 0 END) as expired_deals,
-                 SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' THEN 1 ELSE 0 END) as untracked_active,
+                 SUM(CASE WHEN deals.id IS NULL AND {$dateExpr} IS NULL AND clients.profile_status = 'publish' AND COALESCE(clients.needs_payment, 0) = 0 AND COALESCE(clients.notactive, 0) = 0 THEN 1 ELSE 0 END) as untracked_active,
                  SUM(CASE WHEN ({$dateExpr} < ? OR (deals.id IS NULL AND clients.profile_status = 'private' AND clients.escort_expire IS NULL AND clients.premium_expire IS NULL AND clients.featured_expire IS NULL)) THEN 1 ELSE 0 END) as lapsed_deals,
                  SUM(CASE WHEN deals.status IN ('pending','awaiting_payment','paid','active') THEN COALESCE(deals.amount, 0) ELSE 0 END) as pipeline_value,
                  SUM(CASE WHEN deals.status = 'active' AND deals.payment_id IS NOT NULL THEN COALESCE(deals.amount, 0) ELSE 0 END) as verified_revenue",
@@ -1463,6 +1478,12 @@ class RenewalService
         if ($bucket === 'untracked') {
             $query->whereNull('deals.id')
                 ->where('clients.profile_status', 'publish')
+                ->where(function ($builder) {
+                    $builder->whereNull('clients.needs_payment')->orWhere('clients.needs_payment', false);
+                })
+                ->where(function ($builder) {
+                    $builder->whereNull('clients.notactive')->orWhere('clients.notactive', false);
+                })
                 ->whereRaw("{$dateExpr} IS NULL");
             return;
         }
@@ -1546,6 +1567,12 @@ class RenewalService
         if ($status === 'untracked') {
             $query->whereNull('deals.id')
                 ->where('clients.profile_status', 'publish')
+                ->where(function ($builder) {
+                    $builder->whereNull('clients.needs_payment')->orWhere('clients.needs_payment', false);
+                })
+                ->where(function ($builder) {
+                    $builder->whereNull('clients.notactive')->orWhere('clients.notactive', false);
+                })
                 ->whereRaw("{$dateExpr} IS NULL");
             return;
         }

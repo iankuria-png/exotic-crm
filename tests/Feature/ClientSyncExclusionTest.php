@@ -153,4 +153,52 @@ class ClientSyncExclusionTest extends TestCase
             'wp_modified_at' => '2026-04-03 11:22:33',
         ]);
     }
+
+    public function test_full_sync_persists_wordpress_subscription_activation_flags(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Flag Market',
+            'country' => 'Kenya',
+            'phone_prefix' => '254',
+            'currency_code' => 'KES',
+            'wp_api_url' => 'https://example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+
+        Http::fake([
+            'https://example.test/wp-json/exotic-crm-sync/v1/clients*' => Http::response([
+                'data' => [[
+                    'wp_post_id' => 9402,
+                    'wp_user_id' => 8402,
+                    'name' => 'Flagged Client',
+                    'phone' => '0711000003',
+                    'email' => 'flagged@example.test',
+                    'city' => 'Nairobi',
+                    'post_status' => 'publish',
+                    'needs_payment' => false,
+                    'notactive' => true,
+                    'modified_at' => '2026-04-17 08:30:00',
+                ]],
+                'pages' => 1,
+            ], 200),
+        ]);
+
+        $result = (new ClientSyncService($platform))->fullSync();
+
+        $this->assertSame([
+            'created' => 1,
+            'updated' => 0,
+            'skipped' => 0,
+            'total' => 1,
+        ], $result);
+
+        $this->assertDatabaseHas('clients', [
+            'platform_id' => $platform->id,
+            'wp_post_id' => 9402,
+            'needs_payment' => 0,
+            'notactive' => 1,
+            'wp_modified_at' => '2026-04-17 08:30:00',
+        ]);
+    }
 }

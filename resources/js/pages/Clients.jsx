@@ -11,6 +11,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
+import { deriveClientProfileState, isClientPubliclyActive } from '../utils/clientProfileState';
 import { normalizePhone } from '../utils/phone';
 import { useAuth } from '../hooks/useAuth';
 import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
@@ -810,7 +811,7 @@ export default function Clients() {
         const sevenDayThreshold = Date.now() - (7 * 24 * 60 * 60 * 1000);
 
         return {
-            active: rows.filter((row) => row.profile_status === 'publish').length,
+            active: rows.filter((row) => isClientPubliclyActive(row)).length,
             new_users: rows.filter((row) => {
                 const createdAt = row.created_at ? new Date(row.created_at) : null;
                 return createdAt && !Number.isNaN(createdAt.getTime()) && createdAt.getTime() >= sevenDayThreshold;
@@ -1001,7 +1002,17 @@ export default function Clients() {
         {
             key: 'profile_status',
             label: 'Status',
-            render: (row) => <StatusBadge status={row.profile_status} />,
+            render: (row) => {
+                const profileState = deriveClientProfileState(row);
+
+                return (
+                    <StatusBadge
+                        status={profileState.status}
+                        tone={profileState.tone}
+                        label={profileState.label}
+                    />
+                );
+            },
         },
         {
             key: 'plan',

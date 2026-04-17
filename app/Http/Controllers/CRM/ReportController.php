@@ -156,7 +156,7 @@ class ReportController extends Controller
             'wallet_topup_revenue_breakdown' => $walletTopupBreakdown['breakdown'],
             'wallet_topup_revenue_mtd' => $walletTopupMtdBreakdown['scalar_amount'],
             'wallet_topup_revenue_mtd_breakdown' => $walletTopupMtdBreakdown['breakdown'],
-            'active_clients' => (int) (clone $clientsQuery)->where('profile_status', 'publish')->count(),
+            'active_clients' => (int) (clone $clientsQuery)->active()->count(),
             'total_clients' => (int) (clone $clientsQuery)->count(),
             'conversion_rate' => $conversionRate,
             'renewal_rate' => $renewalRate,

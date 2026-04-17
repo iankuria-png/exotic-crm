@@ -167,6 +167,14 @@ class ClientSyncService
             'wp_modified_at'  => $this->normalizeWpModifiedAt($wpClient['modified_at'] ?? null),
         ];
 
+        if (array_key_exists('needs_payment', $wpClient)) {
+            $syncData['needs_payment'] = (bool) ($wpClient['needs_payment'] ?? false);
+        }
+
+        if (array_key_exists('notactive', $wpClient)) {
+            $syncData['notactive'] = (bool) ($wpClient['notactive'] ?? false);
+        }
+
         // Only write signup_source if WP provides one (prevents clobbering crm_provisioned/crm_manual)
         $wpSignupSource = $wpClient['signup_source'] ?? null;
         if ($wpSignupSource !== null) {

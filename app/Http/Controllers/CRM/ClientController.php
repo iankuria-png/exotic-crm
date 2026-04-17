@@ -15,6 +15,7 @@ use App\Models\Platform;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\ClientDeletionService;
+use App\Services\ClientSubscriptionDeactivationService;
 use App\Services\ClientWpLinkRepairService;
 use App\Services\ClientRetentionInsightService;
 use App\Services\DealPaymentService;
@@ -22,6 +23,7 @@ use App\Services\LeadAssignmentService;
 use App\Services\MarketAuthorizationService;
 use App\Services\CredentialDeliveryService;
 use App\Services\ClientSyncService;
+use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
 use App\Services\ClientProfileUrlSearchService;
@@ -30,6 +32,8 @@ use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
+use App\Support\DealDeactivationReason;
+use App\Support\DeactivationRequest;
 use App\Support\PhoneNormalizer;
 use Carbon\Carbon;
 use Illuminate\Http\Client\RequestException;
@@ -49,6 +53,8 @@ class ClientController extends Controller
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
         private readonly ClientDeletionService $clientDeletionService,
         private readonly DealPaymentService $dealPaymentService,
+        private readonly ClientSubscriptionDeactivationService $clientSubscriptionDeactivationService,
+        private readonly NotificationService $notificationService,
         private readonly PaymentLinkService $paymentLinkService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly ClientProfileUrlSearchService $clientProfileUrlSearchService
@@ -187,7 +193,7 @@ class ClientController extends Controller
 
         $stats = [
             'total' => (clone $statsQuery)->count(),
-            'active' => (clone $statsQuery)->where('profile_status', 'publish')->count(),
+            'active' => (clone $statsQuery)->active()->count(),
             'premium' => $premiumStatsQuery->count(),
             'verified' => (clone $statsQuery)->where('verified', true)->count(),
             'high_risk' => (clone $statsQuery)->where('is_high_risk', true)->count(),
@@ -974,6 +980,107 @@ class ClientController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'message' => 'Sync failed: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function deactivateSubscription(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500',
+            'reason_code' => 'nullable|string|in:' . implode(',', $this->deactivationReasonValues()),
+            'reason_notes' => 'nullable|string|max:500',
+            'notify_client' => 'nullable|boolean',
+        ]);
+
+        if (
+            trim((string) ($validated['reason_code'] ?? '')) === ''
+            && trim((string) ($validated['reason'] ?? '')) === ''
+        ) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'reason_code' => 'A structured reason code or legacy reason is required.',
+            ]);
+        }
+
+        $beforeState = [
+            'profile_status' => $client->profile_status,
+            'needs_payment' => (bool) $client->needs_payment,
+            'notactive' => (bool) $client->notactive,
+            'premium' => (bool) $client->premium,
+            'featured' => (bool) $client->featured,
+            'escort_expire' => $client->escort_expire,
+            'is_high_risk' => (bool) $client->is_high_risk,
+            'risk_reason_code' => $client->risk_reason_code,
+        ];
+
+        $deactivationRequest = $this->buildClientDeactivationRequest($validated);
+
+        DB::beginTransaction();
+        try {
+            $client = $this->clientSubscriptionDeactivationService->deactivate(
+                $client,
+                $deactivationRequest,
+                optional($request->user())->id
+            );
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_SUBSCRIPTION_DEACTIVATE,
+                'client',
+                (int) $client->id,
+                $beforeState,
+                [
+                    'profile_status' => $client->profile_status,
+                    'needs_payment' => (bool) $client->needs_payment,
+                    'notactive' => (bool) $client->notactive,
+                    'premium' => (bool) $client->premium,
+                    'featured' => (bool) $client->featured,
+                    'escort_expire' => $client->escort_expire,
+                    'is_high_risk' => (bool) $client->is_high_risk,
+                    'risk_reason_code' => $client->risk_reason_code,
+                    'deactivation_scope' => 'client_wp_subscription',
+                ],
+                $deactivationRequest->auditReason()
+            );
+
+            DB::commit();
+
+            if ($request->boolean('notify_client')) {
+                $message = $this->resolveClientSubscriptionDeactivationMessage($client);
+                if ($message !== null) {
+                    $this->notificationService->sendSmsToClient($client, $message, [
+                        'purpose' => 'client_subscription_deactivate_notice',
+                    ]);
+                }
+            }
+
+            $client->load([
+                'platform',
+                'assignedAgent',
+                'deals' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
+                'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+                'activeDeal.product',
+            ]);
+
+            return response()->json([
+                'message' => 'WordPress-only subscription deactivated.',
+                'client' => $client,
+            ]);
+        } catch (InvalidArgumentException $exception) {
+            DB::rollBack();
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
+        } catch (\Throwable $exception) {
+            DB::rollBack();
+
+            return response()->json([
+                'message' => 'Subscription deactivation failed: ' . $exception->getMessage(),
             ], 500);
         }
     }
@@ -2726,6 +2833,44 @@ class ClientController extends Controller
                 '8' => 'GFE',
             ],
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function buildClientDeactivationRequest(array $validated): DeactivationRequest
+    {
+        $legacyReason = trim((string) ($validated['reason'] ?? ''));
+        $reasonCode = trim((string) ($validated['reason_code'] ?? ''));
+        $reasonNotes = trim((string) ($validated['reason_notes'] ?? ''));
+
+        if ($reasonCode === '') {
+            $reasonCode = DealDeactivationReason::OTHER->value;
+            $reasonNotes = $reasonNotes !== '' ? $reasonNotes : ($legacyReason !== '' ? $legacyReason : null);
+        }
+
+        return new DeactivationRequest(
+            DealDeactivationReason::from($reasonCode),
+            $reasonNotes !== '' ? $reasonNotes : null
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function deactivationReasonValues(): array
+    {
+        return array_map(
+            static fn (DealDeactivationReason $reason): string => $reason->value,
+            DealDeactivationReason::cases()
+        );
+    }
+
+    private function resolveClientSubscriptionDeactivationMessage(Client $client): ?string
+    {
+        $name = $client->name ?: 'there';
+
+        return "Hi {$name}, your subscription has been deactivated. Contact support if this is unexpected.";
     }
 
     private function snapshotWpFieldValues(array $requestedFields, array $profile): array
