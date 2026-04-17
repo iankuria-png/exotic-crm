@@ -92,7 +92,9 @@ export default function DataTable({
     };
 
     const runBulkAction = async (action) => {
-        if (!action?.onClick || !selectedRows.length) {
+        const isDisabled = !!action?.disabled || !!action?.isDisabled?.(selectedRows);
+
+        if (!action?.onClick || !selectedRows.length || isDisabled) {
             return;
         }
 
@@ -115,6 +117,8 @@ export default function DataTable({
                             const isPrimary = action.variant === 'primary';
                             const isDanger = action.variant === 'danger';
                             const loading = activeBulkAction === (action.key || action.label);
+                            const disabled = loading || !!action.disabled || !!action.isDisabled?.(selectedRows);
+                            const disabledReason = disabled ? action.getDisabledReason?.(selectedRows) : undefined;
 
                             const className = isPrimary
                                 ? 'crm-btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50'
@@ -127,7 +131,8 @@ export default function DataTable({
                                     key={action.key || action.label}
                                     type="button"
                                     onClick={() => runBulkAction(action)}
-                                    disabled={loading || !!action.disabled}
+                                    disabled={disabled}
+                                    title={disabledReason || undefined}
                                     className={className}
                                 >
                                     {loading ? (action.loadingLabel || 'Working...') : action.label}

@@ -7,6 +7,7 @@ import Timeline from '../components/Timeline';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import SupportBoardChat from '../components/SupportBoardChat';
+import ClientSubscriptionDeactivationDialog from '../components/subscriptions/ClientSubscriptionDeactivationDialog';
 import { useToast } from '../components/ToastProvider';
 import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../utils/billingMethodPolicy';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
@@ -446,6 +447,12 @@ export default function ClientDetail() {
     const [updatePhoneValue, setUpdatePhoneValue] = useState('');
     const [showCredentialDrawer, setShowCredentialDrawer] = useState(false);
     const [dealActionDialog, setDealActionDialog] = useState({ type: null, deal: null });
+    const [clientDeactivateDialog, setClientDeactivateDialog] = useState({
+        open: false,
+        reasonCode: 'other',
+        reasonNotes: 'Deactivated from client profile',
+        notifyClient: false,
+    });
     const [deactivationReasonCode, setDeactivationReasonCode] = useState('other');
     const [deactivationReasonNotes, setDeactivationReasonNotes] = useState('Deactivated from client profile');
     const [deactivationLinkedPaymentAction, setDeactivationLinkedPaymentAction] = useState('none');
@@ -747,6 +754,33 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription deactivation failed.');
+        },
+    });
+
+    const deactivateClientSubscriptionMutation = useMutation({
+        mutationFn: ({ reasonCode, reasonNotes, notifyClient: shouldNotify }) =>
+            api.post(`/crm/clients/${id}/deactivate-subscription`, {
+                reason_code: reasonCode,
+                reason_notes: reasonNotes,
+                notify_client: Boolean(shouldNotify),
+            }).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-wp-profile', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            queryClient.invalidateQueries({ queryKey: ['deals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            setClientDeactivateDialog({
+                open: false,
+                reasonCode: 'other',
+                reasonNotes: 'Deactivated from client profile',
+                notifyClient: false,
+            });
+            toast.success(payload?.message || 'Profile subscription deactivated.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Profile subscription deactivation failed.');
         },
     });
 
@@ -1244,6 +1278,28 @@ export default function ClientDetail() {
         deletePreviewMutation.mutate();
     };
 
+    const openClientDeactivationDialog = () => {
+        setClientDeactivateDialog({
+            open: true,
+            reasonCode: 'other',
+            reasonNotes: 'Deactivated from client profile',
+            notifyClient: false,
+        });
+    };
+
+    const closeClientDeactivationDialog = () => {
+        if (deactivateClientSubscriptionMutation.isPending) {
+            return;
+        }
+
+        setClientDeactivateDialog({
+            open: false,
+            reasonCode: 'other',
+            reasonNotes: 'Deactivated from client profile',
+            notifyClient: false,
+        });
+    };
+
     const closeDeleteDialog = () => {
         if (deletePreviewMutation.isPending || deleteClientMutation.isPending) {
             return;
@@ -1577,6 +1633,15 @@ export default function ClientDetail() {
                                 >
                                     Payment Link
                                 </button>
+                                {client.can_deactivate_without_deal ? (
+                                    <button
+                                        type="button"
+                                        onClick={openClientDeactivationDialog}
+                                        className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100"
+                                    >
+                                        Deactivate profile subscription
+                                    </button>
+                                ) : null}
                             </>
                         ) : null}
                         {!isReadOnly ? (
@@ -2183,6 +2248,26 @@ export default function ClientDetail() {
                     </div>
                 </div>
             ) : null}
+
+            <ClientSubscriptionDeactivationDialog
+                open={clientDeactivateDialog.open}
+                title="Deactivate Profile Subscription"
+                message="This will strip paid badges, require payment, and set the linked WordPress profile to private."
+                reasonCode={clientDeactivateDialog.reasonCode}
+                onReasonCodeChange={(value) => setClientDeactivateDialog((current) => ({ ...current, reasonCode: value }))}
+                reasonNotes={clientDeactivateDialog.reasonNotes}
+                onReasonNotesChange={(value) => setClientDeactivateDialog((current) => ({ ...current, reasonNotes: value }))}
+                notifyClient={clientDeactivateDialog.notifyClient}
+                onNotifyClientChange={(value) => setClientDeactivateDialog((current) => ({ ...current, notifyClient: value }))}
+                onCancel={closeClientDeactivationDialog}
+                onConfirm={() => deactivateClientSubscriptionMutation.mutate({
+                    reasonCode: clientDeactivateDialog.reasonCode,
+                    reasonNotes: clientDeactivateDialog.reasonNotes,
+                    notifyClient: clientDeactivateDialog.notifyClient,
+                })}
+                confirmDisabled={!clientDeactivateDialog.reasonNotes.trim() || deactivateClientSubscriptionMutation.isPending}
+                isPending={deactivateClientSubscriptionMutation.isPending}
+            />
 
             {activeTab === 'notes' ? (
                 <div className="space-y-3">

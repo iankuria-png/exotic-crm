@@ -166,6 +166,135 @@ class ClientSubscriptionDeactivationTest extends TestCase
         $this->assertSame(1, (int) ($fullPayload['summary']['untracked_active'] ?? 0));
     }
 
+    public function test_renewal_overview_marks_legacy_rows_as_manually_deactivatable(): void
+    {
+        $platform = $this->createPlatform();
+
+        $legacyClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 123985,
+            'wp_user_id' => 31877,
+            'name' => 'Juliana',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'premium' => false,
+            'featured' => false,
+            'escort_expire' => now()->subDays(5)->timestamp,
+            'premium_expire' => null,
+            'featured_expire' => null,
+        ]);
+
+        $payload = app(RenewalService::class)->buildOverview([
+            'platform_id' => $platform->id,
+            'search' => 'Juliana',
+            'bucket' => 'all',
+        ], 20, null);
+
+        $row = collect($payload['targets']->items())->firstWhere('client_id', $legacyClient->id);
+
+        $this->assertNotNull($row);
+        $this->assertTrue((bool) ($row['is_virtual'] ?? false));
+        $this->assertSame('legacy', $row['origin_type'] ?? null);
+        $this->assertSame('expired', $row['status'] ?? null);
+        $this->assertTrue((bool) ($row['can_deactivate_without_deal'] ?? false));
+        $this->assertSame('client', $row['deactivation_scope'] ?? null);
+        $this->assertSame('Deactivate', $row['deactivation_label'] ?? null);
+    }
+
+    public function test_client_show_payload_exposes_no_deal_deactivation_metadata(): void
+    {
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 123985,
+            'wp_user_id' => 31877,
+            'name' => 'Juliana',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'premium' => false,
+            'featured' => false,
+            'escort_expire' => now()->subDays(5)->timestamp,
+        ]);
+        $user = $this->createAuthorizedUser($platform);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson("/api/crm/clients/{$client->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('id', $client->id)
+            ->assertJsonPath('can_deactivate_without_deal', true)
+            ->assertJsonPath('deactivation_scope', 'client')
+            ->assertJsonPath('deactivation_label', 'Deactivate')
+            ->assertJsonPath('deactivation_disabled_reason', null);
+    }
+
+    public function test_legacy_client_subscription_can_be_deactivated_via_client_endpoint(): void
+    {
+        $platform = $this->createPlatform();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 123985,
+            'wp_user_id' => 31877,
+            'name' => 'Juliana',
+            'phone_normalized' => '233508182807',
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'premium' => false,
+            'featured' => false,
+            'escort_expire' => now()->subDays(5)->timestamp,
+        ]);
+        $user = $this->createAuthorizedUser($platform);
+
+        Http::fake([
+            rtrim((string) $platform->wp_api_url, '/') . '/clients/123985/deactivate' => Http::response([
+                'success' => true,
+            ], 200),
+            rtrim((string) $platform->wp_api_url, '/') . '/clients/123985' => Http::response([
+                'wp_post_id' => 123985,
+                'wp_user_id' => 31877,
+                'name' => 'Juliana',
+                'phone' => '+233508182807',
+                'email' => 'juliana@example.test',
+                'city' => 'East Legon',
+                'post_status' => 'private',
+                'premium' => false,
+                'premium_expire' => null,
+                'featured' => false,
+                'featured_expire' => null,
+                'escort_expire' => null,
+                'verified' => false,
+                'needs_payment' => true,
+                'notactive' => false,
+                'main_image_url' => '',
+                'modified_at' => now()->toIso8601String(),
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/deactivate-subscription", [
+            'reason_code' => 'other',
+            'reason_notes' => 'Manual legacy cleanup from CRM.',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('client.id', $client->id)
+            ->assertJsonPath('client.profile_status', 'private')
+            ->assertJsonPath('client.needs_payment', true)
+            ->assertJsonPath('client.escort_expire', null);
+
+        $this->assertDatabaseHas('clients', [
+            'id' => $client->id,
+            'profile_status' => 'private',
+            'needs_payment' => 1,
+            'escort_expire' => null,
+        ]);
+    }
+
     private function createPlatform(): Platform
     {
         return Platform::query()->create([

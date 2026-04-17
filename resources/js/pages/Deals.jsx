@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
+import ClientSubscriptionDeactivationDialog from '../components/subscriptions/ClientSubscriptionDeactivationDialog';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
 import { platformOptionsWithFlags } from '../utils/flags';
@@ -25,16 +26,50 @@ const SHARED_BUNDLE_DURATION_OPTIONS = [
     { value: 'annually', label: 'Annually' },
 ];
 
-function canBulkDeactivateRow(row) {
+function getDeactivationScope(row) {
     if (!row) {
-        return false;
+        return null;
+    }
+
+    const explicitScope = String(row.deactivation_scope || '').trim().toLowerCase();
+    if (explicitScope === 'deal' || explicitScope === 'client') {
+        return explicitScope;
     }
 
     if (!row.is_virtual && (row.status === 'active' || row.status === 'expired')) {
-        return true;
+        return 'deal';
     }
 
-    return Boolean(row.can_deactivate_without_deal && Number(row.client_id || 0) > 0);
+    if (row.can_deactivate_without_deal && Number(row.client_id || 0) > 0) {
+        return 'client';
+    }
+
+    return null;
+}
+
+function canBulkDeactivateRow(row) {
+    return getDeactivationScope(row) !== null;
+}
+
+function getBulkDeactivationCounts(selection = []) {
+    return selection.reduce((summary, row) => {
+        const scope = getDeactivationScope(row);
+        if (scope === 'deal') {
+            summary.dealCount += 1;
+        } else if (scope === 'client') {
+            summary.clientCount += 1;
+        } else {
+            summary.skippedCount += 1;
+        }
+
+        summary.eligibleCount = summary.dealCount + summary.clientCount;
+        return summary;
+    }, {
+        dealCount: 0,
+        clientCount: 0,
+        eligibleCount: 0,
+        skippedCount: 0,
+    });
 }
 
 function formatCurrency(amount, currency = 'KES') {
@@ -148,6 +183,13 @@ export default function Deals() {
         reasonCode: 'other',
         reasonNotes: 'Bulk deactivation from subscriptions page',
         linkedPaymentAction: 'none',
+        notifyClient: false,
+    });
+    const [clientDeactivateDialog, setClientDeactivateDialog] = useState({
+        open: false,
+        selection: [],
+        reasonCode: 'other',
+        reasonNotes: 'Deactivated from subscriptions page',
         notifyClient: false,
     });
     const [sharedBundleDialog, setSharedBundleDialog] = useState({
@@ -412,9 +454,9 @@ export default function Deals() {
     });
 
     const bulkDeactivateMutation = useMutation({
-        mutationFn: async ({ selection, reasonCode, reasonNotes, linkedPaymentAction, notifyClient }) => {
-            const dealTargets = selection.filter((row) => !row.is_virtual && (row.status === 'active' || row.status === 'expired'));
-            const clientTargets = selection.filter((row) => row.is_virtual && row.can_deactivate_without_deal && Number(row.client_id || 0) > 0);
+        mutationFn: async ({ selection, reasonCode, reasonNotes, linkedPaymentAction = 'none', notifyClient }) => {
+            const dealTargets = selection.filter((row) => getDeactivationScope(row) === 'deal');
+            const clientTargets = selection.filter((row) => getDeactivationScope(row) === 'client' && Number(row.client_id || 0) > 0);
             const skipped = selection.length - dealTargets.length - clientTargets.length;
 
             const results = await Promise.allSettled(
@@ -453,6 +495,15 @@ export default function Deals() {
                 reasonCode: 'other',
                 reasonNotes: 'Bulk deactivation from subscriptions page',
                 linkedPaymentAction: 'none',
+                notifyClient: false,
+            }));
+            setClientDeactivateDialog((d) => ({
+                ...d,
+                open: false,
+                selection: [],
+                reasonCode: 'other',
+                reasonNotes: 'Deactivated from subscriptions page',
+                notifyClient: false,
             }));
             if (result.failed > 0 || result.skipped > 0) {
                 toast.warning(`Bulk deactivate: ${result.success}/${result.total} processed (${result.skipped} skipped, ${result.failed} failed).`);
@@ -661,6 +712,30 @@ export default function Deals() {
         const templates = templatesData?.templates || templatesData?.data || [];
         return templates.filter((template) => template.channel === 'sms' && template.status === 'active');
     }, [templatesData]);
+    const bulkDeactivationCounts = useMemo(
+        () => getBulkDeactivationCounts(bulkDeactivateDialog.selection),
+        [bulkDeactivateDialog.selection],
+    );
+    const clientBulkDeactivationCounts = useMemo(
+        () => getBulkDeactivationCounts(clientDeactivateDialog.selection),
+        [clientDeactivateDialog.selection],
+    );
+
+    const openClientDeactivationDialog = (rowsSelection, reasonNotes = 'Deactivated from subscriptions page') => {
+        const counts = getBulkDeactivationCounts(rowsSelection);
+        if (counts.clientCount === 0) {
+            toast.warning('None of the selected rows can be deactivated from CRM.');
+            return;
+        }
+
+        setClientDeactivateDialog({
+            open: true,
+            selection: rowsSelection,
+            reasonCode: 'other',
+            reasonNotes,
+            notifyClient: false,
+        });
+    };
 
     const openDialog = (type, deal, event) => {
         event?.stopPropagation();
@@ -869,7 +944,8 @@ export default function Deals() {
                 const overflowActions = [];
 
                 if (row.is_virtual) {
-                    primaryAction = {
+                    const canDeactivateClient = getDeactivationScope(row) === 'client';
+                    const createSubscriptionAction = {
                         label: row.status === 'untracked' ? 'Create subscription' : 'Activate',
                         variant: 'primary',
                         disabled: !row.client_id,
@@ -879,6 +955,30 @@ export default function Deals() {
                             navigate(`/clients/${row.client_id}?tab=deals&action=new_subscription&source=${source}`);
                         },
                     };
+                    const deactivateClientAction = canDeactivateClient ? {
+                        key: 'deactivate-profile',
+                        label: row.deactivation_label || 'Deactivate',
+                        variant: 'warning',
+                        disabled: !row.client_id,
+                        onClick: () => openClientDeactivationDialog([row], 'Deactivated from subscriptions page'),
+                    } : null;
+
+                    const shouldPrioritizeDeactivation = canDeactivateClient
+                        && (row.origin_type === 'legacy' || row.has_wp_state_conflict || row.status === 'expired');
+
+                    primaryAction = shouldPrioritizeDeactivation
+                        ? deactivateClientAction
+                        : createSubscriptionAction;
+
+                    if (shouldPrioritizeDeactivation) {
+                        overflowActions.push({
+                            ...createSubscriptionAction,
+                            key: 'create-subscription',
+                        });
+                    } else if (deactivateClientAction) {
+                        overflowActions.push(deactivateClientAction);
+                    }
+
                     overflowActions.push({
                         key: 'open-profile',
                         label: 'Open profile',
@@ -961,7 +1061,20 @@ export default function Deals() {
             label: 'Deactivate selected',
             loadingLabel: 'Preparing...',
             variant: 'danger',
+            isDisabled: (rowsSelection) => getBulkDeactivationCounts(rowsSelection).eligibleCount === 0,
+            getDisabledReason: () => 'Select tracked subscriptions or linked legacy profiles that can be deactivated.',
             onClick: (rowsSelection) => {
+                const counts = getBulkDeactivationCounts(rowsSelection);
+                if (counts.eligibleCount === 0) {
+                    toast.warning('None of the selected rows can be deactivated from CRM.');
+                    return;
+                }
+
+                if (counts.dealCount === 0) {
+                    openClientDeactivationDialog(rowsSelection, 'Bulk deactivation from subscriptions page');
+                    return;
+                }
+
                 setBulkDeactivateDialog({
                     open: true,
                     selection: rowsSelection,
@@ -1857,17 +1970,53 @@ export default function Deals() {
                 </div>
             ) : null}
 
+            <ClientSubscriptionDeactivationDialog
+                open={clientDeactivateDialog.open}
+                title={clientBulkDeactivationCounts.eligibleCount > 1 ? 'Bulk Deactivate Legacy Subscriptions' : 'Deactivate Legacy Subscription'}
+                message="This will strip paid badges, require payment, and set the linked WordPress profile to private."
+                reasonCode={clientDeactivateDialog.reasonCode}
+                onReasonCodeChange={(value) => setClientDeactivateDialog((current) => ({ ...current, reasonCode: value }))}
+                reasonNotes={clientDeactivateDialog.reasonNotes}
+                onReasonNotesChange={(value) => setClientDeactivateDialog((current) => ({ ...current, reasonNotes: value }))}
+                notifyClient={clientDeactivateDialog.notifyClient}
+                onNotifyClientChange={(value) => setClientDeactivateDialog((current) => ({ ...current, notifyClient: value }))}
+                selectionSummary={clientDeactivateDialog.selection.length > 1 ? clientBulkDeactivationCounts : null}
+                onCancel={() => setClientDeactivateDialog((current) => ({ ...current, open: false }))}
+                onConfirm={() => bulkDeactivateMutation.mutate({
+                    selection: clientDeactivateDialog.selection,
+                    reasonCode: clientDeactivateDialog.reasonCode,
+                    reasonNotes: clientDeactivateDialog.reasonNotes,
+                    notifyClient: clientDeactivateDialog.notifyClient,
+                })}
+                confirmDisabled={!clientDeactivateDialog.reasonNotes.trim() || bulkDeactivateMutation.isPending || clientBulkDeactivationCounts.eligibleCount === 0}
+                isPending={bulkDeactivateMutation.isPending}
+            />
+
             <ConfirmDialog
                 open={bulkDeactivateDialog.open}
                 title="Bulk Deactivate Subscriptions"
-                message={`This will deactivate ${bulkDeactivateDialog.selection.filter((row) => canBulkDeactivateRow(row)).length} eligible subscription(s). WordPress profiles will be set to private.`}
+                message={
+                    bulkDeactivationCounts.eligibleCount > 0
+                        ? `This will deactivate ${bulkDeactivationCounts.eligibleCount} eligible subscription(s). ${bulkDeactivationCounts.skippedCount > 0 ? `${bulkDeactivationCounts.skippedCount} selected row(s) will be skipped. ` : ''}WordPress profiles will be set to private.`
+                        : 'No selected subscriptions are eligible for CRM deactivation.'
+                }
                 confirmLabel="Deactivate"
                 tone="danger"
                 onCancel={() => setBulkDeactivateDialog((d) => ({ ...d, open: false }))}
                 onConfirm={() => bulkDeactivateMutation.mutate(bulkDeactivateDialog)}
-                confirmDisabled={!bulkDeactivateDialog.reasonNotes.trim() || bulkDeactivateMutation.isPending || !bulkDeactivateDialog.selection.some((row) => canBulkDeactivateRow(row))}
+                confirmDisabled={!bulkDeactivateDialog.reasonNotes.trim() || bulkDeactivateMutation.isPending || bulkDeactivationCounts.eligibleCount === 0}
                 isPending={bulkDeactivateMutation.isPending}
             >
+                {bulkDeactivationCounts.clientCount > 0 ? (
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                        <p>
+                            {bulkDeactivationCounts.dealCount} tracked CRM subscription{bulkDeactivationCounts.dealCount === 1 ? '' : 's'} and {bulkDeactivationCounts.clientCount} linked profile{bulkDeactivationCounts.clientCount === 1 ? '' : 's'} will be processed.
+                        </p>
+                        <p className="mt-1 text-slate-500">
+                            Linked payment action only applies to the tracked CRM subscription rows.
+                        </p>
+                    </div>
+                ) : null}
                 <label className="mb-1 block text-sm font-medium text-slate-700">Reason code</label>
                 <select
                     value={bulkDeactivateDialog.reasonCode}

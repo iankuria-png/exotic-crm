@@ -15,6 +15,7 @@ use App\Models\Platform;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\ClientDeletionService;
+use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
 use App\Services\ClientWpLinkRepairService;
 use App\Services\ClientRetentionInsightService;
@@ -54,6 +55,7 @@ class ClientController extends Controller
         private readonly ClientDeletionService $clientDeletionService,
         private readonly DealPaymentService $dealPaymentService,
         private readonly ClientSubscriptionDeactivationService $clientSubscriptionDeactivationService,
+        private readonly ClientSubscriptionActionResolver $clientSubscriptionActionResolver,
         private readonly NotificationService $notificationService,
         private readonly PaymentLinkService $paymentLinkService,
         private readonly WalletSettingsService $walletSettingsService,
@@ -478,6 +480,7 @@ class ClientController extends Controller
             'activeDeal.product',
         ]);
         $this->hydrateBillingPlatformState($client);
+        $this->appendSubscriptionActionMetadata($client);
 
         return response()->json($client);
     }
@@ -496,6 +499,19 @@ class ClientController extends Controller
             'payment_link_providers',
             $this->walletSettingsService->currentPaymentLinkProviders($client->platform)
         );
+    }
+
+    private function appendSubscriptionActionMetadata(Client $client): void
+    {
+        $subscriptionAction = $this->clientSubscriptionActionResolver->resolveNoDealDeactivation($client, [
+            'has_tracked_deal_history' => $client->relationLoaded('deals')
+                ? $client->deals->isNotEmpty()
+                : false,
+        ]);
+
+        foreach ($subscriptionAction as $key => $value) {
+            $client->setAttribute($key, $value);
+        }
     }
 
     public function deletePreview(Request $request, Client $client)
@@ -975,6 +991,8 @@ class ClientController extends Controller
                 'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
                 'activeDeal.product',
             ]);
+            $this->hydrateBillingPlatformState($client);
+            $this->appendSubscriptionActionMetadata($client);
 
             return response()->json($client);
         } catch (\Exception $e) {
@@ -1065,6 +1083,8 @@ class ClientController extends Controller
                 'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
                 'activeDeal.product',
             ]);
+            $this->hydrateBillingPlatformState($client);
+            $this->appendSubscriptionActionMetadata($client);
 
             return response()->json([
                 'message' => 'WordPress-only subscription deactivated.',

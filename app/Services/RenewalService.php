@@ -30,7 +30,8 @@ class RenewalService
         private readonly AuditService $auditService,
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
         private readonly WalletAutoRenewPolicy $walletAutoRenewPolicy,
-        private readonly WalletCheckoutService $walletCheckoutService
+        private readonly WalletCheckoutService $walletCheckoutService,
+        private readonly ClientSubscriptionActionResolver $clientSubscriptionActionResolver
     ) {
     }
 
@@ -184,6 +185,17 @@ class RenewalService
                     : ($client->deal_id
                         ? ($client->deal_origin === 'mpesa_import' ? 'mpesa_import' : 'modern')
                         : 'legacy');
+                $clientDeactivation = !$client->deal_id
+                    ? $this->clientSubscriptionActionResolver->resolveNoDealDeactivation($client, [
+                        'has_active_deal' => false,
+                        'has_tracked_deal_history' => false,
+                    ])
+                    : [
+                        'can_deactivate_without_deal' => false,
+                        'deactivation_scope' => null,
+                        'deactivation_label' => 'Deactivate',
+                        'deactivation_disabled_reason' => null,
+                    ];
                 $paymentStatus = $client->deal_id && $paidDealIds->has((int) $client->deal_id) ? 'verified' : 'unlinked';
                 $telemetryKey = $client->deal_id ? 'deal_' . $client->deal_id : 'client_' . $client->id;
                 $telemetry = $telemetryByKey->get($telemetryKey, [
@@ -243,7 +255,14 @@ class RenewalService
                             ? 'WordPress says this profile is public but also marked payment required.'
                             : 'WordPress says this profile is public but also awaiting admin activation.')
                         : null,
-                    'can_deactivate_without_deal' => !$client->deal_id && ($isUntracked || $hasWpStateConflict),
+                    'can_deactivate_without_deal' => (bool) ($clientDeactivation['can_deactivate_without_deal'] ?? false),
+                    'deactivation_scope' => $client->deal_id && in_array($status, ['active', 'expired'], true)
+                        ? 'deal'
+                        : ($clientDeactivation['deactivation_scope'] ?? null),
+                    'deactivation_label' => $client->deal_id && in_array($status, ['active', 'expired'], true)
+                        ? 'Deactivate'
+                        : ($clientDeactivation['deactivation_label'] ?? null),
+                    'deactivation_disabled_reason' => $clientDeactivation['deactivation_disabled_reason'] ?? null,
                     'origin_type' => $originType,
                     'payment_status' => $paymentStatus,
                     'plan_type' => $client->deal_plan_type ?? $inferredPlanType,
