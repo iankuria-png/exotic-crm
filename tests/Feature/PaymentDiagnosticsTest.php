@@ -211,6 +211,143 @@ class PaymentDiagnosticsTest extends TestCase
         ]);
     }
 
+    public function test_pawapay_provider_status_check_populates_provider_identity_and_diagnostics_reason(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya Market',
+            'currency_code' => 'KES',
+            'country' => 'Kenya',
+        ]);
+        $user = User::factory()->create([
+            'role' => 'admin',
+            'assigned_market_ids' => [$platform->id],
+            'status' => 'active',
+        ]);
+        $walletSettings = app(WalletSettingsService::class);
+        $walletSettings->saveSystemConfig([
+            'mode' => 'disabled',
+            'default_currency' => 'KES',
+            'billing_domains' => [
+                'sandbox' => 'https://billing-sandbox.example.test',
+                'production' => 'https://billing.example.test',
+            ],
+        ]);
+        $walletSettings->savePlatformProviderCredentials($platform, [
+            'pawapay' => [
+                'production' => [
+                    'api_key' => 'pawapay-live-key',
+                ],
+            ],
+        ]);
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'status' => 'pending',
+            'completed_at' => null,
+            'source' => 'gateway',
+            'provider_key' => 'pawapay',
+            'provider_environment' => 'production',
+            'amount' => 500,
+            'currency' => 'KES',
+            'phone' => '254783371118',
+            'reference_number' => 'SUB-1189283130C7CBD6EE',
+            'transaction_reference' => '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_funding',
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'production',
+            'decision_version' => 1,
+            'snapshot_json' => [
+                'provider_family' => 'hosted_checkout',
+            ],
+            'decision_json' => ['source' => 'test'],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+            'provider_status' => 'initiated',
+            'requested_amount' => '500.00',
+            'requested_currency' => 'KES',
+            'charge_amount' => '500.00',
+            'charge_currency' => 'KES',
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:pawapay',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+            'state_version' => 1,
+            'raw_state_json' => ['recorded_at' => now()->toIso8601String()],
+            'last_status_at' => now()->subMinute(),
+        ]);
+
+        Http::fake([
+            'https://api.pawapay.io/v2/deposits/*' => Http::response([
+                'status' => 'FOUND',
+                'data' => [
+                    'depositId' => '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+                    'status' => 'FAILED',
+                    'providerTransactionId' => 'UDIO8181J1',
+                    'payer' => [
+                        'accountDetails' => [
+                            'phoneNumber' => '254726177549',
+                        ],
+                    ],
+                    'failureReason' => [
+                        'failureCode' => 'PAYMENT_NOT_APPROVED',
+                        'failureMessage' => 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $statusResponse = $this->postJson("/api/crm/payments/{$payment->id}/check-provider-status");
+        $statusResponse->assertOk()
+            ->assertJsonPath('provider', 'pawapay')
+            ->assertJsonPath('status', 'failed')
+            ->assertJsonPath('message', 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.');
+
+        $this->assertDatabaseHas('billing_provider_transactions', [
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'provider_reported_transaction_id' => 'UDIO8181J1',
+            'provider_reported_phone' => '254726177549',
+            'provider_failure_code' => 'PAYMENT_NOT_APPROVED',
+            'provider_failure_message' => 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.',
+        ]);
+
+        PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'pawapay_callback',
+            'status' => 'failed',
+            'error_message' => 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.',
+            'response_meta' => [
+                'provider_failure_reason' => 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.',
+            ],
+        ]);
+        $payment->forceFill([
+            'status' => 'failed',
+            'failure_reason' => 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.',
+        ])->save();
+
+        $diagnostics = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+        $diagnostics->assertOk()
+            ->assertJsonPath('payment.provider_transaction_id', 'UDIO8181J1')
+            ->assertJsonPath('payment.provider_reported_phone', '254726177549')
+            ->assertJsonPath('failure.reason', 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.')
+            ->assertJsonPath('provider_transactions.0.provider_transaction_id', 'UDIO8181J1')
+            ->assertJsonPath('provider_transactions.0.provider_reported_phone', '254726177549');
+    }
+
     public function test_diagnostics_endpoint_blocks_live_subscription_recommendations_for_sandbox_completed_payments(): void
     {
         ['payment' => $payment, 'user' => $user] = $this->seedProxyPayment('paystack');

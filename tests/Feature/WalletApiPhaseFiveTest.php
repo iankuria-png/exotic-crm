@@ -1381,6 +1381,11 @@ class WalletApiPhaseFiveTest extends TestCase
                 'amount' => '900.00',
                 'currency' => 'KES',
                 'providerTransactionId' => 'provider-transaction-001',
+                'payer' => [
+                    'accountDetails' => [
+                        'phoneNumber' => '254726177549',
+                    ],
+                ],
             ], 200),
         ]);
 
@@ -1416,8 +1421,199 @@ class WalletApiPhaseFiveTest extends TestCase
             'signature_status' => 'unsigned',
             'processing_status' => 'processed',
         ]);
+        $this->assertDatabaseHas('billing_provider_transactions', [
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'provider_transaction_id' => 'deposit-callback-001',
+            'provider_reported_transaction_id' => 'provider-transaction-001',
+            'provider_reported_phone' => '254726177549',
+            'compatibility_reference' => 'deposit-callback-001',
+        ]);
         $this->assertSame('1300.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
         $this->assertDatabaseCount('wallet_transactions', 1);
+    }
+
+    public function test_pawapay_failed_callback_updates_the_exact_matched_provider_transaction(): void
+    {
+        [
+            'platform' => $platform,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 400,
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'pawapay',
+            'profile_name' => 'pawaPay Kenya Production',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => [
+                'base_url' => 'https://api.pawapay.io',
+                'callback_base_url' => 'https://billing.example.test',
+            ],
+            'secrets_json' => [
+                'api_key' => 'pawapay-live-key',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'purpose' => 'wallet_topup',
+            'source' => 'gateway',
+            'provider_key' => 'pawapay',
+            'provider_environment' => 'production',
+            'amount' => 500,
+            'currency' => 'KES',
+            'reference_number' => 'WTU-PAWAPAY-CB-FAILED-001',
+            'transaction_uuid' => (string) Str::uuid(),
+            'transaction_reference' => 'deposit-failed-001',
+            'status' => 'pending',
+            'completed_at' => null,
+        ]);
+
+        BillingRoutingDecision::query()->create([
+            'payment_id' => $payment->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'wallet_funding',
+            'provider_profile_id' => $profile->id,
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'direct',
+            'environment' => 'production',
+            'decision_version' => 1,
+            'snapshot_json' => [
+                'provider_key' => 'pawapay',
+                'provider_family' => 'pawapay',
+                'execution_family' => 'hosted_redirect',
+            ],
+            'decision_json' => [
+                'source' => 'test',
+            ],
+            'immutable_until_terminal_state' => true,
+            'created_at' => now(),
+        ]);
+
+        $matchedTransaction = BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'provider_profile_id' => $profile->id,
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => 'deposit-failed-001',
+            'provider_status' => 'initiated',
+            'requested_amount' => $payment->amount,
+            'requested_currency' => $payment->currency,
+            'charge_amount' => $payment->amount,
+            'charge_currency' => $payment->currency,
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:pawapay',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => 'deposit-failed-001',
+            'state_version' => 1,
+            'raw_state_json' => ['recorded_at' => now()->toIso8601String()],
+            'last_status_at' => now()->subMinutes(10),
+        ]);
+
+        $newerTransaction = BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'provider_profile_id' => $profile->id,
+            'normalized_status' => 'pending',
+            'provider_transaction_id' => 'deposit-other-002',
+            'provider_status' => 'initiated',
+            'requested_amount' => $payment->amount,
+            'requested_currency' => $payment->currency,
+            'charge_amount' => $payment->amount,
+            'charge_currency' => $payment->currency,
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:pawapay',
+            'attempt_sequence' => 2,
+            'compatibility_reference' => 'deposit-other-002',
+            'state_version' => 1,
+            'raw_state_json' => ['recorded_at' => now()->toIso8601String()],
+            'last_status_at' => now()->subMinute(),
+        ]);
+
+        $failureMessage = 'Customers SIM card is offline or their SIM card is too old to support mobile money payments.';
+
+        Http::fake([
+            'https://api.pawapay.io/v2/deposits/*' => Http::response([
+                'status' => 'FOUND',
+                'data' => [
+                    'depositId' => 'deposit-failed-001',
+                    'status' => 'FAILED',
+                    'payer' => [
+                        'accountDetails' => [
+                            'phoneNumber' => '254726177549',
+                        ],
+                    ],
+                    'failureReason' => [
+                        'failureCode' => 'PAYMENT_NOT_APPROVED',
+                        'failureMessage' => $failureMessage,
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $payload = [
+            'depositId' => 'deposit-failed-001',
+            'status' => 'FAILED',
+        ];
+
+        $response = $this->call('POST', '/api/billing/pawapay/callback', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+        ], json_encode($payload, JSON_UNESCAPED_SLASHES));
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'failed');
+
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+            'status' => 'failed',
+            'failure_reason' => $failureMessage,
+        ]);
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'pawapay_callback',
+            'status' => 'failed',
+            'error_message' => $failureMessage,
+        ]);
+
+        $matchedTransaction->refresh();
+        $newerTransaction->refresh();
+
+        $this->assertSame('failed', $matchedTransaction->normalized_status);
+        $this->assertSame('254726177549', $matchedTransaction->provider_reported_phone);
+        $this->assertSame('PAYMENT_NOT_APPROVED', $matchedTransaction->provider_failure_code);
+        $this->assertSame($failureMessage, $matchedTransaction->provider_failure_message);
+        $this->assertNull($matchedTransaction->provider_reported_transaction_id);
+        $this->assertNull($newerTransaction->provider_reported_phone);
+        $this->assertSame('pending', $newerTransaction->normalized_status);
+
+        $event = BillingWebhookEvent::query()->latest('id')->first();
+        $this->assertNotNull($event);
+        $this->assertSame($matchedTransaction->id, $event->billing_provider_transaction_id);
+
+        Sanctum::actingAs($this->createUser('admin', [$platform->id]));
+
+        $diagnostics = $this->getJson("/api/crm/payments/{$payment->id}/diagnostics");
+        $diagnostics->assertOk()
+            ->assertJsonPath('failure.reason', $failureMessage)
+            ->assertJsonPath('payment.provider_reported_phone', '254726177549')
+            ->assertJsonPath('provider_transactions.0.provider_reported_phone', '254726177549')
+            ->assertJsonPath('provider_transactions.0.provider_failure_message', $failureMessage);
     }
 
     public function test_pawapay_callback_verifies_signed_callbacks_against_public_keys(): void

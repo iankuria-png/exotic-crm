@@ -12,6 +12,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Deal;
 use App\Models\Payment;
+use App\Models\BillingProviderTransaction;
 use App\Models\Client;
 use App\Models\Product;
 use App\Models\Platform;
@@ -103,7 +104,27 @@ class PaymentQueueController extends Controller
             abort(403, 'Only admin users can view test payments.');
         }
 
-        $baseQuery = Payment::query()->with(['platform', 'product', 'client', 'manualSubmission', 'manualPaymentBundle']);
+        $latestProviderTransactionOrder = 'COALESCE(last_status_at, created_at) DESC, id DESC';
+
+        $baseQuery = Payment::query()
+            ->with(['platform', 'product', 'client', 'manualSubmission', 'manualPaymentBundle'])
+            ->select('payments.*')
+            ->selectSub(
+                BillingProviderTransaction::query()
+                    ->selectRaw("CASE WHEN provider_type_key = 'pawapay' THEN provider_reported_transaction_id ELSE provider_transaction_id END")
+                    ->whereColumn('payment_id', 'payments.id')
+                    ->orderByRaw($latestProviderTransactionOrder)
+                    ->limit(1),
+                'provider_transaction_id'
+            )
+            ->selectSub(
+                BillingProviderTransaction::query()
+                    ->select('provider_reported_phone')
+                    ->whereColumn('payment_id', 'payments.id')
+                    ->orderByRaw($latestProviderTransactionOrder)
+                    ->limit(1),
+                'provider_reported_phone'
+            );
         $this->marketAuthorizationService->applyPlatformScope($baseQuery, $request->user());
 
         if ($request->filled('platform_id')) {
@@ -114,7 +135,12 @@ class PaymentQueueController extends Controller
             $search = $request->search;
             $baseQuery->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
-                    ->orWhere('transaction_reference', 'like', "%{$search}%");
+                    ->orWhere('transaction_reference', 'like', "%{$search}%")
+                    ->orWhereHas('providerTransactions', function (Builder $providerTransactions) use ($search) {
+                        $providerTransactions->where('provider_reported_transaction_id', 'like', "%{$search}%")
+                            ->orWhere('provider_transaction_id', 'like', "%{$search}%")
+                            ->orWhere('provider_reported_phone', 'like', "%{$search}%");
+                    });
             });
         }
 
@@ -1053,6 +1079,18 @@ class PaymentQueueController extends Controller
             ->orderBy('id')
             ->get();
         $manualSubmission = $payment->manualSubmission;
+        $latestProviderTransaction = $providerTransactions
+            ->sortByDesc(fn ($transaction) => optional($transaction->last_status_at)->getTimestamp() ?? optional($transaction->created_at)->getTimestamp() ?? 0)
+            ->first();
+        $payment->setAttribute(
+            'provider_transaction_id',
+            $latestProviderTransaction
+                ? (($latestProviderTransaction->provider_type_key === 'pawapay')
+                    ? $latestProviderTransaction->provider_reported_transaction_id
+                    : $latestProviderTransaction->provider_transaction_id)
+                : null
+        );
+        $payment->setAttribute('provider_reported_phone', $latestProviderTransaction?->provider_reported_phone);
 
         $failureStage = $this->resolveFailureStage($payment, $latestFailedAttempt, $latestAttempt, $manualCloseMeta, $linkProxy);
         $failureReason = $latestFailedAttempt?->error_message
@@ -1166,7 +1204,13 @@ class PaymentQueueController extends Controller
                     'provider_profile_id' => $transaction->provider_profile_id ? (int) $transaction->provider_profile_id : null,
                     'normalized_status' => $transaction->normalized_status,
                     'provider_status' => $transaction->provider_status,
-                    'provider_transaction_id' => $transaction->provider_transaction_id,
+                    'provider_transaction_id' => $transaction->provider_type_key === 'pawapay'
+                        ? $transaction->provider_reported_transaction_id
+                        : $transaction->provider_transaction_id,
+                    'provider_reference_id' => $transaction->provider_transaction_id,
+                    'provider_reported_phone' => $transaction->provider_reported_phone,
+                    'provider_failure_code' => $transaction->provider_failure_code,
+                    'provider_failure_message' => $transaction->provider_failure_message,
                     'provider_session_id' => $transaction->provider_session_id,
                     'provider_invoice_id' => $transaction->provider_invoice_id,
                     'requested_amount' => $transaction->requested_amount,
@@ -1236,6 +1280,8 @@ class PaymentQueueController extends Controller
                 'response_meta' => [
                     'provider_status' => $snapshot['status'] ?? null,
                     'provider_message' => $snapshot['message'] ?? null,
+                    'provider_transaction_id' => data_get($snapshot, 'data.providerTransactionId'),
+                    'provider_reported_phone' => data_get($snapshot, 'data.payer.accountDetails.phoneNumber') ?? data_get($snapshot, 'data.phoneNumber'),
                     'provider_payload' => $snapshot['data'] ?? null,
                 ],
                 'created_by' => optional($request->user())->id,
@@ -1334,7 +1380,7 @@ class PaymentQueueController extends Controller
             } elseif (($decision['decision'] ?? null) === 'apply_failed') {
                 $updatedPayment = $this->billingGatewayService->failPayment(
                     $payment,
-                    (string) ($decision['message'] ?? $snapshot['message'] ?? 'Sandbox provider verification failed.'),
+                    (string) ($snapshot['message'] ?? $decision['message'] ?? 'Sandbox provider verification failed.'),
                     is_array($snapshot['data'] ?? null) ? $snapshot['data'] : []
                 );
                 $reconciled = true;
@@ -2538,7 +2584,11 @@ class PaymentQueueController extends Controller
             throw new InvalidArgumentException('Hosted checkout has not been initialized yet for this payment.');
         }
 
-        return $this->providerStatusQueryOrchestrator->verify($payment);
+        $snapshot = $this->providerStatusQueryOrchestrator->verify($payment);
+
+        $this->billingGatewayService->syncPawaPayProviderTransactionFromVerification($payment, $snapshot);
+
+        return $snapshot;
     }
 
     private function assertSandboxReconcileEligibility(Payment $payment): void

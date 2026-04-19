@@ -762,6 +762,14 @@ class WalletSettingsService
                     'secret_key_encrypted' => '',
                 ],
             ],
+            'pawapay' => [
+                'sandbox' => [
+                    'api_key_encrypted' => '',
+                ],
+                'production' => [
+                    'api_key_encrypted' => '',
+                ],
+            ],
             'mpesa_stk' => [
                 'sandbox' => [
                     'transport' => 'django_proxy',
@@ -1022,6 +1030,16 @@ class WalletSettingsService
                 }
             }
 
+            $pawapay = data_get($incoming, "pawapay.{$environment}");
+            if (is_array($pawapay)) {
+                if (array_key_exists('api_key', $pawapay) && trim((string) $pawapay['api_key']) !== '') {
+                    $merged['pawapay'][$environment]['api_key_encrypted'] = Crypt::encryptString((string) $pawapay['api_key']);
+                }
+                if (array_key_exists('api_key_encrypted', $pawapay)) {
+                    $merged['pawapay'][$environment]['api_key_encrypted'] = (string) $pawapay['api_key_encrypted'];
+                }
+            }
+
             $mpesa = data_get($incoming, "mpesa_stk.{$environment}");
             if (is_array($mpesa)) {
                 foreach (['payment_service_base_url', 'organization_code', 'callback_base_url'] as $key) {
@@ -1154,6 +1172,10 @@ class WalletSettingsService
                 'secret_key_configured' => !empty($credentials['paystack'][$environment]['secret_key_encrypted']),
             ];
 
+            $masked['pawapay'][$environment] = [
+                'api_key_configured' => !empty($credentials['pawapay'][$environment]['api_key_encrypted']),
+            ];
+
             $masked['mpesa_stk'][$environment] = [
                 'transport' => (string) ($credentials['mpesa_stk'][$environment]['transport'] ?? 'django_proxy'),
                 'payment_service_base_url' => (string) ($credentials['mpesa_stk'][$environment]['payment_service_base_url'] ?? ''),
@@ -1189,6 +1211,10 @@ class WalletSettingsService
             $runtime['paystack'][$environment] = [
                 'public_key' => $this->decryptOrEmpty((string) ($credentials['paystack'][$environment]['public_key_encrypted'] ?? '')),
                 'secret_key' => $this->decryptOrEmpty((string) ($credentials['paystack'][$environment]['secret_key_encrypted'] ?? '')),
+            ];
+
+            $runtime['pawapay'][$environment] = [
+                'api_key' => $this->decryptOrEmpty((string) ($credentials['pawapay'][$environment]['api_key_encrypted'] ?? '')),
             ];
 
             $runtime['mpesa_stk'][$environment] = [

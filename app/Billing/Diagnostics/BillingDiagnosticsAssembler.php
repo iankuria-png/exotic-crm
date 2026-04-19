@@ -304,6 +304,14 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
         $latestProviderTransaction = $providerTransactions->first();
         $latestWebhookEvent = $webhookEvents->first();
         $paymentOrigin = (string) data_get($payment->payment_data, 'origin', '');
+        $providerPhoneDiffers = $latestProviderTransaction?->provider_reported_phone
+            && $latestProviderTransaction->provider_reported_phone !== $payment->phone;
+        $providerFailureReason = $latestProviderTransaction?->provider_failure_message ?: ($payment->failure_reason ?: '—');
+        $latestProviderTransactionId = $latestProviderTransaction
+            ? ($latestProviderTransaction->provider_type_key === 'pawapay'
+                ? $latestProviderTransaction->provider_reported_transaction_id
+                : $latestProviderTransaction->provider_transaction_id)
+            : null;
 
         return new PaymentDiagnosticsView(
             paymentId: $paymentId,
@@ -344,6 +352,11 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
                             Str::headline((string) ($latestProviderTransaction?->normalized_status ?: 'unknown'))
                         ),
                     'entries' => [
+                        ['label' => 'CRM phone', 'value' => $payment->phone ?: '—'],
+                        ...($providerPhoneDiffers ? [['label' => 'Provider phone', 'value' => $latestProviderTransaction->provider_reported_phone]] : []),
+                        ['label' => 'Deposit ID', 'value' => $payment->transaction_reference ?: ($latestProviderTransaction?->compatibility_reference ?: '—')],
+                        ['label' => 'Provider Transaction ID', 'value' => $latestProviderTransactionId ?: '—'],
+                        ['label' => 'Failure reason', 'value' => $providerFailureReason],
                         ['label' => 'Latest provider profile', 'value' => $latestProviderTransaction?->providerProfile?->profile_name ?: '—'],
                         ['label' => 'Latest state', 'value' => $latestProviderTransaction?->normalized_status ?: '—'],
                         ['label' => 'Attempt sequence', 'value' => $latestProviderTransaction?->attempt_sequence ? (string) $latestProviderTransaction->attempt_sequence : '—'],
@@ -360,7 +373,12 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
                             'value' => sprintf(
                                 '%s • %s',
                                 Str::headline((string) ($transaction->normalized_status ?: 'unknown')),
-                                $transaction->compatibility_reference ?: ($transaction->provider_transaction_id ?: 'No provider reference')
+                                $transaction->compatibility_reference ?: (
+                                    ($transaction->provider_type_key === 'pawapay'
+                                        ? $transaction->provider_reported_transaction_id
+                                        : $transaction->provider_transaction_id)
+                                    ?: 'No provider reference'
+                                )
                             ),
                         ];
                     })->all(),

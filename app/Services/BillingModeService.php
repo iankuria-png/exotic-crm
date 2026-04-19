@@ -86,9 +86,13 @@ class BillingModeService
             $resolvedFrom = $resolved['resolved_from'];
             $providerConfig = array_merge(
                 is_array($providerConfig) ? $providerConfig : [],
-                ['enabled' => $resolvedBinding !== null]
+                ['enabled' => $resolvedBinding !== null
+                    ? true
+                    : (bool) data_get($providerConfig, 'enabled', false)]
             );
-            $providerCredentials = $resolvedProfileCredentials;
+            if (!empty($resolvedProfileCredentials)) {
+                $providerCredentials = $resolvedProfileCredentials;
+            }
         }
 
         if (

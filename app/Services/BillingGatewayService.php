@@ -8,6 +8,7 @@ use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Billing\Support\BillingProviderTransactionRecorder;
 use App\Billing\Support\CanonicalPaymentStateReducer;
+use App\Models\BillingProviderTransaction;
 use App\Models\BillingWebhookEvent;
 use App\Models\BillingRoutingDecision;
 use App\Models\BillingProviderProfile;
@@ -603,25 +604,36 @@ class BillingGatewayService
                 'provider_reference' => $depositId,
             ]);
             $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
+            $providerTransaction = $this->syncPawaPayProviderTransactionFromVerification($payment, $verification, $providerTransaction);
+            $failureMessage = $this->resolvePawaPayFailureMessage(
+                $verification,
+                $decisionResult,
+                'pawaPay transaction did not complete successfully.'
+            );
 
             if (($decisionResult['decision'] ?? null) === 'apply_failed') {
                 $failed = $this->failPayment(
                     $payment,
-                    (string) ($decisionResult['message'] ?? $verification['message'] ?? 'pawaPay transaction did not complete successfully.'),
+                    $failureMessage,
                     $verifiedData
                 );
                 $this->recordBillingCallbackAttempt($failed, 'pawapay_callback', 'failed', [
-                    'error_message' => (string) ($decisionResult['message'] ?? $verification['message'] ?? 'pawaPay transaction did not complete successfully.'),
+                    'error_message' => $failureMessage,
                     'response_meta' => [
                         'deposit_id' => $depositId,
                         'callback_status' => $callbackStatus,
                         'provider_status' => $verifiedData['status'] ?? null,
+                        'provider_message' => $failureMessage,
+                        'provider_failure_reason' => $this->providerFailureMessage($verifiedData),
+                        'provider_failure_code' => $this->providerFailureCode($verifiedData),
+                        'provider_reported_phone' => $this->providerReportedPhone($verifiedData),
+                        'provider_transaction_id' => $verifiedData['providerTransactionId'] ?? $providerTransaction?->provider_reported_transaction_id,
                         'verification_status' => $verification['status'] ?? null,
                         'decision' => $decisionResult,
                     ],
                 ]);
 
-                $this->markBillingWebhookEventProcessed($event, $failed, $security['meta'], $verification, $decisionResult);
+                $this->markBillingWebhookEventProcessed($event, $failed, $security['meta'], $verification, $decisionResult, $providerTransaction);
 
                 return [
                     'payment' => $failed,
@@ -638,13 +650,14 @@ class BillingGatewayService
                         'deposit_id' => $depositId,
                         'callback_status' => $callbackStatus,
                         'provider_status' => $verifiedData['status'] ?? null,
-                        'provider_transaction_id' => $verifiedData['providerTransactionId'] ?? null,
+                        'provider_transaction_id' => $verifiedData['providerTransactionId'] ?? $providerTransaction?->provider_reported_transaction_id,
+                        'provider_reported_phone' => $this->providerReportedPhone($verifiedData),
                         'verification_status' => $verification['status'] ?? null,
                         'decision' => $decisionResult,
                     ],
                 ]);
 
-                $this->markBillingWebhookEventProcessed($event, $completed['payment'], $security['meta'], $verification, $decisionResult);
+                $this->markBillingWebhookEventProcessed($event, $completed['payment'], $security['meta'], $verification, $decisionResult, $providerTransaction);
 
                 return array_merge($completed, [
                     'status' => 'completed',
@@ -657,13 +670,15 @@ class BillingGatewayService
                     'deposit_id' => $depositId,
                     'callback_status' => $callbackStatus,
                     'provider_status' => $verifiedData['status'] ?? null,
-                    'provider_transaction_id' => $verifiedData['providerTransactionId'] ?? null,
+                    'provider_transaction_id' => $verifiedData['providerTransactionId'] ?? $providerTransaction?->provider_reported_transaction_id,
+                    'provider_reported_phone' => $this->providerReportedPhone($verifiedData),
+                    'provider_message' => $verification['message'] ?? null,
                     'verification_status' => $verification['status'] ?? null,
                     'decision' => $decisionResult,
                 ],
             ]);
 
-            $this->markBillingWebhookEventProcessed($event, $freshPayment, $security['meta'], $verification, $decisionResult);
+            $this->markBillingWebhookEventProcessed($event, $freshPayment, $security['meta'], $verification, $decisionResult, $providerTransaction);
 
             return [
                 'payment' => $freshPayment,
@@ -819,9 +834,7 @@ class BillingGatewayService
         $attemptStartedAt = microtime(true);
 
         try {
-            $action = $this->pawaPayCompatibilityAdapter->initialize($payment, $context, array_merge($options, [
-                'prefill_phone' => false,
-            ]));
+            $action = $this->pawaPayCompatibilityAdapter->initialize($payment, $context, $options);
         } catch (RuntimeException $exception) {
             $this->failPayment($payment, $exception->getMessage());
             $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'failed', [
@@ -1198,10 +1211,9 @@ class BillingGatewayService
         Payment $payment,
         array $securityMeta,
         array $verification,
-        array $decision
+        array $decision,
+        ?BillingProviderTransaction $providerTransaction = null
     ): void {
-        $providerTransaction = $this->billingProviderTransactionRecorder->latestAttempt($payment, 'pawapay');
-
         $event->forceFill([
             'billing_provider_transaction_id' => $providerTransaction?->id,
             'payment_id' => (int) $payment->id,
@@ -1217,6 +1229,127 @@ class BillingGatewayService
             'processed_at' => now(),
             'last_error' => null,
         ])->save();
+    }
+
+    public function syncPawaPayProviderTransactionFromVerification(
+        Payment $payment,
+        array $verification,
+        ?BillingProviderTransaction $providerTransaction = null
+    ): ?BillingProviderTransaction {
+        $providerKey = strtolower(trim((string) ($verification['provider'] ?? $this->resolvedProviderType($payment))));
+        if ($providerKey !== 'pawapay') {
+            return $providerTransaction;
+        }
+
+        $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
+        $providerReference = trim((string) ($verification['provider_reference'] ?? ''));
+        $providerTransaction ??= $this->resolvePawaPayProviderTransactionForReference($payment, $providerReference);
+
+        if (!$providerTransaction) {
+            return null;
+        }
+
+        $verificationStatus = strtolower(trim((string) ($verification['status'] ?? '')));
+        $normalizedStatus = in_array($verificationStatus, ['completed', 'failed', 'pending'], true)
+            ? $verificationStatus
+            : (string) ($providerTransaction->normalized_status ?: 'pending');
+        $providerStatus = trim((string) ($verifiedData['status'] ?? ''));
+        $providerTransactionId = trim((string) ($verifiedData['providerTransactionId'] ?? ''));
+        $providerPhone = $this->providerReportedPhone($verifiedData);
+        $failureCode = $this->providerFailureCode($verifiedData);
+        $failureMessage = $this->providerFailureMessage($verifiedData);
+
+        $confirmationState = is_array($providerTransaction->confirmation_state_json) ? $providerTransaction->confirmation_state_json : [];
+        $confirmationState['provider_identity'] = array_filter([
+            'deposit_id' => $providerReference !== '' ? $providerReference : ($providerTransaction->compatibility_reference ?: null),
+            'provider_transaction_id' => $providerTransactionId !== '' ? $providerTransactionId : ($providerTransaction->provider_reported_transaction_id ?: null),
+            'provider_reported_phone' => $providerPhone,
+        ], static fn ($value) => $value !== null && $value !== '');
+        $confirmationState['provider_failure'] = array_filter([
+            'code' => $failureCode,
+            'message' => $failureMessage,
+        ], static fn ($value) => $value !== null && $value !== '');
+
+        $rawState = is_array($providerTransaction->raw_state_json) ? $providerTransaction->raw_state_json : [];
+        $rawState['latest_verified_payload'] = $verifiedData;
+        $rawState['latest_verified_at'] = now()->toIso8601String();
+        $rawState['latest_verified_reference'] = $providerReference !== '' ? $providerReference : null;
+
+        $providerTransaction->forceFill([
+            'normalized_status' => $normalizedStatus,
+            'provider_reported_transaction_id' => $providerTransactionId !== '' ? $providerTransactionId : $providerTransaction->provider_reported_transaction_id,
+            'provider_reported_phone' => $providerPhone,
+            'provider_status' => $providerStatus !== '' ? $providerStatus : $providerTransaction->provider_status,
+            'provider_failure_code' => $failureCode,
+            'provider_failure_message' => $failureMessage,
+            'confirmation_state_json' => $confirmationState,
+            'raw_state_json' => $rawState,
+            'last_status_at' => now(),
+        ])->save();
+
+        return $providerTransaction->fresh();
+    }
+
+    private function resolvePawaPayProviderTransactionForReference(Payment $payment, string $providerReference): ?BillingProviderTransaction
+    {
+        if ($providerReference === '') {
+            return null;
+        }
+
+        return BillingProviderTransaction::query()
+            ->where('payment_id', (int) $payment->id)
+            ->where('provider_type_key', 'pawapay')
+            ->where(function ($query) use ($providerReference) {
+                $query->where('provider_transaction_id', $providerReference)
+                    ->orWhere('compatibility_reference', $providerReference);
+            })
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function resolvePawaPayFailureMessage(array $verification, array $decision, string $fallback): string
+    {
+        $verifiedData = is_array($verification['data'] ?? null) ? $verification['data'] : [];
+
+        return (string) (
+            $this->providerFailureMessage($verifiedData)
+            ?? $verification['message']
+            ?? $decision['message']
+            ?? $fallback
+        );
+    }
+
+    private function providerReportedPhone(array $providerPayload): ?string
+    {
+        $phone = trim((string) (
+            data_get($providerPayload, 'payer.accountDetails.phoneNumber')
+            ?? data_get($providerPayload, 'phoneNumber')
+            ?? ''
+        ));
+
+        return $phone !== '' ? $phone : null;
+    }
+
+    private function providerFailureCode(array $providerPayload): ?string
+    {
+        $code = trim((string) (
+            data_get($providerPayload, 'failureReason.failureCode')
+            ?? data_get($providerPayload, 'failureReason.errorCode')
+            ?? ''
+        ));
+
+        return $code !== '' ? $code : null;
+    }
+
+    private function providerFailureMessage(array $providerPayload): ?string
+    {
+        $message = trim((string) (
+            data_get($providerPayload, 'failureReason.failureMessage')
+            ?? data_get($providerPayload, 'failureReason.message')
+            ?? ''
+        ));
+
+        return $message !== '' ? $message : null;
     }
 
     private function pawaPayCallbackSecurityAssessment(

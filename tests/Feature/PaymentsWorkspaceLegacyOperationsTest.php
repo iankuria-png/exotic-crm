@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingProviderProfile;
+use App\Models\BillingProviderTransaction;
 use App\Models\BillingRoutingRule;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -132,5 +133,57 @@ class PaymentsWorkspaceLegacyOperationsTest extends TestCase
             ->assertJsonPath('data.0.platform.payment_link_providers.active_provider', 'pawapay_checkout')
             ->assertJsonPath('data.0.platform.payment_link_providers.providers.pawapay_checkout.wallet_provider_key', 'pawapay')
             ->assertJsonPath('data.0.platform.payment_link_providers.providers.pawapay_checkout.billing_surface', 'subscription_link');
+    }
+
+    public function test_payments_index_projects_and_searches_provider_transaction_identity(): void
+    {
+        $platform = Platform::factory()->create();
+        $user = User::factory()->create([
+            'role' => 'admin',
+            'assigned_market_ids' => [$platform->id],
+            'status' => 'active',
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'status' => 'completed',
+            'amount' => 500,
+            'currency' => 'KES',
+            'phone' => '254783371118',
+            'transaction_reference' => '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+        ]);
+
+        BillingProviderTransaction::query()->create([
+            'payment_id' => $payment->id,
+            'provider_type_key' => 'pawapay',
+            'normalized_status' => 'completed',
+            'provider_transaction_id' => '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+            'provider_reported_transaction_id' => 'UDIO8181J1',
+            'provider_reported_phone' => '254726177549',
+            'provider_status' => 'COMPLETED',
+            'requested_amount' => '500.00',
+            'requested_currency' => 'KES',
+            'charge_amount' => '500.00',
+            'charge_currency' => 'KES',
+            'attempt_group_key' => 'payment:' . $payment->id . ':provider:pawapay',
+            'attempt_sequence' => 1,
+            'compatibility_reference' => '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+            'state_version' => 1,
+            'raw_state_json' => ['recorded_at' => now()->toIso8601String()],
+            'last_status_at' => now(),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $byProviderTransaction = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&search=UDIO8181J1');
+        $byProviderTransaction->assertOk()
+            ->assertJsonPath('data.0.id', $payment->id)
+            ->assertJsonPath('data.0.provider_transaction_id', 'UDIO8181J1')
+            ->assertJsonPath('data.0.provider_reported_phone', '254726177549');
+
+        $byProviderPhone = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&search=254726177549');
+        $byProviderPhone->assertOk()
+            ->assertJsonPath('data.0.id', $payment->id)
+            ->assertJsonPath('data.0.provider_transaction_id', 'UDIO8181J1');
     }
 }

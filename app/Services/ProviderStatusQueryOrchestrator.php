@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Billing\Providers\PawaPay\PawaPayCompatibilityAdapter;
 use App\Billing\Providers\Pesapal\PesapalCompatibilityAdapter;
+use App\Billing\Support\BillingSurface;
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
 use InvalidArgumentException;
@@ -276,14 +277,31 @@ class ProviderStatusQueryOrchestrator
 
     public function resolveSurface(Payment $payment): string
     {
-        $pinnedSurface = $this->latestPinnedDecision($payment)?->billing_surface;
+        $pinnedSurface = $this->normalizeSurface($this->latestPinnedDecision($payment)?->billing_surface);
         if ($pinnedSurface) {
-            return (string) $pinnedSurface;
+            return $pinnedSurface;
         }
 
         return match ((string) $payment->purpose) {
             'subscription' => 'subscription_link',
             default => 'wallet_funding',
+        };
+    }
+
+    private function normalizeSurface(?string $surface): ?string
+    {
+        $surface = strtolower(trim((string) $surface));
+
+        return match ($surface) {
+            'payment_link', 'link', 'proxy_hosted_checkout' => BillingSurface::ProxyHostedCheckout->value,
+            BillingSurface::SubscriptionLink->value => BillingSurface::SubscriptionLink->value,
+            BillingSurface::SubscriptionPush->value => BillingSurface::SubscriptionPush->value,
+            BillingSurface::SubscriptionInvoice->value => BillingSurface::SubscriptionInvoice->value,
+            BillingSurface::WalletFunding->value => BillingSurface::WalletFunding->value,
+            BillingSurface::WalletAutoRenew->value => BillingSurface::WalletAutoRenew->value,
+            BillingSurface::ManualConfirmation->value => BillingSurface::ManualConfirmation->value,
+            BillingSurface::SelfCheckout->value => BillingSurface::SelfCheckout->value,
+            default => null,
         };
     }
 

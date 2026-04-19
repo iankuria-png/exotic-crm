@@ -36,6 +36,97 @@ test.describe('billing browser smoke coverage', () => {
         await expect(page.getByRole('button', { name: 'Auto-match queue' })).toBeVisible();
     });
 
+    test('admin sees the reordered payments table and provider tx subline', async ({ page, request }) => {
+        test.skip(!roleCredentialsAvailable('admin'), missingRoleMessage('admin'));
+
+        const authPayload = await loginViaApi(request, 'admin');
+        await seedAuthState(page, authPayload);
+
+        await page.route('**/api/crm/settings/integrations*', async (route) => {
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                json: { platforms: [] },
+            });
+        });
+
+        await page.route('**/api/crm/payments*', async (route) => {
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                json: {
+                    current_page: 1,
+                    data: [
+                        {
+                            id: 372,
+                            phone: '254783371118',
+                            amount: 500,
+                            currency: 'KES',
+                            product: { name: 'BASIC' },
+                            status: 'completed',
+                            transaction_reference: '3530ebeb-e25c-4abe-9160-b242fd7767e1',
+                            provider_transaction_id: 'UDIO8181J1',
+                            created_at: '2026-04-18T15:23:15.000Z',
+                            client: null,
+                            reconciliation_confidence: 'low',
+                            reconciliation_state: 'open',
+                            resolution_code: null,
+                            platform: { timezone: 'Africa/Nairobi' },
+                        },
+                    ],
+                    from: 1,
+                    last_page: 1,
+                    per_page: 50,
+                    to: 1,
+                    total: 1,
+                    stats_scope: 'business',
+                    stats: {
+                        pending: 0,
+                        pending_amount: 0,
+                        pending_amount_breakdown: {},
+                        confirmed: 1,
+                        confirmed_amount: 500,
+                        confirmed_amount_breakdown: {},
+                        reversed: 0,
+                        reversed_amount: 0,
+                        reversed_amount_breakdown: {},
+                        unmatched: 1,
+                        unmatched_review: 1,
+                        unmatched_review_amount: 500,
+                        unmatched_review_amount_breakdown: {},
+                        failed: 0,
+                        failed_amount: 0,
+                        failed_amount_breakdown: {},
+                    },
+                    baseline_cutoff: '2026-04-01',
+                },
+            });
+        });
+
+        await page.goto('/payments', { waitUntil: 'domcontentloaded' });
+
+        await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
+
+        const headers = page.locator('thead th');
+        await expect(headers.nth(1)).toHaveText('Phone');
+        await expect(headers.nth(2)).toHaveText('Amount');
+        await expect(headers.nth(3)).toHaveText('Product');
+        await expect(headers.nth(4)).toHaveText('Status');
+        await expect(headers.nth(5)).toHaveText('Reference');
+        await expect(headers.nth(6)).toHaveText('Date');
+        await expect(headers.nth(7)).toHaveText('Matched Client');
+        await expect(headers.nth(8)).toHaveText('Match');
+        await expect(headers.nth(9)).toHaveText('Review');
+        await expect(headers.nth(10)).toHaveText('Resolution');
+        await expect(headers.nth(11)).toHaveText('');
+
+        const referenceCell = page.locator('tbody tr').first().locator('td').nth(5);
+        await expect(referenceCell.getByText('3530ebeb-e25c-4abe-9160-b242fd7767e1', { exact: true })).toBeVisible();
+        await expect(referenceCell.getByText('Provider Tx: UDIO8181J1', { exact: true })).toBeVisible();
+        await expect(referenceCell.getByText('Provider Tx: UDIO8181J1', { exact: true })).toHaveAttribute('title', 'UDIO8181J1');
+        await expect(referenceCell.locator('button')).toHaveCount(0);
+    });
+
     test('admin can open the billing workspace shell', async ({ page, request }) => {
         test.skip(!roleCredentialsAvailable('admin'), missingRoleMessage('admin'));
 

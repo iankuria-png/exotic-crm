@@ -238,6 +238,30 @@ function paymentLinkProviderOptionLabel(providerKey, providerConfig = {}) {
     return `${baseLabel} (${paymentLinkModeLabel(providerConfig?.mode)})`;
 }
 
+function renderPaymentReference(row) {
+    const reference = row.transaction_reference || '—';
+    const providerTransactionId = row.provider_transaction_id || '';
+
+    return (
+        <div className="flex min-w-0 max-w-full flex-col gap-0.5">
+            <span
+                className="crm-mono block max-w-full truncate text-xs text-slate-600"
+                title={row.transaction_reference || undefined}
+            >
+                {reference}
+            </span>
+            {providerTransactionId ? (
+                <span
+                    className="crm-mono block max-w-full truncate text-[11px] leading-4 text-slate-400"
+                    title={providerTransactionId}
+                >
+                    Provider Tx: {providerTransactionId}
+                </span>
+            ) : null}
+        </div>
+    );
+}
+
 function diagnosticToneClasses(status) {
     const normalized = String(status || '').toLowerCase();
 
@@ -1650,50 +1674,54 @@ export default function Payments() {
         {
             key: 'phone',
             label: 'Phone',
+            width: '10rem',
             render: (row) => <span className="crm-mono text-xs text-slate-600">{row.phone || '—'}</span>,
         },
         {
             key: 'amount',
             label: 'Amount',
+            width: '8.5rem',
             render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, resolveCurrency(row.currency))}</span>,
         },
         {
             key: 'product',
             label: 'Product',
+            width: '11rem',
             render: (row) => <span className="text-sm text-slate-700">{row.product?.name || '—'}</span>,
         },
         {
             key: 'status',
             label: 'Status',
+            width: '12rem',
             render: (row) => renderPaymentStatusBadges(row),
         },
         {
-            key: 'match_confidence',
-            label: 'Match',
-            render: (row) => row.reconciliation_confidence ? <StatusBadge status={row.reconciliation_confidence} /> : <span className="text-xs text-slate-400">—</span>,
+            key: 'transaction_reference',
+            label: 'Reference',
+            width: '17rem',
+            cellClassName: 'align-top',
+            render: (row) => renderPaymentReference(row),
         },
         {
-            key: 'review_state',
-            label: 'Review',
-            render: (row) => row.reconciliation_state ? <StatusBadge status={row.reconciliation_state} /> : <span className="text-xs text-slate-400">—</span>,
-        },
-        {
-            key: 'resolution',
-            label: 'Resolution',
+            key: 'created_at',
+            label: 'Date',
+            width: '10rem',
+            cellClassName: 'align-top',
             render: (row) => {
-                const badge = paymentResolutionBadge(row.resolution_code);
-                return badge ? (
-                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${badge.className}`}>
-                        {badge.label}
-                    </span>
-                ) : (
-                    <span className="text-xs text-slate-400">—</span>
+                const { date, time } = formatPaymentDateTime(row.created_at, row.platform?.timezone || 'UTC');
+
+                return (
+                    <div className="text-xs leading-tight text-slate-500">
+                        <div>{date}</div>
+                        {time ? <div className="text-slate-400">{time}</div> : null}
+                    </div>
                 );
             },
         },
         {
             key: 'client',
             label: 'Matched Client',
+            width: '12rem',
             render: (row) => (
                 row.client
                     ? (
@@ -1711,27 +1739,36 @@ export default function Payments() {
             ),
         },
         {
-            key: 'transaction_reference',
-            label: 'Reference',
-            render: (row) => <span className="crm-mono text-xs text-slate-500">{row.transaction_reference || '—'}</span>,
+            key: 'match_confidence',
+            label: 'Match',
+            width: '7.5rem',
+            render: (row) => row.reconciliation_confidence ? <StatusBadge status={row.reconciliation_confidence} /> : <span className="text-xs text-slate-400">—</span>,
         },
         {
-            key: 'created_at',
-            label: 'Date',
+            key: 'review_state',
+            label: 'Review',
+            width: '8rem',
+            render: (row) => row.reconciliation_state ? <StatusBadge status={row.reconciliation_state} /> : <span className="text-xs text-slate-400">—</span>,
+        },
+        {
+            key: 'resolution',
+            label: 'Resolution',
+            width: '9rem',
             render: (row) => {
-                const { date, time } = formatPaymentDateTime(row.created_at, row.platform?.timezone || 'UTC');
-
-                return (
-                    <div className="text-xs leading-tight text-slate-500">
-                        <div>{date}</div>
-                        {time ? <div className="text-slate-400">{time}</div> : null}
-                    </div>
+                const badge = paymentResolutionBadge(row.resolution_code);
+                return badge ? (
+                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${badge.className}`}>
+                        {badge.label}
+                    </span>
+                ) : (
+                    <span className="text-xs text-slate-400">—</span>
                 );
             },
         },
         {
             key: 'actions',
             label: '',
+            width: '12.5rem',
             render: (row) => {
                 const testRow = isTestPayment(row);
                 const isFailed = row.status === 'failed' || row.status === 'initiated' || row.status === 'pending';
