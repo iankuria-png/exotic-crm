@@ -871,7 +871,7 @@ class ProfileExtractionService
 
     /**
      * @param array<string, mixed>|null $payload
-     * @return array<int, array{id:int,url:string,is_main:bool}>
+     * @return array<int, array{id:int,url:string,is_main:bool,mime_type:?string}>
      */
     private function normalizeWpMediaItems(?array $payload): array
     {
@@ -891,15 +891,29 @@ class ProfileExtractionService
                     'id' => (int) ($row['id'] ?? 0),
                     'url' => trim((string) ($row['url'] ?? '')),
                     'is_main' => (bool) ($row['is_main'] ?? false),
+                    'mime_type' => isset($row['mime_type']) ? trim((string) $row['mime_type']) : null,
                 ];
             })
-            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0 && ($media['url'] ?? '') !== '')
+            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0
+                && ($media['url'] ?? '') !== ''
+                && $this->isImageMedia($media))
             ->values()
             ->all();
     }
 
+    private function isImageMedia(array $media): bool
+    {
+        $mimeType = strtolower(trim((string) ($media['mime_type'] ?? '')));
+        if ($mimeType !== '') {
+            return str_starts_with($mimeType, 'image/');
+        }
+
+        $url = strtolower(trim((string) ($media['url'] ?? '')));
+        return (bool) preg_match('/\.(jpe?g|png|webp)(?:$|[?#])/', $url);
+    }
+
     /**
-     * @param array<int, array{id:int,url:string,is_main:bool}> $mediaItems
+     * @param array<int, array{id:int,url:string,is_main:bool,mime_type:?string}> $mediaItems
      * @return array{id:int,url:string,is_main:bool}|null
      */
     private function pickRecommendedMedia(array $mediaItems): ?array

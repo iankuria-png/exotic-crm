@@ -45,6 +45,10 @@ use InvalidArgumentException;
 
 class ClientController extends Controller
 {
+    private const PROFILE_MEDIA_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp,mp4';
+    private const PROFILE_MEDIA_IMAGE_MAX_KB = 5120;
+    private const PROFILE_MEDIA_VIDEO_MAX_KB = 51200;
+
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly LeadAssignmentService $leadAssignmentService,
@@ -1401,9 +1405,18 @@ class ClientController extends Controller
         }
 
         $validated = $request->validate([
-            'file' => 'required|file|mimes:jpg,jpeg,png,webp|max:5120',
+            'file' => [
+                'required',
+                'file',
+                'mimes:' . self::PROFILE_MEDIA_ALLOWED_EXTENSIONS,
+                function ($attribute, $value, $fail) use ($request) {
+                    $this->validateProfileMediaUpload($value, $request->boolean('set_main'), $fail);
+                },
+            ],
             'set_main' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
+        ], [
+            'file.mimes' => 'The file must be a JPEG, PNG, WEBP image, or MP4 video.',
         ]);
 
         try {
@@ -3002,5 +3015,37 @@ class ClientController extends Controller
                 return [];
             }
         });
+    }
+
+    private function validateProfileMediaUpload($file, bool $setMain, \Closure $fail): void
+    {
+        if (!$file instanceof \Illuminate\Http\UploadedFile) {
+            return;
+        }
+
+        $isVideo = $this->isProfileMediaVideoUpload($file);
+        if ($isVideo && strtolower((string) $file->getClientOriginalExtension()) !== 'mp4') {
+            $fail('The file must be a JPEG, PNG, WEBP image, or MP4 video.');
+            return;
+        }
+
+        $maxKb = $isVideo ? self::PROFILE_MEDIA_VIDEO_MAX_KB : self::PROFILE_MEDIA_IMAGE_MAX_KB;
+        $sizeKb = (int) ceil(((int) ($file->getSize() ?? 0)) / 1024);
+
+        if ($sizeKb > $maxKb) {
+            $fail($isVideo ? 'MP4 videos must not exceed 50MB.' : 'Images must not exceed 5MB.');
+        }
+
+        if ($isVideo && $setMain) {
+            $fail('Videos cannot be set as the main profile image.');
+        }
+    }
+
+    private function isProfileMediaVideoUpload(\Illuminate\Http\UploadedFile $file): bool
+    {
+        $mimeType = strtolower((string) $file->getMimeType());
+        $extension = strtolower((string) $file->getClientOriginalExtension());
+
+        return str_starts_with($mimeType, 'video/') || $extension === 'mp4';
     }
 }

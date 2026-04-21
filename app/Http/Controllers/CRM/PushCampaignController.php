@@ -34,6 +34,7 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 class PushCampaignController extends Controller
 {
     private const EXPRESS_PASTE_MAX_ROWS = 20;
+    private const PROFILE_IMAGE_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp';
 
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
@@ -1296,8 +1297,11 @@ class PushCampaignController extends Controller
         $this->ensureCampaignItemMutable($pushCampaignItem, 'Sent items cannot be edited.');
 
         $validated = $request->validate([
-            'file' => 'required|file|mimes:jpg,jpeg,png,webp|max:5120',
+            'file' => 'required|file|mimes:' . self::PROFILE_IMAGE_ALLOWED_EXTENSIONS . '|max:5120',
             'apply_to_item' => 'nullable|boolean',
+        ], [
+            'file.mimes' => 'Campaign profile media must be a JPEG, PNG, or WEBP image.',
+            'file.max' => 'Campaign profile images must not exceed 5MB.',
         ]);
 
         $context = $this->resolveItemWpContext($pushCampaign, $pushCampaignItem, true);
@@ -2871,9 +2875,22 @@ class PushCampaignController extends Controller
                     'uploaded_at' => isset($row['uploaded_at']) ? trim((string) $row['uploaded_at']) : null,
                 ];
             })
-            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0 && !$this->isBlankValue($media['url'] ?? null))
+            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0
+                && !$this->isBlankValue($media['url'] ?? null)
+                && $this->isPushCampaignImageMedia($media))
             ->values()
             ->all();
+    }
+
+    private function isPushCampaignImageMedia(array $media): bool
+    {
+        $mimeType = strtolower(trim((string) ($media['mime_type'] ?? '')));
+        if ($mimeType !== '') {
+            return str_starts_with($mimeType, 'image/');
+        }
+
+        $url = strtolower(trim((string) ($media['url'] ?? '')));
+        return (bool) preg_match('/\.(jpe?g|png|webp)(?:$|[?#])/', $url);
     }
 
     /**
