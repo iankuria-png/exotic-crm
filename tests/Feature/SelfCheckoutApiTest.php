@@ -269,7 +269,7 @@ class SelfCheckoutApiTest extends TestCase
             'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) {
                 $payload = json_decode($request->body(), true);
 
-                TestCase::assertSame('254748612016', $payload['phoneNumber'] ?? null);
+                TestCase::assertArrayNotHasKey('phoneNumber', $payload);
                 TestCase::assertSame('KEN', $payload['country'] ?? null);
 
                 return Http::response([

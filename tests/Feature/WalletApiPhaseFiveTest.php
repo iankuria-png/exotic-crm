@@ -1217,7 +1217,7 @@ class WalletApiPhaseFiveTest extends TestCase
                 $payload = json_decode($request->body(), true);
 
                 TestCase::assertSame('Bearer pawapay-sandbox-key', $request->header('Authorization')[0] ?? null);
-                TestCase::assertSame('254700000111', $payload['phoneNumber'] ?? null);
+                TestCase::assertArrayNotHasKey('phoneNumber', $payload);
                 TestCase::assertSame('KEN', $payload['country'] ?? null);
                 TestCase::assertStringContainsString('/billing/complete?payment=', $payload['returnUrl'] ?? '');
                 TestCase::assertSame('900.00', data_get($payload, 'amountDetails.amount'));

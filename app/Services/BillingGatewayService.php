@@ -129,10 +129,16 @@ class BillingGatewayService
             'description' => 'Wallet top-up',
         ]));
 
-        $action = app(ProviderRoutingDispatcher::class)->dispatch($payment, $dispatchContext, array_merge($options, [
+        $routingOptions = array_merge($options, [
             'request' => $request,
             'description' => 'Wallet top-up',
-        ]));
+        ]);
+
+        if ($provider === 'pawapay' && !array_key_exists('prefill_phone', $routingOptions)) {
+            $routingOptions['prefill_phone'] = false;
+        }
+
+        $action = app(ProviderRoutingDispatcher::class)->dispatch($payment, $dispatchContext, $routingOptions);
 
         return [
             'payment' => $payment->fresh(['platform', 'client']),

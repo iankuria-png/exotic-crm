@@ -89,7 +89,7 @@ class PaymentLinkProxyController extends Controller
                 $context['provider_key'] = $providerKey;
                 $callbackUrl = $this->resolveHostedCheckoutCallbackUrl($platform, $context, $payment, $environment);
                 
-                $action = $this->hostedCheckoutExecutor->execute($payment, $context, [
+                $options = [
                     'callback_url' => $callbackUrl,
                     'metadata' => [
                         'channel' => 'payment_link',
@@ -98,7 +98,13 @@ class PaymentLinkProxyController extends Controller
                     'description' => $payment->purpose === 'subscription'
                         ? 'Subscription payment'
                         : 'Payment link checkout',
-                ]);
+                ];
+
+                if ($providerKey === 'pawapay') {
+                    $options['prefill_phone'] = false;
+                }
+
+                $action = $this->hostedCheckoutExecutor->execute($payment, $context, $options);
             } catch (\Throwable $exception) {
                 return response($exception->getMessage(), 502);
             }

@@ -168,6 +168,7 @@ class PaymentLinkProxyRouteTest extends TestCase
                     'https://billing-sandbox.example.test/billing/complete?payment=' . urlencode((string) $payment->transaction_uuid),
                     $payload['returnUrl'] ?? null
                 );
+                TestCase::assertArrayNotHasKey('phoneNumber', $payload);
 
                 return Http::response([
                     'depositId' => $depositId,

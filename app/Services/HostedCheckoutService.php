@@ -132,7 +132,7 @@ class HostedCheckoutService
             ],
         ];
 
-        $shouldPrefillPhone = (bool) ($options['prefill_phone'] ?? true);
+        $shouldPrefillPhone = (bool) ($options['prefill_phone'] ?? false);
         $phoneNumber = preg_replace('/\D+/', '', (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')));
         if ($shouldPrefillPhone && is_string($phoneNumber) && $phoneNumber !== '') {
             $payload['phoneNumber'] = $phoneNumber;
