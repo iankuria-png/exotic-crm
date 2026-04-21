@@ -113,6 +113,7 @@ class BillingGatewayService
                 'requested_amount' => number_format($amount, 2, '.', ''),
                 'provider' => $provider,
                 'auto_subscribe' => $autoSubscribe,
+                'wp_return_url' => $options['return_url'] ?? null,
                 'topup_limits' => [
                     'provider_min' => $providerConfig['min_amount'] ?? null,
                     'provider_max' => $providerConfig['max_amount'] ?? null,

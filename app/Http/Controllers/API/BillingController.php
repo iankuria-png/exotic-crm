@@ -31,6 +31,7 @@ class BillingController extends Controller
             'provider' => 'required|string|max:30',
             'amount' => 'required|numeric|min:0.01',
             'phone' => 'nullable|string|max:30',
+            'return_url' => 'nullable|url|max:2000',
             'auto_subscribe' => 'nullable|array',
             'auto_subscribe.enabled' => 'nullable|boolean',
             'auto_subscribe.product_id' => 'nullable|integer',
@@ -49,6 +50,7 @@ class BillingController extends Controller
             $result = $this->billingGatewayService->initiateTopup($client, $provider, (float) $validated['amount'], [
                 'idempotency_key' => (string) $request->attributes->get('wallet_idempotency_key'),
                 'phone' => $validated['phone'] ?? null,
+                'return_url' => $validated['return_url'] ?? null,
                 'auto_subscribe' => $validated['auto_subscribe'] ?? null,
             ], $request);
         } catch (RuntimeException|InvalidArgumentException $exception) {
@@ -347,7 +349,9 @@ class BillingController extends Controller
 
     private function paymentReturnUrl(Payment $payment): ?string
     {
-        $profileUrl = $payment->client?->wp_profile_url;
+        $storedReturnUrl = (string) data_get($payment->payment_data, 'wp_return_url', '');
+        $profileUrl = $storedReturnUrl !== '' ? $storedReturnUrl : $payment->client?->wp_profile_url;
+
         if (!$profileUrl) {
             return null;
         }
