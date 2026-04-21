@@ -129,6 +129,21 @@ function titleize(value) {
         .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function resolvePredictedSubscriptionLifecycle(record, fallback = 'new') {
+    const lifecycle = String(record?.subscription_lifecycle || '').toLowerCase();
+    if (lifecycle === 'new' || lifecycle === 'renewal') {
+        return lifecycle;
+    }
+
+    return fallback;
+}
+
+function subscriptionLifecycleHelperText(lifecycle) {
+    return lifecycle === 'renewal'
+        ? 'Prefilled as Renewal because this client already has prior subscription history in this market.'
+        : 'Prefilled as New because no prior subscription history was found for this client in this market.';
+}
+
 function paymentResolutionBadge(resolutionCode) {
     const normalized = String(resolutionCode || '').toLowerCase();
     if (!normalized) {
@@ -655,7 +670,13 @@ export default function Payments() {
         phone: '',
         reason: 'Send payment link from CRM',
     });
-    const [createSubDialog, setCreateSubDialog] = useState({ open: false, payment: null, reason: 'Create subscription from matched payment' });
+    const [createSubDialog, setCreateSubDialog] = useState({
+        open: false,
+        payment: null,
+        reason: 'Create subscription from matched payment',
+        subscriptionLifecycle: 'new',
+        subscriptionLifecycleReason: '',
+    });
     const [diagnosticsDrawer, setDiagnosticsDrawer] = useState({ open: false, payment: null });
     const [providerStatusSnapshot, setProviderStatusSnapshot] = useState(null);
     const [sandboxReconcileSnapshot, setSandboxReconcileSnapshot] = useState(null);
@@ -901,12 +922,22 @@ export default function Payments() {
     });
 
     const createSubscriptionMutation = useMutation({
-        mutationFn: ({ paymentId, reason }) =>
-            api.post(`/crm/payments/${paymentId}/create-subscription`, { reason: reason || undefined }).then((response) => response.data),
+        mutationFn: ({ paymentId, reason, subscriptionLifecycle, subscriptionLifecycleReason }) =>
+            api.post(`/crm/payments/${paymentId}/create-subscription`, {
+                reason: reason || undefined,
+                subscription_lifecycle: subscriptionLifecycle || undefined,
+                subscription_lifecycle_reason: subscriptionLifecycleReason || undefined,
+            }).then((response) => response.data),
         onSuccess: (result, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
-            setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' });
+            setCreateSubDialog({
+                open: false,
+                payment: null,
+                reason: 'Create subscription from matched payment',
+                subscriptionLifecycle: 'new',
+                subscriptionLifecycleReason: '',
+            });
             toast.success(`Subscription created (Deal #${result.deal?.id}). Expires ${new Date(result.deal?.expires_at).toLocaleDateString()}.`);
         },
         onError: (error) => {
@@ -1288,7 +1319,13 @@ export default function Payments() {
                 return;
             }
             closeDiagnostics();
-            setCreateSubDialog({ open: true, payment: paymentRow, reason: 'Create subscription from diagnostics drawer' });
+                            setCreateSubDialog({
+                                open: true,
+                                payment: paymentRow,
+                                reason: 'Create subscription from diagnostics drawer',
+                                subscriptionLifecycle: resolvePredictedSubscriptionLifecycle(paymentRow),
+                                subscriptionLifecycleReason: '',
+                            });
             return;
         }
 
@@ -1814,7 +1851,13 @@ export default function Payments() {
                                 toast.warning('Subscription creation is limited to high-confidence reconciled payments.');
                                 return;
                             }
-                            setCreateSubDialog({ open: true, payment: row, reason: 'Create subscription from matched payment' });
+                            setCreateSubDialog({
+                                open: true,
+                                payment: row,
+                                reason: 'Create subscription from matched payment',
+                                subscriptionLifecycle: resolvePredictedSubscriptionLifecycle(row),
+                                subscriptionLifecycleReason: '',
+                            });
                         },
                     };
                 } else if (isLowConfidence) {
@@ -3285,22 +3328,84 @@ export default function Payments() {
                     ? `Activate a subscription for payment #${createSubDialog.payment.id} (${formatCurrency(createSubDialog.payment.amount, resolveCurrency(createSubDialog.payment.currency))}) matched to ${createSubDialog.payment.client?.name || 'client'}.`
                     : ''}
                 confirmLabel="Create subscription"
-                onCancel={() => setCreateSubDialog({ open: false, payment: null, reason: 'Create subscription from matched payment' })}
+                onCancel={() => setCreateSubDialog({
+                    open: false,
+                    payment: null,
+                    reason: 'Create subscription from matched payment',
+                    subscriptionLifecycle: 'new',
+                    subscriptionLifecycleReason: '',
+                })}
                 onConfirm={() => {
                     if (createSubDialog.payment) {
                         if (isTestPayment(createSubDialog.payment)) {
                             toast.info('Test-classified payments cannot create live subscriptions.');
                             return;
                         }
+                        const predictedLifecycle = resolvePredictedSubscriptionLifecycle(createSubDialog.payment);
+                        const lifecycleOverridden = createSubDialog.subscriptionLifecycle !== predictedLifecycle;
+                        if (lifecycleOverridden && !createSubDialog.subscriptionLifecycleReason.trim()) {
+                            toast.error('Add a short reason when overriding the lifecycle classification.');
+                            return;
+                        }
                         createSubscriptionMutation.mutate({
                             paymentId: createSubDialog.payment.id,
                             reason: createSubDialog.reason.trim() || undefined,
+                            subscriptionLifecycle: createSubDialog.subscriptionLifecycle,
+                            subscriptionLifecycleReason: lifecycleOverridden ? createSubDialog.subscriptionLifecycleReason.trim() : undefined,
                         });
                     }
                 }}
-                confirmDisabled={createSubscriptionMutation.isPending}
+                confirmDisabled={
+                    createSubscriptionMutation.isPending
+                    || (
+                        createSubDialog.payment
+                        && createSubDialog.subscriptionLifecycle !== resolvePredictedSubscriptionLifecycle(createSubDialog.payment)
+                        && !createSubDialog.subscriptionLifecycleReason.trim()
+                    )
+                }
                 isPending={createSubscriptionMutation.isPending}
             >
+                {createSubDialog.payment ? (
+                    <div className="mb-4 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div>
+                            <p className="text-sm font-semibold text-slate-800">Subscriber Type</p>
+                            <p className="mt-1 text-xs text-slate-500">
+                                {subscriptionLifecycleHelperText(resolvePredictedSubscriptionLifecycle(createSubDialog.payment))}
+                            </p>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            {['new', 'renewal'].map((option) => (
+                                <button
+                                    key={option}
+                                    type="button"
+                                    onClick={() => setCreateSubDialog((current) => ({ ...current, subscriptionLifecycle: option }))}
+                                    className={`rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                        createSubDialog.subscriptionLifecycle === option
+                                            ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                    }`}
+                                >
+                                    {option === 'new' ? 'New' : 'Renewal'}
+                                </button>
+                            ))}
+                        </div>
+                        {createSubDialog.subscriptionLifecycle !== resolvePredictedSubscriptionLifecycle(createSubDialog.payment) ? (
+                            <div>
+                                <label htmlFor="create-sub-lifecycle-reason" className="mb-1 block text-sm font-medium text-slate-700">
+                                    Override reason
+                                </label>
+                                <textarea
+                                    id="create-sub-lifecycle-reason"
+                                    rows={2}
+                                    value={createSubDialog.subscriptionLifecycleReason}
+                                    onChange={(event) => setCreateSubDialog((current) => ({ ...current, subscriptionLifecycleReason: event.target.value }))}
+                                    className="crm-input"
+                                    placeholder="Explain why this should be classified differently"
+                                />
+                            </div>
+                        ) : null}
+                    </div>
+                ) : null}
                 <label htmlFor="create-sub-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason (optional)</label>
                 <textarea
                     id="create-sub-reason"

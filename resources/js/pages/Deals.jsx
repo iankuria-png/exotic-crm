@@ -80,6 +80,21 @@ function formatCurrency(amount, currency = 'KES') {
     return `${currency} ${Number(amount).toLocaleString()}`;
 }
 
+function resolveDialogPredictedLifecycle(dialogType, deal) {
+    const persisted = String(deal?.subscription_lifecycle || '').toLowerCase();
+    if (persisted === 'new' || persisted === 'renewal') {
+        return persisted;
+    }
+
+    return dialogType === 'renew' || dialogType === 'extend' ? 'renewal' : 'new';
+}
+
+function subscriptionLifecycleHelperText(lifecycle) {
+    return lifecycle === 'renewal'
+        ? 'Prefilled as Renewal because this client already has prior subscription history in this market.'
+        : 'Prefilled as New because no prior subscription history was found for this client in this market.';
+}
+
 function normalizePlatformFilter(value) {
     const raw = String(value ?? '').trim();
     if (raw === '') {
@@ -170,6 +185,8 @@ export default function Deals() {
     const [renewReason, setRenewReason] = useState('Renewed from subscriptions page');
     const [renewDays, setRenewDays] = useState('30');
     const [paymentMethod, setPaymentMethod] = useState('manual');
+    const [subscriptionLifecycle, setSubscriptionLifecycle] = useState('new');
+    const [subscriptionLifecycleReason, setSubscriptionLifecycleReason] = useState('');
     const [paymentReference, setPaymentReference] = useState('');
     const [freeTrialPin, setFreeTrialPin] = useState('');
     const [paymentLinkProvider, setPaymentLinkProvider] = useState('');
@@ -324,10 +341,12 @@ export default function Deals() {
     }, [defaultPaymentLinkProvider, dialog.type, paymentLinkProvider]);
 
     const activateMutation = useMutation({
-        mutationFn: ({ dealId, activationReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue }) =>
+        mutationFn: ({ dealId, activationReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason: activationReason,
                 payment_method: selectedPaymentMethod,
+                subscription_lifecycle: subscriptionLifecycleValue,
+                ...(subscriptionLifecycleReasonValue ? { subscription_lifecycle_reason: subscriptionLifecycleReasonValue } : {}),
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
@@ -338,6 +357,8 @@ export default function Deals() {
             setDialog({ type: null, deal: null });
             setActivateReason('Activated from subscriptions page');
             setPaymentMethod(activationPaymentMethods[0] || '');
+            setSubscriptionLifecycle('new');
+            setSubscriptionLifecycleReason('');
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -380,11 +401,13 @@ export default function Deals() {
     });
 
     const extendMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue }) =>
+        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
             api.post(`/crm/deals/${dealId}/extend`, {
                 additional_days: additionalDays,
                 reason: extensionReason,
                 payment_method: selectedPaymentMethod,
+                subscription_lifecycle: subscriptionLifecycleValue,
+                ...(subscriptionLifecycleReasonValue ? { subscription_lifecycle_reason: subscriptionLifecycleReasonValue } : {}),
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
@@ -396,6 +419,8 @@ export default function Deals() {
             setExtendDays('7');
             setExtendReason('Extended from subscriptions page');
             setPaymentMethod(renewalPaymentMethods[0] || '');
+            setSubscriptionLifecycle('renewal');
+            setSubscriptionLifecycleReason('');
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -411,11 +436,13 @@ export default function Deals() {
     });
 
     const renewMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue }) =>
+        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
             api.post(`/crm/deals/${dealId}/renew`, {
                 additional_days: additionalDays,
                 reason: renewalReason,
                 payment_method: selectedPaymentMethod,
+                subscription_lifecycle: subscriptionLifecycleValue,
+                ...(subscriptionLifecycleReasonValue ? { subscription_lifecycle_reason: subscriptionLifecycleReasonValue } : {}),
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
@@ -427,6 +454,8 @@ export default function Deals() {
             setRenewDays('30');
             setRenewReason('Renewed from subscriptions page');
             setPaymentMethod(renewalPaymentMethods[0] || '');
+            setSubscriptionLifecycle('renewal');
+            setSubscriptionLifecycleReason('');
             setPaymentReference('');
             setFreeTrialPin('');
             setPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -1289,6 +1318,15 @@ export default function Deals() {
     }, [availableDialogPaymentMethods, dialog.type, paymentMethod]);
 
     useEffect(() => {
+        if (!['activate', 'extend', 'renew'].includes(dialog.type || '')) {
+            return;
+        }
+
+        setSubscriptionLifecycle(resolveDialogPredictedLifecycle(dialog.type, selectedDeal));
+        setSubscriptionLifecycleReason('');
+    }, [dialog.type, selectedDeal]);
+
+    useEffect(() => {
         if (typeof window === 'undefined') {
             return;
         }
@@ -1723,6 +1761,46 @@ export default function Deals() {
                                             </span>
                                         </div>
                                     ) : null}
+
+                                    <div className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-800">Subscriber Type</p>
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                {subscriptionLifecycleHelperText(resolveDialogPredictedLifecycle(dialog.type, selectedDeal))}
+                                            </p>
+                                        </div>
+                                        <div className="grid gap-2 sm:grid-cols-2">
+                                            {['new', 'renewal'].map((option) => (
+                                                <button
+                                                    key={option}
+                                                    type="button"
+                                                    onClick={() => setSubscriptionLifecycle(option)}
+                                                    className={`rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                                        subscriptionLifecycle === option
+                                                            ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                                    }`}
+                                                >
+                                                    {option === 'new' ? 'New' : 'Renewal'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal) ? (
+                                            <div>
+                                                <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="subscription-lifecycle-reason">
+                                                    Override reason
+                                                </label>
+                                                <textarea
+                                                    id="subscription-lifecycle-reason"
+                                                    rows={2}
+                                                    value={subscriptionLifecycleReason}
+                                                    onChange={(event) => setSubscriptionLifecycleReason(event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Explain why this should be classified differently"
+                                                />
+                                            </div>
+                                        ) : null}
+                                    </div>
                                 </div>
                             ) : null}
 
@@ -1887,11 +1965,15 @@ export default function Deals() {
                                         dealId: selectedDeal.id,
                                         activationReason: activateReason.trim(),
                                         selectedPaymentMethod: paymentMethod,
+                                        subscriptionLifecycleValue: subscriptionLifecycle,
+                                        subscriptionLifecycleReasonValue: subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal)
+                                            ? subscriptionLifecycleReason.trim()
+                                            : undefined,
                                         referenceValue: paymentReference.trim(),
                                         freeTrialPinValue: freeTrialPin.trim(),
                                         paymentLinkProviderValue: paymentLinkProvider || undefined,
                                     })}
-                                    disabled={!activateReason.trim() || !paymentReady || activateMutation.isPending}
+                                    disabled={!activateReason.trim() || !paymentReady || activateMutation.isPending || (subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal) && !subscriptionLifecycleReason.trim())}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {activateMutation.isPending ? 'Activating...' : 'Confirm activation'}
@@ -1906,11 +1988,15 @@ export default function Deals() {
                                         additionalDays: Number(extendDays),
                                         extensionReason: extendReason,
                                         selectedPaymentMethod: paymentMethod,
+                                        subscriptionLifecycleValue: subscriptionLifecycle,
+                                        subscriptionLifecycleReasonValue: subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal)
+                                            ? subscriptionLifecycleReason.trim()
+                                            : undefined,
                                         referenceValue: paymentReference.trim(),
                                         freeTrialPinValue: freeTrialPin.trim(),
                                         paymentLinkProviderValue: paymentLinkProvider || undefined,
                                     })}
-                                    disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || !extendReason.trim() || !paymentReady || extendMutation.isPending}
+                                    disabled={!Number.isInteger(Number(extendDays)) || Number(extendDays) < 1 || !extendReason.trim() || !paymentReady || extendMutation.isPending || (subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal) && !subscriptionLifecycleReason.trim())}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {extendMutation.isPending ? 'Extending...' : 'Confirm extension'}
@@ -1925,11 +2011,15 @@ export default function Deals() {
                                         additionalDays: Number(renewDays),
                                         renewalReason: renewReason,
                                         selectedPaymentMethod: paymentMethod,
+                                        subscriptionLifecycleValue: subscriptionLifecycle,
+                                        subscriptionLifecycleReasonValue: subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal)
+                                            ? subscriptionLifecycleReason.trim()
+                                            : undefined,
                                         referenceValue: paymentReference.trim(),
                                         freeTrialPinValue: freeTrialPin.trim(),
                                         paymentLinkProviderValue: paymentLinkProvider || undefined,
                                     })}
-                                    disabled={!Number.isInteger(Number(renewDays)) || Number(renewDays) < 1 || !renewReason.trim() || !paymentReady || renewMutation.isPending}
+                                    disabled={!Number.isInteger(Number(renewDays)) || Number(renewDays) < 1 || !renewReason.trim() || !paymentReady || renewMutation.isPending || (subscriptionLifecycle !== resolveDialogPredictedLifecycle(dialog.type, selectedDeal) && !subscriptionLifecycleReason.trim())}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     {renewMutation.isPending ? 'Renewing...' : 'Confirm renewal'}

@@ -16,6 +16,11 @@ use InvalidArgumentException;
 
 class SubscriptionProvisioningService
 {
+    public function __construct(
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService
+    ) {
+    }
+
     public function activateDeal(Deal $deal, array $options = []): Deal
     {
         $deal->loadMissing(['client.platform', 'product', 'platform']);
@@ -61,6 +66,7 @@ class SubscriptionProvisioningService
         $paymentReference = $options['payment_reference']
             ?? $payment?->transaction_reference
             ?? $payment?->reference_number;
+        $lifecycleAttributes = $this->resolveLifecycleAttributes($deal, $payment, $options);
 
         $deal->forceFill([
             'status' => 'active',
@@ -70,7 +76,7 @@ class SubscriptionProvisioningService
             'payment_reference' => $paymentReference,
             'is_free_trial' => $isFreeTrial,
             'free_trial_approved_by' => $isFreeTrial ? $approvedBy : null,
-        ])->save();
+        ] + $lifecycleAttributes)->save();
 
         $this->updateLinkedPayment($payment, $deal, $client, array_merge($options, [
             'activated_at' => $activatedAt,
@@ -192,7 +198,7 @@ class SubscriptionProvisioningService
                 'status' => 'pending',
                 'assigned_to' => $options['assigned_to'] ?? $client->assigned_to,
                 'payment_reference' => $payment->transaction_reference ?? $payment->reference_number,
-            ]);
+            ] + $this->resolveLifecycleAttributes(null, $payment, $options));
         }
 
         return $this->activateDeal($existingDeal, array_merge($options, [
@@ -225,7 +231,51 @@ class SubscriptionProvisioningService
             'confirmed_at' => $options['confirmed_at'] ?? $payment->confirmed_at,
             'reconciliation_confidence' => $options['reconciliation_confidence'] ?? $payment->reconciliation_confidence,
             'reconciliation_state' => $options['reconciliation_state'] ?? $payment->reconciliation_state,
-        ], static fn ($value) => $value !== null))->save();
+        ] + $this->resolveLifecycleAttributes($deal, $payment, $options), static fn ($value) => $value !== null))->save();
+    }
+
+    /**
+     * @return array<string, string|null>
+     */
+    private function resolveLifecycleAttributes(?Deal $deal, ?Payment $payment, array $options): array
+    {
+        if (!empty($options['subscription_lifecycle'])) {
+            return [
+                'subscription_lifecycle' => $options['subscription_lifecycle'],
+                'subscription_lifecycle_source' => $options['subscription_lifecycle_source'] ?? SubscriptionLifecycleService::SOURCE_PREDICTED,
+                'subscription_lifecycle_reason' => $options['subscription_lifecycle_reason'] ?? null,
+            ];
+        }
+
+        if ($deal && !empty($deal->subscription_lifecycle)) {
+            return [
+                'subscription_lifecycle' => $deal->subscription_lifecycle,
+                'subscription_lifecycle_source' => $deal->subscription_lifecycle_source,
+                'subscription_lifecycle_reason' => $deal->subscription_lifecycle_reason,
+            ];
+        }
+
+        if ($payment && !empty($payment->subscription_lifecycle)) {
+            return [
+                'subscription_lifecycle' => $payment->subscription_lifecycle,
+                'subscription_lifecycle_source' => $payment->subscription_lifecycle_source,
+                'subscription_lifecycle_reason' => $payment->subscription_lifecycle_reason,
+            ];
+        }
+
+        if ($payment) {
+            $resolved = $this->subscriptionLifecycleService->resolveForPayment($payment);
+
+            return $this->subscriptionLifecycleService->toPersistenceAttributes($resolved);
+        }
+
+        if ($deal) {
+            $resolved = $this->subscriptionLifecycleService->resolveForDeal($deal);
+
+            return $this->subscriptionLifecycleService->toPersistenceAttributes($resolved);
+        }
+
+        return [];
     }
 
     private function resolveDurationDaysForDeal(Deal $deal, ?int $explicitDurationDays = null): int

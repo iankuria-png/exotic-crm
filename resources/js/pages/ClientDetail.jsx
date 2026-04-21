@@ -41,6 +41,21 @@ function formatDateTime(value) {
     return date.toLocaleString();
 }
 
+function resolveDialogPredictedLifecycle(dialogType, record) {
+    const persisted = String(record?.subscription_lifecycle || '').toLowerCase();
+    if (persisted === 'new' || persisted === 'renewal') {
+        return persisted;
+    }
+
+    return dialogType === 'renew' || dialogType === 'extend' ? 'renewal' : 'new';
+}
+
+function subscriptionLifecycleHelperText(lifecycle) {
+    return lifecycle === 'renewal'
+        ? 'Prefilled as Renewal because this client already has prior subscription history in this market.'
+        : 'Prefilled as New because no prior subscription history was found for this client in this market.';
+}
+
 function titleize(value) {
     if (!value) return '—';
     return String(value)
@@ -426,6 +441,8 @@ export default function ClientDetail() {
     });
     const [activationReason, setActivationReason] = useState('Activation initiated from client profile');
     const [activationPaymentMethod, setActivationPaymentMethod] = useState('manual');
+    const [activationSubscriptionLifecycle, setActivationSubscriptionLifecycle] = useState('new');
+    const [activationSubscriptionLifecycleReason, setActivationSubscriptionLifecycleReason] = useState('');
     const [activationPaymentReference, setActivationPaymentReference] = useState('');
     const [activationFreeTrialPin, setActivationFreeTrialPin] = useState('');
     const [activationPaymentLinkProvider, setActivationPaymentLinkProvider] = useState('');
@@ -461,6 +478,8 @@ export default function ClientDetail() {
     const [renewDays, setRenewDays] = useState('30');
     const [renewReason, setRenewReason] = useState('Renewed from client profile');
     const [dealPaymentMethod, setDealPaymentMethod] = useState('manual');
+    const [dealSubscriptionLifecycle, setDealSubscriptionLifecycle] = useState('renewal');
+    const [dealSubscriptionLifecycleReason, setDealSubscriptionLifecycleReason] = useState('');
     const [dealPaymentReference, setDealPaymentReference] = useState('');
     const [dealFreeTrialPin, setDealFreeTrialPin] = useState('');
     const [dealPaymentLinkProvider, setDealPaymentLinkProvider] = useState('');
@@ -700,10 +719,12 @@ export default function ClientDetail() {
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPin }) =>
+        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPin, subscriptionLifecycle, subscriptionLifecycleReason }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason,
                 payment_method: paymentMethod,
+                subscription_lifecycle: subscriptionLifecycle,
+                ...(subscriptionLifecycleReason ? { subscription_lifecycle_reason: subscriptionLifecycleReason } : {}),
                 ...(paymentMethod === 'manual' ? { payment_reference: paymentReference } : {}),
                 ...(paymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPin } : {}),
                 ...(paymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProvider ? { payment_link_provider: paymentLinkProvider } : {}),
@@ -717,6 +738,8 @@ export default function ClientDetail() {
             setActivationDialog({ open: false, dealId: null, dealLabel: '' });
             setActivationReason('Activation initiated from client profile');
             setActivationPaymentMethod(activationPaymentMethods[0] || '');
+            setActivationSubscriptionLifecycle('new');
+            setActivationSubscriptionLifecycleReason('');
             setActivationPaymentReference('');
             setActivationFreeTrialPin('');
             setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -785,11 +808,13 @@ export default function ClientDetail() {
     });
 
     const extendDealMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPinValue }) =>
+        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPinValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
             api.post(`/crm/deals/${dealId}/extend`, {
                 additional_days: additionalDays,
                 reason: extensionReason,
                 payment_method: selectedPaymentMethod,
+                subscription_lifecycle: subscriptionLifecycleValue,
+                ...(subscriptionLifecycleReasonValue ? { subscription_lifecycle_reason: subscriptionLifecycleReasonValue } : {}),
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
@@ -804,6 +829,8 @@ export default function ClientDetail() {
             setExtendDays('7');
             setExtendReason('Extended from client profile');
             setDealPaymentMethod(dealActionPaymentMethods[0] || '');
+            setDealSubscriptionLifecycle('renewal');
+            setDealSubscriptionLifecycleReason('');
             setDealPaymentReference('');
             setDealFreeTrialPin('');
             setDealPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -818,11 +845,13 @@ export default function ClientDetail() {
     });
 
     const renewDealMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPinValue }) =>
+        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPinValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
             api.post(`/crm/deals/${dealId}/renew`, {
                 additional_days: additionalDays,
                 reason: renewalReason,
                 payment_method: selectedPaymentMethod,
+                subscription_lifecycle: subscriptionLifecycleValue,
+                ...(subscriptionLifecycleReasonValue ? { subscription_lifecycle_reason: subscriptionLifecycleReasonValue } : {}),
                 ...(selectedPaymentMethod === 'manual' ? { payment_reference: referenceValue } : {}),
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
@@ -837,6 +866,8 @@ export default function ClientDetail() {
             setRenewDays('30');
             setRenewReason('Renewed from client profile');
             setDealPaymentMethod(dealActionPaymentMethods[0] || '');
+            setDealSubscriptionLifecycle('renewal');
+            setDealSubscriptionLifecycleReason('');
             setDealPaymentReference('');
             setDealFreeTrialPin('');
             setDealPaymentLinkProvider(defaultPaymentLinkProvider);
@@ -906,7 +937,7 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client-media', id] });
             setMediaUploadFile(null);
             setMediaUploadSetMain(false);
-            toast.success('Image uploaded to WordPress.');
+            toast.success('Media uploaded to WordPress.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Media upload failed.');
@@ -1069,6 +1100,15 @@ export default function ClientDetail() {
     }, [activationDialog.open, activationPaymentLinkProvider, activationPaymentMethod, activationPaymentMethods, defaultPaymentLinkProvider]);
 
     useEffect(() => {
+        if (!activationDialog.open) {
+            return;
+        }
+
+        setActivationSubscriptionLifecycle(resolveDialogPredictedLifecycle('activate', activationDeal));
+        setActivationSubscriptionLifecycleReason('');
+    }, [activationDeal, activationDialog.open]);
+
+    useEffect(() => {
         if (!dealActionDialog.deal) {
             return;
         }
@@ -1081,6 +1121,15 @@ export default function ClientDetail() {
             setDealPaymentLinkProvider(defaultPaymentLinkProvider);
         }
     }, [dealActionDialog.deal, dealActionPaymentMethods, dealPaymentLinkProvider, dealPaymentMethod, defaultPaymentLinkProvider]);
+
+    useEffect(() => {
+        if (!dealActionDialog.deal) {
+            return;
+        }
+
+        setDealSubscriptionLifecycle(resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal));
+        setDealSubscriptionLifecycleReason('');
+    }, [dealActionDialog.deal, dealActionDialog.type]);
 
     useEffect(() => {
         if (!wpProfileData?.wp_profile) {
@@ -1194,6 +1243,7 @@ export default function ClientDetail() {
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canOpenClientAccess = Boolean(client?.id);
     const mediaItems = mediaData?.data || [];
+    const mediaUploadIsVideo = isVideoUploadFile(mediaUploadFile);
     const wpProfileErrorData = wpProfileError?.response?.data || null;
     const mediaErrorData = mediaError?.response?.data || null;
     const staleWpLink = mediaErrorData?.stale_link || wpProfileErrorData?.stale_link || null;
@@ -1415,10 +1465,22 @@ export default function ClientDetail() {
             return;
         }
 
+        if (
+            activationSubscriptionLifecycle !== resolveDialogPredictedLifecycle('activate', activationDeal)
+            && !activationSubscriptionLifecycleReason.trim()
+        ) {
+            toast.error('Add a short reason when overriding the lifecycle classification.');
+            return;
+        }
+
         activateDealMutation.mutate({
             dealId: activationDialog.dealId,
             reason: activationReason.trim() || 'Activation initiated from client profile',
             paymentMethod: activationPaymentMethod,
+            subscriptionLifecycle: activationSubscriptionLifecycle,
+            subscriptionLifecycleReason: activationSubscriptionLifecycle !== resolveDialogPredictedLifecycle('activate', activationDeal)
+                ? activationSubscriptionLifecycleReason.trim()
+                : undefined,
             paymentReference: activationPaymentReference.trim(),
             freeTrialPin: activationFreeTrialPin.trim(),
             paymentLinkProvider: activationPaymentLinkProvider || undefined,
@@ -1433,7 +1495,11 @@ export default function ClientDetail() {
         || (activationRequiresFreeTrialPin && activationFreeTrialPin.trim().length < 4)
         || (activationRequiresProvider && !activationPaymentLinkProvider)
         || (activationApplyDiscount && activationDiscountValue <= 0)
-        || (activationApplyDiscount && activationDiscountPin.trim().length < 4);
+        || (activationApplyDiscount && activationDiscountPin.trim().length < 4)
+        || (
+            activationSubscriptionLifecycle !== resolveDialogPredictedLifecycle('activate', activationDeal)
+            && !activationSubscriptionLifecycleReason.trim()
+        );
 
     const submitProfileUpdate = () => {
         if (!profileForm) {
@@ -2086,6 +2152,46 @@ export default function ClientDetail() {
                                             ) : null}
                                         </div>
                                     ) : null}
+
+                                    <div className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-800">Subscriber Type</p>
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                {subscriptionLifecycleHelperText(resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal))}
+                                            </p>
+                                        </div>
+                                        <div className="grid gap-2 sm:grid-cols-2">
+                                            {['new', 'renewal'].map((option) => (
+                                                <button
+                                                    key={option}
+                                                    type="button"
+                                                    onClick={() => setDealSubscriptionLifecycle(option)}
+                                                    className={`rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                                        dealSubscriptionLifecycle === option
+                                                            ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                                    }`}
+                                                >
+                                                    {option === 'new' ? 'New' : 'Renewal'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {dealSubscriptionLifecycle !== resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal) ? (
+                                            <div>
+                                                <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="client-deal-lifecycle-reason">
+                                                    Override reason
+                                                </label>
+                                                <textarea
+                                                    id="client-deal-lifecycle-reason"
+                                                    rows={2}
+                                                    value={dealSubscriptionLifecycleReason}
+                                                    onChange={(event) => setDealSubscriptionLifecycleReason(event.target.value)}
+                                                    className="crm-input"
+                                                    placeholder="Explain why this should be classified differently"
+                                                />
+                                            </div>
+                                        ) : null}
+                                    </div>
                                 </div>
                             ) : null}
 
@@ -2181,12 +2287,17 @@ export default function ClientDetail() {
                                         || (dealPaymentRequiresProvider && !dealPaymentLinkProvider)
                                         || (dealApplyDiscount && selectedDealDiscountValue <= 0)
                                         || (dealApplyDiscount && dealDiscountPin.trim().length < 4)
+                                        || (dealSubscriptionLifecycle !== resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal) && !dealSubscriptionLifecycleReason.trim())
                                     }
                                     onClick={() => extendDealMutation.mutate({
                                         dealId: dealActionDialog.deal.id,
                                         additionalDays: Number(extendDays),
                                         extensionReason: extendReason,
                                         selectedPaymentMethod: dealPaymentMethod,
+                                        subscriptionLifecycleValue: dealSubscriptionLifecycle,
+                                        subscriptionLifecycleReasonValue: dealSubscriptionLifecycle !== resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal)
+                                            ? dealSubscriptionLifecycleReason.trim()
+                                            : undefined,
                                         referenceValue: dealPaymentReference,
                                         freeTrialPinValue: dealFreeTrialPin,
                                         paymentLinkProviderValue: dealPaymentLinkProvider,
@@ -2209,12 +2320,17 @@ export default function ClientDetail() {
                                         || (dealPaymentRequiresProvider && !dealPaymentLinkProvider)
                                         || (dealApplyDiscount && selectedDealDiscountValue <= 0)
                                         || (dealApplyDiscount && dealDiscountPin.trim().length < 4)
+                                        || (dealSubscriptionLifecycle !== resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal) && !dealSubscriptionLifecycleReason.trim())
                                     }
                                     onClick={() => renewDealMutation.mutate({
                                         dealId: dealActionDialog.deal.id,
                                         additionalDays: Number(renewDays),
                                         renewalReason: renewReason,
                                         selectedPaymentMethod: dealPaymentMethod,
+                                        subscriptionLifecycleValue: dealSubscriptionLifecycle,
+                                        subscriptionLifecycleReasonValue: dealSubscriptionLifecycle !== resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal)
+                                            ? dealSubscriptionLifecycleReason.trim()
+                                            : undefined,
                                         referenceValue: dealPaymentReference,
                                         freeTrialPinValue: dealFreeTrialPin,
                                         paymentLinkProviderValue: dealPaymentLinkProvider,
@@ -2980,19 +3096,27 @@ export default function ClientDetail() {
                                         <div className="grid gap-2 md:grid-cols-2">
                                             <input
                                                 type="file"
-                                                accept="image/jpeg,image/png,image/webp"
-                                                onChange={(event) => setMediaUploadFile(event.target.files?.[0] || null)}
+                                                accept="image/jpeg,image/png,image/webp,video/mp4"
+                                                onChange={(event) => {
+                                                    const selectedFile = event.target.files?.[0] || null;
+                                                    setMediaUploadFile(selectedFile);
+                                                    if (isVideoUploadFile(selectedFile)) {
+                                                        setMediaUploadSetMain(false);
+                                                    }
+                                                }}
                                                 className="crm-input"
                                             />
-                                            <label className="flex items-center gap-2 text-sm text-slate-700">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={mediaUploadSetMain}
-                                                    onChange={(event) => setMediaUploadSetMain(event.target.checked)}
-                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                />
-                                                Set uploaded image as main
-                                            </label>
+                                            {!mediaUploadIsVideo ? (
+                                                <label className="flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={mediaUploadSetMain}
+                                                        onChange={(event) => setMediaUploadSetMain(event.target.checked)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    Set uploaded image as main
+                                                </label>
+                                            ) : null}
                                         </div>
                                         <div className="mt-2 flex justify-end">
                                             <button
@@ -3001,13 +3125,13 @@ export default function ClientDetail() {
                                                     if (!mediaUploadFile) return;
                                                     uploadMediaMutation.mutate({
                                                         file: mediaUploadFile,
-                                                        setMain: mediaUploadSetMain,
+                                                        setMain: mediaUploadIsVideo ? false : mediaUploadSetMain,
                                                     });
                                                 }}
                                                 disabled={!mediaUploadFile || uploadMediaMutation.isPending}
                                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                             >
-                                                {uploadMediaMutation.isPending ? 'Uploading...' : 'Upload image'}
+                                                {uploadMediaMutation.isPending ? 'Uploading...' : 'Upload media'}
                                             </button>
                                         </div>
                                     </div>
@@ -3050,7 +3174,7 @@ export default function ClientDetail() {
                                         </div>
                                     ) : (
                                         <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
-                                            No media uploaded yet. Drag and drop or click to upload an image.
+                                            No media uploaded yet. Choose a file above to upload an image or MP4 video.
                                         </p>
                                     )}
                                 </div>
@@ -3393,6 +3517,46 @@ export default function ClientDetail() {
                                     </div>
                                 ) : null}
 
+                                <div className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-800">Subscriber Type</p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            {subscriptionLifecycleHelperText(resolveDialogPredictedLifecycle('activate', activationDeal))}
+                                        </p>
+                                    </div>
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                        {['new', 'renewal'].map((option) => (
+                                            <button
+                                                key={option}
+                                                type="button"
+                                                onClick={() => setActivationSubscriptionLifecycle(option)}
+                                                className={`rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                                    activationSubscriptionLifecycle === option
+                                                        ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                                                }`}
+                                            >
+                                                {option === 'new' ? 'New' : 'Renewal'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {activationSubscriptionLifecycle !== resolveDialogPredictedLifecycle('activate', activationDeal) ? (
+                                        <div>
+                                            <label htmlFor="client-detail-lifecycle-reason" className="mb-1 block text-sm font-medium text-slate-700">
+                                                Override reason
+                                            </label>
+                                            <textarea
+                                                id="client-detail-lifecycle-reason"
+                                                rows={2}
+                                                value={activationSubscriptionLifecycleReason}
+                                                onChange={(event) => setActivationSubscriptionLifecycleReason(event.target.value)}
+                                                className="crm-input"
+                                                placeholder="Explain why this should be classified differently"
+                                            />
+                                        </div>
+                                    ) : null}
+                                </div>
+
                             </div>
 
                             <div>
@@ -3541,6 +3705,19 @@ function resolveMediaKind(media) {
     }
 
     return 'image';
+}
+
+function isVideoUploadFile(file) {
+    if (!file) {
+        return false;
+    }
+
+    const mimeType = String(file.type || '').toLowerCase();
+    if (mimeType.startsWith('video/')) {
+        return true;
+    }
+
+    return /\.mp4$/i.test(String(file.name || ''));
 }
 
 function ClientMediaCard({

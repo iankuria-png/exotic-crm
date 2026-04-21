@@ -25,7 +25,8 @@ class DealPaymentService
         private readonly LegacyStkService $legacyStkService,
         private readonly PaymentLinkService $paymentLinkService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService
     ) {
     }
 
@@ -60,6 +61,11 @@ class DealPaymentService
             $durationDays = null;
         }
 
+        $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
+            $client,
+            (int) $client->platform_id
+        );
+
         $deal = Deal::create([
             'platform_id' => $client->platform_id,
             'client_id' => $client->id,
@@ -71,6 +77,9 @@ class DealPaymentService
             'duration' => $resolvedDuration,
             'status' => 'pending',
             'assigned_to' => $actorId,
+            'subscription_lifecycle' => $lifecycle['subscription_lifecycle'],
+            'subscription_lifecycle_source' => $lifecycle['subscription_lifecycle_source'],
+            'subscription_lifecycle_reason' => $lifecycle['subscription_lifecycle_reason'],
         ]);
 
         TimelineEvent::create([
@@ -148,6 +157,9 @@ class DealPaymentService
             'reference_sequence' => $overrides['reference_sequence'] ?? null,
             'status' => $overrides['status'] ?? 'completed',
             'duration' => $deal->duration,
+            'subscription_lifecycle' => $overrides['subscription_lifecycle'] ?? $deal->subscription_lifecycle,
+            'subscription_lifecycle_source' => $overrides['subscription_lifecycle_source'] ?? $deal->subscription_lifecycle_source,
+            'subscription_lifecycle_reason' => $overrides['subscription_lifecycle_reason'] ?? $deal->subscription_lifecycle_reason,
             'raw_payload' => $rawPayload,
             'match_confidence' => $overrides['match_confidence'] ?? 'manual',
             'confirmed_by' => $overrides['confirmed_by'] ?? $actorId,
@@ -162,7 +174,8 @@ class DealPaymentService
         string $method,
         Request $request,
         ?string $paymentLinkProvider = null,
-        array $paymentLinkSelection = []
+        array $paymentLinkSelection = [],
+        array $paymentOverrides = []
     ): array {
         $client->loadMissing('platform');
 
@@ -187,6 +200,9 @@ class DealPaymentService
             'transaction_reference' => strtoupper($method) . '-' . $deal->id . '-' . now()->format('YmdHis'),
             'status' => 'initiated',
             'duration' => $deal->duration,
+            'subscription_lifecycle' => $paymentOverrides['subscription_lifecycle'] ?? $deal->subscription_lifecycle,
+            'subscription_lifecycle_source' => $paymentOverrides['subscription_lifecycle_source'] ?? $deal->subscription_lifecycle_source,
+            'subscription_lifecycle_reason' => $paymentOverrides['subscription_lifecycle_reason'] ?? $deal->subscription_lifecycle_reason,
             'raw_payload' => [
                 'source' => 'deal_payment_initiation',
                 'method' => $method,
@@ -391,7 +407,8 @@ class DealPaymentService
         Request $request,
         ?string $paymentLinkProvider,
         array $paymentLinkSelection = [],
-        bool $allowPreparedLinkFallback = false
+        bool $allowPreparedLinkFallback = false,
+        array $paymentOverrides = []
     ): array {
         $beforeState = [
             'deal_status' => $deal->status,
@@ -401,7 +418,7 @@ class DealPaymentService
             'payment_method' => 'link',
         ];
 
-        $initiation = $this->initiatePaymentForDeal($deal, $client, 'link', $request, $paymentLinkProvider, $paymentLinkSelection);
+        $initiation = $this->initiatePaymentForDeal($deal, $client, 'link', $request, $paymentLinkProvider, $paymentLinkSelection, $paymentOverrides);
         $paymentReady = (bool) ($initiation['payment_ready'] ?? false);
         if (!($initiation['success'] ?? false) && !($allowPreparedLinkFallback && $paymentReady)) {
             throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));

@@ -52,6 +52,7 @@ use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 use App\Services\ManualPaymentSubmissionService;
 use App\Services\ManualPaymentBundleService;
+use App\Services\SubscriptionLifecycleService;
 use App\Services\SubscriptionDeactivationService;
 
 class PaymentQueueController extends Controller
@@ -75,6 +76,7 @@ class PaymentQueueController extends Controller
         private readonly WalletSettingsService $walletSettingsService,
         private readonly ManualPaymentSubmissionService $manualPaymentSubmissionService,
         private readonly ManualPaymentBundleService $manualPaymentBundleService,
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
         private readonly SubscriptionDeactivationService $subscriptionDeactivationService
     ) {
     }
@@ -328,6 +330,17 @@ class PaymentQueueController extends Controller
                     'customer_state',
                     $this->manualPaymentSubmissionService->resolveCustomerState($payment)
                 );
+            }
+
+            if (!$payment->subscription_lifecycle && $payment->client_id) {
+                try {
+                    $resolved = $this->subscriptionLifecycleService->resolveForPayment($payment);
+                    $payment->setAttribute('subscription_lifecycle', $resolved['subscription_lifecycle']);
+                    $payment->setAttribute('subscription_lifecycle_source', $resolved['subscription_lifecycle_source']);
+                    $payment->setAttribute('subscription_lifecycle_reason', $resolved['subscription_lifecycle_reason']);
+                } catch (\Throwable) {
+                    // Leave the workspace row unchanged when prediction context is incomplete.
+                }
             }
 
             return $payment;
@@ -603,6 +616,8 @@ class PaymentQueueController extends Controller
 
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
+            'subscription_lifecycle' => 'nullable|in:new,renewal',
+            'subscription_lifecycle_reason' => 'nullable|string|max:500',
         ]);
 
         if ($payment->status !== 'completed') {
@@ -633,17 +648,29 @@ class PaymentQueueController extends Controller
         ];
 
         try {
-            $deal = DB::transaction(fn () => $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
-                'actor_id' => (int) $request->user()->id,
-                'confirmed_by' => (int) $request->user()->id,
-                'confirmed_at' => $payment->confirmed_at ?? now(),
-                'match_confidence' => $payment->match_confidence ?: 'manual',
-                'reconciliation_confidence' => $payment->reconciliation_confidence ?: $reconciliationConfidence,
-                'reconciliation_state' => 'resolved',
-                'emit_payment_received_timeline' => true,
-                'emit_profile_activated_timeline' => false,
-                'emit_deal_activated_timeline' => true,
-            ]));
+            $deal = DB::transaction(function () use ($payment, $request, $validated, $reconciliationConfidence) {
+                $lifecycle = $this->subscriptionLifecycleService->resolveForPayment(
+                    $payment,
+                    $validated['subscription_lifecycle'] ?? null,
+                    $validated['subscription_lifecycle_reason'] ?? null
+                );
+
+                $payment->forceFill(
+                    $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
+                )->save();
+
+                return $this->subscriptionProvisioningService->provisionCompletedPayment($payment, [
+                    'actor_id' => (int) $request->user()->id,
+                    'confirmed_by' => (int) $request->user()->id,
+                    'confirmed_at' => $payment->confirmed_at ?? now(),
+                    'match_confidence' => $payment->match_confidence ?: 'manual',
+                    'reconciliation_confidence' => $payment->reconciliation_confidence ?: $reconciliationConfidence,
+                    'reconciliation_state' => 'resolved',
+                    'emit_payment_received_timeline' => true,
+                    'emit_profile_activated_timeline' => false,
+                    'emit_deal_activated_timeline' => true,
+                ] + $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle));
+            });
         } catch (InvalidArgumentException $exception) {
             return response()->json([
                 'message' => $exception->getMessage(),

@@ -22,7 +22,8 @@ class ManualPaymentSubmissionService
 {
     public function __construct(
         private readonly BillingConfigurationRepository $billingConfigurationRepository,
-        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService
     ) {
     }
 
@@ -114,6 +115,10 @@ class ManualPaymentSubmissionService
                     $transactionUuid
                 );
                 $activatedOnSubmit = (bool) $method->auto_activate_on_submission;
+                $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
+                    $client,
+                    (int) $platform->id
+                );
 
                 $payment = Payment::query()->create([
                     'user_id' => (int) ($client->wp_user_id ?? 0),
@@ -129,6 +134,9 @@ class ManualPaymentSubmissionService
                     'reference_number' => $internalReference,
                     'status' => 'pending',
                     'purpose' => 'subscription',
+                    'subscription_lifecycle' => $lifecycle['subscription_lifecycle'],
+                    'subscription_lifecycle_source' => $lifecycle['subscription_lifecycle_source'],
+                    'subscription_lifecycle_reason' => $lifecycle['subscription_lifecycle_reason'],
                     'source' => 'manual_confirmation',
                     'provider_key' => 'manual_confirmation',
                     'match_confidence' => 'manual',
@@ -390,6 +398,9 @@ class ManualPaymentSubmissionService
             'assigned_to' => $client->assigned_to,
             'origin' => 'manual_submission',
             'payment_reference' => $payment->transaction_reference,
+            'subscription_lifecycle' => $payment->subscription_lifecycle,
+            'subscription_lifecycle_source' => $payment->subscription_lifecycle_source,
+            'subscription_lifecycle_reason' => $payment->subscription_lifecycle_reason,
         ]);
 
         $payment->forceFill([

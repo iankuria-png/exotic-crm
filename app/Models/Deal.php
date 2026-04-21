@@ -28,7 +28,8 @@ class Deal extends Model
         'assigned_to', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
         'discount_percentage', 'original_amount', 'discount_approved_by',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
-        'origin', 'cancellation_reason_code', 'cancellation_notes', 'cancelled_payment_id',
+        'origin', 'subscription_lifecycle', 'subscription_lifecycle_source', 'subscription_lifecycle_reason',
+        'cancellation_reason_code', 'cancellation_notes', 'cancelled_payment_id',
     ];
 
     protected $casts = [

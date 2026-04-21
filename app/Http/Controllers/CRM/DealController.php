@@ -18,6 +18,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\SubscriptionDeactivationService;
 use App\Services\ManualPaymentBundleService;
+use App\Services\SubscriptionLifecycleService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\DeactivationRequest;
@@ -40,6 +41,7 @@ class DealController extends Controller
         private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
         private readonly ManualPaymentBundleService $manualPaymentBundleService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
+        private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
         private readonly WalletSettingsService $walletSettingsService
     ) {
     }
@@ -221,6 +223,8 @@ class DealController extends Controller
             'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
             'duration_days' => 'nullable|integer|min:1|max:365',
+            'subscription_lifecycle' => 'nullable|in:new,renewal',
+            'subscription_lifecycle_reason' => 'nullable|string|max:500',
         ]);
 
         if ($missingColumnsResponse = $this->missingSprint6DealColumnsResponse()) {
@@ -289,6 +293,15 @@ class DealController extends Controller
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $payment = null;
             $discountAudit = null;
+            $lifecycle = $this->subscriptionLifecycleService->resolveForDeal(
+                $deal,
+                $validated['subscription_lifecycle'] ?? null,
+                $validated['subscription_lifecycle_reason'] ?? null
+            );
+
+            $deal->forceFill(
+                $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
+            )->save();
 
             if ($paymentMethod !== 'free_trial') {
                 $discountAudit = $this->syncDealDiscount(
@@ -306,7 +319,15 @@ class DealController extends Controller
                     (int) $request->user()->id
                 );
             } elseif ($paymentMethod === 'link') {
-                $result = $this->dealPaymentService->startLinkPaymentForDeal($deal, $client, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
+                $result = $this->dealPaymentService->startLinkPaymentForDeal(
+                    $deal,
+                    $client,
+                    $request,
+                    $paymentLinkProvider,
+                    $paymentLinkSelection ?? [],
+                    false,
+                    $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
+                );
                 if ($discountAudit && $discountAudit['applied']) {
                     $this->recordDiscountAudit(
                         $request,
@@ -329,7 +350,15 @@ class DealController extends Controller
                     'payment' => $payment,
                 ], 202);
             } elseif ($paymentMethod === 'stk') {
-                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal(
+                    $deal,
+                    $client,
+                    $paymentMethod,
+                    $request,
+                    $paymentLinkProvider,
+                    $paymentLinkSelection ?? [],
+                    $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
+                );
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -353,6 +382,8 @@ class DealController extends Controller
                     'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
                     'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
+                    'subscription_lifecycle' => $deal->subscription_lifecycle,
+                    'subscription_lifecycle_source' => $deal->subscription_lifecycle_source,
                     'payment_link_provider' => $paymentLinkProvider,
                     'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
                     'payment_link_provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
@@ -417,6 +448,9 @@ class DealController extends Controller
                     'transaction_reference' => 'FREE-TRIAL-' . $deal->id,
                     'status' => 'completed',
                     'duration' => $deal->duration,
+                    'subscription_lifecycle' => $lifecycle['subscription_lifecycle'],
+                    'subscription_lifecycle_source' => $lifecycle['subscription_lifecycle_source'],
+                    'subscription_lifecycle_reason' => $lifecycle['subscription_lifecycle_reason'],
                     'raw_payload' => [
                         'source' => 'deal_free_trial',
                         'deal_id' => (int) $deal->id,
@@ -630,6 +664,8 @@ class DealController extends Controller
             'discount_percentage' => 'nullable|numeric|min:1|max:99',
             'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
+            'subscription_lifecycle' => 'nullable|in:new,renewal',
+            'subscription_lifecycle_reason' => 'nullable|string|max:500',
         ]);
 
         if ($missingColumnsResponse = $this->missingSprint6DealColumnsResponse()) {
@@ -682,6 +718,13 @@ class DealController extends Controller
             $wpSync = WpSyncService::forPlatform($client->platform_id);
             $wpSync->extendClient($client->wp_post_id, (int) $validated['additional_days']);
             $discountAudit = null;
+            $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
+                $client,
+                (int) $client->platform_id,
+                $validated['subscription_lifecycle'] ?? null,
+                $validated['subscription_lifecycle_reason'] ?? null,
+                ['force_lifecycle' => SubscriptionLifecycleService::LIFECYCLE_RENEWAL]
+            );
 
             if ($paymentMethod !== 'free_trial') {
                 $discountAudit = $this->syncDealDiscount(
@@ -697,10 +740,19 @@ class DealController extends Controller
                     $deal,
                     $client,
                     (string) $validated['payment_reference'],
-                    (int) $request->user()->id
+                    (int) $request->user()->id,
+                    $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
                 );
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->dealPaymentService->initiatePaymentForDeal($deal, $client, $paymentMethod, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal(
+                    $deal,
+                    $client,
+                    $paymentMethod,
+                    $request,
+                    $paymentLinkProvider,
+                    $paymentLinkSelection ?? [],
+                    $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
+                );
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
@@ -739,6 +791,7 @@ class DealController extends Controller
                     'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
                     'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                     'payment_method' => $paymentMethod,
+                    'extension_payment_lifecycle' => $payment?->subscription_lifecycle,
                     'payment_link_provider' => $paymentLinkProvider,
                     'requested_payment_link_provider' => $paymentLinkSelection['requested_provider'] ?? null,
                     'payment_link_provider_override_requested' => (bool) ($paymentLinkSelection['override_requested'] ?? false),
@@ -817,6 +870,8 @@ class DealController extends Controller
             'discount_percentage' => 'nullable|numeric|min:1|max:99',
             'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
+            'subscription_lifecycle' => 'nullable|in:new,renewal',
+            'subscription_lifecycle_reason' => 'nullable|string|max:500',
         ]);
 
         if ($missingColumnsResponse = $this->missingSprint6DealColumnsResponse()) {
@@ -877,6 +932,13 @@ class DealController extends Controller
             $baseAmount = $deal->original_amount !== null
                 ? (float) $deal->original_amount
                 : (float) $deal->amount;
+            $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
+                $client,
+                (int) $client->platform_id,
+                $validated['subscription_lifecycle'] ?? null,
+                $validated['subscription_lifecycle_reason'] ?? null,
+                ['force_lifecycle' => SubscriptionLifecycleService::LIFECYCLE_RENEWAL]
+            );
 
             $newDeal = Deal::create([
                 'platform_id' => $deal->platform_id,
@@ -897,7 +959,7 @@ class DealController extends Controller
                 'original_amount' => null,
                 'discount_approved_by' => null,
                 'payment_reference' => $paymentMethod === 'manual' ? (string) $validated['payment_reference'] : null,
-            ]);
+            ] + $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle));
             $discountAudit = null;
 
             if ($paymentMethod !== 'free_trial') {
@@ -921,7 +983,15 @@ class DealController extends Controller
                     'payment_reference' => $payment->transaction_reference,
                 ]);
             } elseif (in_array($paymentMethod, ['stk', 'link'], true)) {
-                $initiation = $this->dealPaymentService->initiatePaymentForDeal($newDeal, $client, $paymentMethod, $request, $paymentLinkProvider, $paymentLinkSelection ?? []);
+                $initiation = $this->dealPaymentService->initiatePaymentForDeal(
+                    $newDeal,
+                    $client,
+                    $paymentMethod,
+                    $request,
+                    $paymentLinkProvider,
+                    $paymentLinkSelection ?? [],
+                    $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
+                );
                 if (!($initiation['success'] ?? false)) {
                     throw new \RuntimeException((string) ($initiation['message'] ?? 'Payment initiation failed.'));
                 }
