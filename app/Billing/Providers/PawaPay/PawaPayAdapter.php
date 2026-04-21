@@ -45,7 +45,7 @@ class PawaPayAdapter extends AbstractProviderAdapter
                 settlementSemantics: [SettlementSemantics::Delayed],
                 executionModes: [ExecutionMode::Direct, ExecutionMode::Proxy]
             ),
-            countryCodes: ['GH', 'KE', 'MW', 'MZ', 'UG', 'TZ', 'ZM'],
+            countryCodes: ['CD', 'GH', 'KE', 'MW', 'MZ', 'UG', 'TZ', 'ZM'],
             restrictions: [
                 'adult_content_suitability_requires_review' => true,
             ],

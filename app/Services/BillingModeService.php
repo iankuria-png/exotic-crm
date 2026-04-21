@@ -121,6 +121,7 @@ class BillingModeService
             'provider_credentials' => is_array($providerCredentials) ? $providerCredentials : [],
             'provider_direct_config' => is_array($resolvedDirectConfig) ? $resolvedDirectConfig : null,
             'provider_profile_id' => $resolvedProfile?->id,
+            'provider_profile_country_code' => $resolvedProfile?->country_code,
             'chosen_binding_id' => $resolvedBinding?->id,
             'provider_resolved_from' => $resolvedFrom,
         ]);
@@ -187,6 +188,7 @@ class BillingModeService
             'provider_credentials' => $providerCredentials,
             'provider_direct_config' => null,
             'provider_profile_id' => $profile->id,
+            'provider_profile_country_code' => $profile->country_code,
             'chosen_binding_id' => $chosenBindingId,
             'provider_resolved_from' => 'provider_profile',
         ]);

@@ -132,15 +132,19 @@ class HostedCheckoutService
             ],
         ];
 
-        $shouldPrefillPhone = (bool) ($options['prefill_phone'] ?? false);
         $phoneNumber = preg_replace('/\D+/', '', (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')));
-        if ($shouldPrefillPhone && is_string($phoneNumber) && $phoneNumber !== '') {
-            $payload['phoneNumber'] = $phoneNumber;
-        }
-
-        $countryCode = $this->pawaPayCountryCode((string) ($payment->platform?->country ?? ''));
+        $countryCode = $this->resolvePawaPayCountryCode($payment, $context);
         if ($countryCode !== null) {
             $payload['country'] = $countryCode;
+        } elseif (is_string($phoneNumber) && $phoneNumber !== '') {
+            $payload['phoneNumber'] = $phoneNumber;
+        } else {
+            throw new RuntimeException('pawaPay checkout requires a supported country or customer phone number.');
+        }
+
+        $shouldPrefillPhone = (bool) ($options['prefill_phone'] ?? false);
+        if ($shouldPrefillPhone && is_string($phoneNumber) && $phoneNumber !== '') {
+            $payload['phoneNumber'] = $phoneNumber;
         }
 
         $response = Http::timeout(10)
@@ -439,9 +443,50 @@ class HostedCheckoutService
         return $this->callbackUrl($payment, $context, $options);
     }
 
+    private function resolvePawaPayCountryCode(Payment $payment, array $context): ?string
+    {
+        $candidates = [
+            data_get($context, 'provider_profile_country_code'),
+            data_get($context, 'provider_profile.country_code'),
+            $payment->platform?->country,
+            $payment->platform?->name,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $countryCode = $this->pawaPayCountryCode((string) $candidate);
+            if ($countryCode !== null) {
+                return $countryCode;
+            }
+        }
+
+        $currency = strtoupper(trim((string) ($payment->currency ?: $payment->platform?->currency_code ?: data_get($context, 'wallet.currency_code', ''))));
+        $phonePrefix = preg_replace('/\D+/', '', (string) ($payment->platform?->phone_prefix ?: data_get($context, 'phone_prefix', data_get($context, 'wallet.market.phone_prefix', ''))));
+
+        if ($currency === 'CDF' && $phonePrefix === '243') {
+            return 'COD';
+        }
+
+        return null;
+    }
+
     private function pawaPayCountryCode(string $country): ?string
     {
-        return match (strtoupper(trim($country))) {
+        $normalized = strtoupper(trim($country));
+        $normalized = str_replace(['.', ',', '-', '_'], ' ', $normalized);
+        $normalized = preg_replace('/\s+/', ' ', $normalized) ?: $normalized;
+
+        return match ($normalized) {
+            'DEMOCRATIC REPUBLIC OF CONGO',
+            'DEMOCRATIC REPUBLIC OF THE CONGO',
+            'DR CONGO',
+            'D R CONGO',
+            'CONGO KINSHASA',
+            'CONGO',
+            'CONGO DR',
+            'CONGO DRC',
+            'DRC',
+            'CD',
+            'COD' => 'COD',
             'GHANA' => 'GHA',
             'GH', 'GHA' => 'GHA',
             'KENYA' => 'KEN',

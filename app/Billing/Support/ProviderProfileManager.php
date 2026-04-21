@@ -182,7 +182,7 @@ class ProviderProfileManager
         return [[
             'provider_type_key' => $providerKey,
             'profile_name' => trim((string) ($payload['profile_name'] ?? $existing?->profile_name ?? '')),
-            'country_code' => $this->nullableString($payload['country_code'] ?? $existing?->country_code),
+            'country_code' => $this->nullableUpperString($payload['country_code'] ?? $existing?->country_code),
             'market_id' => $payload['market_id'] ?? $existing?->market_id,
             'merchant_scope_json' => is_array($payload['merchant_scope_json'] ?? null)
                 ? $payload['merchant_scope_json']
@@ -215,5 +215,12 @@ class ProviderProfileManager
         $trimmed = trim((string) $value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    private function nullableUpperString(mixed $value): ?string
+    {
+        $trimmed = $this->nullableString($value);
+
+        return $trimmed === null ? null : strtoupper($trimmed);
     }
 }

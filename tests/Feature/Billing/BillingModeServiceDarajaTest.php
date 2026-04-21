@@ -211,10 +211,15 @@ class BillingModeServiceDarajaTest extends TestCase
         $this->assertSame('pawapay', $context['provider_runtime_key']);
         $this->assertSame('provider_profile', $context['provider_resolved_from']);
         $this->assertSame($profile->id, $context['provider_profile_id']);
+        $this->assertSame('KE', $context['provider_profile_country_code']);
         $this->assertSame($binding->id, $context['chosen_binding_id']);
         $this->assertTrue((bool) data_get($context, 'provider_config.enabled'));
         $this->assertSame('https://api.sandbox.pawapay.io', data_get($context, 'provider_credentials.base_url'));
         $this->assertSame('https://billing.example.test', data_get($context, 'provider_credentials.callback_base_url'));
         $this->assertSame('pawapay-sandbox-key', data_get($context, 'provider_credentials.api_key'));
+
+        $profileContext = app(BillingModeService::class)->profileBackedProviderContext($platform->fresh(), $profile, $binding->id);
+
+        $this->assertSame('KE', $profileContext['provider_profile_country_code']);
     }
 }
