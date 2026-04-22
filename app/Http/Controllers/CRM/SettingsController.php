@@ -2617,6 +2617,9 @@ class SettingsController extends Controller
                 $product->currency = $currency;
                 $product->is_active = $isActive;
                 $product->is_archived = $isArchived;
+                $product->weekly_price = $product->weekly_price ?? 0;
+                $product->biweekly_price = $product->biweekly_price ?? 0;
+                $product->monthly_price = $product->monthly_price ?? 0;
                 $product->save();
 
                 $this->syncProductPriceRows($product, $priceRows, $currency);
