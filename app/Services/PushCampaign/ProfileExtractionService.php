@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Platform;
 use App\Models\PushCampaignItem;
 use App\Models\ScraperProfilePreset;
+use App\Services\WordPressProfileUrlResolver;
 use App\Services\WpSyncService;
 use App\Support\DomParserTrait;
 use App\Support\MarketTimezone;
@@ -475,24 +476,7 @@ class ProfileExtractionService
 
     private function parseWpPostIdFromUrl(string $url): ?int
     {
-        $trimmed = trim($url);
-        if ($trimmed === '') {
-            return null;
-        }
-
-        if (preg_match('/[?&]post_type=escort(?:&|;)?p=(\d+)/i', $trimmed, $match)) {
-            return (int) $match[1];
-        }
-
-        if (preg_match('/[?&]p=(\d+)/i', $trimmed, $match)) {
-            return (int) $match[1];
-        }
-
-        if (preg_match('#/(\d+)/?$#', $trimmed, $match)) {
-            return (int) $match[1];
-        }
-
-        return null;
+        return app(WordPressProfileUrlResolver::class)->parseWpPostIdFromUrl($url);
     }
 
     /**
@@ -572,66 +556,17 @@ class ProfileExtractionService
 
     private function parseWpPostIdFromLinkHeader(string $linkHeader): ?int
     {
-        $normalized = trim($linkHeader);
-        if ($normalized === '') {
-            return null;
-        }
-
-        if (preg_match_all('/<([^>]+)>;\s*rel="?shortlink"?/i', $normalized, $matches)) {
-            foreach ((array) ($matches[1] ?? []) as $link) {
-                $wpPostId = $this->parseWpPostIdFromUrl((string) $link);
-                if ($wpPostId) {
-                    return $wpPostId;
-                }
-            }
-        }
-
-        return null;
+        return app(WordPressProfileUrlResolver::class)->parseWpPostIdFromLinkHeader($linkHeader);
     }
 
     private function parseWpPostIdFromHtmlShortlink(string $html): ?int
     {
-        $normalized = trim($html);
-        if ($normalized === '') {
-            return null;
-        }
-
-        if (preg_match('/<link[^>]+rel=["\']shortlink["\'][^>]+href=["\']([^"\']+)["\']/i', $normalized, $match)) {
-            return $this->parseWpPostIdFromUrl((string) ($match[1] ?? ''));
-        }
-
-        if (preg_match('/<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']shortlink["\']/i', $normalized, $match)) {
-            return $this->parseWpPostIdFromUrl((string) ($match[1] ?? ''));
-        }
-
-        return null;
+        return app(WordPressProfileUrlResolver::class)->parseWpPostIdFromHtmlShortlink($html);
     }
 
     private function parseWpPostIdFromHtmlMarkers(string $html): ?int
     {
-        $normalized = trim($html);
-        if ($normalized === '') {
-            return null;
-        }
-
-        $patterns = [
-            '/\bpostid-(\d+)\b/i',
-            '/\bprofile_id\b[^>]*\bvalue=["\']?(\d+)["\']?/i',
-            '/\bCURRENT_ID\b\s*=\s*(\d+)/i',
-            '/\bpid\b\s*=\s*(\d+)/i',
-            '/\bcachePurgePostId\b["\']?\s*:\s*(\d+)/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $normalized, $match)) {
-                $postId = (int) ($match[1] ?? 0);
-                if ($postId > 0) {
-                    return $postId;
-                }
-            }
-        }
-
-        return null;
+        return app(WordPressProfileUrlResolver::class)->parseWpPostIdFromHtmlMarkers($html);
     }
 
     private function resolveWpFailureCode(array $resolution, string $autoMatchReason = ''): string

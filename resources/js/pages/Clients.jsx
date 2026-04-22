@@ -955,6 +955,44 @@ export default function Clients() {
         || createdTo
         || sortOption !== DEFAULT_SORT_OPTION
     );
+    const searchResolutionNotice = useMemo(() => {
+        const resolution = data?.search_resolution;
+        if (!search || !resolution?.mode) {
+            return null;
+        }
+
+        const wpPostId = resolution.resolved_wp_post_id ? `WP #${resolution.resolved_wp_post_id}` : null;
+
+        if (resolution.mode === 'exact') {
+            return {
+                tone: 'success',
+                title: 'Exact profile URL match found',
+                message: wpPostId
+                    ? `Matched the pasted URL directly to ${wpPostId}.`
+                    : 'Matched the pasted URL directly to one CRM profile.',
+            };
+        }
+
+        if (resolution.mode === 'exact_missing') {
+            return {
+                tone: 'warning',
+                title: 'Profile URL resolved, but no synced CRM client was found',
+                message: wpPostId
+                    ? `The public site resolved this URL to ${wpPostId}, but that profile is not currently in this CRM scope.`
+                    : 'The public site resolved this URL, but the profile is not currently in this CRM scope.',
+            };
+        }
+
+        if (resolution.mode === 'fallback') {
+            return {
+                tone: 'info',
+                title: 'No exact URL match found',
+                message: 'Showing similar profiles from the URL slug so the team can still continue.',
+            };
+        }
+
+        return null;
+    }, [data?.search_resolution, search]);
 
     const columns = [
         {
@@ -1467,6 +1505,19 @@ export default function Clients() {
                             ) : null}
                         </div>
                     ) : null}
+                </section>
+            ) : null}
+
+            {searchResolutionNotice ? (
+                <section className={`rounded-lg border px-4 py-3 text-sm ${
+                    searchResolutionNotice.tone === 'success'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : searchResolutionNotice.tone === 'warning'
+                            ? 'border-amber-200 bg-amber-50 text-amber-800'
+                            : 'border-sky-200 bg-sky-50 text-sky-800'
+                }`}>
+                    <p className="font-semibold">{searchResolutionNotice.title}</p>
+                    <p className="mt-1 text-xs opacity-80">{searchResolutionNotice.message}</p>
                 </section>
             ) : null}
 

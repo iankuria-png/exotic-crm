@@ -82,6 +82,7 @@ class ClientController extends Controller
             'activeDeal.product:id,name,display_name,slug,tier',
         ]);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+        $searchResolution = null;
 
         if ($request->filled('search')) {
             $search = trim((string) $request->search);
@@ -92,6 +93,7 @@ class ClientController extends Controller
             );
 
             if (is_array($resolvedClientSearch)) {
+                $searchResolution = $resolvedClientSearch['resolution'] ?? null;
                 $resolvedClientIds = array_values(array_filter(
                     array_map('intval', (array) ($resolvedClientSearch['client_ids'] ?? [])),
                     fn (int $id) => $id > 0
@@ -222,6 +224,7 @@ class ClientController extends Controller
 
         $payload = $clients->toArray();
         $payload['stats'] = $stats;
+        $payload['search_resolution'] = $searchResolution;
 
         return response()->json($payload);
     }

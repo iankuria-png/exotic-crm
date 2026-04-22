@@ -7,7 +7,9 @@ use App\Models\Platform;
 use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -20,6 +22,8 @@ class ClientUrlSearchTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Cache::flush();
+        Http::preventStrayRequests();
 
         if (!Schema::hasTable('escort_live_urls')) {
             Schema::create('escort_live_urls', function (Blueprint $table) {
@@ -97,6 +101,76 @@ class ClientUrlSearchTest extends TestCase
             ->assertJsonCount(1, 'data');
     }
 
+    public function test_client_search_resolves_exact_client_from_public_profile_shortlink_header(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $exactClient = $this->createClient($ghana, [
+            'wp_post_id' => 127508,
+            'name' => 'Olivia',
+        ]);
+        $this->createClient($ghana, [
+            'wp_post_id' => 116269,
+            'name' => 'Olivia',
+        ]);
+
+        Http::fake([
+            'https://www.exoticghana.com/escort/olivia-7/' => Http::response('', 200, [
+                'Link' => '<https://www.exoticghana.com/wp-json/>; rel="https://api.w.org/", <https://www.exoticghana.com/?p=127508>; rel=shortlink',
+            ]),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/olivia-7/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $exactClient->id)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('search_resolution.mode', 'exact')
+            ->assertJsonPath('search_resolution.source', 'head_shortlink')
+            ->assertJsonPath('search_resolution.resolved_wp_post_id', 127508);
+
+        Http::assertSent(fn ($request) => $request->method() === 'HEAD');
+    }
+
+    public function test_client_search_resolves_exact_client_from_public_profile_html_shortlink(): void
+    {
+        $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
+        $user = $this->createUser('sales', [$ghana->id]);
+        $exactClient = $this->createClient($ghana, [
+            'wp_post_id' => 127509,
+            'name' => 'Olivia',
+        ]);
+        $this->createClient($ghana, [
+            'wp_post_id' => 116269,
+            'name' => 'Olivia',
+        ]);
+
+        Http::fake(function ($request) {
+            if ($request->method() === 'HEAD') {
+                return Http::response('', 200);
+            }
+
+            return Http::response(
+                '<html><head><link rel="shortlink" href="https://www.exoticghana.com/?p=127509"></head><body></body></html>',
+                200,
+                ['Content-Type' => 'text/html; charset=UTF-8']
+            );
+        });
+
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/olivia-8/'));
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $exactClient->id)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('search_resolution.mode', 'exact')
+            ->assertJsonPath('search_resolution.source', 'html_shortlink')
+            ->assertJsonPath('search_resolution.resolved_wp_post_id', 127509);
+    }
+
     public function test_client_search_falls_back_to_slug_derived_name_match_when_wp_lookup_tables_miss(): void
     {
         $ghana = $this->createPlatform('Ghana', 'https://www.exoticghana.com');
@@ -106,13 +180,19 @@ class ClientUrlSearchTest extends TestCase
             'name' => 'Venessa',
         ]);
 
+        Http::fake([
+            'https://www.exoticghana.com/escort/venessa-5/' => Http::response('', 404),
+        ]);
+
         Sanctum::actingAs($user);
 
         $response = $this->getJson('/api/crm/clients?platform_id=' . $ghana->id . '&search=' . urlencode('https://www.exoticghana.com/escort/venessa-5/'));
 
         $response->assertOk()
             ->assertJsonPath('data.0.id', $client->id)
-            ->assertJsonCount(1, 'data');
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('search_resolution.mode', 'fallback')
+            ->assertJsonPath('search_resolution.source', 'slug_fallback');
     }
 
     public function test_client_search_returns_empty_for_url_from_different_market_when_market_is_selected(): void

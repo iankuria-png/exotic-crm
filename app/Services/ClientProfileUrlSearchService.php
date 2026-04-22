@@ -14,7 +14,8 @@ use Throwable;
 class ClientProfileUrlSearchService
 {
     public function __construct(
-        private readonly MarketAuthorizationService $marketAuthorizationService
+        private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly WordPressProfileUrlResolver $wordPressProfileUrlResolver
     ) {
     }
 
@@ -30,13 +31,21 @@ class ClientProfileUrlSearchService
             return [
                 'client_ids' => [],
                 'fallback_terms' => [],
+                'resolution' => $this->resolution('unresolved', 'host_mismatch'),
             ];
         }
 
         if ($normalizedUrl['wp_post_id'] !== null) {
+            $clientIds = $this->findClientIdsByPostId($candidatePlatforms, $normalizedUrl['wp_post_id']);
+
             return [
-                'client_ids' => $this->findClientIdsByPostId($candidatePlatforms, $normalizedUrl['wp_post_id']),
+                'client_ids' => $clientIds,
                 'fallback_terms' => [],
+                'resolution' => $this->resolution(
+                    $clientIds === [] ? 'exact_missing' : 'exact',
+                    'query_param',
+                    $normalizedUrl['wp_post_id']
+                ),
             ];
         }
 
@@ -59,26 +68,28 @@ class ClientProfileUrlSearchService
         }
 
         if ($matches === []) {
+            $publicResolution = $this->resolvePublicProfileUrl($search, $candidatePlatforms);
+            if ($publicResolution !== null) {
+                return $publicResolution;
+            }
+
             return [
                 'client_ids' => [],
                 'fallback_terms' => $this->buildFallbackTerms($normalizedUrl['slug_candidates']),
+                'resolution' => $this->resolution('fallback', 'slug_fallback'),
             ];
         }
 
+        $clientIds = $this->findClientIdsByPlatformPostMatches($matches);
+
         return [
-            'client_ids' => Client::query()
-                ->where(function ($query) use ($matches) {
-                    foreach ($matches as $match) {
-                        $query->orWhere(function ($nested) use ($match) {
-                            $nested->where('platform_id', $match['platform_id'])
-                                ->where('wp_post_id', $match['wp_post_id']);
-                        });
-                    }
-                })
-                ->pluck('id')
-                ->map(fn ($id) => (int) $id)
-                ->all(),
+            'client_ids' => $clientIds,
             'fallback_terms' => [],
+            'resolution' => $this->resolution(
+                $clientIds === [] ? 'exact_missing' : 'exact',
+                'local_wp_lookup',
+                (int) ($matches[0]['wp_post_id'] ?? 0) ?: null
+            ),
         ];
     }
 
@@ -186,6 +197,85 @@ class ClientProfileUrlSearchService
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->all();
+    }
+
+    private function resolvePublicProfileUrl(string $search, Collection $candidatePlatforms): ?array
+    {
+        $matches = [];
+        $lastResolution = null;
+
+        foreach ($candidatePlatforms as $platform) {
+            $resolved = $this->wordPressProfileUrlResolver->resolve($search, $platform);
+            $lastResolution = $resolved;
+            $wpPostId = (int) ($resolved['wp_post_id'] ?? 0);
+
+            if ($wpPostId <= 0) {
+                continue;
+            }
+
+            $matches[] = [
+                'platform_id' => (int) $platform->id,
+                'wp_post_id' => $wpPostId,
+                'source' => (string) ($resolved['source'] ?? 'public_url'),
+            ];
+        }
+
+        if ($matches === []) {
+            return null;
+        }
+
+        $clientIds = $this->findClientIdsByPlatformPostMatches($matches);
+        $wpPostIds = array_values(array_unique(array_map(
+            static fn (array $match) => (int) $match['wp_post_id'],
+            $matches
+        )));
+
+        return [
+            'client_ids' => $clientIds,
+            'fallback_terms' => [],
+            'resolution' => $this->resolution(
+                $clientIds === [] ? 'exact_missing' : 'exact',
+                (string) ($matches[0]['source'] ?? 'public_url'),
+                $wpPostIds[0] ?? null,
+                [
+                    'matched_platform_ids' => array_values(array_unique(array_map(
+                        static fn (array $match) => (int) $match['platform_id'],
+                        $matches
+                    ))),
+                    'http_status' => $lastResolution['http_status'] ?? null,
+                ]
+            ),
+        ];
+    }
+
+    private function findClientIdsByPlatformPostMatches(array $matches): array
+    {
+        if ($matches === []) {
+            return [];
+        }
+
+        return Client::query()
+            ->where(function ($query) use ($matches) {
+                foreach ($matches as $match) {
+                    $query->orWhere(function ($nested) use ($match) {
+                        $nested->where('platform_id', $match['platform_id'])
+                            ->where('wp_post_id', $match['wp_post_id']);
+                    });
+                }
+            })
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    private function resolution(string $mode, string $source, ?int $wpPostId = null, array $extra = []): array
+    {
+        return array_filter([
+            'mode' => $mode,
+            'source' => $source,
+            'resolved_wp_post_id' => $wpPostId,
+            ...$extra,
+        ], static fn ($value) => $value !== null);
     }
 
     private function resolvePostIdForPlatform(Platform $platform, array $urlCandidates, array $slugCandidates): ?int
