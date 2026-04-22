@@ -455,7 +455,7 @@ export default function ClientDetail() {
     const [profileReason, setProfileReason] = useState('Profile edited from CRM');
     const [profileForce, setProfileForce] = useState(false);
     const [profileConflict, setProfileConflict] = useState(null);
-    const [mediaUploadFile, setMediaUploadFile] = useState(null);
+    const [mediaUploadFiles, setMediaUploadFiles] = useState([]);
     const [mediaUploadSetMain, setMediaUploadSetMain] = useState(false);
     const [healthAction, setHealthAction] = useState('keep_primary');
     const [healthReason, setHealthReason] = useState('Duplicate resolution from CRM');
@@ -922,9 +922,15 @@ export default function ClientDetail() {
     });
 
     const uploadMediaMutation = useMutation({
-        mutationFn: ({ file, setMain }) => {
+        mutationFn: ({ files, setMain }) => {
             const formData = new FormData();
-            formData.append('file', file);
+            if (files.length === 1) {
+                formData.append('file', files[0]);
+            }
+
+            files.forEach((file) => {
+                formData.append('files[]', file);
+            });
             formData.append('set_main', setMain ? '1' : '0');
             formData.append('reason', 'Uploaded media from client detail');
             return api.post(`/crm/clients/${id}/media`, formData, {
@@ -933,13 +939,16 @@ export default function ClientDetail() {
                 },
             }).then((response) => response.data);
         },
-        onSuccess: () => {
+        onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-media', id] });
             queryClient.invalidateQueries({ queryKey: ['clients'] });
-            setMediaUploadFile(null);
+            setMediaUploadFiles([]);
             setMediaUploadSetMain(false);
-            toast.success('Media uploaded to WordPress.');
+            const uploadedCount = Number(response?.uploaded_count || 0);
+            toast.success(uploadedCount > 1
+                ? `${uploadedCount} images uploaded to WordPress.`
+                : 'Media uploaded to WordPress.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Media upload failed.');
@@ -1248,7 +1257,15 @@ export default function ClientDetail() {
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canOpenClientAccess = Boolean(client?.id);
     const mediaItems = mediaData?.data || [];
-    const mediaUploadIsVideo = isVideoUploadFile(mediaUploadFile);
+    const mediaUploadHasSelection = mediaUploadFiles.length > 0;
+    const mediaUploadHasMultiple = mediaUploadFiles.length > 1;
+    const mediaUploadIsVideo = mediaUploadFiles.length === 1 && isVideoUploadFile(mediaUploadFiles[0]);
+    const mediaUploadHasVideo = mediaUploadFiles.some((file) => isVideoUploadFile(file));
+    const mediaUploadSelectionLabel = mediaUploadHasSelection
+        ? mediaUploadHasMultiple
+            ? `${mediaUploadFiles.length} images selected`
+            : mediaUploadFiles[0]?.name || '1 file selected'
+        : '';
     const wpProfileErrorData = wpProfileError?.response?.data || null;
     const mediaErrorData = mediaError?.response?.data || null;
     const staleWpLink = mediaErrorData?.stale_link || wpProfileErrorData?.stale_link || null;
@@ -3102,17 +3119,18 @@ export default function ClientDetail() {
                                         <div className="grid gap-2 md:grid-cols-2">
                                             <input
                                                 type="file"
+                                                multiple
                                                 accept="image/jpeg,image/png,image/webp,video/mp4"
                                                 onChange={(event) => {
-                                                    const selectedFile = event.target.files?.[0] || null;
-                                                    setMediaUploadFile(selectedFile);
-                                                    if (isVideoUploadFile(selectedFile)) {
+                                                    const selectedFiles = Array.from(event.target.files || []);
+                                                    setMediaUploadFiles(selectedFiles);
+                                                    if (selectedFiles.length !== 1 || selectedFiles.some((file) => isVideoUploadFile(file))) {
                                                         setMediaUploadSetMain(false);
                                                     }
                                                 }}
                                                 className="crm-input"
                                             />
-                                            {!mediaUploadIsVideo ? (
+                                            {!mediaUploadHasMultiple && !mediaUploadIsVideo ? (
                                                 <label className="flex items-center gap-2 text-sm text-slate-700">
                                                     <input
                                                         type="checkbox"
@@ -3124,17 +3142,25 @@ export default function ClientDetail() {
                                                 </label>
                                             ) : null}
                                         </div>
+                                        {mediaUploadHasSelection ? (
+                                            <p className="mt-2 text-xs text-slate-500">{mediaUploadSelectionLabel}</p>
+                                        ) : null}
+                                        {mediaUploadHasMultiple && mediaUploadHasVideo ? (
+                                            <p className="mt-2 text-xs text-amber-700">
+                                                Multiple uploads are available for images only. Upload videos one at a time.
+                                            </p>
+                                        ) : null}
                                         <div className="mt-2 flex justify-end">
                                             <button
                                                 type="button"
                                                 onClick={() => {
-                                                    if (!mediaUploadFile) return;
+                                                    if (!mediaUploadHasSelection) return;
                                                     uploadMediaMutation.mutate({
-                                                        file: mediaUploadFile,
-                                                        setMain: mediaUploadIsVideo ? false : mediaUploadSetMain,
+                                                        files: mediaUploadFiles,
+                                                        setMain: mediaUploadHasMultiple || mediaUploadIsVideo ? false : mediaUploadSetMain,
                                                     });
                                                 }}
-                                                disabled={!mediaUploadFile || uploadMediaMutation.isPending}
+                                                disabled={!mediaUploadHasSelection || uploadMediaMutation.isPending}
                                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
                                             >
                                                 {uploadMediaMutation.isPending ? 'Uploading...' : 'Upload media'}

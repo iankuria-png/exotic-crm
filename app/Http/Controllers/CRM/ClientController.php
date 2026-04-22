@@ -38,6 +38,7 @@ use App\Support\DealDeactivationReason;
 use App\Support\DeactivationRequest;
 use App\Support\PhoneNormalizer;
 use Carbon\Carbon;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -49,6 +50,8 @@ class ClientController extends Controller
     private const PROFILE_MEDIA_ALLOWED_EXTENSIONS = 'jpg,jpeg,png,webp,mp4';
     private const PROFILE_MEDIA_IMAGE_MAX_KB = 5120;
     private const PROFILE_MEDIA_VIDEO_MAX_KB = 51200;
+    private const PROFILE_MEDIA_MAX_IMAGES = 20;
+    private const PROFILE_MEDIA_MAX_VIDEOS = 5;
 
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
@@ -1417,31 +1420,52 @@ class ClientController extends Controller
 
         $validated = $request->validate([
             'file' => [
-                'required',
+                'sometimes',
                 'file',
                 'mimes:' . self::PROFILE_MEDIA_ALLOWED_EXTENSIONS,
-                function ($attribute, $value, $fail) use ($request) {
-                    $this->validateProfileMediaUpload($value, $request->boolean('set_main'), $fail);
-                },
             ],
+            'files' => ['sometimes', 'array', 'min:1'],
+            'files.*' => ['file', 'mimes:' . self::PROFILE_MEDIA_ALLOWED_EXTENSIONS],
             'set_main' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ], [
             'file.mimes' => 'The file must be a JPEG, PNG, WEBP image, or MP4 video.',
+            'files.*.mimes' => 'Each file must be a JPEG, PNG, WEBP image, or MP4 video.',
         ]);
+
+        $uploadedFiles = $this->resolveProfileMediaUploadFiles($request);
+        if ($uploadedFiles === []) {
+            return response()->json([
+                'message' => 'At least one file upload is required.',
+            ], 422);
+        }
 
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
-            $result = $wpSync->uploadClientMedia(
-                (int) $client->wp_post_id,
-                $request->file('file'),
-                (bool) ($validated['set_main'] ?? false)
-            );
+            $setMain = (bool) ($validated['set_main'] ?? false);
+            $this->validateProfileMediaBatch($uploadedFiles, $setMain);
+
+            $existingMedia = $wpSync->getClientMedia((int) $client->wp_post_id);
+            $this->ensureProfileMediaCapacity($existingMedia, $uploadedFiles);
+
+            $results = [];
+            foreach ($uploadedFiles as $index => $file) {
+                $results[] = $wpSync->uploadClientMedia(
+                    (int) $client->wp_post_id,
+                    $file,
+                    $setMain && count($uploadedFiles) === 1 && $index === 0 && !$this->isProfileMediaVideoUpload($file)
+                );
+            }
 
             $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
             (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
             $client->refresh();
             $this->refreshClientDisplayImageCache($client, verifyReachable: false);
+
+            $uploadedAttachments = collect($results)
+                ->map(fn (array $result): array => (array) ($result['attachment'] ?? []))
+                ->values()
+                ->all();
 
             $this->auditService->fromRequest(
                 $request,
@@ -1452,15 +1476,32 @@ class ClientController extends Controller
                 null,
                 [
                     'media_upload' => [
-                        'attachment_id' => $result['attachment']['id'] ?? null,
-                        'filename' => $result['attachment']['filename'] ?? null,
-                        'set_main' => (bool) ($validated['set_main'] ?? false),
+                        'upload_count' => count($uploadedAttachments),
+                        'attachments' => $uploadedAttachments,
+                        'set_main' => $setMain && count($uploadedFiles) === 1,
                     ],
                 ],
                 $validated['reason'] ?? 'Uploaded profile media from CRM'
             );
 
-            return response()->json($result);
+            $response = [
+                'success' => true,
+                'uploaded_count' => count($uploadedAttachments),
+                'attachments' => $uploadedAttachments,
+                'message' => count($uploadedAttachments) === 1
+                    ? 'Media uploaded successfully.'
+                    : sprintf('%d images uploaded successfully.', count($uploadedAttachments)),
+            ];
+
+            if (count($uploadedAttachments) === 1) {
+                $response['attachment'] = $uploadedAttachments[0];
+            }
+
+            return response()->json($response);
+        } catch (InvalidArgumentException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422);
         } catch (\Throwable $exception) {
             return response()->json([
                 'message' => 'Failed to upload media.',
@@ -3072,7 +3113,126 @@ class ClientController extends Controller
         }
     }
 
-    private function isProfileMediaVideoUpload(\Illuminate\Http\UploadedFile $file): bool
+    /**
+     * @return array<int, UploadedFile>
+     */
+    private function resolveProfileMediaUploadFiles(Request $request): array
+    {
+        $files = $request->file('files', []);
+        if (!is_array($files)) {
+            $files = [];
+        }
+
+        $resolved = collect($files)
+            ->filter(fn ($file): bool => $file instanceof UploadedFile)
+            ->values();
+
+        $singleFile = $request->file('file');
+        if ($singleFile instanceof UploadedFile) {
+            $resolved->prepend($singleFile);
+        }
+
+        return $resolved
+            ->unique(fn (UploadedFile $file): string => sha1(implode('|', [
+                $file->getRealPath() ?: '',
+                $file->getClientOriginalName(),
+                (string) ($file->getSize() ?? 0),
+            ])))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param array<int, UploadedFile> $files
+     */
+    private function validateProfileMediaBatch(array $files, bool $setMain): void
+    {
+        $hasMultiple = count($files) > 1;
+        $videoCount = 0;
+
+        foreach ($files as $file) {
+            $this->validateProfileMediaUpload($file, $setMain && !$hasMultiple, function (string $message): void {
+                throw new InvalidArgumentException($message);
+            });
+
+            if ($this->isProfileMediaVideoUpload($file)) {
+                $videoCount++;
+            }
+        }
+
+        if ($hasMultiple && $videoCount > 0) {
+            throw new InvalidArgumentException('You can upload multiple files at once only when all selected files are images.');
+        }
+
+        if ($hasMultiple && $setMain) {
+            throw new InvalidArgumentException('Set main image is only available for single-image uploads.');
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $existingMedia
+     * @param array<int, UploadedFile> $files
+     */
+    private function ensureProfileMediaCapacity(array $existingMedia, array $files): void
+    {
+        $counts = $this->countCurrentProfileMedia($existingMedia);
+        $incomingImages = 0;
+        $incomingVideos = 0;
+
+        foreach ($files as $file) {
+            if ($this->isProfileMediaVideoUpload($file)) {
+                $incomingVideos++;
+            } else {
+                $incomingImages++;
+            }
+        }
+
+        if (($counts['images'] + $incomingImages) > self::PROFILE_MEDIA_MAX_IMAGES) {
+            throw new InvalidArgumentException(sprintf(
+                'This upload would exceed the profile image limit of %d.',
+                self::PROFILE_MEDIA_MAX_IMAGES
+            ));
+        }
+
+        if (($counts['videos'] + $incomingVideos) > self::PROFILE_MEDIA_MAX_VIDEOS) {
+            throw new InvalidArgumentException(sprintf(
+                'This upload would exceed the profile video limit of %d.',
+                self::PROFILE_MEDIA_MAX_VIDEOS
+            ));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array{images:int,videos:int}
+     */
+    private function countCurrentProfileMedia(array $payload): array
+    {
+        $rows = data_get($payload, 'data');
+        if (!is_array($rows)) {
+            $rows = array_is_list($payload) ? $payload : [];
+        }
+
+        $counts = ['images' => 0, 'videos' => 0];
+
+        foreach ($rows as $media) {
+            $mimeType = strtolower(trim((string) data_get($media, 'mime_type', '')));
+            $url = strtolower(trim((string) data_get($media, 'url', '')));
+
+            if (str_starts_with($mimeType, 'image/') || preg_match('/\.(jpe?g|png|webp)(?:$|[?#])/', $url)) {
+                $counts['images']++;
+                continue;
+            }
+
+            if (str_starts_with($mimeType, 'video/') || preg_match('/\.(mp4|m4v|mov|webm|ogg)(?:$|[?#])/', $url)) {
+                $counts['videos']++;
+            }
+        }
+
+        return $counts;
+    }
+
+    private function isProfileMediaVideoUpload(UploadedFile $file): bool
     {
         $mimeType = strtolower((string) $file->getMimeType());
         $extension = strtolower((string) $file->getClientOriginalExtension());
