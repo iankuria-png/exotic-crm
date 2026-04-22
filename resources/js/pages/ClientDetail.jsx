@@ -887,6 +887,7 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-wp-profile', id] });
             queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
             toast.success('Client profile synced from WordPress.');
             setShowSyncConfirm(false);
         },
@@ -935,6 +936,7 @@ export default function ClientDetail() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
             setMediaUploadFile(null);
             setMediaUploadSetMain(false);
             toast.success('Media uploaded to WordPress.');
@@ -952,6 +954,7 @@ export default function ClientDetail() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
             toast.success('Image deleted from WordPress.');
         },
         onError: (error) => {
@@ -967,6 +970,7 @@ export default function ClientDetail() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
             toast.success('Main image updated.');
         },
         onError: (error) => {
@@ -980,6 +984,7 @@ export default function ClientDetail() {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-wp-profile', id] });
             queryClient.invalidateQueries({ queryKey: ['client-media', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
             toast.success(payload?.message || 'WordPress link repaired.');
         },
         onError: (error) => {
@@ -1623,6 +1628,7 @@ export default function ClientDetail() {
             reason: healthReason.trim(),
         });
     };
+    const profileHeaderImageUrl = proxyImageUrl(client?.display_image_url || client?.main_image_url || '');
 
     return (
         <div className="space-y-4">
@@ -1639,8 +1645,8 @@ export default function ClientDetail() {
             <section className="crm-surface px-5 py-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="flex items-start gap-4">
-                        {client.main_image_url ? (
-                            <img src={client.main_image_url} alt="" className="h-16 w-16 rounded-full object-cover ring-1 ring-slate-200" />
+                        {profileHeaderImageUrl ? (
+                            <img src={profileHeaderImageUrl} alt="" className="h-16 w-16 rounded-full object-cover ring-1 ring-slate-200" />
                         ) : (
                             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-xl font-semibold text-slate-600 ring-1 ring-slate-200">
                                 {client.name?.charAt(0) || '?'}

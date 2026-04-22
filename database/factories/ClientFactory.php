@@ -38,6 +38,9 @@ class ClientFactory extends Factory
             'escort_expire' => null,
             'verified' => false,
             'main_image_url' => fake()->imageUrl(640, 800),
+            'display_image_url' => null,
+            'display_image_source' => null,
+            'display_image_checked_at' => null,
             'wallet_balance' => 0,
             'wallet_currency' => function (array $attributes) {
                 return Platform::query()->whereKey($attributes['platform_id'])->value('currency_code') ?: 'KES';

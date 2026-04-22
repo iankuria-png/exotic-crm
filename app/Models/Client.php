@@ -48,6 +48,9 @@ class Client extends Model
         'escort_expire',
         'verified',
         'main_image_url',
+        'display_image_url',
+        'display_image_source',
+        'display_image_checked_at',
         'wallet_balance',
         'wallet_currency',
         'wallet_last_synced_at',
@@ -75,6 +78,7 @@ class Client extends Model
         'last_synced_at' => 'datetime',
         'wp_modified_at' => 'datetime',
         'risk_marked_at' => 'datetime',
+        'display_image_checked_at' => 'datetime',
     ];
 
     protected $appends = [

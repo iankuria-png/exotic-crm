@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Platform;
 use App\Models\PushCampaignItem;
 use App\Models\ScraperProfilePreset;
+use App\Services\ClientProfileImageService;
 use App\Services\WordPressProfileUrlResolver;
 use App\Services\WpSyncService;
 use App\Support\DomParserTrait;
@@ -796,7 +797,7 @@ class ProfileExtractionService
             return $updates;
         }
 
-        $recommended = $this->pickRecommendedMedia($mediaItems);
+        $recommended = app(ClientProfileImageService::class)->selectDisplayImage($mediaItems);
         if ($recommended && !empty($recommended['url'])) {
             $updates['profile_image_url'] = (string) $recommended['url'];
         }
@@ -810,59 +811,7 @@ class ProfileExtractionService
      */
     private function normalizeWpMediaItems(?array $payload): array
     {
-        if (!$payload) {
-            return [];
-        }
-
-        $rows = data_get($payload, 'data');
-        if (!is_array($rows)) {
-            $rows = array_is_list($payload) ? $payload : [];
-        }
-
-        return collect($rows)
-            ->map(function ($media): array {
-                $row = is_array($media) ? $media : [];
-                return [
-                    'id' => (int) ($row['id'] ?? 0),
-                    'url' => trim((string) ($row['url'] ?? '')),
-                    'is_main' => (bool) ($row['is_main'] ?? false),
-                    'mime_type' => isset($row['mime_type']) ? trim((string) $row['mime_type']) : null,
-                ];
-            })
-            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0
-                && ($media['url'] ?? '') !== ''
-                && $this->isImageMedia($media))
-            ->values()
-            ->all();
-    }
-
-    private function isImageMedia(array $media): bool
-    {
-        $mimeType = strtolower(trim((string) ($media['mime_type'] ?? '')));
-        if ($mimeType !== '') {
-            return str_starts_with($mimeType, 'image/');
-        }
-
-        $url = strtolower(trim((string) ($media['url'] ?? '')));
-        return (bool) preg_match('/\.(jpe?g|png|webp)(?:$|[?#])/', $url);
-    }
-
-    /**
-     * @param array<int, array{id:int,url:string,is_main:bool,mime_type:?string}> $mediaItems
-     * @return array{id:int,url:string,is_main:bool}|null
-     */
-    private function pickRecommendedMedia(array $mediaItems): ?array
-    {
-        if (empty($mediaItems)) {
-            return null;
-        }
-
-        $main = collect($mediaItems)->first(fn(array $item): bool => (bool) ($item['is_main'] ?? false));
-        if ($main) {
-            return $main;
-        }
-
-        return $mediaItems[0] ?? null;
+        return app(ClientProfileImageService::class)->normalizeMediaItems($payload);
     }
 
     private function resolveItemAgeReferenceDate(PushCampaignItem $item, Platform $platform): Carbon

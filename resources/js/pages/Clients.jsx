@@ -15,6 +15,7 @@ import { deriveClientProfileState, isClientPubliclyActive } from '../utils/clien
 import { normalizePhone } from '../utils/phone';
 import { useAuth } from '../hooks/useAuth';
 import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
+import { proxyImageUrl } from '../utils/imageProxy';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -103,6 +104,36 @@ function normalizeKnownPlanKey(value) {
     if (normalized.includes('basic')) return 'basic';
 
     return '';
+}
+
+function ClientAvatar({ client }) {
+    const rawImageUrl = client?.display_image_url || client?.main_image_url || '';
+    const imageUrl = proxyImageUrl(rawImageUrl);
+    const [failedUrl, setFailedUrl] = useState('');
+    const showImage = imageUrl && failedUrl !== imageUrl;
+    const initial = client?.name?.charAt(0) || '?';
+
+    useEffect(() => {
+        setFailedUrl('');
+    }, [imageUrl]);
+
+    if (showImage) {
+        return (
+            <img
+                src={imageUrl}
+                alt=""
+                loading="lazy"
+                className="h-9 w-9 rounded-full object-cover ring-1 ring-slate-200"
+                onError={() => setFailedUrl(imageUrl)}
+            />
+        );
+    }
+
+    return (
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+            {initial}
+        </div>
+    );
 }
 
 function formatPlanLabel(value) {
@@ -1002,13 +1033,7 @@ export default function Clients() {
             cellClassName: 'w-[280px] max-w-[280px]',
             render: (row) => (
                 <div className="flex min-w-0 max-w-[248px] items-center gap-3">
-                    {row.main_image_url ? (
-                        <img src={row.main_image_url} alt="" className="h-9 w-9 rounded-full object-cover ring-1 ring-slate-200" />
-                    ) : (
-                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
-                            {row.name?.charAt(0) || '?'}
-                        </div>
-                    )}
+                    <ClientAvatar client={row} />
                     <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                             <p className="truncate text-sm font-semibold text-slate-900" title={row.name || 'Unnamed'}>

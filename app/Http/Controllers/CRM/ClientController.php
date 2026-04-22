@@ -28,6 +28,7 @@ use App\Services\NotificationService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentMatchingService;
 use App\Services\ClientProfileUrlSearchService;
+use App\Services\ClientProfileImageService;
 use App\Services\SupportBoardService;
 use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
@@ -63,7 +64,8 @@ class ClientController extends Controller
         private readonly NotificationService $notificationService,
         private readonly PaymentLinkService $paymentLinkService,
         private readonly WalletSettingsService $walletSettingsService,
-        private readonly ClientProfileUrlSearchService $clientProfileUrlSearchService
+        private readonly ClientProfileUrlSearchService $clientProfileUrlSearchService,
+        private readonly ClientProfileImageService $clientProfileImageService
     ) {
     }
 
@@ -990,6 +992,8 @@ class ClientController extends Controller
             $syncService = new \App\Services\ClientSyncService($platform);
             $syncService->syncOne($client->wp_post_id);
             $client->refresh();
+            $this->refreshClientDisplayImageCache($client, verifyReachable: false);
+            $client->refresh();
             $client->load([
                 'platform',
                 'assignedAgent',
@@ -1236,6 +1240,8 @@ class ClientController extends Controller
             $syncService = new \App\Services\ClientSyncService($platform);
             $syncService->syncOne((int) $client->wp_post_id);
             $client->refresh();
+            $this->refreshClientDisplayImageCache($client, verifyReachable: false);
+            $client->refresh();
 
             $this->auditService->fromRequest(
                 $request,
@@ -1363,6 +1369,8 @@ class ClientController extends Controller
 
         /** @var Client $repairedClient */
         $repairedClient = $result['client'];
+        $this->refreshClientDisplayImageCache($repairedClient, verifyReachable: false);
+        $repairedClient->refresh();
 
         $this->auditService->fromRequest(
             $request,
@@ -1432,6 +1440,8 @@ class ClientController extends Controller
 
             $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
             (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+            $client->refresh();
+            $this->refreshClientDisplayImageCache($client, verifyReachable: false);
 
             $this->auditService->fromRequest(
                 $request,
@@ -1479,6 +1489,8 @@ class ClientController extends Controller
 
             $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
             (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+            $client->refresh();
+            $this->refreshClientDisplayImageCache($client, verifyReachable: false);
 
             $this->auditService->fromRequest(
                 $request,
@@ -1524,6 +1536,8 @@ class ClientController extends Controller
 
             $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
             (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+            $client->refresh();
+            $this->refreshClientDisplayImageCache($client, verifyReachable: false);
 
             $this->auditService->fromRequest(
                 $request,
@@ -1546,6 +1560,20 @@ class ClientController extends Controller
                 'message' => 'Failed to set main image.',
                 'error' => $exception->getMessage(),
             ], 502);
+        }
+    }
+
+    private function refreshClientDisplayImageCache(Client $client, bool $verifyReachable): void
+    {
+        try {
+            $this->clientProfileImageService->refreshClient($client, verifyReachable: $verifyReachable);
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to refresh client display image cache.', [
+                'client_id' => $client->id,
+                'platform_id' => $client->platform_id,
+                'wp_post_id' => $client->wp_post_id,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 
@@ -2958,7 +2986,7 @@ class ClientController extends Controller
         $fields[] = ['key' => 'phone', 'label' => 'Phone', 'filled' => (bool) $client->phone_normalized];
         $fields[] = ['key' => 'email', 'label' => 'Email', 'filled' => (bool) $client->email];
         $fields[] = ['key' => 'city', 'label' => 'City', 'filled' => (bool) $client->city];
-        $fields[] = ['key' => 'photo', 'label' => 'At least 1 photo', 'filled' => (bool) $client->main_image_url];
+        $fields[] = ['key' => 'photo', 'label' => 'At least 1 photo', 'filled' => (bool) ($client->display_image_url ?: $client->main_image_url)];
 
         // Fields from WP meta — fetch with short cache to avoid hitting WP API on every page load
         $wpMeta = $this->getCachedWpMeta($client);

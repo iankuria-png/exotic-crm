@@ -11,6 +11,7 @@ use App\Models\PushCampaignItem;
 use App\Models\PushSubscriberSnapshot;
 use App\Models\ScraperProfilePreset;
 use App\Services\MarketAuthorizationService;
+use App\Services\ClientProfileImageService;
 use App\Services\PushCampaign\PushCampaignService;
 use App\Services\PushCampaign\PushCampaignDispatchReadinessService;
 use App\Services\PushCampaign\PushCampaignItemMatchService;
@@ -45,6 +46,7 @@ class PushCampaignController extends Controller
         private readonly UploadBatchStatusService $uploadBatchStatusService,
         private readonly SubscriberSyncService $subscriberSyncService,
         private readonly PushProviderService $pushProviderService,
+        private readonly ClientProfileImageService $clientProfileImageService,
     ) {
     }
 
@@ -1240,7 +1242,7 @@ class PushCampaignController extends Controller
         }
 
         $media = $this->fetchWpMediaOptions((array) $context);
-        $recommended = $this->pickRecommendedMedia($media);
+        $recommended = $this->clientProfileImageService->selectDisplayImage($media);
 
         return response()->json([
             'data' => $media,
@@ -2798,10 +2800,10 @@ class PushCampaignController extends Controller
 
                 if ($force || $this->isBlankValue($pushCampaignItem->profile_image_url) || $this->isBlankValue($payload['profile_image_url'] ?? null)) {
                     $media = $this->normalizeWpMediaItems($wpSync->getClientMedia($wpPostId));
-                    $recommended = $this->pickRecommendedMedia($media);
+                    $recommended = $this->clientProfileImageService->selectDisplayImage($media);
                     if ($recommended && !$this->isBlankValue($recommended['url'] ?? null)) {
                         $payload['profile_image_url'] = (string) ($recommended['url'] ?? '');
-                        $sources['image_source'] = (bool) ($recommended['is_main'] ?? false) ? 'wp_media_main' : 'wp_media_first';
+                        $sources['image_source'] = (string) ($recommended['source'] ?? 'wp_media_first');
                     }
                 } else {
                     $media = $this->normalizeWpMediaItems($wpSync->getClientMedia($wpPostId));
@@ -2858,57 +2860,7 @@ class PushCampaignController extends Controller
      */
     private function normalizeWpMediaItems(array $payload): array
     {
-        $rows = data_get($payload, 'data');
-        if (!is_array($rows)) {
-            $rows = array_is_list($payload) ? $payload : [];
-        }
-
-        return collect($rows)
-            ->map(function ($media): array {
-                $row = is_array($media) ? $media : [];
-                return [
-                    'id' => (int) ($row['id'] ?? 0),
-                    'url' => trim((string) ($row['url'] ?? '')),
-                    'filename' => isset($row['filename']) ? trim((string) $row['filename']) : null,
-                    'is_main' => (bool) ($row['is_main'] ?? false),
-                    'mime_type' => isset($row['mime_type']) ? trim((string) $row['mime_type']) : null,
-                    'uploaded_at' => isset($row['uploaded_at']) ? trim((string) $row['uploaded_at']) : null,
-                ];
-            })
-            ->filter(fn(array $media): bool => (int) ($media['id'] ?? 0) > 0
-                && !$this->isBlankValue($media['url'] ?? null)
-                && $this->isPushCampaignImageMedia($media))
-            ->values()
-            ->all();
-    }
-
-    private function isPushCampaignImageMedia(array $media): bool
-    {
-        $mimeType = strtolower(trim((string) ($media['mime_type'] ?? '')));
-        if ($mimeType !== '') {
-            return str_starts_with($mimeType, 'image/');
-        }
-
-        $url = strtolower(trim((string) ($media['url'] ?? '')));
-        return (bool) preg_match('/\.(jpe?g|png|webp)(?:$|[?#])/', $url);
-    }
-
-    /**
-     * @param array<int, array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}> $media
-     * @return array{id:int,url:string,filename:?string,is_main:bool,mime_type:?string,uploaded_at:?string}|null
-     */
-    private function pickRecommendedMedia(array $media): ?array
-    {
-        if (empty($media)) {
-            return null;
-        }
-
-        $main = collect($media)->first(fn(array $item): bool => (bool) ($item['is_main'] ?? false));
-        if ($main) {
-            return $main;
-        }
-
-        return $media[0] ?? null;
+        return $this->clientProfileImageService->normalizeMediaItems($payload);
     }
 
     /**

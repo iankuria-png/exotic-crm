@@ -178,6 +178,29 @@ class ClientIndexListingTest extends TestCase
             ->assertJsonPath('data.0.risk_reason_code', 'fraud_suspected');
     }
 
+    public function test_clients_index_exposes_cached_display_image_url(): void
+    {
+        $platform = $this->createPlatform();
+        $admin = $this->createAdminUser();
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Image Ready Client',
+            'main_image_url' => null,
+            'display_image_url' => 'https://cdn.example.test/profiles/image-ready.webp',
+            'display_image_source' => 'wp_media_first',
+            'display_image_checked_at' => now(),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson("/api/crm/clients?platform_id={$platform->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $client->id)
+            ->assertJsonPath('data.0.display_image_url', 'https://cdn.example.test/profiles/image-ready.webp')
+            ->assertJsonPath('data.0.display_image_source', 'wp_media_first');
+    }
+
     public function test_clients_index_supports_name_and_signup_sorting(): void
     {
         $platform = $this->createPlatform();
