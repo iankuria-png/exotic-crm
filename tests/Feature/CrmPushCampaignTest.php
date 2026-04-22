@@ -1729,6 +1729,67 @@ HTML,
         $this->assertSame(6085, (int) data_get($match, 'candidate.wp_post_id'));
     }
 
+    public function test_extraction_prefers_taxonomy_city_name_over_numeric_city_code(): void
+    {
+        $platform = $this->createPlatform('DRC', 'exoticdrc.com', 'Congo', 'Africa/Lubumbashi');
+        $platform->forceFill([
+            'wp_api_url' => 'https://wp.exoticdrc.test/wp-json/exotic-crm/v1',
+            'wp_api_user' => 'api-user',
+            'wp_api_password' => 'api-pass',
+            'phone_prefix' => '243',
+            'currency_code' => 'CDF',
+        ])->save();
+
+        $campaign = PushCampaign::query()->create([
+            'name' => 'City label extraction',
+            'platform_id' => $platform->id,
+            'status' => 'processing',
+            'upload_batch_id' => 'batch-city-label',
+        ]);
+
+        $item = PushCampaignItem::query()->create([
+            'campaign_id' => $campaign->id,
+            'profile_url' => 'https://www.exoticdrc.com/escorte/lala/',
+            'custom_message' => 'Bonjour',
+            'status' => 'pending_extraction',
+        ]);
+
+        Http::fake([
+            'https://www.exoticdrc.com/escorte/lala/' => Http::response(
+                <<<'HTML'
+<html>
+    <head><title>Lala</title></head>
+    <body class="single single-escorte postid-2055">
+        <input type="hidden" name="profile_id" value="2055" />
+    </body>
+</html>
+HTML,
+                200,
+                ['content-type' => 'text/html; charset=utf-8']
+            ),
+            'https://wp.exoticdrc.test/wp-json/exotic-crm/v1/clients/2055' => Http::response([
+                'data' => [
+                    'name' => 'Lala',
+                    'phone' => '243983804852',
+                    'city' => '84',
+                    'taxonomies' => [
+                        'city' => [
+                            'name' => 'Lubumbashi',
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://wp.exoticdrc.test/wp-json/exotic-crm/v1/clients/2055/media' => Http::response([], 404),
+        ]);
+
+        app(ProfileExtractionService::class)->extractProfileBatch(collect([$item]), $platform);
+
+        $fresh = $item->fresh();
+        $this->assertSame(2055, (int) $fresh->wp_post_id);
+        $this->assertSame('pending', (string) $fresh->status);
+        $this->assertSame('Lubumbashi', (string) $fresh->profile_city);
+    }
+
     public function test_extraction_classifies_http_404_as_actionable_failure(): void
     {
         $platform = $this->createPlatform('Kenya', 'kenya.example', 'Kenya');

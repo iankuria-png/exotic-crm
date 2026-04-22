@@ -9,6 +9,7 @@ use App\Models\ScraperProfilePreset;
 use App\Services\ClientProfileImageService;
 use App\Services\WordPressProfileUrlResolver;
 use App\Services\WpSyncService;
+use App\Support\CityNormalizer;
 use App\Support\DomParserTrait;
 use App\Support\MarketTimezone;
 use Carbon\Carbon;
@@ -676,17 +677,13 @@ class ProfileExtractionService
             ?? ($profile['birthday'] ?? null)
             ?? null;
 
-        $city = $profile['city']
-            ?? ($meta['city'] ?? null)
-            ?? null;
-
         return [
             'name' => $name ? trim((string) $name) : null,
             'phone' => $phone ? trim((string) $phone) : null,
             'image' => $image ? trim((string) $image) : null,
             'age_value' => $age ? trim((string) $age) : null,
             'birthday' => $birthday ? trim((string) $birthday) : null,
-            'city' => $city ? trim((string) $city) : null,
+            'city' => CityNormalizer::fromWpPayload($profile),
         ];
     }
 

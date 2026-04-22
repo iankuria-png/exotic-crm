@@ -1,0 +1,46 @@
+<?php
+
+namespace App\Support;
+
+class CityNormalizer
+{
+    public static function fromWpPayload(array $payload): ?string
+    {
+        $taxonomies = is_array($payload['taxonomies'] ?? null) ? $payload['taxonomies'] : [];
+        $meta = is_array($payload['meta'] ?? null) ? $payload['meta'] : [];
+
+        $candidates = [
+            data_get($taxonomies, 'city.name'),
+            data_get($taxonomies, 'city.0.name'),
+            $payload['city'] ?? null,
+            $meta['city'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $normalized = self::normalizeLabel($candidate);
+            if ($normalized !== null) {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    public static function normalizeLabel(mixed $value, int $maxLength = 100): ?string
+    {
+        if (!is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (preg_match('/^\d+$/', $normalized) === 1) {
+            return null;
+        }
+
+        return mb_substr($normalized, 0, $maxLength);
+    }
+}

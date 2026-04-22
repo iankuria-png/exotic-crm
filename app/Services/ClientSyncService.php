@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\ClientSyncExclusion;
 use App\Models\Platform;
+use App\Support\CityNormalizer;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -141,11 +142,16 @@ class ClientSyncService
         $phone = mb_substr($phone, 0, 20);
         $name = mb_substr($wpClient['name'] ?? '', 0, 255);
         $email = mb_substr($wpClient['email'] ?? '', 0, 255);
-        $city = mb_substr($wpClient['city'] ?? '', 0, 100);
+        $city = CityNormalizer::fromWpPayload($wpClient);
         $imageUrl = mb_substr($wpClient['main_image_url'] ?? '', 0, 500);
         $premiumExpire = $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null);
         $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
         $escortExpire = $this->resolveEscortExpiry($wpClient, $premiumExpire, $featuredExpire);
+
+        $client = Client::firstOrNew([
+            'platform_id' => $this->platform->id,
+            'wp_post_id'  => $wpPostId,
+        ]);
 
         $syncData = [
             'wp_user_id'      => $wpClient['wp_user_id'] ?? null,
@@ -153,7 +159,7 @@ class ClientSyncService
             'name'            => $name ?: null,
             'phone_normalized'=> $phone ?: null,
             'email'           => $email ?: null,
-            'city'            => $city ?: null,
+            'city'            => $city ?? $client->city,
             'profile_status'  => $wpClient['post_status'] ?? 'private',
             'premium'         => (bool) ($wpClient['premium'] ?? false),
             'premium_expire'  => $premiumExpire,
@@ -181,13 +187,8 @@ class ClientSyncService
             $syncData['signup_source'] = $wpSignupSource;
         }
 
-        $client = Client::updateOrCreate(
-            [
-                'platform_id' => $this->platform->id,
-                'wp_post_id'  => $wpPostId,
-            ],
-            $syncData
-        );
+        $client->fill($syncData);
+        $client->save();
 
         return $client->wasRecentlyCreated ? 'created' : 'updated';
     }

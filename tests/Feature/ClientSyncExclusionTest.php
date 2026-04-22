@@ -201,4 +201,106 @@ class ClientSyncExclusionTest extends TestCase
             'wp_modified_at' => '2026-04-17 08:30:00',
         ]);
     }
+
+    public function test_full_sync_prefers_taxonomy_city_name_over_numeric_city_code(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'DRC',
+            'country' => 'Congo',
+            'phone_prefix' => '243',
+            'currency_code' => 'CDF',
+            'wp_api_url' => 'https://drc.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+
+        Http::fake([
+            'https://drc.example.test/wp-json/exotic-crm-sync/v1/clients*' => Http::response([
+                'data' => [[
+                    'wp_post_id' => 2055,
+                    'wp_user_id' => 472,
+                    'name' => 'Lala',
+                    'phone' => '243983804852',
+                    'email' => 'lala@example.test',
+                    'city' => '84',
+                    'taxonomies' => [
+                        'city' => [
+                            'name' => 'Lubumbashi',
+                        ],
+                    ],
+                    'post_status' => 'private',
+                ]],
+                'pages' => 1,
+            ], 200),
+        ]);
+
+        $result = (new ClientSyncService($platform))->fullSync();
+
+        $this->assertSame([
+            'created' => 1,
+            'updated' => 0,
+            'skipped' => 0,
+            'total' => 1,
+        ], $result);
+
+        $this->assertDatabaseHas('clients', [
+            'platform_id' => $platform->id,
+            'wp_post_id' => 2055,
+            'city' => 'Lubumbashi',
+        ]);
+    }
+
+    public function test_full_sync_does_not_overwrite_existing_city_with_numeric_code_only(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => "Côte d'Ivoire",
+            'country' => "Côte d'Ivoire",
+            'phone_prefix' => '225',
+            'currency_code' => 'XOF',
+            'wp_api_url' => 'https://ivoire.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+
+        Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 6085,
+            'wp_user_id' => 3001,
+            'client_type' => 'escort',
+            'name' => 'Vera',
+            'city' => 'Abidjan',
+            'phone_normalized' => '22570006085',
+            'profile_status' => 'publish',
+        ]);
+
+        Http::fake([
+            'https://ivoire.example.test/wp-json/exotic-crm-sync/v1/clients*' => Http::response([
+                'data' => [[
+                    'wp_post_id' => 6085,
+                    'wp_user_id' => 3001,
+                    'name' => 'Vera',
+                    'phone' => '22570006085',
+                    'email' => 'vera@example.test',
+                    'city' => '21',
+                    'post_status' => 'publish',
+                ]],
+                'pages' => 1,
+            ], 200),
+        ]);
+
+        $result = (new ClientSyncService($platform))->fullSync();
+
+        $this->assertSame([
+            'created' => 0,
+            'updated' => 1,
+            'skipped' => 0,
+            'total' => 1,
+        ], $result);
+
+        $this->assertDatabaseHas('clients', [
+            'platform_id' => $platform->id,
+            'wp_post_id' => 6085,
+            'city' => 'Abidjan',
+        ]);
+    }
 }
