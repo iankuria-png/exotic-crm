@@ -340,7 +340,9 @@ export default function Clients() {
     const toast = useToast();
     const { user } = useAuth();
     const isReadOnly = user?.role === 'marketing';
+    const canBulkRefreshThumbnails = ['admin', 'sub_admin', 'sales'].includes(String(user?.role || ''));
     const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
+    const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
     const [searchParams] = useSearchParams();
 
     const [page, setPage] = useState(1);
@@ -409,6 +411,8 @@ export default function Clients() {
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
     const [csvResult, setCsvResult] = useState(null);
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
+    const [bulkThumbnailRefreshSelection, setBulkThumbnailRefreshSelection] = useState([]);
+    const [showBulkThumbnailRefreshConfirm, setShowBulkThumbnailRefreshConfirm] = useState(false);
     const [bulkDeleteDialog, setBulkDeleteDialog] = useState(() => createBulkDeleteDialogState(''));
     const [credentialDrawer, setCredentialDrawer] = useState({
         open: false,
@@ -707,6 +711,40 @@ export default function Clients() {
         },
     });
 
+    const bulkThumbnailRefreshMutation = useMutation({
+        mutationFn: (clientIds) => api.post('/crm/clients/bulk-refresh-display-images', {
+            client_ids: clientIds,
+        }).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            setClearSelectionKey((current) => current + 1);
+            setBulkThumbnailRefreshSelection([]);
+            setShowBulkThumbnailRefreshConfirm(false);
+
+            const refreshedCount = Number(payload?.refreshed_count || 0);
+            const clearedCount = Number(payload?.cleared_count || 0);
+            const skippedCount = Number(payload?.skipped_count || 0);
+            const failedCount = Number(payload?.failed_count || 0);
+
+            const summary = [
+                `${refreshedCount} refreshed`,
+                clearedCount ? `${clearedCount} cleared` : null,
+                skippedCount ? `${skippedCount} skipped` : null,
+                failedCount ? `${failedCount} failed` : null,
+            ].filter(Boolean).join(' • ');
+
+            if (failedCount > 0) {
+                toast.warning(`Thumbnail refresh finished with partial failures: ${summary}.`);
+                return;
+            }
+
+            toast.success(`Thumbnail refresh complete: ${summary}.`);
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Bulk thumbnail refresh failed.');
+        },
+    });
+
     const closeBulkDeleteDialog = () => {
         if (bulkDeletePreviewMutation.isPending || bulkDeleteMutation.isPending) {
             return;
@@ -750,16 +788,30 @@ export default function Clients() {
         setPage(1);
     };
 
-    const bulkActions = canDeleteClients ? [
-        {
+    const bulkActions = [
+        ...(canBulkRefreshThumbnails ? [{
+            key: 'bulk-refresh-client-thumbnails',
+            label: 'Refresh thumbnails',
+            onClick: (rowsSelection) => {
+                setBulkThumbnailRefreshSelection(rowsSelection);
+                setShowBulkThumbnailRefreshConfirm(true);
+            },
+            isDisabled: (rowsSelection) => rowsSelection.some((row) => Number(row.wp_post_id || 0) <= 0),
+            getDisabledReason: (rowsSelection) => (
+                rowsSelection.some((row) => Number(row.wp_post_id || 0) <= 0)
+                    ? 'Only WordPress-linked clients can refresh thumbnails.'
+                    : undefined
+            ),
+        }] : []),
+        ...(canDeleteClients ? [{
             key: 'bulk-delete-clients',
             label: 'Delete selected',
             variant: 'danger',
             onClick: (rowsSelection) => {
                 openSelectedDeleteDialog(rowsSelection);
             },
-        },
-    ] : [];
+        }] : []),
+    ];
 
     const rows = data?.data || [];
     const selectedCsvPlatformName = platformOptions.find((platform) => String(platform.platform_id) === String(csvForm.platform_id))?.platform_name || 'Selected market';
@@ -1555,7 +1607,7 @@ export default function Clients() {
                 isLoading={isLoading}
                 emptyMessage="No clients found matching your filters."
                 compact
-                selectable={canDeleteClients}
+                selectable={canSelectClients}
                 bulkActions={bulkActions}
                 clearSelectionKey={clearSelectionKey}
                 perPage={perPage}
@@ -1601,6 +1653,34 @@ export default function Clients() {
                     }}
                 />
             ) : null}
+
+            <ConfirmDialog
+                open={showBulkThumbnailRefreshConfirm}
+                title="Refresh Client Thumbnails"
+                message="This refreshes the cached CRM thumbnail from WordPress media for the selected profiles. It does not overwrite the rest of the client profile."
+                confirmLabel={`Refresh ${bulkThumbnailRefreshSelection.length || 0} thumbnail${bulkThumbnailRefreshSelection.length === 1 ? '' : 's'}`}
+                onCancel={() => {
+                    if (bulkThumbnailRefreshMutation.isPending) {
+                        return;
+                    }
+
+                    setShowBulkThumbnailRefreshConfirm(false);
+                    setBulkThumbnailRefreshSelection([]);
+                }}
+                onConfirm={() => {
+                    const clientIds = bulkThumbnailRefreshSelection
+                        .map((client) => Number(client.id))
+                        .filter((clientId) => clientId > 0);
+
+                    bulkThumbnailRefreshMutation.mutate(clientIds);
+                }}
+                confirmDisabled={!bulkThumbnailRefreshSelection.length || bulkThumbnailRefreshMutation.isPending}
+                isPending={bulkThumbnailRefreshMutation.isPending}
+            >
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    {bulkThumbnailRefreshSelection.length.toLocaleString()} selected client{bulkThumbnailRefreshSelection.length === 1 ? '' : 's'} will have their cached thumbnails refreshed.
+                </div>
+            </ConfirmDialog>
 
             <ConfirmDialog
                 open={showCsvConfirm}

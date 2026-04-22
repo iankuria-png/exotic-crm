@@ -1016,6 +1016,98 @@ class ClientController extends Controller
         }
     }
 
+    public function bulkRefreshDisplayImages(Request $request)
+    {
+        $validated = $request->validate([
+            'client_ids' => 'required|array|max:200',
+            'client_ids.*' => 'integer|min:1',
+        ]);
+
+        $clientIds = collect($validated['client_ids'])
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($clientIds === []) {
+            return response()->json([
+                'message' => 'Select at least one client to refresh thumbnails.',
+            ], 422);
+        }
+
+        $accessibleQuery = Client::query()->whereIn('id', $clientIds);
+        $this->marketAuthorizationService->applyPlatformScope($accessibleQuery, $request->user());
+        $accessibleCount = (clone $accessibleQuery)->count();
+
+        if ($accessibleCount !== count($clientIds)) {
+            return response()->json([
+                'message' => 'One or more selected clients are not accessible for thumbnail refresh.',
+            ], 403);
+        }
+
+        $clients = $accessibleQuery
+            ->with('platform')
+            ->orderBy('id')
+            ->get();
+
+        $refreshed = 0;
+        $cleared = 0;
+        $skipped = 0;
+        $failed = 0;
+        $results = [];
+
+        foreach ($clients as $client) {
+            if ((int) $client->wp_post_id <= 0) {
+                $skipped++;
+                $results[] = [
+                    'client_id' => (int) $client->id,
+                    'status' => 'skipped',
+                    'message' => 'Client is not linked to WordPress.',
+                ];
+                continue;
+            }
+
+            try {
+                $selection = $this->clientProfileImageService->refreshClient($client, verifyReachable: false);
+
+                if ($selection) {
+                    $refreshed++;
+                    $results[] = [
+                        'client_id' => (int) $client->id,
+                        'status' => 'refreshed',
+                        'display_image_url' => $selection['url'],
+                        'display_image_source' => $selection['source'],
+                    ];
+                } else {
+                    $cleared++;
+                    $results[] = [
+                        'client_id' => (int) $client->id,
+                        'status' => 'cleared',
+                        'message' => 'No usable WordPress image was found.',
+                    ];
+                }
+            } catch (\Throwable $exception) {
+                $failed++;
+                $results[] = [
+                    'client_id' => (int) $client->id,
+                    'status' => 'failed',
+                    'message' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'message' => 'Client thumbnails refresh completed.',
+            'processed_count' => count($clientIds),
+            'refreshed_count' => $refreshed,
+            'cleared_count' => $cleared,
+            'skipped_count' => $skipped,
+            'failed_count' => $failed,
+            'results' => $results,
+        ], $failed > 0 ? 207 : 200);
+    }
+
     public function deactivateSubscription(Request $request, Client $client)
     {
         $this->authorizeClientAccess($request, $client);

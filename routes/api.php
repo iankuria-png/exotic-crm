@@ -145,6 +145,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-delete', [ClientController::class, 'bulkDelete'])->middleware('role:admin,sub_admin');
+    Route::post('/clients/bulk-refresh-display-images', [ClientController::class, 'bulkRefreshDisplayImages'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/delete-preview', [ClientController::class, 'deletePreview'])->middleware('role:admin,sub_admin');
