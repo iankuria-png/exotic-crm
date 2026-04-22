@@ -30,21 +30,20 @@ return [
         'secret' => env('AWS_SECRET_ACCESS_KEY'),
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
-    
-    
+
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID'),
         'client_secret' => env('GOOGLE_CLIENT_SECRET'),
         'redirect' => env('GOOGLE_REDIRECT_URI'),
     ],
-    
+
     'cybersource' => [
         'access_key' => env('CYBERSOURCE_ACCESS_KEY'),
         'profile_id' => env('CYBERSOURCE_PROFILE_ID'),
         'secret_key' => env('CYBERSOURCE_SECRET_KEY'),
         'test_mode' => env('CYBERSOURCE_TEST_MODE', true),
     ],
- 
+
     'kopokopo' => [
         'client_id' => env('KOPOKOPO_CLIENT_ID'),
         'client_secret' => env('KOPOKOPO_CLIENT_SECRET'),
@@ -52,7 +51,7 @@ return [
         'base_url' => env('KOPOKOPO_BASE_URL'),
         'till_number' => env('KOPOKOPO_TILL_NUMBER'),
     ],
-    
+
     'django' => [
         'base_url' => env('DJANGO_API_BASE', 'https://polytech.co.ke/payment_service/api/payments'),
     ],
@@ -68,6 +67,14 @@ return [
         'gateway_url' => env('SMS_GATEWAY_URL'),
         'org_code' => env('SMS_ORG_CODE', '76'),
         'default_prefix' => env('SMS_DEFAULT_PREFIX', '254'),
+    ],
+
+    'support_board' => [
+        'tenant_user_index_ttl_minutes' => (int) env('SUPPORT_BOARD_TENANT_USER_INDEX_TTL_MINUTES', 10),
+        'tenant_user_index_max_pages' => (int) env('SUPPORT_BOARD_TENANT_USER_INDEX_MAX_PAGES', 25),
+        'host_aliases' => [
+            'exoticrwanda.com' => ['exoticrw.com'],
+        ],
     ],
 
     'africastalking' => [
@@ -88,7 +95,5 @@ return [
         'auto_match_min_score' => (int) env('PUSH_CAMPAIGNS_AUTO_MATCH_MIN_SCORE', 85),
         'auto_match_min_margin' => (int) env('PUSH_CAMPAIGNS_AUTO_MATCH_MIN_MARGIN', 15),
     ],
-
-
 
 ];

@@ -25,6 +25,14 @@ class SupportBoardService
 
     private const FAILURE_CACHE_MINUTES = 5;
 
+    private const TENANT_USER_INDEX_CACHE_MINUTES = 10;
+
+    private const TENANT_USER_INDEX_MAX_PAGES = 25;
+
+    private const PLATFORM_HOST_ALIASES = [
+        'exoticrwanda.com' => ['exoticrw.com'],
+    ];
+
     private string $apiUrl;
 
     private ?string $token;
@@ -53,6 +61,11 @@ class SupportBoardService
         return "sb_failure:{$platformId}";
     }
 
+    public static function tenantUsersIndexCacheKey(string $apiUrl, ?string $token): string
+    {
+        return 'sb_tenant_user_index:'.sha1(trim($apiUrl).'|'.hash('sha256', (string) $token));
+    }
+
     public static function clearResolveCache(Client $client): void
     {
         Cache::forget(self::resolveCacheKey((int) $client->platform_id, (int) $client->id));
@@ -70,15 +83,15 @@ class SupportBoardService
 
     public function canReply(User $crmUser): bool
     {
-        return !empty($crmUser->sb_agent_id) || !empty($this->platform->support_board_sender_id);
+        return ! empty($crmUser->sb_agent_id) || ! empty($this->platform->support_board_sender_id);
     }
 
     public function findUserByPhone(string $normalizedPhone): ?array
     {
         foreach ($this->phoneVariants($normalizedPhone) as $phoneVariant) {
             $user = $this->findUserBy('phone', $phoneVariant);
-            if ($user) {
-                return $user;
+            if ($user && ($verified = $this->verifyUserBelongsToPlatform($user))) {
+                return $verified;
             }
         }
 
@@ -92,7 +105,9 @@ class SupportBoardService
             return null;
         }
 
-        return $this->findUserBy('email', $email);
+        $user = $this->findUserBy('email', $email);
+
+        return $user ? $this->verifyUserBelongsToPlatform($user) : null;
     }
 
     public function resolveClient(Client $client): array
@@ -124,18 +139,22 @@ class SupportBoardService
                     $matchedBy = 'phone';
                 }
 
-                if (!$sbUser && $email !== '') {
+                if (! $sbUser && $email !== '') {
                     $sbUser = $this->findUserByEmail($email);
                     if ($sbUser) {
                         $matchedBy = 'email';
                     }
                 }
 
-                $this->syncClientLink(
-                    $client,
-                    $sbUser ? (int) ($sbUser['id'] ?? 0) : null,
-                    $matchedBy
-                );
+                if ($sbUser) {
+                    $this->syncClientLink(
+                        $client,
+                        (int) ($sbUser['id'] ?? 0),
+                        $matchedBy
+                    );
+                } elseif (! $client->sb_user_id) {
+                    $this->syncClientLink($client, null, null);
+                }
 
                 return [
                     'matched' => $sbUser !== null,
@@ -229,7 +248,7 @@ class SupportBoardService
             'extra' => $extra,
         ]);
 
-        if (!$response || !is_array($response)) {
+        if (! $response || ! is_array($response)) {
             return null;
         }
 
@@ -256,7 +275,7 @@ class SupportBoardService
 
         $response = $this->request('get-user-extra', $payload);
 
-        if (!is_array($response)) {
+        if (! is_array($response)) {
             return [];
         }
 
@@ -276,7 +295,7 @@ class SupportBoardService
             fn ($value) => $value !== null
         ));
 
-        if (!empty($settingsExtra)) {
+        if (! empty($settingsExtra)) {
             $payload['settings_extra'] = $settingsExtra;
         }
 
@@ -302,7 +321,7 @@ class SupportBoardService
             'extra' => $extra ?: null,
         ], fn ($v) => $v !== null));
 
-        if (is_array($response) && !empty($response['id'])) {
+        if (is_array($response) && ! empty($response['id'])) {
             return (int) $response['id'];
         }
 
@@ -340,7 +359,7 @@ class SupportBoardService
             'user' => [
                 'first_name' => (string) ($details['first_name'] ?? ''),
                 'last_name' => (string) ($details['last_name'] ?? ''),
-                'full_name' => trim(((string) ($details['first_name'] ?? '')) . ' ' . ((string) ($details['last_name'] ?? ''))),
+                'full_name' => trim(((string) ($details['first_name'] ?? '')).' '.((string) ($details['last_name'] ?? ''))),
                 'profile_image' => $details['profile_image'] ?? null,
                 'user_type' => $details['user_type'] ?? null,
             ],
@@ -388,7 +407,7 @@ class SupportBoardService
             'value' => $value,
         ]);
 
-        if (!$response || !is_array($response)) {
+        if (! $response || ! is_array($response)) {
             return null;
         }
 
@@ -426,18 +445,23 @@ class SupportBoardService
         // Check responses in variant priority order
         foreach ($variants as $index => $variant) {
             $response = $responses["v{$index}"] ?? null;
-            if (!$response || $response instanceof \Throwable || $response->failed()) {
+            if (! $response || $response instanceof \Throwable || $response->failed()) {
                 continue;
             }
 
             $body = json_decode(ltrim($response->body(), "\xEF\xBB\xBF"), true);
-            if (!is_array($body) || !($body['success'] ?? false) || empty($body['response'])) {
+            if (! is_array($body) || ! ($body['success'] ?? false) || empty($body['response'])) {
                 continue;
             }
 
             $user = $body['response'];
-            if (is_array($user) && !empty($user['id'])) {
-                return $this->normalizeUser($user);
+            if (is_array($user) && ! empty($user['id'])) {
+                $normalizedUser = $this->normalizeUser($user);
+                $verifiedUser = $this->verifyUserBelongsToPlatform($normalizedUser);
+
+                if ($verifiedUser) {
+                    return $verifiedUser;
+                }
             }
         }
 
@@ -446,7 +470,7 @@ class SupportBoardService
 
     private function request(string $function, array $payload = []): mixed
     {
-        if (!$this->isConfigured()) {
+        if (! $this->isConfigured()) {
             throw new RuntimeException('Support Board is not configured for this market.');
         }
 
@@ -482,7 +506,7 @@ class SupportBoardService
         }
 
         $body = json_decode(ltrim($response->body(), "\xEF\xBB\xBF"), true);
-        if (!is_array($body) || !array_key_exists('success', $body)) {
+        if (! is_array($body) || ! array_key_exists('success', $body)) {
             Log::error('SupportBoardService invalid response format', [
                 'api_url' => $this->apiUrl,
                 'function' => $function,
@@ -502,7 +526,7 @@ class SupportBoardService
 
         $this->clearFailureCache();
 
-        if (!($body['success'] ?? false)) {
+        if (! ($body['success'] ?? false)) {
             $error = $body['response'] ?? 'Unknown Support Board error.';
             if (is_array($error)) {
                 $error = json_encode($error);
@@ -525,6 +549,7 @@ class SupportBoardService
             } catch (ConnectionException $exception) {
                 if ($attempt < self::REQUEST_ATTEMPTS && $this->shouldRetryConnectionException($exception)) {
                     usleep(self::REQUEST_RETRY_DELAY_MICROSECONDS);
+
                     continue;
                 }
 
@@ -555,7 +580,7 @@ class SupportBoardService
     private function throwIfFailureCached(): void
     {
         $cachedFailure = Cache::get(self::failureCacheKey((int) $this->platform->id));
-        if (!is_array($cachedFailure)) {
+        if (! is_array($cachedFailure)) {
             return;
         }
 
@@ -605,16 +630,16 @@ class SupportBoardService
             $local = ltrim((string) $local, '0');
 
             if ($local !== '') {
-                $variants[] = '+' . $prefix . $local;
-                $variants[] = $prefix . $local;
-                $variants[] = '0' . $local;
+                $variants[] = '+'.$prefix.$local;
+                $variants[] = $prefix.$local;
+                $variants[] = '0'.$local;
             }
         }
 
         if (empty($variants)) {
-            $variants[] = '+' . $digits;
+            $variants[] = '+'.$digits;
             $variants[] = $digits;
-            $variants[] = str_starts_with($digits, '0') ? $digits : '0' . $digits;
+            $variants[] = str_starts_with($digits, '0') ? $digits : '0'.$digits;
         }
 
         return array_values(array_unique(array_filter($variants)));
@@ -635,33 +660,90 @@ class SupportBoardService
     }
 
     /**
+     * Build a short-lived index from the shared Support Board tenant.
+     *
+     * get-users-with-details is currently unreliable in production, so the
+     * sync path uses get-users and filters locally by market host.
+     *
+     * @return array{users: list<array{id: int, phones: list<string>, emails: list<string>, current_url: ?string, host: string}>, stats: array<string, int>}
+     */
+    public function fetchTenantUsersIndex(bool $forceRefresh = false): array
+    {
+        $cacheKey = self::tenantUsersIndexCacheKey($this->apiUrl, $this->token);
+
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        return Cache::remember($cacheKey, now()->addMinutes($this->tenantUserIndexCacheMinutes()), function (): array {
+            $users = [];
+            $stats = [
+                'pages' => 0,
+                'users' => 0,
+                'without_identity' => 0,
+                'without_current_url' => 0,
+            ];
+
+            for ($page = 1; $page <= $this->tenantUserIndexMaxPages(); $page++) {
+                $response = $this->request('get-users', [
+                    'pagination' => $page,
+                    'extra' => ['phone', 'email', 'current_url', 'country_code'],
+                ]);
+
+                $rows = collect(is_array($response) ? $response : [])
+                    ->filter(fn ($row) => is_array($row))
+                    ->values();
+
+                if ($rows->isEmpty()) {
+                    break;
+                }
+
+                $stats['pages']++;
+                $stats['users'] += $rows->count();
+
+                foreach ($rows as $row) {
+                    $indexedUser = $this->normalizeTenantUserIndexEntry($row);
+                    if (! $indexedUser) {
+                        continue;
+                    }
+
+                    if ($indexedUser['phones'] === [] && $indexedUser['emails'] === []) {
+                        $stats['without_identity']++;
+                    }
+
+                    if ($indexedUser['host'] === '') {
+                        $stats['without_current_url']++;
+                    }
+
+                    $users[] = $indexedUser;
+                }
+            }
+
+            Log::info('SupportBoardService tenant user index refreshed', [
+                'api_url' => $this->apiUrl,
+                'stats' => $stats,
+            ]);
+
+            return [
+                'users' => $users,
+                'stats' => $stats,
+            ];
+        });
+    }
+
+    /**
      * Bulk resolve SB user links for a collection of clients.
-     * Makes 1 API call to fetch all SB users, then matches locally.
+     * Reuses a cached tenant-level user index, then matches locally with
+     * market-host guards because all markets share the same Support Board.
      *
      * @param  \Illuminate\Support\Collection<int, Client>  $clients
      * @return array<int, array{matched: bool, sb_user_id: ?int, matched_by: ?string, changed: bool}>
      */
     public function bulkResolveClients(Collection $clients): array
     {
-        $rawDetails = $this->fetchAllUsersWithDetails();
-
-        // Build phone→userId lookup (normalized: digits only)
-        $phoneMap = [];
-        foreach ($rawDetails['phone'] ?? [] as $entry) {
-            $digits = preg_replace('/\D+/', '', (string) ($entry['value'] ?? ''));
-            if ($digits !== '' && !empty($entry['id'])) {
-                $phoneMap[$digits] = (int) $entry['id'];
-            }
-        }
-
-        // Build email→userId lookup (lowercased)
-        $emailMap = [];
-        foreach ($rawDetails['email'] ?? [] as $entry) {
-            $email = strtolower(trim((string) ($entry['value'] ?? '')));
-            if ($email !== '' && !empty($entry['id'])) {
-                $emailMap[$email] = (int) $entry['id'];
-            }
-        }
+        $lookups = $this->buildPlatformTenantLookups($this->fetchTenantUsersIndex());
+        $phoneMap = $lookups['phone'];
+        $emailMap = $lookups['email'];
 
         $results = [];
 
@@ -703,7 +785,7 @@ class SupportBoardService
                     }
 
                     // Fallback: try email
-                    if (!$matchedUserId) {
+                    if (! $matchedUserId) {
                         $email = strtolower(trim((string) ($client->email ?: '')));
                         if ($email !== '' && isset($emailMap[$email])) {
                             $matchedUserId = $emailMap[$email];
@@ -712,8 +794,10 @@ class SupportBoardService
                     }
                 }
 
-                // Persist the link (same path as resolveClient)
-                $this->syncClientLink($client, $matchedUserId, $matchedBy);
+                if ($matchedUserId || ! $client->sb_user_id) {
+                    $this->syncClientLink($client, $matchedUserId, $matchedBy);
+                }
+
                 $this->recordBulkOutcome($result, $beforeSbUserId, $beforeMatchedBy, $matchedUserId, $matchedBy);
             } catch (\Throwable $caughtException) {
                 $result['errors'] = 1;
@@ -727,6 +811,278 @@ class SupportBoardService
         }
 
         return $results;
+    }
+
+    /**
+     * @param  array{users?: list<array{id: int, phones: list<string>, emails: list<string>, current_url: ?string, host: string}>, stats?: array<string, int>}  $index
+     * @return array{phone: array<string, int>, email: array<string, int>, stats: array<string, int>}
+     */
+    private function buildPlatformTenantLookups(array $index): array
+    {
+        $allowedHosts = $this->platformHosts();
+        $phoneCandidates = [];
+        $emailCandidates = [];
+        $stats = [
+            'allowed_hosts' => count($allowedHosts),
+            'indexed_users' => count($index['users'] ?? []),
+            'wrong_host' => 0,
+            'missing_current_url' => 0,
+            'missing_identity' => 0,
+            'ambiguous_phone' => 0,
+            'ambiguous_email' => 0,
+        ];
+
+        foreach (array_values(is_array($index['users'] ?? null) ? $index['users'] : []) as $user) {
+            if (! is_array($user)) {
+                continue;
+            }
+
+            $userId = (int) ($user['id'] ?? 0);
+            if ($userId <= 0) {
+                continue;
+            }
+
+            $host = (string) ($user['host'] ?? '');
+            if ($host === '') {
+                $stats['missing_current_url']++;
+
+                continue;
+            }
+
+            if (! in_array($host, $allowedHosts, true)) {
+                $stats['wrong_host']++;
+
+                continue;
+            }
+
+            $phones = array_values(is_array($user['phones'] ?? null) ? $user['phones'] : []);
+            $emails = array_values(is_array($user['emails'] ?? null) ? $user['emails'] : []);
+
+            if ($phones === [] && $emails === []) {
+                $stats['missing_identity']++;
+
+                continue;
+            }
+
+            foreach ($phones as $phone) {
+                $digits = $this->phoneLookupKey((string) $phone);
+                if ($digits !== '') {
+                    $phoneCandidates[$digits][] = $userId;
+                }
+            }
+
+            foreach ($emails as $email) {
+                $normalizedEmail = $this->emailLookupKey((string) $email);
+                if ($normalizedEmail !== '') {
+                    $emailCandidates[$normalizedEmail][] = $userId;
+                }
+            }
+        }
+
+        $phoneMap = $this->uniqueLookupMap($phoneCandidates, $stats['ambiguous_phone']);
+        $emailMap = $this->uniqueLookupMap($emailCandidates, $stats['ambiguous_email']);
+
+        Log::debug('SupportBoardService platform user index filtered', [
+            'platform_id' => (int) $this->platform->id,
+            'allowed_hosts' => $allowedHosts,
+            'stats' => $stats,
+        ]);
+
+        return [
+            'phone' => $phoneMap,
+            'email' => $emailMap,
+            'stats' => $stats,
+        ];
+    }
+
+    /**
+     * @return array{id: int, phones: list<string>, emails: list<string>, current_url: ?string, host: string}|null
+     */
+    private function normalizeTenantUserIndexEntry(array $user): ?array
+    {
+        $userId = $this->nullableInt($user['id'] ?? null);
+        if (! $userId) {
+            return null;
+        }
+
+        $phones = $this->extractSupportBoardUserValues($user, 'phone');
+        $emails = $this->extractSupportBoardUserValues($user, 'email');
+        $currentUrl = $this->firstFilledValue($this->extractSupportBoardUserValues($user, 'current_url'));
+
+        return [
+            'id' => $userId,
+            'phones' => $phones,
+            'emails' => array_values(array_unique(array_map(fn (string $email) => $this->emailLookupKey($email), $emails))),
+            'current_url' => $currentUrl,
+            'host' => $this->normalizeHost((string) $currentUrl),
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractSupportBoardUserValues(array $user, string $slug): array
+    {
+        $values = [];
+
+        if (isset($user[$slug])) {
+            $values[] = $user[$slug];
+        }
+
+        $extra = $this->normalizeJsonValue($user['extra'] ?? []);
+        if (is_array($extra) && array_key_exists($slug, $extra)) {
+            $values[] = $extra[$slug];
+        }
+
+        $details = is_array($user['details'] ?? null) ? $user['details'] : [];
+        foreach ($details as $detail) {
+            if (is_array($detail) && (string) ($detail['slug'] ?? '') === $slug) {
+                $values[] = $detail['value'] ?? null;
+            }
+        }
+
+        return collect($values)
+            ->flatten()
+            ->map(fn ($value) => trim((string) $value))
+            ->filter(fn (string $value) => $value !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function firstFilledValue(array $values): ?string
+    {
+        foreach ($values as $value) {
+            $trimmed = trim((string) $value);
+            if ($trimmed !== '') {
+                return $trimmed;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, list<int>>  $candidates
+     * @return array<string, int>
+     */
+    private function uniqueLookupMap(array $candidates, int &$ambiguousCount): array
+    {
+        $map = [];
+        $ambiguousCount = 0;
+
+        foreach ($candidates as $key => $ids) {
+            $uniqueIds = array_values(array_unique(array_map('intval', $ids)));
+            if (count($uniqueIds) === 1) {
+                $map[$key] = $uniqueIds[0];
+
+                continue;
+            }
+
+            $ambiguousCount++;
+        }
+
+        return $map;
+    }
+
+    private function verifyUserBelongsToPlatform(array $user): ?array
+    {
+        $userId = (int) ($user['id'] ?? 0);
+        if ($userId <= 0) {
+            return null;
+        }
+
+        $detailedUser = $this->getUser($userId, true);
+        if (! $detailedUser || ! $this->userBelongsToPlatform($detailedUser)) {
+            return null;
+        }
+
+        return $detailedUser;
+    }
+
+    private function userBelongsToPlatform(array $user): bool
+    {
+        $currentUrl = $this->firstFilledValue($this->extractSupportBoardUserValues($user, 'current_url'));
+        $host = $this->normalizeHost((string) $currentUrl);
+
+        return $host !== '' && in_array($host, $this->platformHosts(), true);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function platformHosts(): array
+    {
+        $hosts = array_values(array_filter([
+            $this->normalizeHost((string) ($this->platform->domain ?? '')),
+            $this->normalizeHost((string) ($this->platform->wp_api_url ?? '')),
+        ]));
+
+        foreach ($hosts as $host) {
+            foreach ($this->platformHostAliases() as $canonicalHost => $aliases) {
+                $aliasHosts = array_map(fn (string $alias) => $this->normalizeHost($alias), $aliases);
+                if ($host === $canonicalHost || in_array($host, $aliasHosts, true)) {
+                    $hosts[] = $canonicalHost;
+                    array_push($hosts, ...$aliasHosts);
+                }
+            }
+        }
+
+        return array_values(array_unique(array_filter($hosts)));
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    private function platformHostAliases(): array
+    {
+        $aliases = config('services.support_board.host_aliases', self::PLATFORM_HOST_ALIASES);
+
+        return is_array($aliases) ? $aliases : self::PLATFORM_HOST_ALIASES;
+    }
+
+    private function tenantUserIndexCacheMinutes(): int
+    {
+        return max(1, (int) config(
+            'services.support_board.tenant_user_index_ttl_minutes',
+            self::TENANT_USER_INDEX_CACHE_MINUTES
+        ));
+    }
+
+    private function tenantUserIndexMaxPages(): int
+    {
+        return max(1, (int) config(
+            'services.support_board.tenant_user_index_max_pages',
+            self::TENANT_USER_INDEX_MAX_PAGES
+        ));
+    }
+
+    private function normalizeHost(string $value): string
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        $host = parse_url($trimmed, PHP_URL_HOST);
+        if (! is_string($host) || $host === '') {
+            $host = preg_replace('#^https?://#i', '', $trimmed) ?: '';
+            $host = explode('/', $host)[0] ?? '';
+        }
+
+        $host = strtolower(trim($host));
+
+        return preg_replace('#^www\.#', '', $host) ?: '';
+    }
+
+    private function phoneLookupKey(string $phone): string
+    {
+        return preg_replace('/\D+/', '', $phone) ?: '';
+    }
+
+    private function emailLookupKey(string $email): string
+    {
+        return strtolower(trim($email));
     }
 
     protected function syncClientLink(Client $client, ?int $sbUserId, ?string $matchedBy): void
@@ -753,18 +1109,21 @@ class SupportBoardService
         ?int $afterSbUserId,
         ?string $afterMatchedBy
     ): void {
-        if ($afterSbUserId && !$beforeSbUserId) {
+        if ($afterSbUserId && ! $beforeSbUserId) {
             $result['matched']++;
+
             return;
         }
 
-        if (!$afterSbUserId && $beforeSbUserId) {
+        if (! $afterSbUserId && $beforeSbUserId) {
             $result['cleared']++;
+
             return;
         }
 
         if ($afterSbUserId !== $beforeSbUserId || $afterMatchedBy !== $beforeMatchedBy) {
             $result['updated']++;
+
             return;
         }
 
@@ -780,13 +1139,14 @@ class SupportBoardService
             'id' => $this->nullableInt($user['id'] ?? null),
             'first_name' => $firstName,
             'last_name' => $lastName,
-            'full_name' => trim($firstName . ' ' . $lastName),
+            'full_name' => trim($firstName.' '.$lastName),
             'email' => $user['email'] ?? null,
             'profile_image' => $user['profile_image'] ?? null,
             'user_type' => $user['user_type'] ?? null,
             'creation_time' => $user['creation_time'] ?? null,
             'last_activity' => $user['last_activity'] ?? null,
             'department' => $user['department'] ?? null,
+            'extra' => $this->normalizeJsonValue($user['extra'] ?? []),
             'details' => array_values(is_array($user['details'] ?? null) ? $user['details'] : []),
         ];
     }
@@ -866,7 +1226,7 @@ class SupportBoardService
             'conversation_id' => $this->nullableInt($message['conversation_id'] ?? null),
             'first_name' => $firstName,
             'last_name' => $lastName,
-            'full_name' => trim($firstName . ' ' . $lastName),
+            'full_name' => trim($firstName.' '.$lastName),
             'profile_image' => $message['profile_image'] ?? null,
             'user_type' => $message['user_type'] ?? null,
             'payload' => $this->normalizeJsonValue($message['payload'] ?? null),
@@ -878,7 +1238,7 @@ class SupportBoardService
     {
         $decoded = $this->normalizeJsonValue($attachments);
 
-        if (!is_array($decoded)) {
+        if (! is_array($decoded)) {
             return [];
         }
 
@@ -907,7 +1267,7 @@ class SupportBoardService
 
                 return null;
             })
-            ->filter(fn ($attachment) => is_array($attachment) && !empty($attachment['url']))
+            ->filter(fn ($attachment) => is_array($attachment) && ! empty($attachment['url']))
             ->values()
             ->all();
     }

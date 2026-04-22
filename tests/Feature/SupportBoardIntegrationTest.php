@@ -3,16 +3,14 @@
 namespace Tests\Feature;
 
 use App\Exceptions\SupportBoardUnavailableException;
+use App\Jobs\RunSupportBoardSyncJob;
 use App\Models\Client;
-use App\Models\ClientNote;
 use App\Models\Platform;
 use App\Models\SupportBoardSyncRun;
-use App\Models\TimelineEvent;
 use App\Models\User;
-use App\Jobs\RunSupportBoardSyncJob;
 use App\Services\SupportBoardLinkSyncService;
-use App\Services\SupportBoardSyncRunService;
 use App\Services\SupportBoardService;
+use App\Services\SupportBoardSyncRunService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Cache;
@@ -25,6 +23,13 @@ use Tests\TestCase;
 class SupportBoardIntegrationTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Cache::flush();
+    }
 
     public function test_settings_detail_masks_support_board_token_and_patch_preserves_or_updates_it(): void
     {
@@ -803,17 +808,26 @@ class SupportBoardIntegrationTest extends TestCase
             'email' => 'async-sync@example.test',
         ]);
 
-        Http::fake(function (ClientRequest $request) {
+        Http::fake(function (ClientRequest $request) use ($platform) {
             $function = $request->data()['function'] ?? null;
-            if ($function === 'get-users-with-details') {
+            if ($function === 'get-users') {
+                if ((int) ($request->data()['pagination'] ?? 1) > 1) {
+                    return Http::response(['success' => true, 'response' => []]);
+                }
+
                 return Http::response([
                     'success' => true,
                     'response' => [
-                        'phone' => [
-                            ['id' => 5678, 'value' => '+254701234567'],
-                        ],
-                        'email' => [
-                            ['id' => 5678, 'value' => 'async-sync@example.test'],
+                        [
+                            'id' => 5678,
+                            'first_name' => 'Async',
+                            'last_name' => 'User',
+                            'email' => 'async-sync@example.test',
+                            'extra' => [
+                                'phone' => '+254701234567',
+                                'current_url' => rtrim((string) $platform->domain, '/').'/escort/async-user/',
+                                'country_code' => 'UG',
+                            ],
                         ],
                     ],
                 ]);
@@ -862,21 +876,25 @@ class SupportBoardIntegrationTest extends TestCase
             ]));
         }
 
-        Http::fake(function (ClientRequest $request) use ($clients) {
+        Http::fake(function (ClientRequest $request) use ($clients, $platform) {
             $function = $request->data()['function'] ?? null;
-            if ($function === 'get-users-with-details') {
+            if ($function === 'get-users') {
+                if ((int) ($request->data()['pagination'] ?? 1) > 1) {
+                    return Http::response(['success' => true, 'response' => []]);
+                }
+
                 return Http::response([
                     'success' => true,
-                    'response' => [
-                        'phone' => $clients->map(fn ($client, $index) => [
-                            'id' => 7000 + $index + 1,
-                            'value' => '+' . $client->phone_normalized,
-                        ])->all(),
-                        'email' => $clients->map(fn ($client, $index) => [
-                            'id' => 7000 + $index + 1,
-                            'value' => $client->email,
-                        ])->all(),
-                    ],
+                    'response' => $clients->map(fn ($client, $index) => [
+                        'id' => 7000 + $index + 1,
+                        'first_name' => 'Chunk',
+                        'last_name' => 'User',
+                        'email' => $client->email,
+                        'extra' => [
+                            'phone' => '+'.$client->phone_normalized,
+                            'current_url' => rtrim((string) $platform->domain, '/').'/escort/chunk-user-'.($index + 1).'/',
+                        ],
+                    ])->all(),
                 ]);
             }
 
@@ -914,6 +932,214 @@ class SupportBoardIntegrationTest extends TestCase
         });
     }
 
+    public function test_support_board_bulk_sync_filters_shared_tenant_users_by_platform_host(): void
+    {
+        $platform = $this->createPlatform([
+            'domain' => 'https://www.exotickenya.com/',
+            'wp_api_url' => 'https://www.exotickenya.com/wp-json/exotic-crm-sync/v1',
+        ]);
+
+        $matchingClient = $this->createClient($platform, [
+            'phone_normalized' => '254701111111',
+            'email' => 'matching-host@example.test',
+        ]);
+        $wrongHostClient = $this->createClient($platform, [
+            'phone_normalized' => '254702222222',
+            'email' => 'wrong-host@example.test',
+        ]);
+        $missingHostClient = $this->createClient($platform, [
+            'phone_normalized' => '254703333333',
+            'email' => 'missing-host@example.test',
+        ]);
+
+        Http::fake(function (ClientRequest $request) {
+            if (($request->data()['function'] ?? null) !== 'get-users') {
+                return Http::response(['success' => true, 'response' => []]);
+            }
+
+            if ((int) ($request->data()['pagination'] ?? 1) > 1) {
+                return Http::response(['success' => true, 'response' => []]);
+            }
+
+            return Http::response([
+                'success' => true,
+                'response' => [
+                    [
+                        'id' => 9101,
+                        'email' => 'matching-host@example.test',
+                        'extra' => [
+                            'phone' => '+254701111111',
+                            'current_url' => 'https://www.exotickenya.com/escort/matching/',
+                            'country_code' => 'TZ',
+                        ],
+                    ],
+                    [
+                        'id' => 9102,
+                        'email' => 'wrong-host@example.test',
+                        'extra' => [
+                            'phone' => '+254702222222',
+                            'current_url' => 'https://www.exoticghana.com/escort/wrong/',
+                            'country_code' => 'KE',
+                        ],
+                    ],
+                    [
+                        'id' => 9103,
+                        'email' => 'missing-host@example.test',
+                        'extra' => [
+                            'phone' => '+254703333333',
+                        ],
+                    ],
+                ],
+            ]);
+        });
+
+        app(SupportBoardService::class, ['platform' => $platform])
+            ->bulkResolveClients(collect([$matchingClient, $wrongHostClient, $missingHostClient]));
+
+        $this->assertSame(9101, (int) $matchingClient->fresh()->sb_user_id);
+        $this->assertNull($wrongHostClient->fresh()->sb_user_id);
+        $this->assertNull($missingHostClient->fresh()->sb_user_id);
+    }
+
+    public function test_support_board_tenant_user_index_is_reused_across_bulk_chunks(): void
+    {
+        $platform = $this->createPlatform([
+            'domain' => 'https://www.exotickenya.com/',
+        ]);
+
+        $clients = collect();
+        for ($index = 1; $index <= 101; $index++) {
+            $clients->push($this->createClient($platform, [
+                'phone_normalized' => sprintf('254711%06d', $index),
+                'email' => "cached-index-{$index}@example.test",
+            ]));
+        }
+
+        $getUsersCalls = 0;
+        Http::fake(function (ClientRequest $request) use ($clients, &$getUsersCalls) {
+            if (($request->data()['function'] ?? null) !== 'get-users') {
+                return Http::response(['success' => true, 'response' => []]);
+            }
+
+            $getUsersCalls++;
+            if ((int) ($request->data()['pagination'] ?? 1) > 1) {
+                return Http::response(['success' => true, 'response' => []]);
+            }
+
+            return Http::response([
+                'success' => true,
+                'response' => $clients->map(fn ($client, $index) => [
+                    'id' => 9200 + $index + 1,
+                    'email' => $client->email,
+                    'extra' => [
+                        'phone' => '+'.$client->phone_normalized,
+                        'current_url' => 'https://www.exotickenya.com/escort/cached-'.($index + 1).'/',
+                    ],
+                ])->all(),
+            ]);
+        });
+
+        $sync = app(SupportBoardLinkSyncService::class);
+        $firstChunk = $sync->syncPlatformBulkChunk($platform, false, 0, 100);
+        $sync->syncPlatformBulkChunk($platform, false, (int) $firstChunk['last_processed_client_id'], 100);
+
+        $this->assertSame(2, $getUsersCalls);
+        $this->assertSame(9201, (int) $clients->first()->fresh()->sb_user_id);
+        $this->assertSame(9301, (int) $clients->last()->fresh()->sb_user_id);
+    }
+
+    public function test_support_board_get_user_by_fallback_requires_verified_platform_host(): void
+    {
+        $platform = $this->createPlatform([
+            'domain' => 'https://www.exotickenya.com/',
+        ]);
+        $client = $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'verified-fallback@example.test',
+        ]);
+
+        Http::fake(function (ClientRequest $request) {
+            return match ($request->data()['function'] ?? null) {
+                'get-user-by' => Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 9301,
+                        'first_name' => 'Verified',
+                        'last_name' => 'Fallback',
+                        'email' => 'verified-fallback@example.test',
+                    ],
+                ]),
+                'get-user' => Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 9301,
+                        'first_name' => 'Verified',
+                        'last_name' => 'Fallback',
+                        'email' => 'verified-fallback@example.test',
+                        'details' => [
+                            ['slug' => 'phone', 'name' => 'Phone', 'value' => '+254701234567'],
+                            ['slug' => 'current_url', 'name' => 'Current URL', 'value' => 'https://www.exotickenya.com/escort/verified/'],
+                        ],
+                    ],
+                ]),
+                default => Http::response(['success' => true, 'response' => []]),
+            };
+        });
+
+        $resolved = app(SupportBoardService::class, ['platform' => $platform])->resolveClient($client);
+
+        $this->assertTrue($resolved['matched']);
+        $this->assertSame(9301, (int) $client->fresh()->sb_user_id);
+    }
+
+    public function test_support_board_get_user_by_fallback_rejects_wrong_platform_host_without_clearing_existing_link(): void
+    {
+        $platform = $this->createPlatform([
+            'domain' => 'https://www.exotickenya.com/',
+        ]);
+        $client = $this->createClient($platform, [
+            'phone_normalized' => '254701234567',
+            'email' => 'wrong-fallback@example.test',
+            'sb_user_id' => 7777,
+            'sb_matched_by' => 'phone',
+        ]);
+
+        Http::fake(function (ClientRequest $request) {
+            return match ($request->data()['function'] ?? null) {
+                'get-user' => (int) ($request->data()['user_id'] ?? 0) === 9302
+                    ? Http::response([
+                        'success' => true,
+                        'response' => [
+                            'id' => 9302,
+                            'first_name' => 'Wrong',
+                            'last_name' => 'Fallback',
+                            'email' => 'wrong-fallback@example.test',
+                            'details' => [
+                                ['slug' => 'phone', 'name' => 'Phone', 'value' => '+254701234567'],
+                                ['slug' => 'current_url', 'name' => 'Current URL', 'value' => 'https://www.exoticghana.com/escort/wrong/'],
+                            ],
+                        ],
+                    ])
+                    : Http::response(['success' => true, 'response' => '']),
+                'get-user-by' => Http::response([
+                    'success' => true,
+                    'response' => [
+                        'id' => 9302,
+                        'first_name' => 'Wrong',
+                        'last_name' => 'Fallback',
+                        'email' => 'wrong-fallback@example.test',
+                    ],
+                ]),
+                default => Http::response(['success' => true, 'response' => []]),
+            };
+        });
+
+        $resolved = app(SupportBoardService::class, ['platform' => $platform])->resolveClient($client);
+
+        $this->assertFalse($resolved['matched']);
+        $this->assertSame(7777, (int) $client->fresh()->sb_user_id);
+    }
+
     public function test_support_board_http_failures_are_classified_as_unavailable_and_cached(): void
     {
         $platform = $this->createPlatform();
@@ -923,18 +1149,18 @@ class SupportBoardIntegrationTest extends TestCase
         ]);
 
         try {
-            app(SupportBoardService::class, ['platform' => $platform])->fetchAllUsersWithDetails();
+            app(SupportBoardService::class, ['platform' => $platform])->fetchTenantUsersIndex();
             $this->fail('Expected SupportBoardUnavailableException to be thrown.');
         } catch (SupportBoardUnavailableException $exception) {
             $this->assertSame(
-                'Support Board request "get-users-with-details" returned HTTP 500.',
+                'Support Board request "get-users" returned HTTP 500.',
                 $exception->getMessage()
             );
         }
 
         $failure = Cache::get(SupportBoardService::failureCacheKey((int) $platform->id));
         $this->assertIsArray($failure);
-        $this->assertSame('get-users-with-details', $failure['function'] ?? null);
+        $this->assertSame('get-users', $failure['function'] ?? null);
         $this->assertSame(500, $failure['status'] ?? null);
     }
 
@@ -945,8 +1171,8 @@ class SupportBoardIntegrationTest extends TestCase
         Cache::put(
             SupportBoardService::failureCacheKey((int) $platform->id),
             [
-                'function' => 'get-users-with-details',
-                'message' => 'Support Board request "get-users-with-details" returned HTTP 500.',
+                'function' => 'get-users',
+                'message' => 'Support Board request "get-users" returned HTTP 500.',
                 'status' => 500,
                 'recorded_at' => now()->toIso8601String(),
             ],
@@ -956,11 +1182,11 @@ class SupportBoardIntegrationTest extends TestCase
         Http::fake();
 
         try {
-            app(SupportBoardService::class, ['platform' => $platform])->fetchAllUsersWithDetails();
+            app(SupportBoardService::class, ['platform' => $platform])->fetchTenantUsersIndex();
             $this->fail('Expected SupportBoardUnavailableException to be thrown.');
         } catch (SupportBoardUnavailableException $exception) {
             $this->assertSame(
-                'Support Board request "get-users-with-details" returned HTTP 500.',
+                'Support Board request "get-users" returned HTTP 500.',
                 $exception->getMessage()
             );
         }
@@ -1000,7 +1226,7 @@ class SupportBoardIntegrationTest extends TestCase
         $this->assertSame(SupportBoardSyncRun::STATUS_FAILED, $run->status);
         $this->assertGreaterThanOrEqual(1, (int) $run->errors);
         $this->assertStringContainsString(
-            'Support Board request "get-users-with-details" returned HTTP 500.',
+            'Support Board request "get-users" returned HTTP 500.',
             (string) data_get($run->error_details, '0.message')
         );
     }
@@ -1030,9 +1256,7 @@ class SupportBoardIntegrationTest extends TestCase
                 app(SupportBoardSyncRunService::class),
                 new class extends SupportBoardLinkSyncService
                 {
-                    public function __construct()
-                    {
-                    }
+                    public function __construct() {}
 
                     public function syncPlatformBulkChunk(Platform $platform, bool $refresh = false, int $afterClientId = 0, int $limit = self::BULK_SYNC_CHUNK_SIZE): array
                     {
@@ -1144,8 +1368,8 @@ class SupportBoardIntegrationTest extends TestCase
         Cache::put(
             SupportBoardService::failureCacheKey((int) $platform->id),
             [
-                'function' => 'get-users-with-details',
-                'message' => 'Support Board request "get-users-with-details" returned HTTP 500.',
+                'function' => 'get-users',
+                'message' => 'Support Board request "get-users" returned HTTP 500.',
                 'status' => 500,
                 'recorded_at' => now()->toIso8601String(),
             ],
@@ -1352,8 +1576,8 @@ class SupportBoardIntegrationTest extends TestCase
     private function createUser(string $role, array $assignedMarkets = [], array $attributes = []): User
     {
         return User::query()->create(array_merge([
-            'name' => ucfirst($role) . ' User',
-            'email' => $role . '-' . uniqid() . '@example.test',
+            'name' => ucfirst($role).' User',
+            'email' => $role.'-'.uniqid().'@example.test',
             'password' => bcrypt('password'),
             'role' => $role,
             'status' => 'active',
