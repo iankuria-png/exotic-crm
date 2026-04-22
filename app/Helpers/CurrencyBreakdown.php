@@ -44,8 +44,9 @@ class CurrencyBreakdown
     private static function run($query, string $currencyExpression, string $amountExpression): array
     {
         $rows = $query
-            ->select(DB::raw("{$currencyExpression} as _c, SUM({$amountExpression}) as _t"))
-            ->groupByRaw($currencyExpression)
+            ->selectRaw("{$currencyExpression} as _c")
+            ->selectRaw("SUM({$amountExpression}) as _t")
+            ->groupBy('_c')
             ->get();
 
         $breakdown = [];

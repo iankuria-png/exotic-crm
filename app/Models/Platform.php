@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
 
 class Platform extends Model
 {
@@ -33,9 +35,36 @@ class Platform extends Model
         'sync_last_synced_at' => 'datetime',
         'sync_last_result' => 'array',
         'payment_link_providers' => 'array',
-        'support_board_token' => 'encrypted',
         'wallet_settings' => 'array',
     ];
+
+    public function getSupportBoardTokenAttribute($value): string
+    {
+        if (empty($value)) {
+            return '';
+        }
+
+        try {
+            return Crypt::decryptString((string) $value);
+        } catch (\Throwable $exception) {
+            Log::warning('Unable to decrypt platform support_board_token.', [
+                'platform_id' => $this->attributes['id'] ?? null,
+                'exception' => $exception::class,
+            ]);
+
+            return '';
+        }
+    }
+
+    public function setSupportBoardTokenAttribute($value): void
+    {
+        if ($value === null || $value === '') {
+            $this->attributes['support_board_token'] = null;
+            return;
+        }
+
+        $this->attributes['support_board_token'] = Crypt::encryptString((string) $value);
+    }
     
     public function getConnectionConfig()
     {
