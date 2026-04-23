@@ -265,6 +265,72 @@ class PawaPayHostedCheckoutServiceTest extends TestCase
         $this->assertSame('https://checkout.pawapay.test/rwanda-fallback', $result['url']);
     }
 
+    public function test_initialize_pawapay_normalizes_benin_cfa_to_xof(): void
+    {
+        $payment = $this->makePayment([
+            'country' => 'Benin',
+            'currency_code' => 'CFA',
+            'phone_prefix' => '229',
+        ], [
+            'currency' => 'CFA',
+            'phone' => '229970000111',
+        ]);
+        $service = new HostedCheckoutService(Mockery::mock(BillingModeService::class));
+
+        Http::fake([
+            'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) {
+                $payload = json_decode($request->body(), true);
+
+                TestCase::assertSame('BEN', $payload['country'] ?? null);
+                TestCase::assertSame('XOF', $payload['amountDetails']['currency'] ?? null);
+
+                return Http::response([
+                    'depositId' => $payload['depositId'] ?? null,
+                    'redirectUrl' => 'https://checkout.pawapay.test/benin-currency',
+                ], 200);
+            },
+        ]);
+
+        $result = $service->initializePawaPay($payment, $this->context(), [
+            'callback_url' => 'https://merchant.example.test/billing/complete?payment=' . urlencode((string) $payment->transaction_uuid),
+        ]);
+
+        $this->assertSame('https://checkout.pawapay.test/benin-currency', $result['url']);
+    }
+
+    public function test_initialize_pawapay_normalizes_ethiopia_bir_to_etb(): void
+    {
+        $payment = $this->makePayment([
+            'country' => 'Ethiopia',
+            'currency_code' => 'BIR',
+            'phone_prefix' => '251',
+        ], [
+            'currency' => 'BIR',
+            'phone' => '251910000111',
+        ]);
+        $service = new HostedCheckoutService(Mockery::mock(BillingModeService::class));
+
+        Http::fake([
+            'https://api.sandbox.pawapay.io/v2/paymentpage' => function ($request) {
+                $payload = json_decode($request->body(), true);
+
+                TestCase::assertSame('ETH', $payload['country'] ?? null);
+                TestCase::assertSame('ETB', $payload['amountDetails']['currency'] ?? null);
+
+                return Http::response([
+                    'depositId' => $payload['depositId'] ?? null,
+                    'redirectUrl' => 'https://checkout.pawapay.test/ethiopia-currency',
+                ], 200);
+            },
+        ]);
+
+        $result = $service->initializePawaPay($payment, $this->context(), [
+            'callback_url' => 'https://merchant.example.test/billing/complete?payment=' . urlencode((string) $payment->transaction_uuid),
+        ]);
+
+        $this->assertSame('https://checkout.pawapay.test/ethiopia-currency', $result['url']);
+    }
+
     public function test_initialize_pawapay_falls_back_to_phone_when_country_cannot_be_resolved(): void
     {
         $payment = $this->makePayment([
@@ -325,6 +391,23 @@ class PawaPayHostedCheckoutServiceTest extends TestCase
         }
     }
 
+    public function test_pawapay_country_code_from_market_hints_supports_market_currency_aliases(): void
+    {
+        $this->assertSame('BEN', $this->invokePawaPayCountryCodeFromMarketHints('CFA', '229'));
+        $this->assertSame('CMR', $this->invokePawaPayCountryCodeFromMarketHints('CFA', '237'));
+        $this->assertSame('SEN', $this->invokePawaPayCountryCodeFromMarketHints('CFA', '221'));
+        $this->assertSame('ETH', $this->invokePawaPayCountryCodeFromMarketHints('BIR', '251'));
+    }
+
+    public function test_pawapay_currency_code_normalizes_market_currency_aliases(): void
+    {
+        $this->assertSame('XOF', $this->invokePawaPayCurrencyCode('CFA', 'BEN'));
+        $this->assertSame('XAF', $this->invokePawaPayCurrencyCode('CFA', 'CMR'));
+        $this->assertSame('ETB', $this->invokePawaPayCurrencyCode('BIR', 'ETH'));
+        $this->assertSame('CDF', $this->invokePawaPayCurrencyCode('CDF', 'COD'));
+        $this->assertNull($this->invokePawaPayCurrencyCode('CFA'));
+    }
+
     public function test_pawapay_country_code_distinguishes_the_two_congo_markets(): void
     {
         $this->assertSame('COG', $this->invokePawaPayCountryCode('Republic of the Congo'));
@@ -346,6 +429,14 @@ class PawaPayHostedCheckoutServiceTest extends TestCase
         $method = new \ReflectionMethod($service, 'pawaPayCountryCodeFromMarketHints');
 
         return $method->invoke($service, $currency, $phonePrefix);
+    }
+
+    private function invokePawaPayCurrencyCode(string $currency, ?string $countryCode = null): ?string
+    {
+        $service = new HostedCheckoutService(Mockery::mock(BillingModeService::class));
+        $method = new \ReflectionMethod($service, 'pawaPayCurrencyCode');
+
+        return $method->invoke($service, $currency, $countryCode);
     }
 
     private function officialPawaPayMarkets(): array

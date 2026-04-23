@@ -115,12 +115,17 @@ class HostedCheckoutService
             $reason = 'Wallet top-up';
         }
 
+        $phoneNumber = preg_replace('/\D+/', '', (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')));
+        $phonePrefix = $this->resolvePawaPayPhonePrefix($payment, $context);
+        $countryCode = $this->resolvePawaPayCountryCode($payment, $context);
+        $currencyCode = $this->resolvePawaPayCurrencyCode($payment, $context, $countryCode, $phonePrefix);
+
         $payload = [
             'depositId' => $depositId,
             'returnUrl' => $this->pawaPayReturnUrl($payment, $context, $options),
             'amountDetails' => [
                 'amount' => number_format((float) $payment->amount, 2, '.', ''),
-                'currency' => strtoupper((string) ($payment->currency ?: 'KES')),
+                'currency' => $currencyCode,
             ],
             'language' => 'EN',
             'reason' => mb_substr($reason, 0, 50),
@@ -132,8 +137,6 @@ class HostedCheckoutService
             ],
         ];
 
-        $phoneNumber = preg_replace('/\D+/', '', (string) ($payment->phone ?: data_get($payment->payment_data, 'customer.phone', '')));
-        $countryCode = $this->resolvePawaPayCountryCode($payment, $context);
         if ($countryCode !== null) {
             $payload['country'] = $countryCode;
         } elseif (is_string($phoneNumber) && $phoneNumber !== '') {
@@ -459,10 +462,30 @@ class HostedCheckoutService
             }
         }
 
-        $currency = strtoupper(trim((string) ($payment->currency ?: $payment->platform?->currency_code ?: data_get($context, 'wallet.currency_code', ''))));
-        $phonePrefix = preg_replace('/\D+/', '', (string) ($payment->platform?->phone_prefix ?: data_get($context, 'phone_prefix', data_get($context, 'wallet.market.phone_prefix', ''))));
+        $currency = $this->normalizePawaPayCurrencyValue((string) ($payment->currency ?: $payment->platform?->currency_code ?: data_get($context, 'wallet.currency_code', '')));
+        $phonePrefix = $this->resolvePawaPayPhonePrefix($payment, $context);
 
         return $this->pawaPayCountryCodeFromMarketHints($currency, $phonePrefix);
+    }
+
+    private function resolvePawaPayPhonePrefix(Payment $payment, array $context): string
+    {
+        return preg_replace('/\D+/', '', (string) ($payment->platform?->phone_prefix ?: data_get($context, 'phone_prefix', data_get($context, 'wallet.market.phone_prefix', '')))) ?: '';
+    }
+
+    private function resolvePawaPayCurrencyCode(Payment $payment, array $context, ?string $countryCode = null, string $phonePrefix = ''): string
+    {
+        $rawCurrency = $this->normalizePawaPayCurrencyValue((string) ($payment->currency ?: $payment->platform?->currency_code ?: data_get($context, 'wallet.currency_code', 'KES')));
+        if ($rawCurrency === '') {
+            $rawCurrency = 'KES';
+        }
+
+        $resolvedCountryCode = $countryCode;
+        if ($resolvedCountryCode === null && $phonePrefix !== '') {
+            $resolvedCountryCode = $this->pawaPayCountryCodeFromMarketHints($rawCurrency, $phonePrefix);
+        }
+
+        return $this->pawaPayCurrencyCode($rawCurrency, $resolvedCountryCode) ?? $rawCurrency;
     }
 
     private function pawaPayCountryCode(string $country): ?string
@@ -495,17 +518,75 @@ class HostedCheckoutService
         }
 
         foreach ($this->pawaPayCountryDefinitions() as $countryCode => $definition) {
-            $currencies = array_map(
-                static fn (string $candidate): string => strtoupper(trim($candidate)),
-                (array) ($definition['currencies'] ?? [])
-            );
             $phonePrefixes = array_map(
                 static fn (string $candidate): string => preg_replace('/\D+/', '', $candidate) ?: '',
                 (array) ($definition['phone_prefixes'] ?? [])
             );
 
-            if (in_array($currency, $currencies, true) && in_array($phonePrefix, $phonePrefixes, true)) {
+            if ($this->pawaPayCurrencyMatchesDefinition($currency, $definition) && in_array($phonePrefix, $phonePrefixes, true)) {
                 return $countryCode;
+            }
+        }
+
+        return null;
+    }
+
+    private function pawaPayCurrencyCode(string $currency, ?string $countryCode = null): ?string
+    {
+        $normalized = $this->normalizePawaPayCurrencyValue($currency);
+        if ($normalized === '') {
+            return null;
+        }
+
+        if ($countryCode !== null) {
+            $definition = $this->pawaPayCountryDefinitions()[$countryCode] ?? null;
+            if (is_array($definition)) {
+                $resolved = $this->pawaPayCurrencyCodeForDefinition($normalized, $definition);
+                if ($resolved !== null) {
+                    return $resolved;
+                }
+            }
+        }
+
+        foreach ($this->pawaPayCountryDefinitions() as $definition) {
+            $resolved = $this->pawaPayCurrencyCodeForDefinition($normalized, $definition);
+            if ($resolved !== null && $resolved === $normalized) {
+                return $resolved;
+            }
+        }
+
+        return match ($normalized) {
+            'BIR' => 'ETB',
+            default => null,
+        };
+    }
+
+    private function pawaPayCurrencyMatchesDefinition(string $currency, array $definition): bool
+    {
+        return $this->pawaPayCurrencyCodeForDefinition($currency, $definition) !== null;
+    }
+
+    private function pawaPayCurrencyCodeForDefinition(string $currency, array $definition): ?string
+    {
+        $normalized = $this->normalizePawaPayCurrencyValue($currency);
+        if ($normalized === '') {
+            return null;
+        }
+
+        $currencies = array_map(
+            fn (string $candidate): string => $this->normalizePawaPayCurrencyValue($candidate),
+            (array) ($definition['currencies'] ?? [])
+        );
+
+        if (in_array($normalized, $currencies, true)) {
+            return $normalized;
+        }
+
+        foreach ((array) ($definition['currency_aliases'] ?? []) as $alias => $resolvedCurrency) {
+            if ($normalized === $this->normalizePawaPayCurrencyValue((string) $alias)) {
+                $resolved = $this->normalizePawaPayCurrencyValue((string) $resolvedCurrency);
+
+                return in_array($resolved, $currencies, true) ? $resolved : null;
             }
         }
 
@@ -521,6 +602,11 @@ class HostedCheckoutService
         return trim($normalized);
     }
 
+    private function normalizePawaPayCurrencyValue(string $value): string
+    {
+        return Str::upper(trim($value));
+    }
+
     private function pawaPayCountryDefinitions(): array
     {
         return [
@@ -528,24 +614,28 @@ class HostedCheckoutService
                 'alpha2' => 'BJ',
                 'aliases' => ['Benin'],
                 'currencies' => ['XOF'],
+                'currency_aliases' => ['CFA' => 'XOF'],
                 'phone_prefixes' => ['229'],
             ],
             'BFA' => [
                 'alpha2' => 'BF',
                 'aliases' => ['Burkina Faso'],
                 'currencies' => ['XOF'],
+                'currency_aliases' => ['CFA' => 'XOF'],
                 'phone_prefixes' => ['226'],
             ],
             'CMR' => [
                 'alpha2' => 'CM',
                 'aliases' => ['Cameroon'],
                 'currencies' => ['XAF'],
+                'currency_aliases' => ['CFA' => 'XAF'],
                 'phone_prefixes' => ['237'],
             ],
             'CIV' => [
                 'alpha2' => 'CI',
                 'aliases' => ["Cote d'Ivoire", "Cote dIvoire", 'Ivory Coast', "Côte d'Ivoire"],
                 'currencies' => ['XOF'],
+                'currency_aliases' => ['CFA' => 'XOF'],
                 'phone_prefixes' => ['225'],
             ],
             'COD' => [
@@ -565,12 +655,14 @@ class HostedCheckoutService
                 'alpha2' => 'ET',
                 'aliases' => ['Ethiopia'],
                 'currencies' => ['ETB'],
+                'currency_aliases' => ['BIR' => 'ETB'],
                 'phone_prefixes' => ['251'],
             ],
             'GAB' => [
                 'alpha2' => 'GA',
                 'aliases' => ['Gabon'],
                 'currencies' => ['XAF'],
+                'currency_aliases' => ['CFA' => 'XAF'],
                 'phone_prefixes' => ['241'],
             ],
             'GHA' => [
@@ -613,6 +705,7 @@ class HostedCheckoutService
                 'alpha2' => 'CG',
                 'aliases' => ['Republic of the Congo', 'Republic of Congo', 'Congo Brazzaville'],
                 'currencies' => ['XAF'],
+                'currency_aliases' => ['CFA' => 'XAF'],
                 'phone_prefixes' => ['242'],
             ],
             'RWA' => [
@@ -625,6 +718,7 @@ class HostedCheckoutService
                 'alpha2' => 'SN',
                 'aliases' => ['Senegal'],
                 'currencies' => ['XOF'],
+                'currency_aliases' => ['CFA' => 'XOF'],
                 'phone_prefixes' => ['221'],
             ],
             'SLE' => [
