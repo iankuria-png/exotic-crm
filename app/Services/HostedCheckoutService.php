@@ -462,47 +462,196 @@ class HostedCheckoutService
         $currency = strtoupper(trim((string) ($payment->currency ?: $payment->platform?->currency_code ?: data_get($context, 'wallet.currency_code', ''))));
         $phonePrefix = preg_replace('/\D+/', '', (string) ($payment->platform?->phone_prefix ?: data_get($context, 'phone_prefix', data_get($context, 'wallet.market.phone_prefix', ''))));
 
-        if ($currency === 'CDF' && $phonePrefix === '243') {
-            return 'COD';
+        return $this->pawaPayCountryCodeFromMarketHints($currency, $phonePrefix);
+    }
+
+    private function pawaPayCountryCode(string $country): ?string
+    {
+        $normalized = $this->normalizePawaPayCountryValue($country);
+        if ($normalized === '') {
+            return null;
+        }
+
+        foreach ($this->pawaPayCountryDefinitions() as $countryCode => $definition) {
+            $candidates = array_merge(
+                [$countryCode, (string) ($definition['alpha2'] ?? '')],
+                (array) ($definition['aliases'] ?? [])
+            );
+
+            foreach ($candidates as $candidate) {
+                if ($normalized === $this->normalizePawaPayCountryValue((string) $candidate)) {
+                    return $countryCode;
+                }
+            }
         }
 
         return null;
     }
 
-    private function pawaPayCountryCode(string $country): ?string
+    private function pawaPayCountryCodeFromMarketHints(string $currency, string $phonePrefix): ?string
     {
-        $normalized = strtoupper(trim($country));
-        $normalized = str_replace(['.', ',', '-', '_'], ' ', $normalized);
+        if ($currency === '' || $phonePrefix === '') {
+            return null;
+        }
+
+        foreach ($this->pawaPayCountryDefinitions() as $countryCode => $definition) {
+            $currencies = array_map(
+                static fn (string $candidate): string => strtoupper(trim($candidate)),
+                (array) ($definition['currencies'] ?? [])
+            );
+            $phonePrefixes = array_map(
+                static fn (string $candidate): string => preg_replace('/\D+/', '', $candidate) ?: '',
+                (array) ($definition['phone_prefixes'] ?? [])
+            );
+
+            if (in_array($currency, $currencies, true) && in_array($phonePrefix, $phonePrefixes, true)) {
+                return $countryCode;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizePawaPayCountryValue(string $value): string
+    {
+        $normalized = Str::upper(Str::ascii(trim($value)));
+        $normalized = str_replace(["'", '.', ',', '-', '_', '(', ')'], ' ', $normalized);
         $normalized = preg_replace('/\s+/', ' ', $normalized) ?: $normalized;
 
-        return match ($normalized) {
-            'DEMOCRATIC REPUBLIC OF CONGO',
-            'DEMOCRATIC REPUBLIC OF THE CONGO',
-            'DR CONGO',
-            'D R CONGO',
-            'CONGO KINSHASA',
-            'CONGO',
-            'CONGO DR',
-            'CONGO DRC',
-            'DRC',
-            'CD',
-            'COD' => 'COD',
-            'GHANA' => 'GHA',
-            'GH', 'GHA' => 'GHA',
-            'KENYA' => 'KEN',
-            'KE', 'KEN' => 'KEN',
-            'MALAWI' => 'MWI',
-            'MW', 'MWI' => 'MWI',
-            'MOZAMBIQUE' => 'MOZ',
-            'MZ', 'MOZ' => 'MOZ',
-            'TANZANIA' => 'TZA',
-            'TZ', 'TZA' => 'TZA',
-            'UGANDA' => 'UGA',
-            'UG', 'UGA' => 'UGA',
-            'ZAMBIA' => 'ZMB',
-            'ZM', 'ZMB' => 'ZMB',
-            default => null,
-        };
+        return trim($normalized);
+    }
+
+    private function pawaPayCountryDefinitions(): array
+    {
+        return [
+            'BEN' => [
+                'alpha2' => 'BJ',
+                'aliases' => ['Benin'],
+                'currencies' => ['XOF'],
+                'phone_prefixes' => ['229'],
+            ],
+            'BFA' => [
+                'alpha2' => 'BF',
+                'aliases' => ['Burkina Faso'],
+                'currencies' => ['XOF'],
+                'phone_prefixes' => ['226'],
+            ],
+            'CMR' => [
+                'alpha2' => 'CM',
+                'aliases' => ['Cameroon'],
+                'currencies' => ['XAF'],
+                'phone_prefixes' => ['237'],
+            ],
+            'CIV' => [
+                'alpha2' => 'CI',
+                'aliases' => ["Cote d'Ivoire", "Cote dIvoire", 'Ivory Coast', "Côte d'Ivoire"],
+                'currencies' => ['XOF'],
+                'phone_prefixes' => ['225'],
+            ],
+            'COD' => [
+                'alpha2' => 'CD',
+                'aliases' => [
+                    'Democratic Republic of the Congo',
+                    'Democratic Republic of Congo',
+                    'DR Congo',
+                    'Congo Kinshasa',
+                    'Congo DRC',
+                    'DRC',
+                ],
+                'currencies' => ['CDF', 'USD'],
+                'phone_prefixes' => ['243'],
+            ],
+            'ETH' => [
+                'alpha2' => 'ET',
+                'aliases' => ['Ethiopia'],
+                'currencies' => ['ETB'],
+                'phone_prefixes' => ['251'],
+            ],
+            'GAB' => [
+                'alpha2' => 'GA',
+                'aliases' => ['Gabon'],
+                'currencies' => ['XAF'],
+                'phone_prefixes' => ['241'],
+            ],
+            'GHA' => [
+                'alpha2' => 'GH',
+                'aliases' => ['Ghana'],
+                'currencies' => ['GHS'],
+                'phone_prefixes' => ['233'],
+            ],
+            'KEN' => [
+                'alpha2' => 'KE',
+                'aliases' => ['Kenya'],
+                'currencies' => ['KES'],
+                'phone_prefixes' => ['254'],
+            ],
+            'LSO' => [
+                'alpha2' => 'LS',
+                'aliases' => ['Lesotho'],
+                'currencies' => ['LSL'],
+                'phone_prefixes' => ['266'],
+            ],
+            'MWI' => [
+                'alpha2' => 'MW',
+                'aliases' => ['Malawi'],
+                'currencies' => ['MWK'],
+                'phone_prefixes' => ['265'],
+            ],
+            'MOZ' => [
+                'alpha2' => 'MZ',
+                'aliases' => ['Mozambique'],
+                'currencies' => ['MZN'],
+                'phone_prefixes' => ['258'],
+            ],
+            'NGA' => [
+                'alpha2' => 'NG',
+                'aliases' => ['Nigeria'],
+                'currencies' => ['NGN'],
+                'phone_prefixes' => ['234'],
+            ],
+            'COG' => [
+                'alpha2' => 'CG',
+                'aliases' => ['Republic of the Congo', 'Republic of Congo', 'Congo Brazzaville'],
+                'currencies' => ['XAF'],
+                'phone_prefixes' => ['242'],
+            ],
+            'RWA' => [
+                'alpha2' => 'RW',
+                'aliases' => ['Rwanda'],
+                'currencies' => ['RWF'],
+                'phone_prefixes' => ['250'],
+            ],
+            'SEN' => [
+                'alpha2' => 'SN',
+                'aliases' => ['Senegal'],
+                'currencies' => ['XOF'],
+                'phone_prefixes' => ['221'],
+            ],
+            'SLE' => [
+                'alpha2' => 'SL',
+                'aliases' => ['Sierra Leone'],
+                'currencies' => ['SLE'],
+                'phone_prefixes' => ['232'],
+            ],
+            'TZA' => [
+                'alpha2' => 'TZ',
+                'aliases' => ['Tanzania'],
+                'currencies' => ['TZS'],
+                'phone_prefixes' => ['255'],
+            ],
+            'UGA' => [
+                'alpha2' => 'UG',
+                'aliases' => ['Uganda'],
+                'currencies' => ['UGX'],
+                'phone_prefixes' => ['256'],
+            ],
+            'ZMB' => [
+                'alpha2' => 'ZM',
+                'aliases' => ['Zambia'],
+                'currencies' => ['ZMW'],
+                'phone_prefixes' => ['260'],
+            ],
+        ];
     }
 
     private function isUuidV4(string $value): bool
