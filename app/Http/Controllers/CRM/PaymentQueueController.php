@@ -529,7 +529,7 @@ class PaymentQueueController extends Controller
 
         $payment->loadMissing('platform');
         $phonePrefix = (string) ($payment->platform?->phone_prefix ?: '254');
-        $service = new PaymentMatchingService();
+        $service = app(PaymentMatchingService::class);
         $result = $service->matchPayment($payment, $phonePrefix);
         $freshPayment = $payment->fresh(['platform', 'product', 'client']);
 
@@ -571,7 +571,7 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $service = new PaymentMatchingService();
+        $service = app(PaymentMatchingService::class);
         $beforeState = [
             'client_id' => $payment->client_id,
             'match_confidence' => $payment->match_confidence,
@@ -728,7 +728,7 @@ class PaymentQueueController extends Controller
             );
         }
 
-        $service = new PaymentMatchingService();
+        $service = app(PaymentMatchingService::class);
         $dryRun = (bool) ($validated['dry_run'] ?? false);
 
         $accessiblePlatformIds = null;

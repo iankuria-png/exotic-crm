@@ -21,8 +21,8 @@ class PaymentMatchingService
         ?PaymentReconciliationConfidenceService $confidenceService = null,
         ?SubscriptionProvisioningService $subscriptionProvisioningService = null
     ) {
-        $this->confidenceService = $confidenceService ?? new PaymentReconciliationConfidenceService();
-        $this->subscriptionProvisioningService = $subscriptionProvisioningService ?? new SubscriptionProvisioningService();
+        $this->confidenceService = $confidenceService ?? app(PaymentReconciliationConfidenceService::class);
+        $this->subscriptionProvisioningService = $subscriptionProvisioningService ?? app(SubscriptionProvisioningService::class);
     }
 
     /**

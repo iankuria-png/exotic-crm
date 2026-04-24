@@ -1867,7 +1867,7 @@ class ClientController extends Controller
                     'duplicate_of' => null,
                 ]);
 
-                $matcher = new PaymentMatchingService();
+                $matcher = app(PaymentMatchingService::class);
                 $candidatePayments = Payment::query()
                     ->where('platform_id', (int) $client->platform_id)
                     ->whereNull('client_id')

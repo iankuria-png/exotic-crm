@@ -71,6 +71,42 @@ class PaymentReconciliationConfidenceTest extends TestCase
         $this->assertNotNull($highConfidencePayment->fresh()->deal_id);
     }
 
+    public function test_confirm_match_succeeds_for_completed_payment_without_constructor_regression(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+        $user = $this->createUser('sales', [$platform->id]);
+        $client = $this->createClient($platform);
+        $product = $this->createProduct();
+
+        $payment = Payment::query()->create([
+            'platform_id' => $platform->id,
+            'product_id' => $product->id,
+            'phone' => '0711000099',
+            'amount' => 2500,
+            'currency' => 'KES',
+            'status' => 'completed',
+            'reconciliation_confidence' => 'low',
+            'reconciliation_state' => 'manual_review',
+        ]);
+
+        $this->fakeProvisioningApis($platform, $client);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/payments/{$payment->id}/confirm-match", [
+            'client_id' => $client->id,
+            'reason' => 'Manual queue recovery after stale CRM sync',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('payment.client_id', $client->id)
+            ->assertJsonPath('payment.match_confidence', 'manual')
+            ->assertJsonPath('payment.reconciliation_confidence', 'high')
+            ->assertJsonPath('payment.reconciliation_state', 'resolved');
+
+        $this->assertNotNull($payment->fresh()->deal_id);
+    }
+
     public function test_review_state_endpoint_marks_manual_review_and_resolved(): void
     {
         $platform = $this->createPlatform('Tanzania');
