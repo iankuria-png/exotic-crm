@@ -2947,15 +2947,21 @@ export default function ClientDetail() {
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Incall Rate (default)</span>
-                                            <input value={profileForm?.rates_incall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_incall: event.target.value }))} className="crm-input" placeholder="e.g. 1500" />
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="shrink-0 rounded bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-600">{client?.platform?.currency_code || 'KES'}</span>
+                                                <input value={profileForm?.rates_incall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_incall: event.target.value }))} className="crm-input" placeholder="e.g. 1500" />
+                                            </div>
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Outcall Rate (default)</span>
-                                            <input value={profileForm?.rates_outcall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_outcall: event.target.value }))} className="crm-input" placeholder="e.g. 2000" />
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="shrink-0 rounded bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-600">{client?.platform?.currency_code || 'KES'}</span>
+                                                <input value={profileForm?.rates_outcall || ''} onChange={(event) => setProfileForm((current) => ({ ...current, rates_outcall: event.target.value }))} className="crm-input" placeholder="e.g. 2000" />
+                                            </div>
                                         </label>
 
                                         <div className="md:col-span-2">
-                                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rates by Duration</p>
+                                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rates by Duration <span className="ml-1 font-normal normal-case text-slate-400">({client?.platform?.currency_code || 'KES'})</span></p>
                                             <div className="overflow-auto rounded-md border border-slate-200">
                                                 <table className="w-full text-xs">
                                                     <thead>
