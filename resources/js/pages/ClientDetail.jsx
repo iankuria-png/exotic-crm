@@ -505,6 +505,15 @@ export default function ClientDetail() {
         reason: 'Wallet adjustment from client profile',
     });
 
+    const navigateToTab = useCallback((tabKey, sectionKey = null) => {
+        setActiveTab(tabKey);
+        if (sectionKey) setProfileSection(sectionKey);
+        const next = new URLSearchParams(searchParams);
+        if (tabKey === 'overview') next.delete('tab');
+        else next.set('tab', tabKey);
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
+
     const { data: client, isLoading } = useQuery({
         queryKey: ['client', id],
         queryFn: () => api.get(`/crm/clients/${id}`).then((r) => r.data),
@@ -1460,15 +1469,6 @@ export default function ClientDetail() {
         setShowPaymentLinkModal(false);
         setPaymentLinkResult(null);
     };
-
-    const navigateToTab = useCallback((tabKey, sectionKey = null) => {
-        setActiveTab(tabKey);
-        if (sectionKey) setProfileSection(sectionKey);
-        const next = new URLSearchParams(searchParams);
-        if (tabKey === 'overview') next.delete('tab');
-        else next.set('tab', tabKey);
-        setSearchParams(next, { replace: true });
-    }, [searchParams, setSearchParams]);
 
     const copyPaymentLinkUrl = async () => {
         const paymentUrl = paymentLinkResult?.payment_url;
