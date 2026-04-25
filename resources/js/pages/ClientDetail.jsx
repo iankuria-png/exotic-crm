@@ -488,6 +488,7 @@ export default function ClientDetail() {
     const [dealDiscountPin, setDealDiscountPin] = useState('');
     const [notifyClient, setNotifyClient] = useState(false);
     const [showVerifiedDialog, setShowVerifiedDialog] = useState(false);
+    const [showNewBadgeDialog, setShowNewBadgeDialog] = useState(false);
     const [showTourModal, setShowTourModal] = useState(false);
     const [tourForm, setTourForm] = useState({ city: '', start: '', end: '', phone: '' });
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
@@ -822,6 +823,21 @@ export default function ClientDetail() {
         },
         onError: (err) => {
             toast.error(err?.response?.data?.message || 'Failed to update verified status.');
+        },
+    });
+
+    // ── New Badge ────────────────────────────────────────────────────────────
+    const updateNewBadgeMutation = useMutation({
+        mutationFn: (forceNew) =>
+            api.post(`/crm/clients/${id}/new-badge`, { force_new: forceNew }).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.setQueryData(['client', id], data);
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setShowNewBadgeDialog(false);
+            toast.success(data.force_new ? 'NEW badge pinned to profile.' : 'NEW badge override removed.');
+        },
+        onError: (err) => {
+            toast.error(err?.response?.data?.message || 'Failed to update NEW badge.');
         },
     });
 
@@ -1763,6 +1779,7 @@ export default function ClientDetail() {
                                 {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
                                 {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
                                 {client.verified ? <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
+                                {client.force_new ? <span className="inline-flex items-center rounded-md bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-200">NEW pinned</span> : null}
                                 {isUntrackedForeverPlan ? (
                                     <span
                                         className="inline-flex cursor-help items-center rounded-md bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
@@ -1861,6 +1878,23 @@ export default function ClientDetail() {
                                         </svg>
                                     )}
                                     {client.verified ? 'Verified' : 'Mark verified'}
+                                </button>
+
+                                {/* NEW badge pin toggle */}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowNewBadgeDialog(true)}
+                                    title={client.force_new ? 'NEW badge is pinned — click to remove' : 'Pin NEW badge to listing and profile'}
+                                    className={`inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                                        client.force_new
+                                            ? 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100'
+                                            : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                                    }`}
+                                >
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                                    </svg>
+                                    {client.force_new ? 'NEW pinned' : 'Pin NEW badge'}
                                 </button>
                             </div>
                         ) : null}
@@ -3994,6 +4028,23 @@ export default function ClientDetail() {
                     tone={client?.verified ? 'warning' : 'default'}
                     onConfirm={() => updateVerifiedStatusMutation.mutate(!client.verified)}
                     onCancel={() => setShowVerifiedDialog(false)}
+                />
+            ) : null}
+
+            {/* ── NEW Badge Dialog ─────────────────────────────────────────── */}
+            {!isReadOnly ? (
+                <ConfirmDialog
+                    open={showNewBadgeDialog}
+                    title={client?.force_new ? 'Remove NEW badge override?' : 'Pin NEW badge to listing?'}
+                    message={client?.force_new
+                        ? 'The NEW badge will no longer be pinned. It will still show naturally if the profile was published recently.'
+                        : 'The NEW badge will appear on this profile\'s listing card and profile page regardless of publish date.'}
+                    confirmLabel={updateNewBadgeMutation.isPending ? 'Updating…' : (client?.force_new ? 'Remove override' : 'Pin NEW badge')}
+                    confirmDisabled={updateNewBadgeMutation.isPending}
+                    isPending={updateNewBadgeMutation.isPending}
+                    tone={client?.force_new ? 'warning' : 'default'}
+                    onConfirm={() => updateNewBadgeMutation.mutate(!client.force_new)}
+                    onCancel={() => setShowNewBadgeDialog(false)}
                 />
             ) : null}
 

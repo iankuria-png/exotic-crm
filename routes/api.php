@@ -156,6 +156,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/verified-status', [ClientController::class, 'updateVerifiedStatus'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/new-badge', [ClientController::class, 'updateNewBadge'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/tours', [ClientController::class, 'tours'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/tours', [ClientController::class, 'addTour'])->middleware('role:admin,sub_admin,sales');
     Route::delete('/clients/{client}/tours/{tourId}', [ClientController::class, 'deleteTour'])->middleware('role:admin,sub_admin,sales');

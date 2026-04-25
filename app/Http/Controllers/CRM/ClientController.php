@@ -1085,6 +1085,69 @@ class ClientController extends Controller
         return response()->json($client);
     }
 
+    // ─── New Badge ──────────────────────────────────────────────────────────────
+
+    public function updateNewBadge(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate(['force_new' => 'required|boolean']);
+        $forceNew  = (bool) $validated['force_new'];
+        $before    = ['force_new' => (bool) $client->force_new];
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            // Empty string causes the WP endpoint to delete_post_meta (removes override).
+            $wpSync->updateClientProfile((int) $client->wp_post_id, [
+                'force_new' => $forceNew ? '1' : '',
+            ]);
+        } catch (RequestException $e) {
+            $status  = $e->response?->status() ?? 502;
+            $payload = $e->response?->json();
+            if ($status >= 400 && $status < 500) {
+                return response()->json($payload ?? ['message' => 'WordPress rejected the request.'], $status);
+            }
+            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+        }
+
+        $client->update(['force_new' => $forceNew]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_NEW_BADGE_UPDATE,
+            'client',
+            (int) $client->id,
+            $before,
+            ['force_new' => $forceNew]
+        );
+
+        $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+        (new ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+        $client->refresh();
+
+        $client->load([
+            'platform',
+            'assignedAgent',
+            'deals'    => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'notes'    => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
+            'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'activeDeal.product',
+        ]);
+        $this->hydrateBillingPlatformState($client);
+        $this->appendSubscriptionActionMetadata($client);
+
+        return response()->json($client);
+    }
+
     // ─── Tours ──────────────────────────────────────────────────────────────────
 
     public function tours(Request $request, Client $client)
