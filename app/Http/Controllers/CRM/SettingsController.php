@@ -3635,7 +3635,7 @@ class SettingsController extends Controller
             ->keyBy('id');
 
         $users = User::query()
-            ->select(['id', 'name', 'email', 'role', 'status', 'assigned_market_ids', 'sb_agent_id'])
+            ->select(['id', 'name', 'email', 'role', 'status', 'phone', 'notification_prefs', 'assigned_market_ids', 'sb_agent_id'])
             ->with('platforms:id,name,country')
             ->orderBy('role')
             ->orderBy('name')
@@ -3670,6 +3670,8 @@ class SettingsController extends Controller
                     'role' => $user->role,
                     'status' => $user->status ?? 'active',
                     'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
+                    'phone' => $user->phone,
+                    'notification_prefs' => is_array($user->notification_prefs) ? $user->notification_prefs : null,
                     'assigned_market_ids' => array_values(array_unique(array_map('intval', $assignedMarketIds))),
                     'assigned_markets' => $marketDetails,
                 ];
@@ -3702,8 +3704,14 @@ class SettingsController extends Controller
             'role' => 'required|in:admin,sub_admin,sales,marketing',
             'status' => 'required|in:active,inactive',
             'sb_agent_id' => 'nullable|integer',
+            'phone' => 'nullable|string|max:30',
             'assigned_market_ids' => 'nullable|array',
             'assigned_market_ids.*' => 'integer|exists:platforms,id',
+            'notification_prefs' => 'nullable|array',
+            'notification_prefs.payment_failure_sms' => 'nullable|array',
+            'notification_prefs.payment_failure_sms.enabled' => 'nullable|boolean',
+            'notification_prefs.payment_failure_sms.market_ids' => 'nullable|array',
+            'notification_prefs.payment_failure_sms.market_ids.*' => 'integer|exists:platforms,id',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -3722,6 +3730,8 @@ class SettingsController extends Controller
             'password' => $passwordHash,
             'role' => $validated['role'],
             'status' => $validated['status'],
+            'phone' => $validated['phone'] ?? null,
+            'notification_prefs' => $validated['notification_prefs'] ?? null,
             'sb_agent_id' => $validated['sb_agent_id'] ?? null,
             'assigned_market_ids' => $assignedMarketIds,
         ]);
@@ -3744,6 +3754,8 @@ class SettingsController extends Controller
                     'email' => $user->email,
                     'role' => $user->role,
                     'status' => $user->status ?? 'active',
+                    'phone' => $user->phone,
+                    'notification_prefs' => $user->notification_prefs,
                     'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
                     'assigned_market_ids' => $assignedMarketIds,
                 ],
@@ -3768,6 +3780,8 @@ class SettingsController extends Controller
             'email' => $user->email,
             'role' => $user->role,
             'status' => $user->status ?? 'active',
+            'phone' => $user->phone,
+            'notification_prefs' => $user->notification_prefs,
             'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
             'assigned_market_ids' => $assignedMarketIds,
             'assigned_markets' => $assignedMarkets,
@@ -3780,8 +3794,14 @@ class SettingsController extends Controller
             'role' => 'required|in:admin,sub_admin,sales,marketing',
             'status' => 'required|in:active,inactive',
             'sb_agent_id' => 'nullable|integer',
+            'phone' => 'nullable|string|max:30',
             'assigned_market_ids' => 'nullable|array',
             'assigned_market_ids.*' => 'integer|exists:platforms,id',
+            'notification_prefs' => 'nullable|array',
+            'notification_prefs.payment_failure_sms' => 'nullable|array',
+            'notification_prefs.payment_failure_sms.enabled' => 'nullable|boolean',
+            'notification_prefs.payment_failure_sms.market_ids' => 'nullable|array',
+            'notification_prefs.payment_failure_sms.market_ids.*' => 'integer|exists:platforms,id',
             'password' => 'nullable|string|min:8',
             'reason' => 'nullable|string|max:500',
         ]);
@@ -3796,6 +3816,8 @@ class SettingsController extends Controller
         $beforeState = [
             'role' => $user->role,
             'status' => $user->status ?? 'active',
+            'phone' => $user->phone,
+            'notification_prefs' => $user->notification_prefs,
             'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
             'assigned_market_ids' => $this->decodeMarketIds($user->assigned_market_ids),
         ];
@@ -3803,6 +3825,10 @@ class SettingsController extends Controller
         $updateData = [
             'role' => $validated['role'],
             'status' => $validated['status'],
+            'phone' => $validated['phone'] ?? null,
+            'notification_prefs' => array_key_exists('notification_prefs', $validated)
+                ? $validated['notification_prefs']
+                : $user->notification_prefs,
             'sb_agent_id' => $validated['sb_agent_id'] ?? null,
             'assigned_market_ids' => $assignedMarketIds,
         ];
@@ -3827,6 +3853,8 @@ class SettingsController extends Controller
                 [
                     'role' => $user->role,
                     'status' => $user->status ?? 'active',
+                    'phone' => $user->phone,
+                    'notification_prefs' => $user->notification_prefs,
                     'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
                     'assigned_market_ids' => $assignedMarketIds,
                     ...(!empty($validated['password']) ? ['password_changed' => true] : []),
@@ -3852,6 +3880,8 @@ class SettingsController extends Controller
             'email' => $user->email,
             'role' => $user->role,
             'status' => $user->status ?? 'active',
+            'phone' => $user->phone,
+            'notification_prefs' => $user->notification_prefs,
             'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
             'assigned_market_ids' => $assignedMarketIds,
             'assigned_markets' => $assignedMarkets,

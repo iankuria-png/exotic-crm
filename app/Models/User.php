@@ -18,6 +18,8 @@ class User extends Authenticatable
         'role',
         'assigned_market_ids',
         'status',
+        'phone',
+        'notification_prefs',
         'sb_agent_id',
     ];
 
@@ -28,6 +30,7 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'assigned_market_ids' => 'array',
+        'notification_prefs' => 'array',
     ];
     
     // Add relationship to platforms
@@ -63,5 +66,31 @@ class User extends Authenticatable
     public function isActive(): bool
     {
         return ($this->status ?? 'active') === 'active';
+    }
+
+    public function paymentFailureSmsEnabled(): bool
+    {
+        $prefs = $this->notification_prefs;
+        $default = in_array($this->role, ['sales'], true);
+
+        if (!is_array($prefs)) {
+            return $default;
+        }
+
+        return (bool) data_get($prefs, 'payment_failure_sms.enabled', $default);
+    }
+
+    public function paymentFailureSmsMarketIds(): ?array
+    {
+        $ids = data_get($this->notification_prefs ?? [], 'payment_failure_sms.market_ids');
+
+        if ($ids === null) {
+            return null;
+        }
+
+        return array_values(array_unique(array_filter(
+            array_map('intval', (array) $ids),
+            static fn (int $id): bool => $id > 0
+        )));
     }
 }

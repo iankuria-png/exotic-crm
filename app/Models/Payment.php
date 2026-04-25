@@ -2,10 +2,12 @@
 
 namespace App\Models;
 
+use App\Jobs\SendPaymentFailureAlertsJob;
 use App\Services\ClientRetentionInsightService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 
@@ -26,6 +28,17 @@ class Payment extends Model
         };
 
         static::saved($refresh);
+        static::saved(static function (Payment $payment): void {
+            if (!$payment->wasChanged('status') || (string) $payment->status !== 'failed') {
+                return;
+            }
+
+            $paymentId = (int) $payment->id;
+
+            DB::afterCommit(static function () use ($paymentId): void {
+                SendPaymentFailureAlertsJob::dispatch($paymentId);
+            });
+        });
         static::deleted($refresh);
     }
 

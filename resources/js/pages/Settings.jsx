@@ -6105,6 +6105,7 @@ function RolesWorkspace() {
         name: '',
         email: '',
         password: '',
+        phone: '',
         role: 'sales',
         status: 'active',
         assigned_market_ids: [],
@@ -6139,6 +6140,7 @@ function RolesWorkspace() {
                 name: '',
                 email: '',
                 password: '',
+                phone: '',
                 role: 'sales',
                 status: 'active',
                 assigned_market_ids: [],
@@ -6150,11 +6152,16 @@ function RolesWorkspace() {
         },
     });
 
+    const testAlertSmsMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/integrations/sms-provider/test', payload).then((response) => response.data),
+    });
+
     const users = data?.users || [];
     const summary = data?.summary || {};
     const availableMarkets = data?.available_markets || [];
 
     const openEditor = (user) => {
+        testAlertSmsMutation.reset();
         setSelectedUser(user);
         setEditor({
             role: user.role || 'sales',
@@ -6163,6 +6170,8 @@ function RolesWorkspace() {
             assigned_market_ids: Array.isArray(user.assigned_market_ids) ? user.assigned_market_ids.map((id) => Number(id)) : [],
             password: '',
             reason: 'Role update from settings',
+            phone: user.phone || '',
+            notification_prefs: user.notification_prefs ?? null,
         });
     };
 
@@ -6171,11 +6180,26 @@ function RolesWorkspace() {
             if (!current) return current;
 
             const exists = current.assigned_market_ids.includes(marketId);
+            const assignedMarketIds = exists
+                ? current.assigned_market_ids.filter((id) => id !== marketId)
+                : [...current.assigned_market_ids, marketId];
+            const selectableMarketIds = assignedMarketIds.length > 0
+                ? assignedMarketIds
+                : (current.role === 'admin' ? availableMarkets.map((market) => Number(market.id)) : []);
+            const scopedMarketIds = current.notification_prefs?.payment_failure_sms?.market_ids;
+
             return {
                 ...current,
-                assigned_market_ids: exists
-                    ? current.assigned_market_ids.filter((id) => id !== marketId)
-                    : [...current.assigned_market_ids, marketId],
+                assigned_market_ids: assignedMarketIds,
+                notification_prefs: Array.isArray(scopedMarketIds)
+                    ? {
+                        ...current.notification_prefs,
+                        payment_failure_sms: {
+                            enabled: current.notification_prefs?.payment_failure_sms?.enabled ?? false,
+                            market_ids: scopedMarketIds.filter((id) => selectableMarketIds.includes(id)),
+                        },
+                    }
+                    : current.notification_prefs,
             };
         });
     };
@@ -6188,6 +6212,89 @@ function RolesWorkspace() {
                 assigned_market_ids: exists
                     ? current.assigned_market_ids.filter((id) => id !== marketId)
                     : [...current.assigned_market_ids, marketId],
+            };
+        });
+    };
+
+    const getSmsEnabled = () => {
+        if (!editor) return false;
+        const prefs = editor.notification_prefs;
+        if (!prefs?.payment_failure_sms) return editor.role === 'sales';
+        return !!prefs.payment_failure_sms.enabled;
+    };
+
+    const getSmsMarketScope = () => {
+        const ids = editor?.notification_prefs?.payment_failure_sms?.market_ids;
+        return ids === null || ids === undefined ? 'all' : 'specific';
+    };
+
+    const getSmsMarketIds = () => editor?.notification_prefs?.payment_failure_sms?.market_ids ?? [];
+
+    const getSmsSelectableMarkets = () => {
+        if (!editor) return [];
+
+        const selectableIds = editor.assigned_market_ids.length > 0
+            ? editor.assigned_market_ids
+            : (editor.role === 'admin' ? availableMarkets.map((market) => Number(market.id)) : []);
+
+        return availableMarkets.filter((market) => selectableIds.includes(Number(market.id)));
+    };
+
+    const getSmsTestMarketId = () => {
+        if (!editor) return null;
+
+        const scopedIds = getSmsMarketIds();
+        const selectableMarkets = getSmsSelectableMarkets();
+        const selectableIds = selectableMarkets.map((market) => Number(market.id));
+
+        return scopedIds.find((id) => selectableIds.includes(Number(id)))
+            ?? editor.assigned_market_ids[0]
+            ?? selectableIds[0]
+            ?? null;
+    };
+
+    const setSmsEnabled = (enabled) => {
+        setEditor((current) => ({
+            ...current,
+            notification_prefs: {
+                ...current.notification_prefs,
+                payment_failure_sms: {
+                    enabled,
+                    market_ids: current.notification_prefs?.payment_failure_sms?.market_ids ?? null,
+                },
+            },
+        }));
+    };
+
+    const setSmsMarketScope = (scope) => {
+        setEditor((current) => ({
+            ...current,
+            notification_prefs: {
+                ...current.notification_prefs,
+                payment_failure_sms: {
+                    enabled: current.notification_prefs?.payment_failure_sms?.enabled ?? false,
+                    market_ids: scope === 'all' ? null : [],
+                },
+            },
+        }));
+    };
+
+    const toggleSmsMarket = (marketId) => {
+        setEditor((current) => {
+            const existing = current.notification_prefs?.payment_failure_sms?.market_ids ?? [];
+            const next = existing.includes(marketId)
+                ? existing.filter((id) => id !== marketId)
+                : [...existing, marketId];
+
+            return {
+                ...current,
+                notification_prefs: {
+                    ...current.notification_prefs,
+                    payment_failure_sms: {
+                        enabled: current.notification_prefs?.payment_failure_sms?.enabled ?? false,
+                        market_ids: next,
+                    },
+                },
             };
         });
     };
@@ -6229,6 +6336,7 @@ function RolesWorkspace() {
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Role</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Assigned Markets</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Phone</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Actions</th>
                                 </tr>
                             </thead>
@@ -6265,6 +6373,9 @@ function RolesWorkspace() {
                                                 <p className="truncate text-xs text-slate-500">{marketLabel}</p>
                                             </td>
                                             <td className="px-4 py-2.5">
+                                                <p className="font-mono text-xs text-slate-500">{user.phone || '—'}</p>
+                                            </td>
+                                            <td className="px-4 py-2.5">
                                                 <button
                                                     type="button"
                                                     onClick={() => openEditor(user)}
@@ -6295,95 +6406,194 @@ function RolesWorkspace() {
                             </div>
                         </header>
 
-                        <div className="grid gap-3 p-4 md:grid-cols-2">
-                            <div>
-                                <label htmlFor="role-select" className="mb-1 block text-sm font-medium text-slate-700">Role</label>
-                                <select
-                                    id="role-select"
-                                    value={editor.role}
-                                    onChange={(event) => setEditor((current) => ({ ...current, role: event.target.value }))}
-                                    className="crm-select w-full"
-                                >
-                                    <option value="admin">Admin</option>
-                                    <option value="sub_admin">Sub-admin</option>
-                                    <option value="sales">Sales</option>
-                                    <option value="marketing">Marketing</option>
-                                </select>
-                            </div>
+                        <div className="max-h-[65vh] overflow-y-auto">
+                            <div className="grid gap-3 p-4 md:grid-cols-2">
+                                <div>
+                                    <label htmlFor="role-select" className="mb-1 block text-sm font-medium text-slate-700">Role</label>
+                                    <select
+                                        id="role-select"
+                                        value={editor.role}
+                                        onChange={(event) => setEditor((current) => ({ ...current, role: event.target.value }))}
+                                        className="crm-select w-full"
+                                    >
+                                        <option value="admin">Admin</option>
+                                        <option value="sub_admin">Sub-admin</option>
+                                        <option value="sales">Sales</option>
+                                        <option value="marketing">Marketing</option>
+                                    </select>
+                                </div>
 
-                            <div>
-                                <label htmlFor="status-select" className="mb-1 block text-sm font-medium text-slate-700">Status</label>
-                                <select
-                                    id="status-select"
-                                    value={editor.status}
-                                    onChange={(event) => setEditor((current) => ({ ...current, status: event.target.value }))}
-                                    className="crm-select w-full"
-                                >
-                                    <option value="active">Active</option>
-                                    <option value="inactive">Inactive</option>
-                                </select>
-                            </div>
+                                <div>
+                                    <label htmlFor="status-select" className="mb-1 block text-sm font-medium text-slate-700">Status</label>
+                                    <select
+                                        id="status-select"
+                                        value={editor.status}
+                                        onChange={(event) => setEditor((current) => ({ ...current, status: event.target.value }))}
+                                        className="crm-select w-full"
+                                    >
+                                        <option value="active">Active</option>
+                                        <option value="inactive">Inactive</option>
+                                    </select>
+                                </div>
 
-                            <div className="md:col-span-2">
-                                <label htmlFor="sb-agent-id" className="mb-1 block text-sm font-medium text-slate-700">SB Agent ID</label>
-                                <input
-                                    id="sb-agent-id"
-                                    type="number"
-                                    min="1"
-                                    inputMode="numeric"
-                                    value={editor.sb_agent_id}
-                                    onChange={(event) => setEditor((current) => ({ ...current, sb_agent_id: event.target.value }))}
-                                    className="crm-input"
-                                    placeholder="Support Board user ID"
-                                />
-                                <p className="mt-1 text-xs text-slate-500">
-                                    Maps this CRM user to their Support Board agent identity for personalized replies.
-                                </p>
-                            </div>
+                                <div className="md:col-span-2">
+                                    <label htmlFor="sb-agent-id" className="mb-1 block text-sm font-medium text-slate-700">SB Agent ID</label>
+                                    <input
+                                        id="sb-agent-id"
+                                        type="number"
+                                        min="1"
+                                        inputMode="numeric"
+                                        value={editor.sb_agent_id}
+                                        onChange={(event) => setEditor((current) => ({ ...current, sb_agent_id: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Support Board user ID"
+                                    />
+                                    <p className="mt-1 text-xs text-slate-500">
+                                        Maps this CRM user to their Support Board agent identity for personalized replies.
+                                    </p>
+                                </div>
 
-                            <div className="md:col-span-2">
-                                <p className="mb-1 text-sm font-medium text-slate-700">Assigned markets</p>
-                                {availableMarkets.length === 0 ? (
-                                    <p className="text-sm text-slate-500">No markets available.</p>
-                                ) : (
-                                    <div className="grid max-h-56 gap-2 overflow-auto rounded-md border border-slate-200 p-2 sm:grid-cols-2">
-                                        {availableMarkets.map((market) => (
-                                            <label key={market.id} className="flex items-center gap-2 rounded-md px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={editor.assigned_market_ids.includes(market.id)}
-                                                    onChange={() => toggleMarket(market.id)}
-                                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
-                                                />
-                                                <span>{market.name} {market.country ? `(${market.country})` : ''}</span>
-                                            </label>
-                                        ))}
+                                <div className="md:col-span-2">
+                                    <label htmlFor="edit-phone" className="mb-1 block text-sm font-medium text-slate-700">
+                                        Phone number <span className="font-normal text-slate-400">(for SMS alerts)</span>
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            id="edit-phone"
+                                            type="tel"
+                                            value={editor.phone}
+                                            onChange={(event) => setEditor((current) => ({ ...current, phone: event.target.value }))}
+                                            className="crm-input flex-1"
+                                            placeholder="e.g. 0712345678"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => testAlertSmsMutation.mutate({
+                                                phone: editor.phone.trim(),
+                                                message: 'Test: This is a payment alert verification from ExoticCRM. Your alerts are configured correctly.',
+                                                market_id: getSmsTestMarketId(),
+                                                reason: 'Agent phone verification test',
+                                            })}
+                                            disabled={!editor.phone.trim() || testAlertSmsMutation.isPending}
+                                            className="crm-btn-secondary shrink-0 px-3 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {testAlertSmsMutation.isPending ? 'Sending…' : 'Test'}
+                                        </button>
                                     </div>
-                                )}
-                            </div>
+                                    {testAlertSmsMutation.isSuccess ? (
+                                        <p className="mt-1 text-xs text-emerald-600">✓ Test message sent — check the phone.</p>
+                                    ) : null}
+                                    {testAlertSmsMutation.isError ? (
+                                        <p className="mt-1 text-xs text-red-600">✗ Send failed — check the number and SMS settings.</p>
+                                    ) : null}
+                                </div>
 
-                            <div className="md:col-span-2">
-                                <label htmlFor="edit-password" className="mb-1 block text-sm font-medium text-slate-700">New Password <span className="font-normal text-slate-400">(leave blank to keep current)</span></label>
-                                <input
-                                    id="edit-password"
-                                    type="password"
-                                    value={editor.password || ''}
-                                    onChange={(event) => setEditor((current) => ({ ...current, password: event.target.value }))}
-                                    className="crm-input"
-                                    placeholder="Min 8 characters"
-                                    autoComplete="new-password"
-                                />
-                            </div>
+                                <div className="md:col-span-2">
+                                    <p className="mb-1 text-sm font-medium text-slate-700">Assigned markets</p>
+                                    {availableMarkets.length === 0 ? (
+                                        <p className="text-sm text-slate-500">No markets available.</p>
+                                    ) : (
+                                        <div className="grid max-h-56 gap-2 overflow-auto rounded-md border border-slate-200 p-2 sm:grid-cols-2">
+                                            {availableMarkets.map((market) => (
+                                                <label key={market.id} className="flex items-center gap-2 rounded-md px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={editor.assigned_market_ids.includes(market.id)}
+                                                        onChange={() => toggleMarket(market.id)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    <span>{market.name} {market.country ? `(${market.country})` : ''}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
 
-                            <div className="md:col-span-2">
-                                <label htmlFor="role-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
-                                <textarea
-                                    id="role-reason"
-                                    rows={3}
-                                    value={editor.reason}
-                                    onChange={(event) => setEditor((current) => ({ ...current, reason: event.target.value }))}
-                                    className="crm-input"
-                                />
+                                <div className="md:col-span-2 space-y-3 rounded-md border border-slate-200 p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-medium text-slate-700">Payment failure SMS alerts</p>
+                                            <p className="text-xs text-slate-500">
+                                                {editor.role === 'marketing'
+                                                    ? 'This alert is available for sales, admin, and sub-admin roles only.'
+                                                    : ['admin', 'sub_admin'].includes(editor.role)
+                                                    ? 'Opt in to receive an SMS when a payment fails in your accessible markets.'
+                                                    : 'Receive an SMS when a payment fails in your assigned markets.'}
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={getSmsEnabled()}
+                                            disabled={editor.role === 'marketing'}
+                                            onClick={() => setSmsEnabled(!getSmsEnabled())}
+                                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${editor.role === 'marketing' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${getSmsEnabled() ? 'bg-teal-600' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${getSmsEnabled() ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+
+                                    {getSmsEnabled() && ['admin', 'sub_admin'].includes(editor.role) ? (
+                                        <div className="space-y-2 border-t border-slate-100 pt-3">
+                                            <p className="text-xs font-medium text-slate-600">Alert scope</p>
+                                            {['all', 'specific'].map((scope) => (
+                                                <label key={scope} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="radio"
+                                                        name="sms-scope"
+                                                        checked={getSmsMarketScope() === scope}
+                                                        onChange={() => setSmsMarketScope(scope)}
+                                                        className="h-4 w-4 border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    {scope === 'all' ? 'All accessible markets' : 'Specific markets only'}
+                                                </label>
+                                            ))}
+                                            {getSmsMarketScope() === 'specific' ? (
+                                                <div className="grid gap-1 pl-6 pt-1 sm:grid-cols-2">
+                                                    {getSmsSelectableMarkets().length === 0 ? (
+                                                        <p className="text-xs text-slate-500">Assign markets above first.</p>
+                                                    ) : (
+                                                        getSmsSelectableMarkets().map((market) => (
+                                                            <label key={market.id} className="flex cursor-pointer items-center gap-2 text-xs text-slate-700">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={getSmsMarketIds().includes(market.id)}
+                                                                    onChange={() => toggleSmsMarket(market.id)}
+                                                                    className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                                />
+                                                                {market.name}
+                                                            </label>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label htmlFor="edit-password" className="mb-1 block text-sm font-medium text-slate-700">New Password <span className="font-normal text-slate-400">(leave blank to keep current)</span></label>
+                                    <input
+                                        id="edit-password"
+                                        type="password"
+                                        value={editor.password || ''}
+                                        onChange={(event) => setEditor((current) => ({ ...current, password: event.target.value }))}
+                                        className="crm-input"
+                                        placeholder="Min 8 characters"
+                                        autoComplete="new-password"
+                                    />
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label htmlFor="role-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                                    <textarea
+                                        id="role-reason"
+                                        rows={3}
+                                        value={editor.reason}
+                                        onChange={(event) => setEditor((current) => ({ ...current, reason: event.target.value }))}
+                                        className="crm-input"
+                                    />
+                                </div>
                             </div>
                         </div>
 
@@ -6406,7 +6616,9 @@ function RolesWorkspace() {
                                         role: editor.role,
                                         status: editor.status,
                                         sb_agent_id: editor.sb_agent_id === '' ? null : Number(editor.sb_agent_id),
+                                        phone: editor.phone.trim() || null,
                                         assigned_market_ids: editor.assigned_market_ids,
+                                        notification_prefs: editor.notification_prefs,
                                         ...(editor.password ? { password: editor.password } : {}),
                                         reason: editor.reason,
                                     },
@@ -6451,6 +6663,13 @@ function RolesWorkspace() {
                                 onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
                                 className="crm-input"
                                 placeholder="Temporary password (optional)"
+                            />
+                            <input
+                                type="tel"
+                                value={createForm.phone}
+                                onChange={(event) => setCreateForm((current) => ({ ...current, phone: event.target.value }))}
+                                className="crm-input md:col-span-2"
+                                placeholder="Phone number (for SMS alerts, e.g. 0712345678)"
                             />
                             <select
                                 value={createForm.role}
@@ -6509,6 +6728,7 @@ function RolesWorkspace() {
                                 onClick={() => createUserMutation.mutate({
                                     name: createForm.name,
                                     email: createForm.email,
+                                    phone: createForm.phone.trim() || null,
                                     role: createForm.role,
                                     status: createForm.status,
                                     assigned_market_ids: createForm.assigned_market_ids,
