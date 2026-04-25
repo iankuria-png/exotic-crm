@@ -1461,6 +1461,15 @@ export default function ClientDetail() {
         setPaymentLinkResult(null);
     };
 
+    const navigateToTab = useCallback((tabKey, sectionKey = null) => {
+        setActiveTab(tabKey);
+        if (sectionKey) setProfileSection(sectionKey);
+        const next = new URLSearchParams(searchParams);
+        if (tabKey === 'overview') next.delete('tab');
+        else next.set('tab', tabKey);
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
+
     const copyPaymentLinkUrl = async () => {
         const paymentUrl = paymentLinkResult?.payment_url;
         if (!paymentUrl) {
@@ -1715,15 +1724,6 @@ export default function ClientDetail() {
         });
     };
     const profileHeaderImageUrl = proxyImageUrl(client?.display_image_url || client?.main_image_url || '');
-
-    const navigateToTab = useCallback((tabKey, sectionKey = null) => {
-        setActiveTab(tabKey);
-        if (sectionKey) setProfileSection(sectionKey);
-        const next = new URLSearchParams(searchParams);
-        if (tabKey === 'overview') next.delete('tab');
-        else next.set('tab', tabKey);
-        setSearchParams(next, { replace: true });
-    }, [searchParams, setSearchParams]);
 
     const isSynced = canSyncFromWp && Boolean(client.last_synced_at);
 
