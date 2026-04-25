@@ -141,6 +141,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // Clients (marketing role has read-only access)
     Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/cities', [ClientController::class, 'cities'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');

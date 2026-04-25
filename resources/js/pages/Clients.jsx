@@ -405,6 +405,7 @@ export default function Clients() {
     const [createdFrom, setCreatedFrom] = useState(() => normalizeDateInputValue(searchParams.get('created_from')));
     const [createdTo, setCreatedTo] = useState(() => normalizeDateInputValue(searchParams.get('created_to')));
     const [sortOption, setSortOption] = useState(() => resolveInitialSortOption(searchParams));
+    const [cityFilter, setCityFilter] = useState(() => (searchParams.get('city') || '').trim());
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
@@ -443,6 +444,19 @@ export default function Clients() {
     );
     const sortParams = useMemo(() => getSortParams(sortOption), [sortOption]);
 
+    const { data: citiesData } = useQuery({
+        queryKey: ['client-cities', platformFilter],
+        queryFn: () =>
+            api.get('/crm/clients/cities', {
+                params: platformFilter ? { platform_id: Number(platformFilter) } : {},
+            }).then((response) => response.data),
+    });
+    const availableCities = citiesData?.cities || [];
+
+    useEffect(() => {
+        setCityFilter('');
+    }, [platformFilter]);
+
     const { data, isLoading } = useQuery({
         queryKey: [
             'clients',
@@ -456,6 +470,7 @@ export default function Clients() {
             hasChatFilter,
             onlineFilter,
             platformFilter,
+            cityFilter,
             signupSourceFilter,
             retentionBandFilter,
             behaviorTagFilter,
@@ -477,6 +492,7 @@ export default function Clients() {
                     ...(hasChatFilter !== '' && { has_chat: hasChatFilter }),
                     ...(onlineFilter && { online_within: Number(onlineFilter) }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
+                    ...(cityFilter && { city: cityFilter }),
                     ...(signupSourceFilter && { signup_source: signupSourceFilter }),
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
@@ -1030,6 +1046,7 @@ export default function Clients() {
         || hasChatFilter !== ''
         || onlineFilter
         || platformFilter
+        || cityFilter
         || signupSourceFilter
         || retentionBandFilter
         || behaviorTagFilter
@@ -1336,6 +1353,16 @@ export default function Clients() {
                     />
 
                     <FilterSelect
+                        label="City"
+                        value={cityFilter}
+                        onChange={(event) => { setCityFilter(event.target.value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'All locations' },
+                            ...availableCities.map((city) => ({ value: city, label: city })),
+                        ]}
+                    />
+
+                    <FilterSelect
                         label="Status"
                         value={statusFilter}
                         onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
@@ -1514,6 +1541,7 @@ export default function Clients() {
                                 setHasChatFilter('');
                                 setOnlineFilter('');
                                 setPlatformFilter('');
+                                setCityFilter('');
                                 setSignupSourceFilter('');
                                 setRetentionBandFilter('');
                                 setBehaviorTagFilter('');

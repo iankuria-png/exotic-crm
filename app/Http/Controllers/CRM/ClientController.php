@@ -187,6 +187,10 @@ class ClientController extends Controller
             });
         }
 
+        if ($request->filled('city')) {
+            $query->where('city', (string) $request->city);
+        }
+
         if ($request->filled('created_from')) {
             $query->where('created_at', '>=', $this->parseClientDateBoundary((string) $request->input('created_from')));
         }
@@ -3483,6 +3487,19 @@ class ClientController extends Controller
         }
 
         return $counts;
+    }
+
+    public function cities(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $query = Client::query()->whereNotNull('city')->where('city', '!=', '');
+
+        if ($request->filled('platform_id')) {
+            $query->where('platform_id', (int) $request->platform_id);
+        }
+
+        $cities = $query->distinct()->orderBy('city')->pluck('city');
+
+        return response()->json(['cities' => $cities]);
     }
 
     private function isProfileMediaVideoUpload(UploadedFile $file): bool

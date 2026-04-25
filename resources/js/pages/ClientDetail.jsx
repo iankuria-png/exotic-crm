@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
@@ -1700,6 +1700,17 @@ export default function ClientDetail() {
     };
     const profileHeaderImageUrl = proxyImageUrl(client?.display_image_url || client?.main_image_url || '');
 
+    const navigateToTab = useCallback((tabKey, sectionKey = null) => {
+        setActiveTab(tabKey);
+        if (sectionKey) setProfileSection(sectionKey);
+        const next = new URLSearchParams(searchParams);
+        if (tabKey === 'overview') next.delete('tab');
+        else next.set('tab', tabKey);
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
+
+    const isSynced = canSyncFromWp && Boolean(client.last_synced_at);
+
     return (
         <div className="space-y-4">
             <button
@@ -1715,10 +1726,31 @@ export default function ClientDetail() {
             <section className="crm-surface px-5 py-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="flex items-start gap-4">
-                        {profileHeaderImageUrl ? (
-                            <img src={profileHeaderImageUrl} alt="" className="h-16 w-16 rounded-full object-cover ring-1 ring-slate-200" />
+                        {(!isReadOnly && canSyncFromWp) ? (
+                            <button
+                                type="button"
+                                onClick={() => navigateToTab('edit_profile', 'media')}
+                                className="group relative flex-shrink-0"
+                                title="View profile media"
+                            >
+                                {profileHeaderImageUrl ? (
+                                    <img src={profileHeaderImageUrl} alt="" className="h-16 w-16 rounded-full object-cover ring-1 ring-slate-200" />
+                                ) : (
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-xl font-semibold text-slate-600 ring-1 ring-slate-200">
+                                        {client.name?.charAt(0) || '?'}
+                                    </div>
+                                )}
+                                <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/25 opacity-0 transition group-hover:opacity-100">
+                                    <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    </svg>
+                                </span>
+                            </button>
+                        ) : profileHeaderImageUrl ? (
+                            <img src={profileHeaderImageUrl} alt="" className="h-16 w-16 flex-shrink-0 rounded-full object-cover ring-1 ring-slate-200" />
                         ) : (
-                            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-xl font-semibold text-slate-600 ring-1 ring-slate-200">
+                            <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl font-semibold text-slate-600 ring-1 ring-slate-200">
                                 {client.name?.charAt(0) || '?'}
                             </div>
                         )}
@@ -1748,79 +1780,134 @@ export default function ClientDetail() {
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-col gap-2">
                         {!isReadOnly ? (
-                            <>
+                            <div className="flex flex-wrap items-center gap-2">
+                                {/* Sync from WP — muted when unsynced, teal when synced */}
                                 <button
+                                    type="button"
                                     onClick={() => setShowSyncConfirm(true)}
                                     disabled={!canSyncFromWp || syncMutation.isPending}
-                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                                    title={!canSyncFromWp ? 'Sync unavailable for manual CRM-only records' : undefined}
+                                    title={!canSyncFromWp ? 'Sync unavailable for manual CRM-only records' : isSynced ? `Last synced ${client.last_synced_at}` : 'Sync profile from WordPress'}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                        isSynced
+                                            ? 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
+                                            : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600'
+                                    }`}
                                 >
-                                    {syncMutation.isPending ? 'Syncing...' : 'Sync latest from WP'}
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                    {syncMutation.isPending ? 'Syncing…' : 'Sync from WP'}
                                 </button>
+
+                                {/* Client access */}
                                 <button
                                     type="button"
                                     onClick={() => setShowCredentialDrawer(true)}
                                     disabled={!canOpenClientAccess}
-                                    className="crm-btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                                    title={!canOpenClientAccess ? 'Client access tools are unavailable until this client loads.' : undefined}
+                                    title={!canOpenClientAccess ? 'Client access tools are unavailable until this client loads.' : 'Manage client access'}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                                 >
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                    </svg>
                                     Client access
                                 </button>
+
+                                {/* Payment Link */}
                                 <button
                                     type="button"
                                     onClick={openPaymentLinkModal}
-                                    className="crm-btn-secondary"
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
                                 >
-                                    Payment Link
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                                    </svg>
+                                    Payment link
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowVerifiedDialog(true)}
-                                    className={`rounded-md border px-4 py-2 text-sm font-semibold transition ${
-                                        client.verified
-                                            ? 'border-teal-200 bg-teal-50 text-teal-700 hover:border-teal-300 hover:bg-teal-100'
-                                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
-                                    }`}
-                                    title={client.verified ? 'Click to remove verified badge' : 'Click to mark as verified'}
-                                >
-                                    {client.verified ? 'Verified ✓' : 'Mark Verified'}
-                                </button>
+
+                                {/* Add Tour */}
                                 <button
                                     type="button"
                                     onClick={() => setShowTourModal(true)}
-                                    className="crm-btn-secondary"
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
                                 >
-                                    Add Tour
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    </svg>
+                                    Add tour
                                 </button>
-                                {client.can_deactivate_without_deal ? (
+
+                                {/* Verified pill toggle */}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowVerifiedDialog(true)}
+                                    title={client.verified ? 'Click to remove verified badge' : 'Click to mark as verified'}
+                                    className={`inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                                        client.verified
+                                            ? 'border-teal-300 bg-teal-50 text-teal-700 hover:bg-teal-100'
+                                            : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                                    }`}
+                                >
+                                    {client.verified ? (
+                                        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
+                                            <path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clipRule="evenodd" />
+                                        </svg>
+                                    ) : (
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                    )}
+                                    {client.verified ? 'Verified' : 'Mark verified'}
+                                </button>
+                            </div>
+                        ) : null}
+
+                        {/* Consequence row */}
+                        {(!isReadOnly || canDeleteClient) ? (
+                            <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
+                                {!isReadOnly && client.can_deactivate_without_deal ? (
                                     <button
                                         type="button"
                                         onClick={openClientDeactivationDialog}
-                                        className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
                                     >
-                                        Deactivate profile subscription
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Deactivate subscription
                                     </button>
                                 ) : null}
-                            </>
-                        ) : null}
-                        {!isReadOnly ? (
-                            <button
-                                onClick={() => setShowDealModal(true)}
-                                className="crm-btn-primary"
-                            >
-                                New subscription
-                            </button>
-                        ) : null}
-                        {canDeleteClient ? (
-                            <button
-                                type="button"
-                                onClick={openDeleteDialog}
-                                className="crm-btn-danger"
-                            >
-                                Delete client
-                            </button>
+                                {!isReadOnly ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowDealModal(true)}
+                                        className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                                        </svg>
+                                        New subscription
+                                    </button>
+                                ) : null}
+                                {canDeleteClient ? (
+                                    <>
+                                        {!isReadOnly ? <span className="mx-1 h-5 w-px bg-slate-200" /> : null}
+                                        <button
+                                            type="button"
+                                            onClick={openDeleteDialog}
+                                            title="Delete client"
+                                            className="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-white p-1.5 text-rose-500 transition hover:bg-rose-50 hover:text-rose-700"
+                                        >
+                                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                            </svg>
+                                        </button>
+                                    </>
+                                ) : null}
+                            </div>
                         ) : null}
                     </div>
                 </div>
@@ -1829,8 +1916,31 @@ export default function ClientDetail() {
             <section className="grid gap-4 lg:grid-cols-3">
                 <ProfileInfoCard title="Contact Info">
                     <dl className="space-y-2.5">
-                        <DefinitionRow label="Phone" value={client.phone_normalized || '—'} mono />
-                        <DefinitionRow label="Email" value={client.email || '—'} />
+                        <DefinitionRow
+                            label="Phone"
+                            mono
+                            value={(!isReadOnly && canSyncFromWp && client.phone_normalized) ? (
+                                <button
+                                    type="button"
+                                    onClick={() => navigateToTab('edit_profile', 'contact')}
+                                    className="crm-mono text-xs font-medium text-teal-700 underline-offset-2 hover:underline"
+                                >
+                                    {client.phone_normalized}
+                                </button>
+                            ) : (client.phone_normalized || '—')}
+                        />
+                        <DefinitionRow
+                            label="Email"
+                            value={(!isReadOnly && canSyncFromWp && client.email) ? (
+                                <button
+                                    type="button"
+                                    onClick={() => navigateToTab('edit_profile', 'contact')}
+                                    className="font-medium text-teal-700 underline-offset-2 hover:underline"
+                                >
+                                    {client.email}
+                                </button>
+                            ) : (client.email || '—')}
+                        />
                         <DefinitionRow label="City" value={client.city || '—'} />
                         <DefinitionRow label="Market" value={client.platform?.name || '—'} />
                     </dl>
@@ -1884,9 +1994,33 @@ export default function ClientDetail() {
 
                 <ProfileInfoCard title="Summary">
                     <dl className="space-y-2.5">
-                        <DefinitionRow label="Total Subscriptions" value={client.deals?.length || 0} />
-                        <DefinitionRow label="Total Payments" value={client.payments?.length || 0} />
-                        <DefinitionRow label="Notes" value={client.notes?.length || 0} />
+                        <DefinitionRow
+                            label="Total Subscriptions"
+                            value={(() => {
+                                const count = client.deals?.length || 0;
+                                return count > 0 ? (
+                                    <button type="button" onClick={() => navigateToTab('deals')} className="font-semibold text-teal-700 underline-offset-2 hover:underline">{count}</button>
+                                ) : <span className="font-medium text-slate-900">0</span>;
+                            })()}
+                        />
+                        <DefinitionRow
+                            label="Total Payments"
+                            value={(() => {
+                                const count = client.payments?.length || 0;
+                                return count > 0 ? (
+                                    <button type="button" onClick={() => navigateToTab('payments')} className="font-semibold text-teal-700 underline-offset-2 hover:underline">{count}</button>
+                                ) : <span className="font-medium text-slate-900">0</span>;
+                            })()}
+                        />
+                        <DefinitionRow
+                            label="Notes"
+                            value={(() => {
+                                const count = client.notes?.length || 0;
+                                return count > 0 ? (
+                                    <button type="button" onClick={() => navigateToTab('notes')} className="font-semibold text-teal-700 underline-offset-2 hover:underline">{count}</button>
+                                ) : <span className="font-medium text-slate-900">0</span>;
+                            })()}
+                        />
                         <DefinitionRow label="Agent" value={client.assigned_agent?.name || 'Unassigned'} />
                     </dl>
                 </ProfileInfoCard>
