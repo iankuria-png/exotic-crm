@@ -103,6 +103,63 @@ function formatRelativeFromUnix(unixTs) {
     return `${years}y ago`;
 }
 
+function normalizeNewBadgeMode(value, fallbackForceNew = false) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'auto' || normalized === 'force_on' || normalized === 'force_off') {
+        return normalized;
+    }
+
+    return fallbackForceNew ? 'force_on' : 'auto';
+}
+
+function getNewBadgeModePresentation(mode) {
+    if (mode === 'force_on') {
+        return {
+            chipLabel: 'NEW pinned',
+            buttonLabel: 'NEW pinned',
+            buttonTitle: 'NEW badge is pinned on the public profile',
+            buttonClassName: 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100',
+            toastMessage: 'NEW badge pinned to profile.',
+        };
+    }
+
+    if (mode === 'force_off') {
+        return {
+            chipLabel: 'NEW hidden',
+            buttonLabel: 'NEW hidden',
+            buttonTitle: 'NEW badge is hidden on the public profile',
+            buttonClassName: 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100',
+            toastMessage: 'NEW badge hidden from profile.',
+        };
+    }
+
+    return {
+        chipLabel: '',
+        buttonLabel: 'NEW auto',
+        buttonTitle: 'NEW badge follows the normal publish-date rule',
+        buttonClassName: 'border-slate-200 bg-white text-slate-500 hover:border-slate-300',
+        toastMessage: 'NEW badge returned to automatic behavior.',
+    };
+}
+
+const NEW_BADGE_MODE_OPTIONS = [
+    {
+        mode: 'auto',
+        title: 'Automatic',
+        description: 'Use the normal publish-date rule from WordPress.',
+    },
+    {
+        mode: 'force_on',
+        title: 'Force On',
+        description: 'Always show the NEW badge on the public listing and profile.',
+    },
+    {
+        mode: 'force_off',
+        title: 'Force Off',
+        description: 'Hide the NEW badge even if the profile is still naturally new.',
+    },
+];
+
 function toDateString(date) {
     if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
         return '';
@@ -837,13 +894,14 @@ export default function ClientDetail() {
 
     // ── New Badge ────────────────────────────────────────────────────────────
     const updateNewBadgeMutation = useMutation({
-        mutationFn: (forceNew) =>
-            api.post(`/crm/clients/${id}/new-badge`, { force_new: forceNew }).then((r) => r.data),
+        mutationFn: (mode) =>
+            api.post(`/crm/clients/${id}/new-badge`, { mode }).then((r) => r.data),
         onSuccess: (data) => {
             queryClient.setQueryData(['client', id], data);
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
             setShowNewBadgeDialog(false);
-            toast.success(data.force_new ? 'NEW badge pinned to profile.' : 'NEW badge override removed.');
+            const nextMode = normalizeNewBadgeMode(data.new_badge_mode, data.force_new);
+            toast.success(getNewBadgeModePresentation(nextMode).toastMessage);
         },
         onError: (err) => {
             toast.error(err?.response?.data?.message || 'Failed to update NEW badge.');
@@ -1320,6 +1378,8 @@ export default function ClientDetail() {
     }
 
     const profileState = deriveClientProfileState(client);
+    const currentNewBadgeMode = normalizeNewBadgeMode(client.new_badge_mode, client.force_new);
+    const newBadgePresentation = getNewBadgeModePresentation(currentNewBadgeMode);
     const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
     const isUntrackedForeverPlan = isClientTrueForeverPlan(client);
     const activeSubscriptionLabel = client.active_deal
@@ -1779,7 +1839,16 @@ export default function ClientDetail() {
                                 {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
                                 {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
                                 {client.verified ? <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
-                                {client.force_new ? <span className="inline-flex items-center rounded-md bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-200">NEW pinned</span> : null}
+                                {newBadgePresentation.chipLabel ? (
+                                    <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                                        currentNewBadgeMode === 'force_off'
+                                            ? 'bg-rose-50 text-rose-700 ring-rose-200'
+                                            : 'bg-violet-50 text-violet-700 ring-violet-200'
+                                    }`}
+                                    >
+                                        {newBadgePresentation.chipLabel}
+                                    </span>
+                                ) : null}
                                 {isUntrackedForeverPlan ? (
                                     <span
                                         className="inline-flex cursor-help items-center rounded-md bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
@@ -1884,17 +1953,13 @@ export default function ClientDetail() {
                                 <button
                                     type="button"
                                     onClick={() => setShowNewBadgeDialog(true)}
-                                    title={client.force_new ? 'NEW badge is pinned — click to remove' : 'Pin NEW badge to listing and profile'}
-                                    className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                                        client.force_new
-                                            ? 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100'
-                                            : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-                                    }`}
+                                    title={newBadgePresentation.buttonTitle}
+                                    className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${newBadgePresentation.buttonClassName}`}
                                 >
                                     <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
                                     </svg>
-                                    {client.force_new ? 'NEW pinned' : 'Pin NEW badge'}
+                                    {newBadgePresentation.buttonLabel}
                                 </button>
                             </div>
                         ) : null}
@@ -4032,20 +4097,60 @@ export default function ClientDetail() {
             ) : null}
 
             {/* ── NEW Badge Dialog ─────────────────────────────────────────── */}
-            {!isReadOnly ? (
-                <ConfirmDialog
-                    open={showNewBadgeDialog}
-                    title={client?.force_new ? 'Remove NEW badge override?' : 'Pin NEW badge to listing?'}
-                    message={client?.force_new
-                        ? 'The NEW badge will no longer be pinned. It will still show naturally if the profile was published recently.'
-                        : 'The NEW badge will appear on this profile\'s listing card and profile page regardless of publish date.'}
-                    confirmLabel={updateNewBadgeMutation.isPending ? 'Updating…' : (client?.force_new ? 'Remove override' : 'Pin NEW badge')}
-                    confirmDisabled={updateNewBadgeMutation.isPending}
-                    isPending={updateNewBadgeMutation.isPending}
-                    tone={client?.force_new ? 'warning' : 'default'}
-                    onConfirm={() => updateNewBadgeMutation.mutate(!client.force_new)}
-                    onCancel={() => setShowNewBadgeDialog(false)}
-                />
+            {!isReadOnly && showNewBadgeDialog ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-lg rounded-xl bg-white shadow-xl">
+                        <div className="border-b border-slate-200 px-6 py-4">
+                            <h2 className="text-base font-semibold text-slate-900">Set NEW badge behavior</h2>
+                            <p className="mt-1 text-sm text-slate-500">
+                                Choose whether the public profile should follow the normal NEW rule, stay pinned on, or be forced off.
+                            </p>
+                        </div>
+                        <div className="space-y-3 px-6 py-5">
+                            {NEW_BADGE_MODE_OPTIONS.map((option) => {
+                                const isActive = currentNewBadgeMode === option.mode;
+                                return (
+                                    <button
+                                        key={option.mode}
+                                        type="button"
+                                        disabled={updateNewBadgeMutation.isPending}
+                                        onClick={() => updateNewBadgeMutation.mutate(option.mode)}
+                                        className={`w-full rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                            isActive
+                                                ? 'border-violet-300 bg-violet-50 shadow-sm'
+                                                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                                        }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div>
+                                                <div className="text-sm font-semibold text-slate-900">{option.title}</div>
+                                                <div className="mt-1 text-sm text-slate-500">{option.description}</div>
+                                            </div>
+                                            {isActive ? (
+                                                <span className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-violet-700">
+                                                    Current
+                                                </span>
+                                            ) : null}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="flex items-center justify-between border-t border-slate-200 px-6 py-4">
+                            <p className="text-xs text-slate-500">
+                                Automatic uses the site&apos;s normal publish-date window for NEW.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => setShowNewBadgeDialog(false)}
+                                disabled={updateNewBadgeMutation.isPending}
+                                className="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {updateNewBadgeMutation.isPending ? 'Updating…' : 'Close'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             ) : null}
 
             {/* ── Add Tour Modal ───────────────────────────────────────────── */}

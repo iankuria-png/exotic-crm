@@ -1097,14 +1097,34 @@ class ClientController extends Controller
             ], 422);
         }
 
-        $validated = $request->validate(['force_new' => 'required|boolean']);
-        $forceNew  = (bool) $validated['force_new'];
-        $before    = ['force_new' => (bool) $client->force_new];
+        $validated = $request->validate([
+            'mode' => 'nullable|string|in:auto,force_on,force_off',
+            'force_new' => 'nullable|boolean',
+        ]);
+
+        $mode = $validated['mode'] ?? null;
+        if ($mode === null && array_key_exists('force_new', $validated)) {
+            $mode = (bool) $validated['force_new'] ? 'force_on' : 'auto';
+        }
+
+        if ($mode === null) {
+            return response()->json([
+                'message' => 'A NEW badge mode is required.',
+            ], 422);
+        }
+
+        $forceNew = $mode === 'force_on';
+        $before = [
+            'force_new' => (bool) $client->force_new,
+            'new_badge_mode' => in_array((string) $client->new_badge_mode, ['auto', 'force_on', 'force_off'], true)
+                ? (string) $client->new_badge_mode
+                : ((bool) $client->force_new ? 'force_on' : 'auto'),
+        ];
 
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
-            // Empty string causes the WP endpoint to delete_post_meta (removes override).
             $wpSync->updateClientProfile((int) $client->wp_post_id, [
+                'new_badge_mode' => $mode,
                 'force_new' => $forceNew ? '1' : '',
             ]);
         } catch (RequestException $e) {
@@ -1118,7 +1138,10 @@ class ClientController extends Controller
             return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
         }
 
-        $client->update(['force_new' => $forceNew]);
+        $client->update([
+            'force_new' => $forceNew,
+            'new_badge_mode' => $mode,
+        ]);
 
         $this->auditService->fromRequest(
             $request,
@@ -1127,7 +1150,10 @@ class ClientController extends Controller
             'client',
             (int) $client->id,
             $before,
-            ['force_new' => $forceNew]
+            [
+                'force_new' => $forceNew,
+                'new_badge_mode' => $mode,
+            ]
         );
 
         $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);

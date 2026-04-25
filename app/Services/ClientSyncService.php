@@ -153,6 +153,8 @@ class ClientSyncService
             'wp_post_id'  => $wpPostId,
         ]);
 
+        $newBadgeMode = $this->resolveNewBadgeMode($wpClient);
+
         $syncData = [
             'wp_user_id'      => $wpClient['wp_user_id'] ?? null,
             'client_type'     => 'escort',
@@ -167,7 +169,8 @@ class ClientSyncService
             'featured_expire' => $featuredExpire,
             'escort_expire'   => $escortExpire,
             'verified'        => (bool) ($wpClient['verified'] ?? false),
-            'force_new'       => (bool) ($wpClient['force_new'] ?? false),
+            'force_new'       => $newBadgeMode === 'force_on',
+            'new_badge_mode'  => $newBadgeMode,
             'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
             'main_image_url'  => $imageUrl ?: null,
             'last_synced_at'  => now(),
@@ -192,6 +195,17 @@ class ClientSyncService
         $client->save();
 
         return $client->wasRecentlyCreated ? 'created' : 'updated';
+    }
+
+    private function resolveNewBadgeMode(array $wpClient): string
+    {
+        $mode = strtolower(trim((string) ($wpClient['new_badge_mode'] ?? '')));
+
+        if (in_array($mode, ['auto', 'force_on', 'force_off'], true)) {
+            return $mode;
+        }
+
+        return !empty($wpClient['force_new']) ? 'force_on' : 'auto';
     }
 
     /**

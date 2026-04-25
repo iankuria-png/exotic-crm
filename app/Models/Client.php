@@ -48,6 +48,7 @@ class Client extends Model
         'escort_expire',
         'verified',
         'force_new',
+        'new_badge_mode',
         'main_image_url',
         'display_image_url',
         'display_image_source',
