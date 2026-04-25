@@ -167,6 +167,7 @@ class ClientSyncService
             'featured_expire' => $featuredExpire,
             'escort_expire'   => $escortExpire,
             'verified'        => (bool) ($wpClient['verified'] ?? false),
+            'force_new'       => (bool) ($wpClient['force_new'] ?? false),
             'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
             'main_image_url'  => $imageUrl ?: null,
             'last_synced_at'  => now(),

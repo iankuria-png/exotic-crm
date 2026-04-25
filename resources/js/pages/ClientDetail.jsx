@@ -1862,7 +1862,7 @@ export default function ClientDetail() {
                                     type="button"
                                     onClick={() => setShowVerifiedDialog(true)}
                                     title={client.verified ? 'Click to remove verified badge' : 'Click to mark as verified'}
-                                    className={`inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                                    className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
                                         client.verified
                                             ? 'border-teal-300 bg-teal-50 text-teal-700 hover:bg-teal-100'
                                             : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
@@ -1885,7 +1885,7 @@ export default function ClientDetail() {
                                     type="button"
                                     onClick={() => setShowNewBadgeDialog(true)}
                                     title={client.force_new ? 'NEW badge is pinned — click to remove' : 'Pin NEW badge to listing and profile'}
-                                    className={`inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                                    className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
                                         client.force_new
                                             ? 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100'
                                             : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
