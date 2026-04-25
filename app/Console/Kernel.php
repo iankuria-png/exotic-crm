@@ -128,6 +128,13 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_reconcile_pending_payments.log'));
 
+        $schedule->command('crm:reconcile-payment-failure-alerts')
+            ->name('crm_reconcile_payment_failure_alerts')
+            ->everyFiveMinutes()
+            ->withoutOverlapping(10)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_reconcile_payment_failure_alerts.log'));
+
         // Daily subscriber snapshot sync across configured push providers.
         $schedule->command('crm:sync-push-subscribers')
             ->name('crm_sync_push_subscribers')
@@ -143,15 +150,15 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
-        // Queue worker: processes push queue first (time-sensitive), then default queue.
+        // Queue worker: processes push queue first (time-sensitive), then alert jobs, then default queue.
         // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
-        // --queue=push,default ensures push notifications are never blocked by slow sync jobs.
+        // --queue=push,alerts,default ensures payment failure alerts are not blocked by slow default jobs.
         // --max-jobs=100 prevents memory leaks during long-running batches.
         $queueConnection = (string) config('queue.default', 'sync');
 
         if ($queueConnection !== 'sync') {
             $schedule->command(sprintf(
-                'queue:work %s --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
+                'queue:work %s --queue=push,alerts,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
                 $queueConnection
             ))
                 ->name('queue_worker')

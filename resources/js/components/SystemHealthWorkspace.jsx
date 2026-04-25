@@ -4,10 +4,10 @@ import api from '../services/api';
 import { useToast } from './ToastProvider';
 
 function statusChip(status) {
-    if (['connected', 'healthy', 'success', 'complete'].includes(status)) {
+    if (['connected', 'healthy', 'success', 'complete', 'sent'].includes(status)) {
         return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
     }
-    if (['configured_disabled', 'partial', 'degraded', 'pending', 'stale', 'missing', 'skipped', 'running', 'idle', 'rolling_back'].includes(status)) {
+    if (['configured_disabled', 'partial', 'degraded', 'pending', 'queued', 'processing', 'stale', 'missing', 'skipped', 'running', 'idle', 'rolling_back'].includes(status)) {
         return 'bg-amber-50 text-amber-700 ring-amber-200';
     }
     return 'bg-rose-50 text-rose-700 ring-rose-200';
@@ -591,6 +591,26 @@ export default function SystemHealthWorkspace({
                             </div>
                         </div>
 
+                        <div className="grid gap-3 sm:grid-cols-3">
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Alert Jobs Pending</p>
+                                <p className="mt-2 text-lg font-semibold text-slate-900">{queueStatusQuery.data?.alerts_pending ?? '—'}</p>
+                                <p className="mt-1 text-xs text-slate-500">payment-failure SMS queue</p>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Alert Jobs Processing</p>
+                                <p className="mt-2 text-lg font-semibold text-slate-900">{queueStatusQuery.data?.alerts_processing ?? '—'}</p>
+                                <p className="mt-1 text-xs text-slate-500">active alert deliveries</p>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Alert Jobs Failed</p>
+                                <p className={`mt-2 text-lg font-semibold ${(queueStatusQuery.data?.alerts_failed || 0) > 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                                    {queueStatusQuery.data?.alerts_failed ?? '—'}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-500">delivery retries needed</p>
+                            </div>
+                        </div>
+
                         {Object.keys(queueStatusQuery.data?.job_breakdown || {}).length > 0 ? (
                             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Job Breakdown</p>
@@ -658,6 +678,83 @@ export default function SystemHealthWorkspace({
                                         </button>
                                     </div>
                                 ) : null}
+                            </div>
+                        ) : null}
+
+                        {queueStatusQuery.data?.latest_failed_alert_job ? (
+                            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
+                                <p className="text-xs font-semibold text-amber-900">
+                                    Latest alert failure: {queueStatusQuery.data.latest_failed_alert_job} &middot; {formatDateTime(queueStatusQuery.data.latest_failed_alert_at)}
+                                </p>
+                                {queueStatusQuery.data?.latest_failed_alert_exception ? (
+                                    <div className="mt-2 rounded-lg bg-slate-950 p-3">
+                                        <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-amber-100">
+                                            {queueStatusQuery.data.latest_failed_alert_exception}
+                                        </pre>
+                                    </div>
+                                ) : null}
+                            </div>
+                        ) : null}
+
+                        {Array.isArray(queueStatusQuery.data?.recent_alert_attempts) && queueStatusQuery.data.recent_alert_attempts.length > 0 ? (
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recent Payment Failure Alert Attempts</p>
+                                        <p className="mt-1 text-xs text-slate-500">Shows coordinator and per-recipient SMS activity for recent failed payments.</p>
+                                    </div>
+                                </div>
+                                <div className="mt-3 overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-slate-200">
+                                        <thead className="bg-white">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Type</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Payment</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Market</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Recipient</th>
+                                                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">When</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 bg-white">
+                                            {queueStatusQuery.data.recent_alert_attempts.map((attempt) => (
+                                                <tr key={attempt.id}>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">
+                                                        {attempt.attempt_type === 'payment_failure_alert_enqueue' ? 'Coordinator' : 'SMS'}
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${statusChip(attempt.status)}`}>
+                                                            {attempt.status.replaceAll('_', ' ')}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">
+                                                        <p className="font-medium text-slate-900">{attempt.reference || `Payment #${attempt.payment_id}`}</p>
+                                                        {attempt.trigger_source ? (
+                                                            <p className="text-slate-500">{attempt.trigger_source.replaceAll('_', ' ')}</p>
+                                                        ) : null}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">{attempt.platform_name || 'Unknown market'}</td>
+                                                    <td className="px-3 py-2 text-xs text-slate-700">
+                                                        {attempt.recipient_name ? (
+                                                            <>
+                                                                <p className="font-medium text-slate-900">{attempt.recipient_name}</p>
+                                                                <p className="text-slate-500">{attempt.recipient_phone || attempt.recipient_role || 'Recipient snapshot'}</p>
+                                                            </>
+                                                        ) : (
+                                                            <p className="text-slate-500">{attempt.skip_reason ? attempt.skip_reason.replaceAll('_', ' ') : 'Recipient snapshot queued'}</p>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-xs text-slate-500">
+                                                        <p>{formatDateTime(attempt.created_at)}</p>
+                                                        {attempt.error_message ? (
+                                                            <p className="mt-1 text-rose-600">{attempt.error_message}</p>
+                                                        ) : null}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         ) : null}
 

@@ -2,11 +2,18 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SendPaymentFailureAlertRecipientJob;
+use App\Jobs\SendPaymentFailureAlertsJob;
+use App\Models\Client;
+use App\Models\Payment;
+use App\Models\PaymentAttempt;
 use App\Models\Platform;
+use App\Models\Product;
 use App\Models\User;
 use App\Support\CrmAuditAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -221,6 +228,112 @@ class SystemHealthUpdatesTest extends TestCase
             ->assertJsonPath('pulse_url', url('/pulse'))
             ->assertJsonPath('pulse_check_command', 'cd ' . base_path() . ' && /opt/cpanel/ea-php82/root/usr/bin/php artisan pulse:check')
             ->assertJsonPath('pulse_restart_command', 'cd ' . base_path() . ' && /opt/cpanel/ea-php82/root/usr/bin/php artisan pulse:restart');
+    }
+
+    public function test_queue_status_includes_alert_queue_metrics_and_recent_alert_attempts(): void
+    {
+        $user = $this->createUser('sub_admin');
+        $platform = Platform::query()->create([
+            'name' => 'Kenya Market',
+            'domain' => 'kenya.example.test',
+            'slug' => 'kenya-market',
+            'country' => 'Kenya',
+            'currency_code' => 'KES',
+            'phone_prefix' => '254',
+            'timezone' => 'Africa/Nairobi',
+            'payment_instruction' => 'Pay via mobile money',
+        ]);
+        $client = Client::query()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 1001,
+            'name' => 'Alert Client',
+            'phone_normalized' => '254700000001',
+        ]);
+        $product = Product::query()->create([
+            'name' => 'Featured Boost',
+            'display_name' => 'Featured Boost',
+            'slug' => 'featured-boost',
+            'platform_id' => $platform->id,
+            'tier' => 'featured',
+            'monthly_price' => 50,
+            'biweekly_price' => 30,
+            'weekly_price' => 20,
+            'currency' => 'KES',
+            'is_active' => true,
+            'is_archived' => false,
+            'sort_order' => 1,
+        ]);
+        $payment = Payment::query()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'phone' => '254700000001',
+            'amount' => 99.99,
+            'currency' => 'KES',
+            'transaction_reference' => 'TXN-QUEUE-1',
+            'reference_number' => 'REF-QUEUE-1',
+            'status' => 'failed',
+            'source' => 'gateway',
+            'payment_data' => [],
+            'raw_payload' => [],
+        ]);
+
+        PaymentAttempt::query()->create([
+            'payment_id' => $payment->id,
+            'attempt_type' => 'payment_failure_alert_sms',
+            'provider' => 'paystack',
+            'status' => 'sent',
+            'request_meta' => [
+                'event_key' => 'payment-failure:1:20260426120000.000000',
+                'trigger_source' => 'payment_model_saved',
+                'user_id' => 9,
+                'user_name' => 'Ops Admin',
+                'user_role' => 'admin',
+                'phone' => '0700000001',
+            ],
+            'response_meta' => [
+                'provider_result' => ['success' => true, 'status' => 'sent'],
+            ],
+        ]);
+
+        DB::table('jobs')->insert([
+            [
+                'queue' => 'alerts',
+                'payload' => json_encode(['displayName' => SendPaymentFailureAlertsJob::class], JSON_UNESCAPED_SLASHES),
+                'attempts' => 0,
+                'reserved_at' => null,
+                'available_at' => now()->timestamp,
+                'created_at' => now()->timestamp,
+            ],
+            [
+                'queue' => 'alerts',
+                'payload' => json_encode(['displayName' => SendPaymentFailureAlertRecipientJob::class], JSON_UNESCAPED_SLASHES),
+                'attempts' => 0,
+                'reserved_at' => now()->timestamp,
+                'available_at' => now()->timestamp,
+                'created_at' => now()->timestamp,
+            ],
+        ]);
+
+        DB::table('failed_jobs')->insert([
+            'uuid' => (string) Str::uuid(),
+            'connection' => 'database',
+            'queue' => 'alerts',
+            'payload' => json_encode(['displayName' => SendPaymentFailureAlertRecipientJob::class], JSON_UNESCAPED_SLASHES),
+            'exception' => 'Gateway timed out.',
+            'failed_at' => now(),
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/crm/settings/system-health/queue-status')
+            ->assertOk()
+            ->assertJsonPath('alerts_pending', 1)
+            ->assertJsonPath('alerts_processing', 1)
+            ->assertJsonPath('alerts_failed', 1)
+            ->assertJsonPath('latest_failed_alert_job', 'SendPaymentFailureAlertRecipientJob')
+            ->assertJsonPath('recent_alert_attempts.0.attempt_type', 'payment_failure_alert_sms')
+            ->assertJsonPath('recent_alert_attempts.0.recipient_name', 'Ops Admin');
     }
 
     private function createUser(string $role, array $assignedMarketIds = []): User

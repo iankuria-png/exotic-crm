@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\SendPaymentFailureAlertRecipientJob;
+use App\Jobs\SendPaymentFailureAlertsJob;
 use App\Models\Platform;
 use App\Services\AuditService;
 use App\Services\DeploymentStatusService;
@@ -138,9 +140,14 @@ class SystemHealthUpdateController extends Controller
     {
         $pending = DB::table('jobs')->whereNull('reserved_at')->count();
         $processing = DB::table('jobs')->whereNotNull('reserved_at')->count();
+        $pendingAlerts = DB::table('jobs')->where('queue', 'alerts')->whereNull('reserved_at')->count();
+        $processingAlerts = DB::table('jobs')->where('queue', 'alerts')->whereNotNull('reserved_at')->count();
 
         $failedCount = DB::table('failed_jobs')->count();
-        $latestFailed = DB::table('failed_jobs')->orderByDesc('failed_at')->first();
+        $failedJobs = DB::table('failed_jobs')
+            ->orderByDesc('failed_at')
+            ->get(['payload', 'exception', 'failed_at']);
+        $latestFailed = $failedJobs->first();
 
         $recentActivity = DB::table('jobs')
             ->whereNotNull('reserved_at')
@@ -166,9 +173,7 @@ class SystemHealthUpdateController extends Controller
         $jobBreakdown = DB::table('jobs')
             ->get(['payload'])
             ->map(function ($job): ?string {
-                $payload = json_decode((string) ($job->payload ?? ''), true);
-
-                return is_array($payload) ? ($payload['displayName'] ?? null) : null;
+                return $this->extractJobDisplayName((string) ($job->payload ?? ''));
             })
             ->filter(fn (?string $jobClass): bool => filled($jobClass))
             ->countBy()
@@ -176,19 +181,91 @@ class SystemHealthUpdateController extends Controller
             ->all();
 
         $latestFailedPayload = $latestFailed ? json_decode($latestFailed->payload, true) : null;
+        $alertFailedJobs = $failedJobs
+            ->map(function ($job): array {
+                return [
+                    'display_name' => $this->extractJobDisplayName((string) ($job->payload ?? '')),
+                    'failed_at' => $job->failed_at,
+                    'exception' => $job->exception,
+                ];
+            })
+            ->filter(fn (array $job): bool => $this->isPaymentFailureAlertJob($job['display_name'] ?? null))
+            ->values();
+        $latestFailedAlertJob = $alertFailedJobs->first();
+        $recentAlertAttempts = DB::table('payment_attempts')
+            ->leftJoin('payments', 'payments.id', '=', 'payment_attempts.payment_id')
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->whereIn('payment_attempts.attempt_type', [
+                'payment_failure_alert_enqueue',
+                'payment_failure_alert_sms',
+            ])
+            ->orderByDesc('payment_attempts.id')
+            ->limit(10)
+            ->get([
+                'payment_attempts.id',
+                'payment_attempts.payment_id',
+                'payment_attempts.attempt_type',
+                'payment_attempts.status',
+                'payment_attempts.error_code',
+                'payment_attempts.error_message',
+                'payment_attempts.request_meta',
+                'payment_attempts.response_meta',
+                'payment_attempts.created_at',
+                'payments.reference_number',
+                'payments.transaction_reference',
+                'payments.platform_id',
+                'platforms.name as platform_name',
+            ])
+            ->map(function ($attempt): array {
+                $requestMeta = json_decode((string) ($attempt->request_meta ?? ''), true);
+                $responseMeta = json_decode((string) ($attempt->response_meta ?? ''), true);
+
+                return [
+                    'id' => (int) $attempt->id,
+                    'payment_id' => (int) $attempt->payment_id,
+                    'attempt_type' => (string) $attempt->attempt_type,
+                    'status' => (string) $attempt->status,
+                    'error_code' => $attempt->error_code,
+                    'error_message' => $attempt->error_message,
+                    'created_at' => $attempt->created_at,
+                    'reference' => $attempt->reference_number ?: $attempt->transaction_reference,
+                    'platform_id' => $attempt->platform_id ? (int) $attempt->platform_id : null,
+                    'platform_name' => $attempt->platform_name,
+                    'event_key' => is_array($requestMeta) ? ($requestMeta['event_key'] ?? null) : null,
+                    'recipient_name' => is_array($requestMeta) ? ($requestMeta['user_name'] ?? null) : null,
+                    'recipient_role' => is_array($requestMeta) ? ($requestMeta['user_role'] ?? null) : null,
+                    'recipient_phone' => is_array($requestMeta) ? ($requestMeta['phone'] ?? null) : null,
+                    'trigger_source' => is_array($requestMeta) ? ($requestMeta['trigger_source'] ?? null) : null,
+                    'skip_reason' => is_array($responseMeta) ? ($responseMeta['skip_reason'] ?? null) : null,
+                    'provider_result' => is_array($responseMeta) ? ($responseMeta['provider_result'] ?? null) : null,
+                ];
+            })
+            ->values()
+            ->all();
 
         return response()->json([
             'status' => $status,
             'pending' => $pending,
             'processing' => $processing,
             'failed' => $failedCount,
+            'alerts_pending' => $pendingAlerts,
+            'alerts_processing' => $processingAlerts,
+            'alerts_failed' => $alertFailedJobs->count(),
             'latest_failed_at' => $latestFailed?->failed_at,
             'latest_failed_exception' => $latestFailed ? Str::limit($latestFailed->exception, 300) : null,
             'latest_failed_job' => $latestFailedPayload ? class_basename($latestFailedPayload['displayName'] ?? '') : null,
+            'latest_failed_alert_at' => $latestFailedAlertJob['failed_at'] ?? null,
+            'latest_failed_alert_exception' => isset($latestFailedAlertJob['exception'])
+                ? Str::limit((string) $latestFailedAlertJob['exception'], 300)
+                : null,
+            'latest_failed_alert_job' => isset($latestFailedAlertJob['display_name'])
+                ? class_basename((string) $latestFailedAlertJob['display_name'])
+                : null,
             'job_breakdown' => $jobBreakdown,
+            'recent_alert_attempts' => $recentAlertAttempts,
             'queue_cron_command' => ($queueConnection = (string) config('queue.default', 'sync')) !== 'sync'
                 ? sprintf(
-                    '* * * * * cd %s && %s artisan queue:work %s --queue=push,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
+                    '* * * * * cd %s && %s artisan queue:work %s --queue=push,alerts,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3 >> /dev/null 2>&1',
                     base_path(),
                     config('deployment.php_binary', '/usr/local/bin/php'),
                     $queueConnection
@@ -206,6 +283,21 @@ class SystemHealthUpdateController extends Controller
                 config('deployment.php_binary', '/usr/local/bin/php')
             ),
         ]);
+    }
+
+    private function extractJobDisplayName(string $payload): ?string
+    {
+        $decoded = json_decode($payload, true);
+
+        return is_array($decoded) ? ($decoded['displayName'] ?? null) : null;
+    }
+
+    private function isPaymentFailureAlertJob(?string $displayName): bool
+    {
+        return in_array($displayName, [
+            SendPaymentFailureAlertsJob::class,
+            SendPaymentFailureAlertRecipientJob::class,
+        ], true);
     }
 
     public function retryFailedJobs(): JsonResponse

@@ -2,13 +2,19 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SendPaymentFailureAlertRecipientJob;
 use App\Jobs\SendPaymentFailureAlertsJob;
 use App\Models\Client;
-use App\Models\Platform;
 use App\Models\Payment;
+use App\Models\PaymentAttempt;
+use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\MarketAuthorizationService;
+use App\Services\NotificationService;
+use App\Services\PaymentAttemptService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
@@ -32,7 +38,7 @@ class PaymentFailureSmsAlertsTest extends TestCase
         ]);
     }
 
-    public function test_payment_status_transition_to_failed_dispatches_alert_job_after_commit(): void
+    public function test_payment_status_transition_to_failed_dispatches_coordinator_job_on_alerts_queue(): void
     {
         Queue::fake();
 
@@ -44,16 +50,18 @@ class PaymentFailureSmsAlertsTest extends TestCase
             'failure_reason' => 'Provider timeout',
         ])->save();
 
+        $payment->refresh();
+
         Queue::assertPushed(SendPaymentFailureAlertsJob::class, function (SendPaymentFailureAlertsJob $job) use ($payment): bool {
-            return $job->paymentId === (int) $payment->id;
+            return $job->paymentId === (int) $payment->id
+                && $job->eventKey === $payment->paymentFailureAlertEventKey()
+                && $job->queue === 'alerts';
         });
     }
 
-    public function test_failed_payment_alert_job_resolves_sales_sub_admin_and_global_admin_recipients(): void
+    public function test_coordinator_job_snapshots_recipients_and_dispatches_one_alert_job_per_recipient(): void
     {
-        Http::fake([
-            '*' => Http::response('OK', 200),
-        ]);
+        Queue::fake();
 
         $platform = $this->createPlatform(['phone_prefix' => '233']);
         $otherPlatform = $this->createPlatform([
@@ -63,21 +71,18 @@ class PaymentFailureSmsAlertsTest extends TestCase
             'phone_prefix' => '254',
         ]);
 
-        $payment = $this->createPayment($platform, [
-            'status' => 'failed',
-            'failure_reason' => 'Provider timeout',
-            'currency' => 'GHS',
-            'amount' => 120.5,
-        ]);
+        $payment = $this->createFailedPaymentWithAlertEvent($platform);
 
         User::factory()->create([
+            'name' => 'Sales One',
             'role' => 'sales',
             'status' => 'active',
-            'phone' => '020 123 4567',
+            'phone' => '0201234567',
             'assigned_market_ids' => [$platform->id],
         ]);
 
-        $subAdmin = User::factory()->create([
+        User::factory()->create([
+            'name' => 'Sub Admin One',
             'role' => 'sub_admin',
             'status' => 'active',
             'phone' => '0201234568',
@@ -91,6 +96,7 @@ class PaymentFailureSmsAlertsTest extends TestCase
         ]);
 
         $globalAdmin = User::factory()->create([
+            'name' => 'Global Admin',
             'role' => 'admin',
             'status' => 'active',
             'phone' => '0201234569',
@@ -102,62 +108,139 @@ class PaymentFailureSmsAlertsTest extends TestCase
                 ],
             ],
         ]);
-
         $globalAdmin->platforms()->sync([$otherPlatform->id]);
-
-        User::factory()->create([
-            'role' => 'sales',
-            'status' => 'active',
-            'phone' => '0201234570',
-            'assigned_market_ids' => [$otherPlatform->id],
-        ]);
-
-        User::factory()->create([
-            'role' => 'sub_admin',
-            'status' => 'active',
-            'phone' => '0201234571',
-            'assigned_market_ids' => [$platform->id],
-            'notification_prefs' => [
-                'payment_failure_sms' => [
-                    'enabled' => true,
-                    'market_ids' => [$otherPlatform->id],
-                ],
-            ],
-        ]);
 
         User::factory()->create([
             'role' => 'admin',
             'status' => 'active',
-            'phone' => '0201234572',
+            'phone' => '0201234570',
+            'notification_prefs' => [
+                'payment_failure_sms' => [
+                    'enabled' => false,
+                    'market_ids' => null,
+                ],
+            ],
+        ]);
+
+        $job = new SendPaymentFailureAlertsJob(
+            (int) $payment->id,
+            $payment->paymentFailureAlertEventKey(),
+            'payment_model_saved'
+        );
+
+        $job->handle(
+            app(PaymentAttemptService::class),
+            app(MarketAuthorizationService::class)
+        );
+
+        Queue::assertPushed(SendPaymentFailureAlertRecipientJob::class, 3);
+        Queue::assertPushed(SendPaymentFailureAlertRecipientJob::class, function (SendPaymentFailureAlertRecipientJob $job): bool {
+            return (int) ($job->recipient['id'] ?? 0) > 0 && $job->queue === 'alerts';
+        });
+
+        $attempt = PaymentAttempt::query()
+            ->where('payment_id', (int) $payment->id)
+            ->where('attempt_type', 'payment_failure_alert_enqueue')
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($attempt);
+        $this->assertSame('queued', $attempt->status);
+        $this->assertSame(3, data_get($attempt->response_meta, 'recipient_count'));
+    }
+
+    public function test_admin_with_phone_but_alerts_disabled_is_skipped_and_no_recipient_jobs_are_queued(): void
+    {
+        Queue::fake();
+
+        $platform = $this->createPlatform();
+        $payment = $this->createFailedPaymentWithAlertEvent($platform);
+
+        User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+            'phone' => '0712345678',
             'assigned_market_ids' => [],
         ]);
 
-        (new SendPaymentFailureAlertsJob((int) $payment->id))->handle(
-            app(\App\Services\NotificationService::class),
-            app(\App\Services\MarketAuthorizationService::class)
+        (new SendPaymentFailureAlertsJob(
+            (int) $payment->id,
+            $payment->paymentFailureAlertEventKey(),
+            'payment_model_saved'
+        ))->handle(
+            app(PaymentAttemptService::class),
+            app(MarketAuthorizationService::class)
         );
 
-        Http::assertSentCount(3);
-        Http::assertSent(function ($request): bool {
-            return $request['Phonenumber'] === '233201234567';
-        });
-        Http::assertSent(function ($request): bool {
-            return $request['Phonenumber'] === '233201234568';
-        });
-        Http::assertSent(function ($request): bool {
-            return $request['Phonenumber'] === '233201234569';
-        });
+        Queue::assertNotPushed(SendPaymentFailureAlertRecipientJob::class);
+
+        $attempt = PaymentAttempt::query()
+            ->where('payment_id', (int) $payment->id)
+            ->where('attempt_type', 'payment_failure_alert_enqueue')
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($attempt);
+        $this->assertSame('skipped', $attempt->status);
+        $this->assertSame('no_recipients', $attempt->error_code);
     }
 
-    public function test_alert_job_skips_test_payments(): void
+    public function test_recipient_job_records_sent_attempt_and_will_not_resend_same_event_to_same_user(): void
     {
         Http::fake([
             '*' => Http::response('OK', 200),
         ]);
 
+        $platform = $this->createPlatform(['phone_prefix' => '233']);
+        $payment = $this->createFailedPaymentWithAlertEvent($platform, [
+            'currency' => 'GHS',
+            'amount' => 120.5,
+            'failure_reason' => 'Provider timeout',
+        ]);
+
+        $recipient = [
+            'id' => 99,
+            'name' => 'Sales One',
+            'role' => 'sales',
+            'phone' => '020 123 4567',
+        ];
+
+        $job = new SendPaymentFailureAlertRecipientJob(
+            (int) $payment->id,
+            $payment->paymentFailureAlertEventKey(),
+            $recipient,
+            'payment_failure_alert_enqueue'
+        );
+
+        $job->handle(
+            app(NotificationService::class),
+            app(PaymentAttemptService::class)
+        );
+        $job->handle(
+            app(NotificationService::class),
+            app(PaymentAttemptService::class)
+        );
+
+        Http::assertSentCount(1);
+        Http::assertSent(function ($request): bool {
+            return $request['Phonenumber'] === '233201234567';
+        });
+
+        $attempts = PaymentAttempt::query()
+            ->where('payment_id', (int) $payment->id)
+            ->where('attempt_type', 'payment_failure_alert_sms')
+            ->get();
+
+        $this->assertCount(1, $attempts);
+        $this->assertSame('sent', $attempts->first()->status);
+    }
+
+    public function test_coordinator_job_skips_test_payments_and_records_skipped_attempt(): void
+    {
+        Queue::fake();
+
         $platform = $this->createPlatform();
-        $payment = $this->createPayment($platform, [
-            'status' => 'failed',
+        $payment = $this->createFailedPaymentWithAlertEvent($platform, [
             'provider_environment' => 'sandbox',
         ]);
 
@@ -168,15 +251,64 @@ class PaymentFailureSmsAlertsTest extends TestCase
             'assigned_market_ids' => [$platform->id],
         ]);
 
-        (new SendPaymentFailureAlertsJob((int) $payment->id))->handle(
-            app(\App\Services\NotificationService::class),
-            app(\App\Services\MarketAuthorizationService::class)
+        (new SendPaymentFailureAlertsJob(
+            (int) $payment->id,
+            $payment->paymentFailureAlertEventKey(),
+            'payment_model_saved'
+        ))->handle(
+            app(PaymentAttemptService::class),
+            app(MarketAuthorizationService::class)
         );
 
-        Http::assertNothingSent();
+        Queue::assertNotPushed(SendPaymentFailureAlertRecipientJob::class);
+
+        $attempt = PaymentAttempt::query()
+            ->where('payment_id', (int) $payment->id)
+            ->where('attempt_type', 'payment_failure_alert_enqueue')
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($attempt);
+        $this->assertSame('skipped', $attempt->status);
+        $this->assertSame('test_payment', $attempt->error_code);
     }
 
-    public function test_admin_can_store_and_update_phone_and_notification_preferences_on_roles_endpoints(): void
+    public function test_watchdog_command_backfills_missing_failed_payment_alert_enqueue_job(): void
+    {
+        Queue::fake();
+
+        $platform = $this->createPlatform();
+        $payment = Payment::withoutEvents(function () use ($platform): Payment {
+            return $this->createPayment($platform, [
+                'status' => 'failed',
+                'failure_reason' => 'Webhook marked as failed',
+                'raw_payload' => [],
+            ]);
+        });
+
+        DB::table('payments')
+            ->where('id', (int) $payment->id)
+            ->update([
+                'raw_payload' => json_encode([
+                    'payment_failure_alert' => [
+                        'event_key' => Payment::buildPaymentFailureAlertEventKey((int) $payment->id, $payment->updated_at),
+                        'status_changed_at' => $payment->updated_at?->toIso8601String(),
+                    ],
+                ], JSON_UNESCAPED_SLASHES),
+            ]);
+
+        $this->artisan('crm:reconcile-payment-failure-alerts')
+            ->expectsOutputToContain('queued,')
+            ->assertSuccessful();
+
+        Queue::assertPushed(SendPaymentFailureAlertsJob::class, function (SendPaymentFailureAlertsJob $job) use ($payment): bool {
+            return $job->paymentId === (int) $payment->id
+                && $job->eventKey === $payment->fresh()->paymentFailureAlertEventKey()
+                && $job->triggerSource === 'reconcile_payment_failure_alerts';
+        });
+    }
+
+    public function test_admin_can_store_and_update_phone_notification_preferences_and_live_alert_state_on_roles_endpoints(): void
     {
         $admin = $this->createUser('admin');
         $platform = $this->createPlatform();
@@ -201,7 +333,8 @@ class PaymentFailureSmsAlertsTest extends TestCase
 
         $createResponse->assertCreated()
             ->assertJsonPath('phone', '0712345678')
-            ->assertJsonPath('notification_prefs.payment_failure_sms.enabled', true);
+            ->assertJsonPath('notification_prefs.payment_failure_sms.enabled', true)
+            ->assertJsonPath('payment_failure_sms_state', 'enabled');
 
         $userId = (int) $createResponse->json('id');
 
@@ -221,7 +354,8 @@ class PaymentFailureSmsAlertsTest extends TestCase
 
         $updateResponse->assertOk()
             ->assertJsonPath('phone', '0722000111')
-            ->assertJsonPath('notification_prefs.payment_failure_sms.market_ids.0', $platform->id);
+            ->assertJsonPath('notification_prefs.payment_failure_sms.market_ids.0', $platform->id)
+            ->assertJsonPath('payment_failure_sms_state', 'enabled');
 
         $rolesResponse = $this->getJson('/api/crm/settings/roles');
 
@@ -232,6 +366,7 @@ class PaymentFailureSmsAlertsTest extends TestCase
         $this->assertNotNull($saved);
         $this->assertSame('0722000111', data_get($saved, 'phone'));
         $this->assertSame([$platform->id], data_get($saved, 'notification_prefs.payment_failure_sms.market_ids'));
+        $this->assertSame('enabled', data_get($saved, 'payment_failure_sms_state'));
     }
 
     private function createUser(string $role, array $assignedMarketIds = []): User
@@ -259,6 +394,31 @@ class PaymentFailureSmsAlertsTest extends TestCase
             'timezone' => 'Africa/Accra',
             'payment_instruction' => 'Pay via mobile money',
         ], $overrides));
+    }
+
+    private function createFailedPaymentWithAlertEvent(Platform $platform, array $overrides = []): Payment
+    {
+        $payment = Payment::withoutEvents(function () use ($platform, $overrides): Payment {
+            return $this->createPayment($platform, array_merge([
+                'status' => 'failed',
+                'failure_reason' => 'Provider timeout',
+                'raw_payload' => [],
+            ], $overrides));
+        });
+
+        $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
+        $rawPayload['payment_failure_alert'] = [
+            'event_key' => Payment::buildPaymentFailureAlertEventKey((int) $payment->id, $payment->updated_at),
+            'status_changed_at' => $payment->updated_at?->toIso8601String(),
+        ];
+
+        DB::table('payments')
+            ->where('id', (int) $payment->id)
+            ->update([
+                'raw_payload' => json_encode($rawPayload, JSON_UNESCAPED_SLASHES),
+            ]);
+
+        return $payment->fresh(['platform', 'client', 'product']);
     }
 
     private function createPayment(Platform $platform, array $overrides = []): Payment

@@ -6095,6 +6095,18 @@ function roleClasses(role) {
     return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
 
+function paymentFailureSmsStateClasses(state) {
+    if (state === 'enabled') return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    if (state === 'not_eligible') return 'bg-slate-100 text-slate-700 ring-slate-300';
+    return 'bg-amber-50 text-amber-700 ring-amber-200';
+}
+
+function paymentFailureSmsStateLabel(state) {
+    if (state === 'enabled') return 'On';
+    if (state === 'not_eligible') return 'Not eligible';
+    return 'Off';
+}
+
 function RolesWorkspace() {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -6299,6 +6311,12 @@ function RolesWorkspace() {
         });
     };
 
+    const getLiveAlertState = () => {
+        if (!editor) return 'disabled';
+        if (!['admin', 'sub_admin', 'sales'].includes(editor.role)) return 'not_eligible';
+        return getSmsEnabled() ? 'enabled' : 'disabled';
+    };
+
     return (
         <div className="space-y-4">
             <section className="grid gap-4 md:grid-cols-4">
@@ -6337,6 +6355,7 @@ function RolesWorkspace() {
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Assigned Markets</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Phone</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Live Alerts</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Actions</th>
                                 </tr>
                             </thead>
@@ -6374,6 +6393,11 @@ function RolesWorkspace() {
                                             </td>
                                             <td className="px-4 py-2.5">
                                                 <p className="font-mono text-xs text-slate-500">{user.phone || '—'}</p>
+                                            </td>
+                                            <td className="px-4 py-2.5">
+                                                <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(user.payment_failure_sms_state)}`}>
+                                                    {paymentFailureSmsStateLabel(user.payment_failure_sms_state)}
+                                                </span>
                                             </td>
                                             <td className="px-4 py-2.5">
                                                 <button
@@ -6486,6 +6510,9 @@ function RolesWorkspace() {
                                     {testAlertSmsMutation.isError ? (
                                         <p className="mt-1 text-xs text-red-600">✗ Send failed — check the number and SMS settings.</p>
                                     ) : null}
+                                    <p className="mt-1 text-xs text-slate-500">
+                                        Test sends a provider check only. Live payment-failure alerts still depend on the alert setting below.
+                                    </p>
                                 </div>
 
                                 <div className="md:col-span-2">
@@ -6521,6 +6548,9 @@ function RolesWorkspace() {
                                                     : 'Receive an SMS when a payment fails in your assigned markets.'}
                                             </p>
                                         </div>
+                                        <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentFailureSmsStateClasses(getLiveAlertState())}`}>
+                                            {paymentFailureSmsStateLabel(getLiveAlertState())}
+                                        </span>
                                         <button
                                             type="button"
                                             role="switch"
@@ -6532,6 +6562,14 @@ function RolesWorkspace() {
                                             <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${getSmsEnabled() ? 'translate-x-6' : 'translate-x-1'}`} />
                                         </button>
                                     </div>
+
+                                    {['admin', 'sub_admin'].includes(editor.role) && editor.phone.trim() && !getSmsEnabled() ? (
+                                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                                            <p className="text-xs text-amber-800">
+                                                Live payment-failure alerts are off for this user. Test SMS can succeed even while live alerts remain disabled.
+                                            </p>
+                                        </div>
+                                    ) : null}
 
                                     {getSmsEnabled() && ['admin', 'sub_admin'].includes(editor.role) ? (
                                         <div className="space-y-2 border-t border-slate-100 pt-3">

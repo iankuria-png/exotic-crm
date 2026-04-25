@@ -5,7 +5,7 @@ namespace App\Jobs;
 use App\Models\Payment;
 use App\Models\User;
 use App\Services\MarketAuthorizationService;
-use App\Services\NotificationService;
+use App\Services\PaymentAttemptService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -25,13 +25,17 @@ class SendPaymentFailureAlertsJob implements ShouldQueue, ShouldBeUnique
 
     public int $uniqueFor = 600;
 
-    public function __construct(public readonly int $paymentId)
-    {
+    public function __construct(
+        public readonly int $paymentId,
+        public readonly string $eventKey,
+        public readonly string $triggerSource = 'payment_model_saved',
+    ) {
+        $this->onQueue('alerts');
     }
 
     public function uniqueId(): string
     {
-        return 'payment-failure-alert-' . $this->paymentId;
+        return 'payment-failure-alert:' . $this->eventKey;
     }
 
     public function backoff(): array
@@ -40,68 +44,76 @@ class SendPaymentFailureAlertsJob implements ShouldQueue, ShouldBeUnique
     }
 
     public function handle(
-        NotificationService $notificationService,
+        PaymentAttemptService $paymentAttemptService,
         MarketAuthorizationService $marketAuthorizationService
     ): void {
         $payment = Payment::query()
             ->with([
                 'client:id,name',
-                'product:id,name,display_name',
-                'platform:id,phone_prefix',
+                'platform:id,name,phone_prefix',
             ])
             ->find($this->paymentId);
 
-        if (!$payment || (string) $payment->status !== 'failed') {
+        if (!$payment) {
+            return;
+        }
+
+        if ((string) $payment->status !== 'failed') {
+            $this->recordEnqueueAttempt($payment, $paymentAttemptService, 'skipped', 'payment_not_failed');
             return;
         }
 
         if ($payment->isSandboxTest() || $payment->isClassifiedTest()) {
+            $this->recordEnqueueAttempt($payment, $paymentAttemptService, 'skipped', 'test_payment');
             Log::info('SendPaymentFailureAlertsJob: skipping test payment.', [
                 'payment_id' => $this->paymentId,
+                'event_key' => $this->eventKey,
             ]);
             return;
         }
 
         $platformId = (int) $payment->platform_id;
         if ($platformId <= 0) {
+            $this->recordEnqueueAttempt($payment, $paymentAttemptService, 'skipped', 'missing_platform');
             return;
         }
 
         $recipients = $this->resolveRecipients($marketAuthorizationService, $platformId);
+        $recipientSnapshot = $recipients
+            ->map(fn (User $user): array => [
+                'id' => (int) $user->id,
+                'name' => (string) $user->name,
+                'role' => (string) $user->role,
+                'phone' => $user->phone ? (string) $user->phone : null,
+            ])
+            ->values()
+            ->all();
 
-        if ($recipients->isEmpty()) {
+        if (empty($recipientSnapshot)) {
+            $this->recordEnqueueAttempt($payment, $paymentAttemptService, 'skipped', 'no_recipients', [
+                'recipient_snapshot' => [],
+                'recipient_count' => 0,
+            ]);
             Log::info('SendPaymentFailureAlertsJob: no eligible recipients.', [
                 'payment_id' => $this->paymentId,
                 'platform_id' => $platformId,
+                'event_key' => $this->eventKey,
             ]);
             return;
         }
 
-        $message = $this->buildMessage($payment);
-        $phonePrefix = $payment->platform?->phone_prefix ?: null;
+        $this->recordEnqueueAttempt($payment, $paymentAttemptService, 'queued', null, [
+            'recipient_snapshot' => $recipientSnapshot,
+            'recipient_count' => count($recipientSnapshot),
+        ]);
 
-        foreach ($recipients as $user) {
-            if (!filled($user->phone)) {
-                Log::info('SendPaymentFailureAlertsJob: skipping user with no phone.', [
-                    'user_id' => $user->id,
-                    'payment_id' => $this->paymentId,
-                ]);
-                continue;
-            }
-
-            $result = $notificationService->sendSms($user->phone, $message, [
-                'platform_id' => $platformId,
-                'phone_prefix' => $phonePrefix,
-                'payment_id' => $payment->id,
-                'alert_type' => 'payment_failure',
-            ]);
-
-            Log::info('SendPaymentFailureAlertsJob: SMS dispatched.', [
-                'payment_id' => $this->paymentId,
-                'user_id' => $user->id,
-                'success' => $result['success'] ?? false,
-                'status' => $result['status'] ?? 'unknown',
-            ]);
+        foreach ($recipientSnapshot as $recipient) {
+            SendPaymentFailureAlertRecipientJob::dispatch(
+                (int) $payment->id,
+                $this->eventKey,
+                $recipient,
+                $this->triggerSource
+            )->onQueue('alerts');
         }
     }
 
@@ -113,7 +125,7 @@ class SendPaymentFailureAlertsJob implements ShouldQueue, ShouldBeUnique
             ->whereIn('role', ['admin', 'sub_admin', 'sales'])
             ->where('status', 'active')
             ->with('platforms:id')
-            ->get(['id', 'role', 'status', 'phone', 'assigned_market_ids', 'notification_prefs'])
+            ->get(['id', 'name', 'role', 'status', 'phone', 'assigned_market_ids', 'notification_prefs'])
             ->filter(function (User $user) use ($marketAuthorizationService, $platformId): bool {
                 if (!$marketAuthorizationService->userCanAccessPlatform($user, $platformId)) {
                     return false;
@@ -135,17 +147,28 @@ class SendPaymentFailureAlertsJob implements ShouldQueue, ShouldBeUnique
             ->values();
     }
 
-    private function buildMessage(Payment $payment): string
-    {
-        $clientName = $payment->client?->name ?? 'Unknown';
-        $currency = (string) ($payment->currency ?? 'KES');
-        $amount = number_format((float) ($payment->amount ?? 0), 2);
-        $product = $payment->product
-            ? ($payment->product->display_name ?: $payment->product->name)
-            : 'Unknown product';
-        $reason = mb_substr((string) ($payment->failure_reason ?? 'Unknown'), 0, 60);
-        $reference = mb_substr((string) ($payment->reference_number ?? $payment->transaction_reference ?? '-'), 0, 20);
-
-        return "Payment alert: {$clientName} {$currency} {$amount} failed ({$product}). Reason: {$reason}. Ref: {$reference}. Login to review.";
+    private function recordEnqueueAttempt(
+        Payment $payment,
+        PaymentAttemptService $paymentAttemptService,
+        string $status,
+        ?string $skipReason = null,
+        array $extra = []
+    ): void {
+        $paymentAttemptService->record($payment, 'payment_failure_alert_enqueue', $status, [
+            'provider' => $payment->provider_key,
+            'error_code' => $skipReason,
+            'error_message' => $skipReason ? str_replace('_', ' ', $skipReason) : null,
+            'request_meta' => array_filter([
+                'event_key' => $this->eventKey,
+                'trigger_source' => $this->triggerSource,
+                'platform_id' => (int) $payment->platform_id,
+                'reference_number' => $payment->reference_number,
+                'transaction_reference' => $payment->transaction_reference,
+                'status_changed_at' => data_get($payment->raw_payload, 'payment_failure_alert.status_changed_at'),
+            ]),
+            'response_meta' => array_filter(array_merge([
+                'skip_reason' => $skipReason,
+            ], $extra), static fn ($value) => $value !== null),
+        ]);
     }
 }

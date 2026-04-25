@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Jobs\SendPaymentFailureAlertsJob;
 use App\Services\ClientRetentionInsightService;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -34,9 +35,22 @@ class Payment extends Model
             }
 
             $paymentId = (int) $payment->id;
+            $eventKey = self::buildPaymentFailureAlertEventKey($paymentId, $payment->updated_at);
+            $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
+            $rawPayload['payment_failure_alert'] = [
+                'event_key' => $eventKey,
+                'status_changed_at' => $payment->updated_at?->toIso8601String(),
+            ];
 
-            DB::afterCommit(static function () use ($paymentId): void {
-                SendPaymentFailureAlertsJob::dispatch($paymentId);
+            DB::afterCommit(static function () use ($paymentId, $eventKey, $rawPayload): void {
+                DB::table('payments')
+                    ->where('id', $paymentId)
+                    ->update([
+                        'raw_payload' => json_encode($rawPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    ]);
+
+                SendPaymentFailureAlertsJob::dispatch($paymentId, $eventKey, 'payment_model_saved')
+                    ->onQueue('alerts');
             });
         });
         static::deleted($refresh);
@@ -165,6 +179,26 @@ class Payment extends Model
     public function attempts()
     {
         return $this->hasMany(PaymentAttempt::class);
+    }
+
+    public function paymentFailureAlertEventKey(): string
+    {
+        $stored = trim((string) data_get($this->raw_payload, 'payment_failure_alert.event_key', ''));
+
+        if ($stored !== '') {
+            return $stored;
+        }
+
+        return self::buildPaymentFailureAlertEventKey((int) $this->id, $this->updated_at);
+    }
+
+    public static function buildPaymentFailureAlertEventKey(int $paymentId, $changedAt = null): string
+    {
+        $timestamp = $changedAt instanceof CarbonInterface
+            ? $changedAt->copy()->utc()->format('YmdHis.u')
+            : now()->utc()->format('YmdHis.u');
+
+        return sprintf('payment-failure:%d:%s', $paymentId, $timestamp);
     }
 
     public function routingDecisions()

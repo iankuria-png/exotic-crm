@@ -93,4 +93,13 @@ class User extends Authenticatable
             static fn (int $id): bool => $id > 0
         )));
     }
+
+    public function paymentFailureSmsState(): string
+    {
+        if (!in_array($this->role, ['admin', 'sub_admin', 'sales'], true)) {
+            return 'not_eligible';
+        }
+
+        return $this->paymentFailureSmsEnabled() ? 'enabled' : 'disabled';
+    }
 }
