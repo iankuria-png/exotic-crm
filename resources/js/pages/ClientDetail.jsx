@@ -487,6 +487,9 @@ export default function ClientDetail() {
     const [dealDiscountPercentage, setDealDiscountPercentage] = useState('');
     const [dealDiscountPin, setDealDiscountPin] = useState('');
     const [notifyClient, setNotifyClient] = useState(false);
+    const [showVerifiedDialog, setShowVerifiedDialog] = useState(false);
+    const [showTourModal, setShowTourModal] = useState(false);
+    const [tourForm, setTourForm] = useState({ city: '', start: '', end: '', phone: '' });
     const [notificationTemplateId, setNotificationTemplateId] = useState('');
     const [notificationMessage, setNotificationMessage] = useState('');
     const [walletTopupForm, setWalletTopupForm] = useState({
@@ -804,6 +807,56 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Profile subscription deactivation failed.');
+        },
+    });
+
+    // ── Verified Status ──────────────────────────────────────────────────────
+    const updateVerifiedStatusMutation = useMutation({
+        mutationFn: (verified) =>
+            api.post(`/crm/clients/${id}/verified-status`, { verified }).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.setQueryData(['client', id], data);
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setShowVerifiedDialog(false);
+            toast.success(data.verified ? 'Verified badge applied.' : 'Verified badge removed.');
+        },
+        onError: (err) => {
+            toast.error(err?.response?.data?.message || 'Failed to update verified status.');
+        },
+    });
+
+    // ── Tours ────────────────────────────────────────────────────────────────
+    const toursQuery = useQuery({
+        queryKey: ['client-tours', id],
+        queryFn: () => api.get(`/crm/clients/${id}/tours`).then((r) => r.data),
+        enabled: !!id && !!client,
+    });
+
+    const addTourMutation = useMutation({
+        mutationFn: (payload) =>
+            api.post(`/crm/clients/${id}/tours`, payload).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client-tours', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            setShowTourModal(false);
+            setTourForm({ city: '', start: '', end: '', phone: '' });
+            toast.success('Tour added.');
+        },
+        onError: (err) => {
+            toast.error(err?.response?.data?.message || 'Failed to add tour.');
+        },
+    });
+
+    const deleteTourMutation = useMutation({
+        mutationFn: (tourId) =>
+            api.delete(`/crm/clients/${id}/tours/${tourId}`).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client-tours', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            toast.success('Tour removed.');
+        },
+        onError: (err) => {
+            toast.error(err?.response?.data?.message || 'Failed to delete tour.');
         },
     });
 
@@ -1722,6 +1775,25 @@ export default function ClientDetail() {
                                 >
                                     Payment Link
                                 </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowVerifiedDialog(true)}
+                                    className={`rounded-md border px-4 py-2 text-sm font-semibold transition ${
+                                        client.verified
+                                            ? 'border-teal-200 bg-teal-50 text-teal-700 hover:border-teal-300 hover:bg-teal-100'
+                                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                                    }`}
+                                    title={client.verified ? 'Click to remove verified badge' : 'Click to mark as verified'}
+                                >
+                                    {client.verified ? 'Verified ✓' : 'Mark Verified'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTourModal(true)}
+                                    className="crm-btn-secondary"
+                                >
+                                    Add Tour
+                                </button>
                                 {client.can_deactivate_without_deal ? (
                                     <button
                                         type="button"
@@ -1912,6 +1984,68 @@ export default function ClientDetail() {
                     onOpenActivationDialog={openActivationDialog}
                     activeDeal={client?.deals?.find((d) => ['pending', 'awaiting_payment'].includes(d.status))}
                 />
+
+                {/* ── Tours Panel ────────────────────────────────────────── */}
+                <section className="crm-surface">
+                    <header className="crm-panel-header">
+                        <div>
+                            <h3 className="crm-panel-title">Tours</h3>
+                            <p className="crm-panel-subtitle">Scheduled appearances linked to this profile on WordPress.</p>
+                        </div>
+                        {!isReadOnly ? (
+                            <button type="button" onClick={() => setShowTourModal(true)} className="crm-btn-primary shrink-0">
+                                Add Tour
+                            </button>
+                        ) : null}
+                    </header>
+                    <div className="p-4">
+                        {toursQuery.isLoading ? (
+                            <p className="text-sm text-slate-400">Loading tours…</p>
+                        ) : toursQuery.isError ? (
+                            <p className="text-sm text-rose-600">Failed to load tours.</p>
+                        ) : (toursQuery.data?.tours?.length || 0) === 0 ? (
+                            <p className="text-sm text-slate-400">No tours scheduled.</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {toursQuery.data.tours.map((tour) => (
+                                    <div key={tour.id} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2.5">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">
+                                                {tour.city}{tour.country ? `, ${tour.country}` : ''}
+                                            </p>
+                                            <p className="mt-0.5 text-xs text-slate-500">
+                                                {tour.start} → {tour.end}
+                                                {tour.phone ? <span className="ml-2 font-mono">{tour.phone}</span> : null}
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {tour.needs_payment ? (
+                                                <span className="inline-flex items-center rounded-sm bg-amber-50 px-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-inset ring-amber-600/20">Payment required</span>
+                                            ) : tour.status === 'publish' ? (
+                                                <span className="inline-flex items-center rounded-sm bg-teal-50 px-1.5 text-[10px] font-bold uppercase tracking-wider text-teal-700 ring-1 ring-inset ring-teal-600/20">Active</span>
+                                            ) : (
+                                                <span className="inline-flex items-center rounded-sm bg-slate-100 px-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-600 ring-1 ring-inset ring-slate-200">{tour.status}</span>
+                                            )}
+                                            {!isReadOnly ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => deleteTourMutation.mutate(tour.id)}
+                                                    disabled={deleteTourMutation.isPending}
+                                                    className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                                                    title="Delete tour"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                                        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                                                    </svg>
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </section>
                 </>
             ) : null}
 
@@ -3710,6 +3844,101 @@ export default function ClientDetail() {
                         queryClient.invalidateQueries({ queryKey: ['client', id] });
                     }}
                 />
+            ) : null}
+
+            {/* ── Verified Status Dialog ───────────────────────────────────── */}
+            {!isReadOnly ? (
+                <ConfirmDialog
+                    open={showVerifiedDialog}
+                    title={client?.verified ? 'Remove verified badge?' : 'Mark client as verified?'}
+                    message={client?.verified
+                        ? 'This will remove the verified badge from their public profile on WordPress.'
+                        : 'This will display a verified badge on their public profile on WordPress.'}
+                    confirmLabel={updateVerifiedStatusMutation.isPending ? 'Updating…' : (client?.verified ? 'Remove badge' : 'Mark verified')}
+                    confirmDisabled={updateVerifiedStatusMutation.isPending}
+                    isPending={updateVerifiedStatusMutation.isPending}
+                    tone={client?.verified ? 'warning' : 'default'}
+                    onConfirm={() => updateVerifiedStatusMutation.mutate(!client.verified)}
+                    onCancel={() => setShowVerifiedDialog(false)}
+                />
+            ) : null}
+
+            {/* ── Add Tour Modal ───────────────────────────────────────────── */}
+            {!isReadOnly && showTourModal ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
+                        <div className="border-b border-slate-200 px-6 py-4">
+                            <h2 className="text-base font-semibold text-slate-900">Add Tour</h2>
+                            <p className="mt-0.5 text-sm text-slate-500">Schedule an appearance on the client's WordPress profile.</p>
+                        </div>
+                        <div className="space-y-4 px-6 py-5">
+                            <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Destination city <span className="text-rose-500">*</span></span>
+                                <input
+                                    type="text"
+                                    value={tourForm.city}
+                                    onChange={(e) => setTourForm((f) => ({ ...f, city: e.target.value }))}
+                                    className="crm-input"
+                                    placeholder="e.g. Nairobi"
+                                />
+                            </label>
+                            <div className="grid grid-cols-2 gap-3">
+                                <label className="block space-y-1.5">
+                                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Start date <span className="text-rose-500">*</span></span>
+                                    <input
+                                        type="date"
+                                        value={tourForm.start}
+                                        onChange={(e) => setTourForm((f) => ({ ...f, start: e.target.value }))}
+                                        className="crm-input"
+                                    />
+                                </label>
+                                <label className="block space-y-1.5">
+                                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">End date <span className="text-rose-500">*</span></span>
+                                    <input
+                                        type="date"
+                                        value={tourForm.end}
+                                        min={tourForm.start}
+                                        onChange={(e) => setTourForm((f) => ({ ...f, end: e.target.value }))}
+                                        className="crm-input"
+                                    />
+                                </label>
+                            </div>
+                            <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Contact phone <span className="text-rose-500">*</span></span>
+                                <input
+                                    type="tel"
+                                    value={tourForm.phone}
+                                    onChange={(e) => setTourForm((f) => ({ ...f, phone: e.target.value }))}
+                                    className="crm-input"
+                                    placeholder={client?.phone_normalized || 'e.g. 254712345678'}
+                                />
+                            </label>
+                            {addTourMutation.isError ? (
+                                <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                                    {addTourMutation.error?.response?.data?.message || 'Failed to add tour.'}
+                                </p>
+                            ) : null}
+                        </div>
+                        <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+                            <button
+                                type="button"
+                                onClick={() => { setShowTourModal(false); setTourForm({ city: '', start: '', end: '', phone: '' }); addTourMutation.reset(); }}
+                                className="crm-btn-secondary"
+                                disabled={addTourMutation.isPending}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={addTourMutation.isPending || !tourForm.city || !tourForm.start || !tourForm.end || !tourForm.phone}
+                                onClick={() => addTourMutation.mutate(tourForm)}
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {addTourMutation.isPending ? 'Adding…' : 'Add Tour'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             ) : null}
         </div>
     );

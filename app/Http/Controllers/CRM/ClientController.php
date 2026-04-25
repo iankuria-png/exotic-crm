@@ -1016,6 +1016,167 @@ class ClientController extends Controller
         }
     }
 
+    // ─── Verified Status ────────────────────────────────────────────────────────
+
+    public function updateVerifiedStatus(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json([
+                'message' => 'This client is not linked to a WordPress profile.',
+            ], 422);
+        }
+
+        $validated = $request->validate(['verified' => 'required|boolean']);
+        $verified  = (bool) $validated['verified'];
+
+        $before = ['verified' => (bool) $client->verified];
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            // Push to WP via the existing generic update endpoint.
+            // Sends '1'/'0' so the WP theme treats it as a truthy meta value.
+            $wpSync->updateClientProfile((int) $client->wp_post_id, [
+                'verified' => $verified ? '1' : '0',
+            ]);
+        } catch (RequestException $e) {
+            $status  = $e->response?->status() ?? 502;
+            $payload = $e->response?->json();
+            if ($status >= 400 && $status < 500) {
+                return response()->json($payload ?? ['message' => 'WordPress rejected the request.'], $status);
+            }
+            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
+        }
+
+        $client->update(['verified' => $verified]);
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_VERIFIED_STATUS_UPDATE,
+            'client',
+            (int) $client->id,
+            $before,
+            ['verified' => $verified]
+        );
+
+        $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
+        (new ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
+        $client->refresh();
+
+        $client->load([
+            'platform',
+            'assignedAgent',
+            'deals'      => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'notes'      => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
+            'payments'   => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
+            'activeDeal.product',
+        ]);
+        $this->hydrateBillingPlatformState($client);
+        $this->appendSubscriptionActionMetadata($client);
+
+        return response()->json($client);
+    }
+
+    // ─── Tours ──────────────────────────────────────────────────────────────────
+
+    public function tours(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json(['tours' => []]);
+        }
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $data   = $wpSync->getTours((int) $client->wp_post_id);
+            return response()->json($data);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Failed to fetch tours: ' . $e->getMessage()], 502);
+        }
+    }
+
+    public function addTour(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json(['message' => 'This client is not linked to a WordPress profile.'], 422);
+        }
+
+        $validated = $request->validate([
+            'city'  => 'required|string|max:255',
+            'start' => 'required|date_format:Y-m-d',
+            'end'   => 'required|date_format:Y-m-d|after_or_equal:start',
+            'phone' => 'required|string|max:50',
+        ]);
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $tour   = $wpSync->addTour((int) $client->wp_post_id, $validated);
+        } catch (RequestException $e) {
+            $status  = $e->response?->status() ?? 502;
+            $payload = $e->response?->json();
+            if ($status >= 400 && $status < 500) {
+                return response()->json($payload ?? ['message' => 'WordPress rejected the tour.'], $status);
+            }
+            return response()->json(['message' => 'Failed to create tour: ' . $e->getMessage()], 502);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Failed to create tour: ' . $e->getMessage()], 502);
+        }
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_TOUR_ADD,
+            'client',
+            (int) $client->id,
+            [],
+            ['tour' => $validated]
+        );
+
+        return response()->json($tour, 201);
+    }
+
+    public function deleteTour(Request $request, Client $client, int $tourId)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        if ((int) $client->wp_post_id <= 0) {
+            return response()->json(['message' => 'This client is not linked to a WordPress profile.'], 422);
+        }
+
+        try {
+            $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
+            $wpSync->deleteTour((int) $client->wp_post_id, $tourId);
+        } catch (RequestException $e) {
+            $status  = $e->response?->status() ?? 502;
+            $payload = $e->response?->json();
+            if ($status >= 400 && $status < 500) {
+                return response()->json($payload ?? ['message' => 'WordPress rejected the request.'], $status);
+            }
+            return response()->json(['message' => 'Failed to delete tour: ' . $e->getMessage()], 502);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Failed to delete tour: ' . $e->getMessage()], 502);
+        }
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $client->platform_id,
+            CrmAuditAction::CLIENT_TOUR_DELETE,
+            'client',
+            (int) $client->id,
+            ['tour_id' => $tourId],
+            []
+        );
+
+        return response()->json(['message' => 'Tour deleted.']);
+    }
+
     public function bulkRefreshDisplayImages(Request $request)
     {
         $validated = $request->validate([

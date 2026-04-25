@@ -154,6 +154,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/verified-status', [ClientController::class, 'updateVerifiedStatus'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/{client}/tours', [ClientController::class, 'tours'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::post('/clients/{client}/tours', [ClientController::class, 'addTour'])->middleware('role:admin,sub_admin,sales');
+    Route::delete('/clients/{client}/tours/{tourId}', [ClientController::class, 'deleteTour'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/completeness', [ClientController::class, 'profileCompleteness'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/retention-insight', [ClientController::class, 'retentionInsight'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/retention-history', [ClientController::class, 'retentionHistory'])->middleware('role:admin,sub_admin,sales,marketing');

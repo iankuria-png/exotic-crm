@@ -178,6 +178,30 @@ class WpSyncService
     }
 
     /**
+     * List all tours for a client profile.
+     */
+    public function getTours(int $postId): array
+    {
+        return $this->get("/clients/{$postId}/tours");
+    }
+
+    /**
+     * Add a tour to a client profile (admin-created, published immediately).
+     */
+    public function addTour(int $postId, array $data): array
+    {
+        return $this->post("/clients/{$postId}/tours", $data);
+    }
+
+    /**
+     * Delete a tour from a client profile.
+     */
+    public function deleteTour(int $postId, int $tourId): array
+    {
+        return $this->delete("/clients/{$postId}/tours/{$tourId}");
+    }
+
+    /**
      * Get profiles expiring within N days
      */
     public function getExpiring(int $days = 14): array

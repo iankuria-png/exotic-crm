@@ -57,6 +57,9 @@ final class CrmAuditAction
     public const MANUAL_PAYMENT_BUNDLE_COMPENSATION_FAILED = 'manual_payment_bundle_compensation_failed';
     public const MANUAL_PAYMENT_BUNDLE_VOID = 'manual_payment_bundle_void';
     public const CLIENT_PROFILE_EDIT = 'client_profile_edit';
+    public const CLIENT_VERIFIED_STATUS_UPDATE = 'client_verified_status_update';
+    public const CLIENT_TOUR_ADD = 'client_tour_add';
+    public const CLIENT_TOUR_DELETE = 'client_tour_delete';
     public const CLIENT_SUBSCRIPTION_DEACTIVATE = 'client_subscription_deactivate';
     public const CLIENT_SUPPORT_BOARD_PROFILE_SYNC = 'client_support_board_profile_sync';
     public const CLIENT_HEALTH_RESOLVE = 'client_health_resolve';
