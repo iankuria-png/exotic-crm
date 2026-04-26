@@ -12,6 +12,13 @@ function formatPercent(value, digits = 1) {
     return `${asNumber(value).toFixed(digits)}%`;
 }
 
+function abbreviateNumber(n) {
+    const num = asNumber(n);
+    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+    if (num >= 10_000) return `${(num / 1_000).toFixed(1)}K`;
+    return num.toLocaleString();
+}
+
 function describeWindow(fromDate, toDate) {
     if (!fromDate || !toDate) {
         return 'selected window';
@@ -27,12 +34,23 @@ function describeWindow(fromDate, toDate) {
     return `${diffDays}-day window`;
 }
 
-function MiniStat({ label, value, meta }) {
+function MiniStat({ label, value, delta, deltaSuffix }) {
+    const sign = delta >= 0 ? '+' : '';
+    const deltaColor = delta > 0
+        ? 'text-emerald-600'
+        : delta < 0
+            ? 'text-rose-500'
+            : 'text-slate-400';
+
     return (
         <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3.5 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
-            <p className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{value}</p>
-            {meta ? <p className="mt-1 text-xs text-slate-500">{meta}</p> : null}
+            <p className="text-[10px] font-semibold uppercase tracking-[0.10em] text-slate-400">{label}</p>
+            <p className="mt-1.5 text-xl font-semibold tracking-tight text-slate-900">{value}</p>
+            {delta !== undefined ? (
+                <p className={`mt-1 text-[11px] font-medium ${deltaColor}`}>
+                    {sign}{asNumber(delta).toFixed(1)}{deltaSuffix} vs prev.
+                </p>
+            ) : null}
         </div>
     );
 }
@@ -175,23 +193,27 @@ export default function ProfileEngagementWidget({
                     <div className="grid gap-2 sm:grid-cols-4">
                         <MiniStat
                             label="Views"
-                            value={asNumber(platformTotals.profile_view?.total).toLocaleString()}
-                            meta={`${asNumber(platformTotals.profile_view?.delta_percent).toFixed(1)}% vs previous ${windowLabel}`}
+                            value={abbreviateNumber(platformTotals.profile_view?.total)}
+                            delta={asNumber(platformTotals.profile_view?.delta_percent)}
+                            deltaSuffix="%"
                         />
                         <MiniStat
-                            label="Unique visitors"
-                            value={asNumber(platformTotals.unique_visitors?.total).toLocaleString()}
-                            meta={`${asNumber(platformTotals.unique_visitors?.delta_percent).toFixed(1)}% vs previous ${windowLabel}`}
+                            label="Unique Visitors"
+                            value={abbreviateNumber(platformTotals.unique_visitors?.total)}
+                            delta={asNumber(platformTotals.unique_visitors?.delta_percent)}
+                            deltaSuffix="%"
                         />
                         <MiniStat
                             label="Contacts"
-                            value={asNumber(platformTotals.contact_actions?.total).toLocaleString()}
-                            meta={`${asNumber(platformTotals.contact_actions?.delta_percent).toFixed(1)}% vs previous ${windowLabel}`}
+                            value={abbreviateNumber(platformTotals.contact_actions?.total)}
+                            delta={asNumber(platformTotals.contact_actions?.delta_percent)}
+                            deltaSuffix="%"
                         />
                         <MiniStat
-                            label="Contact rate"
+                            label="Contact Rate"
                             value={formatPercent(platformTotals.contact_rate_percent?.value)}
-                            meta={`${asNumber(platformTotals.contact_rate_percent?.delta_pp).toFixed(1)}pp vs previous ${windowLabel}`}
+                            delta={asNumber(platformTotals.contact_rate_percent?.delta_pp)}
+                            deltaSuffix="pp"
                         />
                     </div>
 

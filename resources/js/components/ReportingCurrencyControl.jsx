@@ -42,7 +42,7 @@ export default function ReportingCurrencyControl({ reporting, className = '' }) 
                 </select>
             ) : null}
 
-            <span className="inline-flex h-9 items-center rounded-full border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-800">
+            <span className="inline-flex h-9 items-center rounded border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-800">
                 {badgeLabel}
             </span>
         </div>

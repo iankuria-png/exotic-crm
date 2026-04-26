@@ -16,6 +16,7 @@ import { getCountryFlag } from '../utils/flags';
 import { formatCurrency, asNumber } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
+import MetricCard from '../components/MetricCard';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
@@ -164,27 +165,6 @@ function PreviewFooter({ hiddenCount, noun, ctaLabel, onOpen }) {
     );
 }
 
-function MetricCard({ metric, isLoading }) {
-    const interactive = typeof metric.onClick === 'function';
-    const Wrapper = interactive ? 'button' : 'article';
-
-    return (
-        <Wrapper
-            {...(interactive ? { type: 'button', onClick: metric.onClick } : {})}
-            className={`rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm ${interactive ? 'w-full cursor-pointer text-left transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600' : ''}`}
-        >
-            <p className="flex items-center gap-2 text-sm font-medium text-slate-600">
-                <span className={`h-2 w-2 rounded-full ${metric.accentDot}`} aria-hidden="true" />
-                {metric.label}
-            </p>
-            <p className="mt-2 text-[1.95rem] leading-none font-semibold tracking-tight text-slate-900 sm:text-[2.05rem]">
-                {isLoading ? <span className="inline-block h-9 w-20 animate-pulse rounded bg-slate-100" /> : metric.value}
-            </p>
-            <p className={`mt-2 text-sm font-medium ${metric.hintClass}`}>{metric.hint}</p>
-            {metric.subHint ? <p className="mt-1 text-xs text-slate-500">{metric.subHint}</p> : null}
-        </Wrapper>
-    );
-}
 
 function RetentionWatchWidget({ summary, isLoading, onOpenWatchlist }) {
     const watchCount = asNumber(summary?.watch_count);
@@ -476,20 +456,19 @@ function OperationsDashboard() {
             label: 'Collected Revenue',
             value: reportingCurrency.isFlat && revenueWindowNormalized !== null ? (
                 <div>
-                    <p className="text-[1.65rem] leading-tight font-semibold tracking-tight text-slate-900">{revenueWindowNormalizedDisplay}</p>
+                    <p className="text-2xl leading-tight font-semibold tracking-tight text-slate-900">{revenueWindowNormalizedDisplay}</p>
                     <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
                 </div>
             ) : (
-                <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-[1.4rem] leading-snug font-semibold tracking-tight text-slate-900" />
+                <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-2xl leading-tight font-semibold tracking-tight text-slate-900" />
             ),
             hint: recentPaymentsCount > 0
                 ? isMixedRevenue
-                    ? `${recentPaymentsCount} successful payments • ${reportingCurrency.isFlat ? `normalized to ${kpis.normalized_currency || reportingCurrency.targetCurrency}` : 'Mixed currencies in scope'}`
-                    : `${recentPaymentsCount} successful payments • avg ${formatCurrency(averageTicketWindow, resolvedRevenueCurrency)}`
+                    ? `${recentPaymentsCount} payments • ${reportingCurrency.isFlat ? `normalized to ${kpis.normalized_currency || reportingCurrency.targetCurrency}` : 'mixed currencies'}`
+                    : `${recentPaymentsCount} payments • avg ${formatCurrency(averageTicketWindow, resolvedRevenueCurrency)}`
                 : 'No successful payments in selected range',
             subHint: revenueDeltaLabel || 'No comparable single-currency baseline',
-            accentDot: 'bg-teal-600',
-            hintClass: 'text-teal-700',
+            tone: 'accent',
             onClick: () => navigate(withMarketScope('/payments?status=completed')),
         },
         {
@@ -497,8 +476,7 @@ function OperationsDashboard() {
             label: 'Active Clients',
             value: activeClients.toLocaleString(),
             hint: `${Math.round(activeCoverage)}% coverage of ${totalClients.toLocaleString()} records`,
-            accentDot: 'bg-slate-400',
-            hintClass: 'text-slate-600',
+            tone: 'default',
             onClick: () => navigate(withMarketScope('/clients?status=publish')),
         },
         {
@@ -508,8 +486,7 @@ function OperationsDashboard() {
             hint: paymentRecoveryQueueTotal > 0
                 ? `${paymentRecoveryFailed} failed • ${paymentRecoveryPending} pending • ${paymentRecoveryUnmatched} unmatched`
                 : 'No payment recovery backlog',
-            accentDot: paymentRecoveryQueueTotal > 0 ? 'bg-rose-500' : 'bg-slate-400',
-            hintClass: paymentRecoveryQueueTotal > 0 ? 'text-rose-700' : 'text-slate-600',
+            tone: paymentRecoveryQueueTotal > 0 ? 'danger' : 'default',
             onClick: () => navigate(withMarketScope('/payments?status=recovery_queue')),
         },
         {
@@ -519,8 +496,7 @@ function OperationsDashboard() {
             hint: renewalWorkload14d > 0
                 ? `${renewalRisk72h} in 0-3d • ${renewalPipeline14d} in 4-14d`
                 : 'No renewals due in next 14 days',
-            accentDot: renewalWorkload14d > 0 ? 'bg-amber-500' : 'bg-slate-400',
-            hintClass: renewalWorkload14d > 0 ? 'text-amber-700' : 'text-emerald-700',
+            tone: renewalWorkload14d > 0 ? 'warning' : 'default',
             onClick: () => navigate(withMarketScope('/deals?bucket=workload')),
         },
         {
@@ -529,10 +505,9 @@ function OperationsDashboard() {
             value: retentionWatchCount.toLocaleString(),
             hint: retentionWatchCount > 0
                 ? `${logoChurn30d.toFixed(2)}% logo churn in trailing 30 days`
-                : 'No clients currently flagged in retention watch',
+                : 'No clients flagged',
             subHint: 'Signals combine payments, renewals, engagement, reminders, and market baseline.',
-            accentDot: retentionWatchCount > 0 ? 'bg-rose-500' : 'bg-slate-400',
-            hintClass: retentionWatchCount > 0 ? 'text-rose-700' : 'text-slate-600',
+            tone: retentionWatchCount > 0 ? 'danger' : 'default',
             onClick: () => navigate(withMarketScope('/clients?retention_band=watch')),
         },
     ];
@@ -589,30 +564,6 @@ function OperationsDashboard() {
 
                     <div className="flex flex-wrap gap-2 xl:justify-end">
                         <ReportingCurrencyControl reporting={reportingCurrency} />
-                        <button
-                            type="button"
-                            onClick={() => navigate('/payments?status=recovery_queue')}
-                            className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-                            title="Open payment recovery queue"
-                        >
-                            Recovery
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => navigate('/deals?bucket=workload')}
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                            title="Open renewal workload"
-                        >
-                            Renewals
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => navigate('/leads')}
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                            title="Open lead backlog"
-                        >
-                            Leads
-                        </button>
                     </div>
                 </div>
 
@@ -695,14 +646,14 @@ function OperationsDashboard() {
                     </div>
 
                     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                        <span className="rounded-full border border-slate-300 bg-white px-3 py-1">
+                        <span className="rounded border border-slate-200 bg-white px-2.5 py-1">
                             Range: <span className="crm-mono font-medium text-slate-700">{formatDate(appliedRangeFrom)}</span> to <span className="crm-mono font-medium text-slate-700">{formatDate(appliedRangeTo)}</span>
                         </span>
-                        <span className="rounded-full border border-slate-300 bg-white px-3 py-1">
+                        <span className="rounded border border-slate-200 bg-white px-2.5 py-1">
                             {isDefaultDateWindow ? 'Default: oldest to today' : 'Custom range'}
                         </span>
                         {platformFilter ? (
-                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
+                            <span className="rounded border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700">
                                 Market filter active
                             </span>
                         ) : null}
@@ -711,8 +662,17 @@ function OperationsDashboard() {
             </section>
 
             <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                {metrics.map((metric) => (
-                    <MetricCard key={metric.key} metric={metric} isLoading={isLoading} />
+                {metrics.map((m) => (
+                    <MetricCard
+                        key={m.key}
+                        label={m.label}
+                        value={m.value}
+                        hint={m.hint}
+                        subHint={m.subHint}
+                        tone={m.tone}
+                        onClick={m.onClick}
+                        isLoading={isLoading}
+                    />
                 ))}
             </section>
 

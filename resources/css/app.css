@@ -86,7 +86,7 @@
     }
 
     .crm-kpi-value {
-        @apply mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900;
+        @apply mt-2 text-2xl leading-tight font-semibold tracking-tight text-slate-900;
     }
 
     .crm-kpi-meta {
