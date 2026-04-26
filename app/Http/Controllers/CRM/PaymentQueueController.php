@@ -29,6 +29,7 @@ use App\Services\PaymentAttemptService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentLinkService;
 use App\Services\ProviderStatusQueryOrchestrator;
+use App\Services\ReportingCurrencyService;
 use App\Services\LegacyStkService;
 use App\Models\IntegrationSetting;
 use App\Models\WalletTransaction;
@@ -77,7 +78,8 @@ class PaymentQueueController extends Controller
         private readonly ManualPaymentSubmissionService $manualPaymentSubmissionService,
         private readonly ManualPaymentBundleService $manualPaymentBundleService,
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
-        private readonly SubscriptionDeactivationService $subscriptionDeactivationService
+        private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
+        private readonly ReportingCurrencyService $reportingCurrencyService
     ) {
     }
 
@@ -89,6 +91,8 @@ class PaymentQueueController extends Controller
             'environment' => 'nullable|in:production,sandbox',
             'test_visibility' => 'nullable|in:hide,include,only',
             'resolution_code' => 'nullable|in:reversed,invalid_reference',
+            'currency_mode' => 'nullable|in:native,flat',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
 
         $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -101,6 +105,8 @@ class PaymentQueueController extends Controller
         $testVisibility = strtolower(trim((string) ($validated['test_visibility'] ?? 'hide')));
         $testVisibility = in_array($testVisibility, ['hide', 'include', 'only'], true) ? $testVisibility : 'hide';
         $canViewTests = $this->canViewTests($request);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode($validated['currency_mode'] ?? null, false);
 
         if (($testVisibility !== 'hide' || $environmentFilter === 'sandbox') && !$canViewTests) {
             abort(403, 'Only admin users can view test payments.');
@@ -256,6 +262,11 @@ class PaymentQueueController extends Controller
         $reversedBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
         $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
+        $pendingNormalized   = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
+        $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedStatsQuery, $targetCurrency);
+        $reversedNormalized  = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
+        $failedNormalized    = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->where('status', 'failed'), $targetCurrency);
+        $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'), $targetCurrency);
 
         // Aging-bucket breakdowns
         $lt1hBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo));
@@ -269,23 +280,35 @@ class PaymentQueueController extends Controller
             'pending_amount' => $pendingBreakdown['scalar_amount'],
             'pending_amount_breakdown' => $pendingBreakdown['breakdown'],
             'pending_currency_count' => $pendingBreakdown['currency_count'],
+            'pending_normalized_amount' => $pendingNormalized['normalized_total'],
+            'pending_normalization_meta' => $pendingNormalized['normalization_meta'],
             'confirmed' => (clone $confirmedStatsQuery)->count(),
             'confirmed_amount' => $confirmedBreakdown['scalar_amount'],
             'confirmed_amount_breakdown' => $confirmedBreakdown['breakdown'],
             'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
+            'confirmed_normalized_amount' => $confirmedNormalized['normalized_total'],
+            'confirmed_normalization_meta' => $confirmedNormalized['normalization_meta'],
             'reversed' => (clone $reversedStatsQuery)->count(),
             'reversed_amount' => $reversedBreakdown['scalar_amount'],
             'reversed_amount_breakdown' => $reversedBreakdown['breakdown'],
+            'reversed_normalized_amount' => $reversedNormalized['normalized_total'],
+            'reversed_normalization_meta' => $reversedNormalized['normalization_meta'],
             'failed' => (clone $statsQuery)->where('status', 'failed')->count(),
             'failed_amount' => $failedBreakdown['scalar_amount'],
             'failed_amount_breakdown' => $failedBreakdown['breakdown'],
             'failed_currency_count' => $failedBreakdown['currency_count'],
+            'failed_normalized_amount' => $failedNormalized['normalized_total'],
+            'failed_normalization_meta' => $failedNormalized['normalization_meta'],
             'matched' => (clone $statsQuery)->whereNotNull('client_id')->count(),
             'unmatched' => (clone $statsQuery)->whereNull('client_id')->count(),
             'unmatched_review' => (clone $confirmedStatsQuery)->whereNull('client_id')->count(),
             'unmatched_review_amount' => $unmatchedBreakdown['scalar_amount'],
             'unmatched_review_amount_breakdown' => $unmatchedBreakdown['breakdown'],
             'unmatched_review_currency_count' => $unmatchedBreakdown['currency_count'],
+            'unmatched_review_normalized_amount' => $unmatchedNormalized['normalized_total'],
+            'unmatched_review_normalization_meta' => $unmatchedNormalized['normalization_meta'],
+            'normalized_currency' => $targetCurrency,
+            'currency_mode' => $currencyMode,
             'awaiting_aging' => [
                 'lt_1h' => [
                     'count' => (clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo)->count(),

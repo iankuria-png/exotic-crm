@@ -17,6 +17,7 @@ use App\Models\TimelineEvent;
 use App\Services\ClientRetentionInsightService;
 use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
+use App\Services\ReportingCurrencyService;
 use App\Services\SupportBoardService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
@@ -33,7 +34,8 @@ class DashboardController extends Controller
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly RenewalService $renewalService,
-        private readonly ClientRetentionInsightService $clientRetentionInsightService
+        private readonly ClientRetentionInsightService $clientRetentionInsightService,
+        private readonly ReportingCurrencyService $reportingCurrencyService
     ) {
     }
 
@@ -45,6 +47,8 @@ class DashboardController extends Controller
             'search' => 'nullable|string|max:120',
             'country_period' => 'nullable|in:week,month',
             'sales_view' => 'nullable|boolean',
+            'currency_mode' => 'nullable|in:native,flat',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
 
         $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
@@ -58,6 +62,11 @@ class DashboardController extends Controller
             : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
 
         $search = trim((string) ($validated['search'] ?? ''));
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode(
+            $validated['currency_mode'] ?? null,
+            $selectedPlatformId === null
+        );
         $oldestRecordAt = $this->resolveOldestDashboardRecordAt($platformIds);
         $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
         $defaultTo = now()->endOfDay();
@@ -190,6 +199,9 @@ class DashboardController extends Controller
         $revenueWindowBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $paymentsWindowQuery);
         $revenuePreviousBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery);
         $walletTopupBreakdown      = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsWindowQuery);
+        $revenueWindowNormalized   = $this->reportingCurrencyService->normalizePaymentQuery(clone $paymentsWindowQuery, $targetCurrency);
+        $revenuePreviousNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $previousRevenueQuery, $targetCurrency);
+        $walletTopupNormalized     = $this->reportingCurrencyService->normalizePaymentQuery(clone $walletTopupsWindowQuery, $targetCurrency);
 
         $revenueWindow         = $revenueWindowBreakdown['scalar_amount'];
         $revenuePreviousWindow = $revenuePreviousBreakdown['scalar_amount'];
@@ -226,7 +238,7 @@ class DashboardController extends Controller
         $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
         $countryPeriod = $validated['country_period'] ?? 'week';
-        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to);
+        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to, $targetCurrency);
 
         $activeCampaignsQuery = RenewalCampaign::enabled();
         if (is_array($platformIds)) {
@@ -272,6 +284,8 @@ class DashboardController extends Controller
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),
                 'search' => $search !== '' ? $search : null,
+                'currency_mode' => $currencyMode,
+                'reporting_currency' => $targetCurrency,
             ],
             'window' => [
                 'default_from' => $defaultFrom->toDateString(),
@@ -293,16 +307,27 @@ class DashboardController extends Controller
                 'recent_payments' => $completedPaymentsWindow,
                 'revenue_window' => $revenueWindow,
                 'revenue_window_breakdown' => $revenueWindowBreakdown['breakdown'],
+                'revenue_window_normalized' => $revenueWindowNormalized['normalized_total'],
+                'revenue_window_normalized_display' => $revenueWindowNormalized['normalized_display'],
+                'revenue_window_normalization_meta' => $revenueWindowNormalized['normalization_meta'],
                 'revenue_mtd' => $revenueWindow,
                 'revenue_mtd_breakdown' => $revenueWindowBreakdown['breakdown'],
+                'revenue_mtd_normalized' => $revenueWindowNormalized['normalized_total'],
+                'revenue_mtd_normalization_meta' => $revenueWindowNormalized['normalization_meta'],
                 'wallet_topups_window' => $walletTopupsWindow,
                 'wallet_topup_revenue_window' => $walletTopupRevenueWindow,
                 'wallet_topup_revenue_window_breakdown' => $walletTopupBreakdown['breakdown'],
+                'wallet_topup_revenue_window_normalized' => $walletTopupNormalized['normalized_total'],
+                'wallet_topup_revenue_window_normalization_meta' => $walletTopupNormalized['normalization_meta'],
                 'revenue_previous_window' => $revenuePreviousWindow,
                 'revenue_previous_window_breakdown' => $revenuePreviousBreakdown['breakdown'],
+                'revenue_previous_window_normalized' => $revenuePreviousNormalized['normalized_total'],
+                'revenue_previous_window_normalization_meta' => $revenuePreviousNormalized['normalization_meta'],
                 'revenue_delta_percent' => $revenueDeltaPercent,
                 'average_ticket_window' => $averageTicket,
                 'revenue_is_mixed' => $isMixed,
+                'normalized_currency' => $targetCurrency,
+                'currency_mode' => $currencyMode,
                 'payment_recovery_queue_total' => $paymentRecoveryTotal,
                 'payment_recovery_pending' => $paymentRecoveryPending,
                 'payment_recovery_failed' => $paymentRecoveryFailed,
@@ -414,7 +439,7 @@ class DashboardController extends Controller
         return response()->json($products);
     }
 
-    private function buildCountryRevenue(?array $platformIds, string $period, Carbon $rangeFrom, Carbon $rangeTo): array
+    private function buildCountryRevenue(?array $platformIds, string $period, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency): array
     {
         $windowDays = $period === 'month' ? 30 : 7;
         $currentTo = $rangeTo->copy();
@@ -448,9 +473,22 @@ class DashboardController extends Controller
 
             $currentRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $currentRevenueQuery, $platform->currency_code ?: 'KES');
             $previousRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery, $platform->currency_code ?: 'KES');
+            $currentRevenueNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $currentRevenueQuery, $targetCurrency);
+            $previousRevenueNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $previousRevenueQuery, $targetCurrency);
             $currentRevenue = $currentRevenueBreakdown['scalar_amount'];
             $previousRevenue = $previousRevenueBreakdown['scalar_amount'];
             $trend = $this->calculateComparableCountryTrend($currentRevenueBreakdown, $previousRevenueBreakdown);
+            $normalizedTrend = null;
+            if (
+                !($currentRevenueNormalized['normalization_meta']['partial'] ?? true)
+                && !($previousRevenueNormalized['normalization_meta']['partial'] ?? true)
+                && (float) ($previousRevenueNormalized['normalized_total'] ?? 0) > 0
+            ) {
+                $normalizedTrend = round(
+                    (((float) $currentRevenueNormalized['normalized_total'] - (float) $previousRevenueNormalized['normalized_total']) / (float) $previousRevenueNormalized['normalized_total']) * 100,
+                    1
+                );
+            }
 
             $result[] = [
                 'platform_id' => $platform->id,
@@ -459,13 +497,28 @@ class DashboardController extends Controller
                 'currency' => $platform->currency_code,
                 'current_revenue_breakdown' => $currentRevenueBreakdown['breakdown'],
                 'current_revenue' => $currentRevenue,
+                'current_revenue_normalized' => $currentRevenueNormalized['normalized_total'],
+                'current_revenue_normalized_display' => $currentRevenueNormalized['normalized_display'],
+                'current_revenue_normalization_meta' => $currentRevenueNormalized['normalization_meta'],
                 'previous_revenue_breakdown' => $previousRevenueBreakdown['breakdown'],
                 'previous_revenue' => $previousRevenue,
+                'previous_revenue_normalized' => $previousRevenueNormalized['normalized_total'],
+                'previous_revenue_normalization_meta' => $previousRevenueNormalized['normalization_meta'],
                 'trend' => $trend,
+                'normalized_trend' => $normalizedTrend,
             ];
         }
 
-        usort($result, fn($a, $b) => array_sum($b['current_revenue_breakdown']) <=> array_sum($a['current_revenue_breakdown']));
+        usort($result, function ($a, $b) {
+            $left = $a['current_revenue_normalized'] ?? null;
+            $right = $b['current_revenue_normalized'] ?? null;
+
+            if ($left !== null && $right !== null) {
+                return $right <=> $left;
+            }
+
+            return array_sum($b['current_revenue_breakdown']) <=> array_sum($a['current_revenue_breakdown']);
+        });
 
         return $result;
     }

@@ -11,6 +11,7 @@ use App\Models\Lead;
 use App\Models\Payment;
 use App\Models\RenewalRun;
 use App\Services\MarketAuthorizationService;
+use App\Services\ReportingCurrencyService;
 use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
@@ -21,7 +22,8 @@ use Illuminate\Support\Facades\DB;
 class ReportController extends Controller
 {
     public function __construct(
-        private readonly MarketAuthorizationService $marketAuthorizationService
+        private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly ReportingCurrencyService $reportingCurrencyService
     ) {
     }
 
@@ -31,6 +33,8 @@ class ReportController extends Controller
             'platform_id' => 'nullable|exists:platforms,id',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
+            'currency_mode' => 'nullable|in:native,flat',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
 
         $from = !empty($validated['from'])
@@ -54,6 +58,11 @@ class ReportController extends Controller
         $platformIds = $selectedPlatformId
             ? [(int) $selectedPlatformId]
             : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode(
+            $validated['currency_mode'] ?? null,
+            $selectedPlatformId === null
+        );
 
         $paymentsQuery = $this->successfulCollectedPaymentsQuery($from, $to, $platformIds);
         $walletTopupsQuery = Payment::query()
@@ -145,17 +154,32 @@ class ReportController extends Controller
         $revenueMtdBreakdown     = CurrencyBreakdown::fromPaymentQuery(clone $revenueMtdQuery);
         $walletTopupBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsQuery);
         $walletTopupMtdBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupMtdQuery);
+        $totalRevenueNormalized   = $this->reportingCurrencyService->normalizePaymentQuery(clone $paymentsQuery, $targetCurrency);
+        $revenueMtdNormalized     = $this->reportingCurrencyService->normalizePaymentQuery(clone $revenueMtdQuery, $targetCurrency);
+        $walletTopupNormalized    = $this->reportingCurrencyService->normalizePaymentQuery(clone $walletTopupsQuery, $targetCurrency);
+        $walletTopupMtdNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $walletTopupMtdQuery, $targetCurrency);
 
         $kpis = [
             'total_revenue' => $totalRevenueBreakdown['scalar_amount'],
             'total_revenue_breakdown' => $totalRevenueBreakdown['breakdown'],
+            'total_revenue_normalized' => $totalRevenueNormalized['normalized_total'],
+            'total_revenue_normalized_display' => $totalRevenueNormalized['normalized_display'],
+            'total_revenue_normalization_meta' => $totalRevenueNormalized['normalization_meta'],
             'revenue_mtd' => $revenueMtdBreakdown['scalar_amount'],
             'revenue_mtd_breakdown' => $revenueMtdBreakdown['breakdown'],
+            'revenue_mtd_normalized' => $revenueMtdNormalized['normalized_total'],
+            'revenue_mtd_normalization_meta' => $revenueMtdNormalized['normalization_meta'],
             'wallet_topups_count' => (int) (clone $walletTopupsQuery)->count(),
             'wallet_topup_revenue' => $walletTopupBreakdown['scalar_amount'],
             'wallet_topup_revenue_breakdown' => $walletTopupBreakdown['breakdown'],
+            'wallet_topup_revenue_normalized' => $walletTopupNormalized['normalized_total'],
+            'wallet_topup_revenue_normalization_meta' => $walletTopupNormalized['normalization_meta'],
             'wallet_topup_revenue_mtd' => $walletTopupMtdBreakdown['scalar_amount'],
             'wallet_topup_revenue_mtd_breakdown' => $walletTopupMtdBreakdown['breakdown'],
+            'wallet_topup_revenue_mtd_normalized' => $walletTopupMtdNormalized['normalized_total'],
+            'wallet_topup_revenue_mtd_normalization_meta' => $walletTopupMtdNormalized['normalization_meta'],
+            'normalized_currency' => $targetCurrency,
+            'currency_mode' => $currencyMode,
             'active_clients' => (int) (clone $clientsQuery)->active()->count(),
             'total_clients' => (int) (clone $clientsQuery)->count(),
             'conversion_rate' => $conversionRate,
@@ -237,18 +261,22 @@ class ReportController extends Controller
             ->groupByRaw("{$packageNameExpression}, {$paymentCurrencyExpression}")
             ->get()
             ->groupBy(fn ($row) => $row->package_name ?: 'Unknown package')
-            ->map(function ($rows, $label) {
+            ->map(function ($rows, $label) use ($targetCurrency, $to) {
                 $breakdown = [];
                 foreach ($rows as $row) {
                     $breakdown[$row->currency] = ($breakdown[$row->currency] ?? 0.0) + (float) $row->total;
                 }
                 ksort($breakdown);
+                $normalized = $this->reportingCurrencyService->normalizeBreakdown($breakdown, $to, $targetCurrency);
 
                 return [
                     'label' => $label,
                     'value' => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
                     'revenue_breakdown' => $breakdown,
-                    'sort_value' => array_sum($breakdown),
+                    'normalized_total' => $normalized['normalized_total'],
+                    'normalized_currency' => $normalized['normalized_currency'],
+                    'normalization_meta' => $normalized['normalization_meta'],
+                    'sort_value' => $normalized['normalized_total'] ?? array_sum($breakdown),
                 ];
             })
             ->sortByDesc('sort_value')
@@ -257,6 +285,9 @@ class ReportController extends Controller
                 'label' => $row['label'],
                 'value' => $row['value'],
                 'revenue_breakdown' => $row['revenue_breakdown'],
+                'normalized_total' => $row['normalized_total'],
+                'normalized_currency' => $row['normalized_currency'],
+                'normalization_meta' => $row['normalization_meta'],
             ])
             ->values();
 
@@ -270,7 +301,7 @@ class ReportController extends Controller
             ->groupByRaw("{$ownerNameExpression}, {$paymentCurrencyExpression}")
             ->get()
             ->groupBy(fn ($row) => $row->owner_name ?: 'Unassigned')
-            ->map(function ($rows, $owner) {
+            ->map(function ($rows, $owner) use ($targetCurrency, $to) {
                 $breakdown = [];
                 $paymentCount = 0;
                 foreach ($rows as $row) {
@@ -287,6 +318,10 @@ class ReportController extends Controller
                 $scalarAverage = count($breakdown) === 1 && $paymentCount > 0
                     ? round(array_values($breakdown)[0] / $paymentCount, 2)
                     : null;
+                $normalized = $this->reportingCurrencyService->normalizeBreakdown($breakdown, $to, $targetCurrency);
+                $normalizedAverage = $paymentCount > 0 && $normalized['normalized_total'] !== null
+                    ? round((float) $normalized['normalized_total'] / $paymentCount, 2)
+                    : null;
 
                 return [
                     'owner' => $owner,
@@ -294,12 +329,16 @@ class ReportController extends Controller
                     'deals' => $paymentCount,
                     'revenue' => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
                     'revenue_breakdown' => $breakdown,
+                    'normalized_revenue' => $normalized['normalized_total'],
+                    'normalized_currency' => $normalized['normalized_currency'],
+                    'normalization_meta' => $normalized['normalization_meta'],
                     'avg_revenue_per_payment' => $scalarAverage,
                     'avg_revenue_per_payment_breakdown' => $avgBreakdown,
+                    'normalized_avg_revenue_per_payment' => $normalizedAverage,
                     'avg_revenue_per_subscription' => $scalarAverage,
                     'avg_revenue_breakdown' => $avgBreakdown,
                     'active_subscriptions' => 0,
-                    'sort_value' => array_sum($breakdown),
+                    'sort_value' => $normalized['normalized_total'] ?? array_sum($breakdown),
                 ];
             })
             ->sortByDesc('sort_value')
@@ -310,6 +349,9 @@ class ReportController extends Controller
             'payments_count' => (int) $ownerPerformanceAll->sum('payments_count'),
             'revenue' => count($kpis['total_revenue_breakdown']) === 1 ? array_values($kpis['total_revenue_breakdown'])[0] : null,
             'revenue_breakdown' => $kpis['total_revenue_breakdown'],
+            'normalized_revenue' => $totalRevenueNormalized['normalized_total'],
+            'normalized_currency' => $targetCurrency,
+            'normalization_meta' => $totalRevenueNormalized['normalization_meta'],
             'active_subscriptions' => 0,
         ];
 
@@ -337,6 +379,8 @@ class ReportController extends Controller
         return response()->json([
             'filters' => [
                 'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+                'currency_mode' => $currencyMode,
+                'reporting_currency' => $targetCurrency,
             ],
             'range' => [
                 'from' => $from->toDateString(),
@@ -363,6 +407,9 @@ class ReportController extends Controller
                     'payments_count' => $topOwner['payments_count'],
                     'revenue' => $topOwner['revenue'],
                     'revenue_breakdown' => $topOwner['revenue_breakdown'],
+                    'normalized_revenue' => $topOwner['normalized_revenue'] ?? null,
+                    'normalized_currency' => $topOwner['normalized_currency'] ?? $targetCurrency,
+                    'normalization_meta' => $topOwner['normalization_meta'] ?? null,
                     'active_subscriptions' => $topOwner['active_subscriptions'],
                 ]
                 : null,

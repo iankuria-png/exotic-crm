@@ -189,8 +189,10 @@ class ReportingCurrencyService
             : "DATE(COALESCE(payments.completed_at, payments.created_at))";
         $currencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), '{$target}')";
 
-        $rows = (clone $query)
-            ->selectRaw("{$dateExpression} as event_date")
+        $aggregateQuery = clone $query;
+
+        $rows = $aggregateQuery
+            ->select(DB::raw("{$dateExpression} as event_date"))
             ->selectRaw("{$currencyExpression} as currency")
             ->selectRaw('SUM(payments.amount) as amount')
             ->groupByRaw($dateExpression)
