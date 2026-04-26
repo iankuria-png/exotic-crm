@@ -8,9 +8,12 @@ import SectionFrame from '../components/SectionFrame';
 import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
 import ConfirmDialog from '../components/ConfirmDialog';
+import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
+import useReportingCurrency from '../hooks/useReportingCurrency';
 import { getCountryFlag, platformOptionsWithFlags } from '../utils/flags';
+import { formatCurrency } from '../utils/currency';
 
 const TEAM_PERIOD_STORAGE_KEY = 'exoticcrm.team.period';
 const DEFAULT_PERIOD = 'week';
@@ -533,6 +536,7 @@ export default function Team() {
     const [selectedAgent, setSelectedAgent] = useState(null);
     const [goalToDelete, setGoalToDelete] = useState(null);
     const [goalOverrideToDelete, setGoalOverrideToDelete] = useState(null);
+    const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -564,12 +568,13 @@ export default function Team() {
     }, [activeTab, isManager, selectedAgent]);
 
     const myStatsQuery = useQuery({
-        queryKey: ['team', 'me', period, platformFilter || 'all'],
+        queryKey: ['team', 'me', period, platformFilter || 'all', reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/team/me', {
                 params: {
                     period,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                    reporting_currency: reportingCurrency.targetCurrency,
                 },
             }).then((response) => response.data),
         placeholderData: keepPreviousData,
@@ -612,13 +617,14 @@ export default function Team() {
 
     const leaderboardQuery = useQuery({
         enabled: isManager && activeTab === 'leaderboard',
-        queryKey: ['team', 'leaderboard', period, platformFilter || 'all', leaderboardRoleFilter],
+        queryKey: ['team', 'leaderboard', period, platformFilter || 'all', leaderboardRoleFilter, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/team/leaderboard', {
                 params: {
                     period,
                     role_filter: leaderboardRoleFilter,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                    ...reportingCurrency.queryParams,
                 },
             }).then((response) => response.data),
         placeholderData: keepPreviousData,
@@ -701,13 +707,14 @@ export default function Team() {
 
     const agentStatsQuery = useQuery({
         enabled: isManager && activeTab === 'agent-detail' && Boolean(selectedAgent?.user_id),
-        queryKey: ['team', 'agent-detail', selectedAgent?.user_id, period, platformFilter || 'all'],
+        queryKey: ['team', 'agent-detail', selectedAgent?.user_id, period, platformFilter || 'all', reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get(`/crm/team/${selectedAgent.user_id}/stats`, {
                 params: {
                     from: agentDateRange.from,
                     to: agentDateRange.to,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                    reporting_currency: reportingCurrency.targetCurrency,
                 },
             }).then((response) => response.data),
         placeholderData: keepPreviousData,
@@ -845,11 +852,24 @@ export default function Team() {
         },
     ], [managerGoals, presenceQuery.data]);
 
+    const renderRevenueValue = (summary) => {
+        if (reportingCurrency.isFlat && summary.normalized_revenue_total !== null && summary.normalized_revenue_total !== undefined) {
+            return (
+                <div>
+                    <p>{summary.normalized_revenue_display || formatCurrency(summary.normalized_revenue_total, summary.normalized_revenue_currency || reportingCurrency.targetCurrency)}</p>
+                    <p className="mt-1 text-xs font-medium text-slate-500">{summary.revenue_display || '--'}</p>
+                </div>
+            );
+        }
+
+        return summary.revenue_display || '--';
+    };
+
     const myMetricCards = useMemo(() => [
         {
             label: 'Revenue',
-            value: mySummary.revenue_display || '--',
-            meta: 'Activated subscription value',
+            value: renderRevenueValue(mySummary),
+            meta: 'Collected payment value',
             tone: 'accent',
         },
         {
@@ -882,13 +902,13 @@ export default function Team() {
             meta: formatTrendText(myTrend.active_seconds, period),
             tone: 'neutral',
         },
-    ], [mySummary, myTrend, period]);
+    ], [mySummary, myTrend, period, reportingCurrency.isFlat, reportingCurrency.targetCurrency]);
 
     const agentMetricCards = useMemo(() => [
         {
             label: 'Revenue',
-            value: agentSummary.revenue_display || '--',
-            meta: 'Activated subscription value',
+            value: renderRevenueValue(agentSummary),
+            meta: 'Collected payment value',
             tone: 'accent',
         },
         {
@@ -921,7 +941,7 @@ export default function Team() {
             meta: formatTrendText(agentTrend.active_seconds, period),
             tone: 'neutral',
         },
-    ], [agentSummary, agentTrend, period]);
+    ], [agentSummary, agentTrend, period, reportingCurrency.isFlat, reportingCurrency.targetCurrency]);
 
     const trendHighlights = useMemo(() => [
         {
@@ -991,9 +1011,18 @@ export default function Team() {
             cellClassName: '!whitespace-normal text-right',
             render: (row) => (
                 <div className="space-y-1 text-right">
-                    {formatCurrencyRows(row.revenue_by_currency).map((value) => (
-                        <p key={value} className="crm-mono text-sm font-semibold text-slate-800">{value}</p>
-                    ))}
+                    {reportingCurrency.isFlat && row.normalized_revenue_total !== null && row.normalized_revenue_total !== undefined ? (
+                        <>
+                            <p className="crm-mono text-sm font-semibold text-slate-900">
+                                {row.normalized_revenue_display || formatCurrency(row.normalized_revenue_total, row.normalized_revenue_currency || reportingCurrency.targetCurrency)}
+                            </p>
+                            <p className="text-[11px] font-medium text-slate-500">{row.revenue_display || '--'}</p>
+                        </>
+                    ) : (
+                        formatCurrencyRows(row.revenue_by_currency).map((value) => (
+                            <p key={value} className="crm-mono text-sm font-semibold text-slate-800">{value}</p>
+                        ))
+                    )}
                 </div>
             ),
         },
@@ -1046,7 +1075,7 @@ export default function Team() {
             cellClassName: 'text-right crm-mono font-semibold text-slate-900',
             render: (row) => formatCount(row.total_actions),
         },
-    ], [period]);
+    ], [period, reportingCurrency.isFlat, reportingCurrency.targetCurrency]);
 
     const managerTabs = useMemo(() => {
         const items = [
@@ -1123,6 +1152,7 @@ export default function Team() {
 
     const pageActions = (
         <>
+            <ReportingCurrencyControl reporting={reportingCurrency} />
             <FilterSelect
                 label="Period"
                 value={period}

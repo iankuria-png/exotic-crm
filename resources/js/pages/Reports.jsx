@@ -4,8 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import PageHeader from '../components/PageHeader';
 import MetricCard from '../components/MetricCard';
+import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
+import useReportingCurrency from '../hooks/useReportingCurrency';
 import { formatCurrency, asNumber } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
 
@@ -186,14 +188,16 @@ function FunnelFlow({ stages, totals }) {
     );
 }
 
-function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false }) {
+function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false, currencyMode = 'native', targetCurrency = 'USD' }) {
     if (!rows.length) {
         return <InsightEmptyState title="No owner performance data" message="No successful payments were collected in this reporting window." />;
     }
 
     // For share calculation use the totals breakdown sum or scalar
     const totalsBreakdown = totals?.revenue_breakdown ?? {};
-    const revenueTotal = isMixed
+    const revenueTotal = currencyMode === 'flat' && totals?.normalized_revenue !== null && totals?.normalized_revenue !== undefined
+        ? asNumber(totals.normalized_revenue)
+        : isMixed
         ? Object.values(totalsBreakdown).reduce((sum, v) => sum + v, 0)
         : asNumber(totals?.revenue);
 
@@ -212,7 +216,9 @@ function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false
                     {rows.map((row) => {
                         const paymentCount = asNumber(row.payments_count ?? row.deals);
                         const rowBreakdown = row.revenue_breakdown ?? {};
-                        const rowTotal = Object.values(rowBreakdown).reduce((sum, v) => sum + v, 0);
+                        const rowTotal = currencyMode === 'flat' && row.normalized_revenue !== null && row.normalized_revenue !== undefined
+                            ? asNumber(row.normalized_revenue)
+                            : Object.values(rowBreakdown).reduce((sum, v) => sum + v, 0);
                         const share = revenueTotal > 0 ? Math.round((rowTotal / revenueTotal) * 100) : 0;
                         return (
                             <tr key={row.owner}>
@@ -233,7 +239,14 @@ function OwnerPerformanceTable({ rows, totals, currency = 'KES', isMixed = false
                                     <p className="mt-1 text-xs text-slate-500">{share}% revenue share</p>
                                 </td>
                                 <td className="px-3 py-3 text-right font-semibold text-slate-800">
-                                    <CurrencyAmount breakdown={rowBreakdown} scalarAmount={row.revenue} fallbackCurrency={currency} stackClassName="leading-snug" />
+                                    {currencyMode === 'flat' && row.normalized_revenue !== null && row.normalized_revenue !== undefined ? (
+                                        <div>
+                                            <p>{formatCurrency(row.normalized_revenue, row.normalized_currency || targetCurrency)}</p>
+                                            <CurrencyAmount breakdown={rowBreakdown} scalarAmount={row.revenue} fallbackCurrency={currency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                                        </div>
+                                    ) : (
+                                        <CurrencyAmount breakdown={rowBreakdown} scalarAmount={row.revenue} fallbackCurrency={currency} stackClassName="leading-snug" />
+                                    )}
                                 </td>
                             </tr>
                         );
@@ -272,6 +285,7 @@ export default function Reports() {
     const [engagementSortBy, setEngagementSortBy] = useState('engagement_score');
     const [engagementOrder, setEngagementOrder] = useState('desc');
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
+    const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data: integrationData } = useQuery({
         queryKey: ['settings-integrations', 'reports-filter'],
@@ -284,13 +298,14 @@ export default function Reports() {
     const reportCurrency = selectedPlatform?.currency || 'KES';
 
     const { data, isLoading } = useQuery({
-        queryKey: ['reports-summary', platformFilter, fromDate, toDate],
+        queryKey: ['reports-summary', platformFilter, fromDate, toDate, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/reports/summary', {
                 params: {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...(fromDate ? { from: fromDate } : {}),
                     ...(toDate ? { to: toDate } : {}),
+                    ...reportingCurrency.queryParams,
                 },
             }).then((response) => response.data),
         enabled: !isRangeInvalid && !isMarketing,
@@ -328,6 +343,7 @@ export default function Reports() {
     }, [platformFilter, fromDate, toDate]);
 
     const kpis = data?.kpis || {};
+    const normalizedCurrency = kpis.normalized_currency || reportingCurrency.targetCurrency;
     const resolvedReportCurrency = useMemo(() => {
         const totalRevenueCurrencies = Object.keys(kpis.total_revenue_breakdown ?? {});
         if (totalRevenueCurrencies.length === 1) {
@@ -390,18 +406,30 @@ export default function Reports() {
     const packageRevenue = useMemo(
         () => (data?.package_revenue || []).map((row) => {
             const breakdown = row.revenue_breakdown ?? {};
-            const totalValue = isMixedReport
+            const normalizedValue = row.normalized_total !== null && row.normalized_total !== undefined
+                ? asNumber(row.normalized_total)
+                : null;
+            const totalValue = reportingCurrency.isFlat && normalizedValue !== null
+                ? normalizedValue
+                : isMixedReport
                 ? Object.values(breakdown).reduce((s, v) => s + v, 0)
                 : asNumber(row.value);
             return {
                 label: row.label,
                 value: totalValue,
-                formattedValue: isMixedReport
+                formattedValue: reportingCurrency.isFlat && normalizedValue !== null
+                    ? (
+                        <div className="text-right">
+                            <p>{formatCurrency(normalizedValue, row.normalized_currency || normalizedCurrency)}</p>
+                            <CurrencyAmount breakdown={breakdown} scalarAmount={row.value} fallbackCurrency={resolvedReportCurrency} className="text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                        </div>
+                    )
+                    : isMixedReport
                     ? <CurrencyAmount breakdown={breakdown} scalarAmount={row.value} fallbackCurrency={resolvedReportCurrency} stackClassName="leading-snug text-right" />
                     : formatCurrency(row.value, resolvedReportCurrency),
             };
         }),
-        [data?.package_revenue, resolvedReportCurrency, isMixedReport],
+        [data?.package_revenue, resolvedReportCurrency, isMixedReport, normalizedCurrency, reportingCurrency.isFlat],
     );
 
     const ownerRows = data?.owner_performance || [];
@@ -445,6 +473,9 @@ export default function Reports() {
             if (data) {
                 // KPIs: one row per currency in the breakdown (never a mixed-currency scalar)
                 const totalRevBreakdown = kpis.total_revenue_breakdown ?? {};
+                if (kpis.total_revenue_normalized !== null && kpis.total_revenue_normalized !== undefined) {
+                    rows.push(toCsvRow(['KPI', 'Collected Revenue Normalized', kpis.normalized_currency || normalizedCurrency, kpis.total_revenue_normalized]));
+                }
                 if (Object.keys(totalRevBreakdown).length > 0) {
                     Object.entries(totalRevBreakdown).forEach(([currency, amount]) =>
                         rows.push(toCsvRow(['KPI', 'Collected Revenue', currency, amount])),
@@ -453,6 +484,9 @@ export default function Reports() {
                     rows.push(toCsvRow(['KPI', 'Collected Revenue', resolvedReportCurrency, kpis.total_revenue ?? 0]));
                 }
                 const revMtdBreakdown = kpis.revenue_mtd_breakdown ?? {};
+                if (kpis.revenue_mtd_normalized !== null && kpis.revenue_mtd_normalized !== undefined) {
+                    rows.push(toCsvRow(['KPI', 'Revenue MTD Normalized', kpis.normalized_currency || normalizedCurrency, kpis.revenue_mtd_normalized]));
+                }
                 if (Object.keys(revMtdBreakdown).length > 0) {
                     Object.entries(revMtdBreakdown).forEach(([currency, amount]) =>
                         rows.push(toCsvRow(['KPI', 'Revenue MTD', currency, amount])),
@@ -485,6 +519,9 @@ export default function Reports() {
                 // Package revenue: one row per (package, currency)
                 (data.package_revenue || []).forEach((row) => {
                     const bd = row.revenue_breakdown ?? {};
+                    if (row.normalized_total !== null && row.normalized_total !== undefined) {
+                        rows.push(toCsvRow(['Package Revenue Normalized', row.label, row.normalized_currency || normalizedCurrency, row.normalized_total]));
+                    }
                     if (Object.keys(bd).length > 0) {
                         Object.entries(bd).forEach(([currency, amount]) =>
                             rows.push(toCsvRow(['Package Revenue', row.label, currency, amount])),
@@ -498,6 +535,9 @@ export default function Reports() {
                 (data.owner_performance || []).forEach((row) => {
                     const paymentCount = row.payments_count ?? row.deals ?? 0;
                     const bd = row.revenue_breakdown ?? {};
+                    if (row.normalized_revenue !== null && row.normalized_revenue !== undefined) {
+                        rows.push(toCsvRow(['Owner Performance Normalized', row.owner, row.normalized_currency || normalizedCurrency, `${paymentCount} successful payments | ${row.normalized_revenue} revenue`]));
+                    }
                     if (Object.keys(bd).length > 0) {
                         Object.entries(bd).forEach(([currency, amount]) =>
                             rows.push(toCsvRow(['Owner Performance', row.owner, currency, `${paymentCount} successful payments | ${amount} revenue`])),
@@ -549,6 +589,7 @@ export default function Reports() {
                 subtitle={`Server-backed metrics for revenue, renewal health, and profile engagement (${engagementRangeLabel}).`}
                 actions={(
                     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2">
+                        <ReportingCurrencyControl reporting={reportingCurrency} />
                         <label className="text-xs font-medium text-slate-600" htmlFor="report-market">Market</label>
                         <select
                             id="report-market"
@@ -614,8 +655,15 @@ export default function Reports() {
                     <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <MetricCard
                             label="Collected Revenue"
-                            value={<CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} />}
-                            meta="selected reporting window"
+                            value={reportingCurrency.isFlat && kpis.total_revenue_normalized !== null && kpis.total_revenue_normalized !== undefined ? (
+                                <div>
+                                    <p>{kpis.total_revenue_normalized_display || formatCurrency(kpis.total_revenue_normalized, normalizedCurrency)}</p>
+                                    <CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                                </div>
+                            ) : (
+                                <CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} />
+                            )}
+                            meta={reportingCurrency.isFlat ? `selected window in ${normalizedCurrency}` : 'selected reporting window'}
                             tone="accent"
                         />
                         <MetricCard
@@ -682,7 +730,14 @@ export default function Reports() {
                                                 : `${topOwner.owner} (${asNumber(topOwner.payments_count ?? topOwner.deals)} successful payments, ${formatCurrency(topOwner.revenue, resolvedReportCurrency)})`}
                                         </div>
                                     ) : null}
-                                    <OwnerPerformanceTable rows={ownerRows} totals={ownerTotals} currency={resolvedReportCurrency} isMixed={isMixedReport} />
+                                    <OwnerPerformanceTable
+                                        rows={ownerRows}
+                                        totals={ownerTotals}
+                                        currency={resolvedReportCurrency}
+                                        isMixed={isMixedReport}
+                                        currencyMode={reportingCurrency.displayMode}
+                                        targetCurrency={normalizedCurrency}
+                                    />
                                 </div>
                             </ReportPanel>
                         </div>

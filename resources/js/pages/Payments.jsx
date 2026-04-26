@@ -9,12 +9,14 @@ import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentImportDrawer from '../components/PaymentImportDrawer';
+import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { candidateScore, scoreTone, toneClasses } from '../utils/scoring';
 import { formatCurrency } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
 import { useAuth } from '../hooks/useAuth';
+import useReportingCurrency from '../hooks/useReportingCurrency';
 
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
 const SUCCESSFUL_PAYMENT_STATUSES = ['completed', 'expired'];
@@ -719,6 +721,7 @@ export default function Payments() {
         notes: '',
     });
     const [importDrawerOpen, setImportDrawerOpen] = useState(false);
+    const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data: integrationData } = useQuery({
         queryKey: ['settings-integrations', 'payments-filter'],
@@ -740,7 +743,7 @@ export default function Payments() {
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, fromDate, toDate, canViewTests],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -758,6 +761,7 @@ export default function Payments() {
                     ...(resolutionFilter && { resolution_code: resolutionFilter }),
                     ...(fromDate && { from: fromDate }),
                     ...(toDate && { to: toDate }),
+                    ...reportingCurrency.queryParams,
                 },
             }).then((response) => response.data),
         enabled: !isRangeInvalid,
@@ -1370,18 +1374,23 @@ export default function Payments() {
                 awaitingCount: Number(data.stats.pending || 0),
                 awaitingAmount: toAmount(data.stats.pending_amount),
                 awaitingBreakdown: data.stats.pending_amount_breakdown ?? {},
+                awaitingNormalized: data.stats.pending_normalized_amount,
                 confirmedCount: Number(data.stats.confirmed || 0),
                 confirmedAmount: toAmount(data.stats.confirmed_amount),
                 confirmedBreakdown: data.stats.confirmed_amount_breakdown ?? {},
+                confirmedNormalized: data.stats.confirmed_normalized_amount,
                 reversedCount: Number(data.stats.reversed || 0),
                 reversedAmount: toAmount(data.stats.reversed_amount),
                 reversedBreakdown: data.stats.reversed_amount_breakdown ?? {},
+                reversedNormalized: data.stats.reversed_normalized_amount,
                 unmatchedCount: Number((data.stats.unmatched_review ?? data.stats.unmatched) || 0),
                 unmatchedAmount: toAmount(data.stats.unmatched_review_amount),
                 unmatchedBreakdown: data.stats.unmatched_review_amount_breakdown ?? {},
+                unmatchedNormalized: data.stats.unmatched_review_normalized_amount,
                 failedCount: Number(data.stats.failed || 0),
                 failedAmount: toAmount(data.stats.failed_amount),
                 failedBreakdown: data.stats.failed_amount_breakdown ?? {},
+                failedNormalized: data.stats.failed_normalized_amount,
             };
         }
 
@@ -1410,6 +1419,21 @@ export default function Payments() {
 
     const statsScope = String(data?.stats_scope || 'business');
     const visibilityMode = canViewTests ? testVisibility : 'hide';
+    const normalizedCurrency = data?.stats?.normalized_currency || reportingCurrency.targetCurrency;
+    const renderSummaryAmount = (breakdown, scalarAmount, normalizedAmount) => {
+        if (reportingCurrency.isFlat && normalizedAmount !== null && normalizedAmount !== undefined) {
+            return (
+                <div>
+                    <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(normalizedAmount, normalizedCurrency)}</p>
+                    <CurrencyAmount breakdown={breakdown} scalarAmount={scalarAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                </div>
+            );
+        }
+
+        return (
+            <CurrencyAmount breakdown={breakdown} scalarAmount={scalarAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
+        );
+    };
 
     const activeMetric = useMemo(() => {
         if (statusFilter === 'awaiting_payment') return 'awaiting';
@@ -1935,7 +1959,8 @@ export default function Payments() {
                 title="Payments"
                 subtitle={data?.total ? `${data.total.toLocaleString()} payment records` : 'Incoming payments and match queue'}
                 actions={(
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <ReportingCurrencyControl reporting={reportingCurrency} />
                         <button
                             type="button"
                             onClick={openImportTemplate}
@@ -1976,7 +2001,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Awaiting Payment</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.awaitingCount.toLocaleString()}</p>
-                    <CurrencyAmount breakdown={summary.awaitingBreakdown} scalarAmount={summary.awaitingAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
+                    {renderSummaryAmount(summary.awaitingBreakdown, summary.awaitingAmount, summary.awaitingNormalized)}
                     <p className="mt-1 text-xs text-slate-500">Initiated + pending transactions</p>
                 </button>
 
@@ -2002,7 +2027,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
-                    <CurrencyAmount breakdown={summary.confirmedBreakdown} scalarAmount={summary.confirmedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
+                    {renderSummaryAmount(summary.confirmedBreakdown, summary.confirmedAmount, summary.confirmedNormalized)}
                     <p className="mt-1 text-xs text-slate-500">Completed + expired successful payments</p>
                     {summary.reversedCount > 0 ? (
                         <button
@@ -2020,13 +2045,11 @@ export default function Payments() {
                         >
                             <span aria-hidden="true" className="text-sm leading-none text-orange-500">↳</span>
                             <span>{summary.reversedCount} reversed</span>
-                            <CurrencyAmount
-                                breakdown={summary.reversedBreakdown}
-                                scalarAmount={summary.reversedAmount}
-                                fallbackCurrency={resolveCurrency(null)}
-                                className="text-xs font-semibold text-orange-700"
-                                stackClassName="leading-snug"
-                            />
+                                <span className="text-xs font-semibold text-orange-700">
+                                    {reportingCurrency.isFlat && summary.reversedNormalized !== null && summary.reversedNormalized !== undefined
+                                        ? formatCurrency(summary.reversedNormalized, normalizedCurrency)
+                                        : formatCurrency(summary.reversedAmount, resolveCurrency(null))}
+                                </span>
                         </button>
                     ) : null}
                 </div>
@@ -2045,7 +2068,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Unmatched Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.unmatchedCount.toLocaleString()}</p>
-                    <CurrencyAmount breakdown={summary.unmatchedBreakdown} scalarAmount={summary.unmatchedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
+                    {renderSummaryAmount(summary.unmatchedBreakdown, summary.unmatchedAmount, summary.unmatchedNormalized)}
                     <p className="mt-1 text-xs text-slate-500">Successful payments, no client linked</p>
                 </button>
 
@@ -2063,7 +2086,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Failed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.failedCount.toLocaleString()}</p>
-                    <CurrencyAmount breakdown={summary.failedBreakdown} scalarAmount={summary.failedAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
+                    {renderSummaryAmount(summary.failedBreakdown, summary.failedAmount, summary.failedNormalized)}
                     <p className="mt-1 text-xs text-slate-500">Needs retry or follow-up</p>
                 </button>
             </section>

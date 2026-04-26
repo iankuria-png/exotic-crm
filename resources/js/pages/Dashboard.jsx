@@ -10,10 +10,12 @@ import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import SalesDashboardView from '../components/dashboard/SalesDashboardView';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
+import useReportingCurrency from '../hooks/useReportingCurrency';
 import { useAuth } from '../hooks/useAuth';
 import { getCountryFlag } from '../utils/flags';
 import { formatCurrency, asNumber } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
+import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
@@ -341,9 +343,10 @@ function OperationsDashboard() {
     const [toDate, setToDate] = useState('');
     const [countryPeriod, setCountryPeriod] = useState('week');
     const [didHydrateDefaultRange, setDidHydrateDefaultRange] = useState(false);
+    const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data, isLoading } = useQuery({
-        queryKey: ['dashboard', platformFilter, fromDate, toDate, countryPeriod],
+        queryKey: ['dashboard', platformFilter, fromDate, toDate, countryPeriod, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/dashboard', {
                 params: {
@@ -351,6 +354,7 @@ function OperationsDashboard() {
                     ...(fromDate ? { from: fromDate } : {}),
                     ...(toDate ? { to: toDate } : {}),
                     country_period: countryPeriod,
+                    ...reportingCurrency.queryParams,
                 },
             }).then((response) => response.data),
         refetchInterval: DASHBOARD_REFRESH_MS,
@@ -432,6 +436,9 @@ function OperationsDashboard() {
     const totalLeads = asNumber(kpis.total_leads);
     const revenueWindow = kpis.revenue_window ?? kpis.revenue_mtd ?? null;
     const revenueWindowBreakdown = kpis.revenue_window_breakdown ?? kpis.revenue_mtd_breakdown ?? {};
+    const revenueWindowNormalized = kpis.revenue_window_normalized ?? kpis.revenue_mtd_normalized ?? null;
+    const revenueWindowNormalizedDisplay = kpis.revenue_window_normalized_display
+        || (revenueWindowNormalized !== null ? formatCurrency(revenueWindowNormalized, kpis.normalized_currency || reportingCurrency.targetCurrency) : null);
     const isMixedRevenue = kpis.revenue_is_mixed ?? Object.keys(revenueWindowBreakdown).length > 1;
     const averageTicketWindow = kpis.average_ticket_window ?? null;
     const resolvedRevenueCurrency = Object.keys(revenueWindowBreakdown).length === 1
@@ -467,10 +474,17 @@ function OperationsDashboard() {
         {
             key: 'revenue',
             label: 'Collected Revenue',
-            value: <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-[1.4rem] leading-snug font-semibold tracking-tight text-slate-900" />,
+            value: reportingCurrency.isFlat && revenueWindowNormalized !== null ? (
+                <div>
+                    <p className="text-[1.65rem] leading-tight font-semibold tracking-tight text-slate-900">{revenueWindowNormalizedDisplay}</p>
+                    <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                </div>
+            ) : (
+                <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-[1.4rem] leading-snug font-semibold tracking-tight text-slate-900" />
+            ),
             hint: recentPaymentsCount > 0
                 ? isMixedRevenue
-                    ? `${recentPaymentsCount} successful payments • Mixed currencies in scope`
+                    ? `${recentPaymentsCount} successful payments • ${reportingCurrency.isFlat ? `normalized to ${kpis.normalized_currency || reportingCurrency.targetCurrency}` : 'Mixed currencies in scope'}`
                     : `${recentPaymentsCount} successful payments • avg ${formatCurrency(averageTicketWindow, resolvedRevenueCurrency)}`
                 : 'No successful payments in selected range',
             subHint: revenueDeltaLabel || 'No comparable single-currency baseline',
@@ -574,6 +588,7 @@ function OperationsDashboard() {
                     </div>
 
                     <div className="flex flex-wrap gap-2 xl:justify-end">
+                        <ReportingCurrencyControl reporting={reportingCurrency} />
                         <button
                             type="button"
                             onClick={() => navigate('/payments?status=recovery_queue')}
@@ -711,6 +726,8 @@ function OperationsDashboard() {
                             period={countryPeriod}
                             onPeriodChange={setCountryPeriod}
                             isLoading={isLoading}
+                            currencyMode={reportingCurrency.displayMode}
+                            targetCurrency={kpis.normalized_currency || reportingCurrency.targetCurrency}
                         />
                     ) : null}
 

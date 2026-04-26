@@ -1,6 +1,7 @@
 import React from 'react';
 import SectionFrame from '../SectionFrame';
 import { getCountryFlag } from '../../utils/flags';
+import { formatCurrency } from '../../utils/currency';
 import CurrencyAmount from '../CurrencyAmount';
 
 function TrendArrow({ trend }) {
@@ -54,7 +55,7 @@ function PeriodToggle({ period, onChange }) {
     );
 }
 
-export default function CountryRevenueWidget({ data = [], period = 'week', onPeriodChange, isLoading }) {
+export default function CountryRevenueWidget({ data = [], period = 'week', onPeriodChange, isLoading, currencyMode = 'native', targetCurrency = 'USD' }) {
     const subtitle = period === 'month'
         ? 'Revenue by market in selected 30-day window'
         : 'Revenue by market in selected 7-day window';
@@ -86,14 +87,29 @@ export default function CountryRevenueWidget({ data = [], period = 'week', onPer
                                 </div>
                             </div>
                             <div className="text-right">
-                                <CurrencyAmount
-                                    breakdown={market.current_revenue_breakdown}
-                                    scalarAmount={market.current_revenue}
-                                    fallbackCurrency={market.currency}
-                                    className="crm-mono text-sm font-semibold text-slate-900"
-                                    stackClassName="crm-mono text-sm font-semibold text-slate-900"
-                                />
-                                <TrendArrow trend={market.trend} />
+                                {currencyMode === 'flat' && market.current_revenue_normalized !== null && market.current_revenue_normalized !== undefined ? (
+                                    <>
+                                        <p className="crm-mono text-sm font-semibold text-slate-900">
+                                            {market.current_revenue_normalized_display || formatCurrency(market.current_revenue_normalized, targetCurrency)}
+                                        </p>
+                                        <CurrencyAmount
+                                            breakdown={market.current_revenue_breakdown}
+                                            scalarAmount={market.current_revenue}
+                                            fallbackCurrency={market.currency}
+                                            className="text-xs font-medium text-slate-500"
+                                            stackClassName="text-xs font-medium text-slate-500"
+                                        />
+                                    </>
+                                ) : (
+                                    <CurrencyAmount
+                                        breakdown={market.current_revenue_breakdown}
+                                        scalarAmount={market.current_revenue}
+                                        fallbackCurrency={market.currency}
+                                        className="crm-mono text-sm font-semibold text-slate-900"
+                                        stackClassName="crm-mono text-sm font-semibold text-slate-900"
+                                    />
+                                )}
+                                <TrendArrow trend={currencyMode === 'flat' ? market.normalized_trend : market.trend} />
                             </div>
                         </div>
                     ))}

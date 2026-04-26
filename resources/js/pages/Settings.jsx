@@ -6829,6 +6829,139 @@ function DashboardSettingsPanel() {
     );
 }
 
+function ReportingCurrencySettingsPanel() {
+    const toast = useToast();
+    const queryClient = useQueryClient();
+    const [draft, setDraft] = useState({
+        enabled: false,
+        target_currency: 'USD',
+        provider: 'currencyapi',
+        allow_user_override: true,
+        stale_days: 7,
+    });
+
+    const settingsQuery = useQuery({
+        queryKey: ['reporting-currency-settings'],
+        queryFn: () => api.get('/crm/settings/reporting-currency').then((response) => response.data),
+    });
+    const settings = settingsQuery.data?.settings || {};
+
+    useEffect(() => {
+        if (!settingsQuery.data?.settings) {
+            return;
+        }
+
+        setDraft({
+            enabled: Boolean(settings.enabled),
+            target_currency: String(settings.target_currency || 'USD').toUpperCase(),
+            provider: settings.provider || 'currencyapi',
+            allow_user_override: settings.allow_user_override !== false,
+            stale_days: Number(settings.stale_days ?? 7),
+        });
+    }, [settingsQuery.data, settings]);
+
+    const saveMutation = useMutation({
+        mutationFn: () => api.patch('/crm/settings/reporting-currency', {
+            enabled: draft.enabled,
+            target_currency: draft.target_currency.trim().toUpperCase(),
+            provider: draft.provider.trim() || 'currencyapi',
+            allow_user_override: draft.allow_user_override,
+            stale_days: Number(draft.stale_days || 0),
+        }).then((response) => response.data?.settings || {}),
+        onSuccess: (settings) => {
+            queryClient.setQueryData(['reporting-currency-settings'], { settings });
+            queryClient.invalidateQueries({ queryKey: ['reporting-currency-settings'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            queryClient.invalidateQueries({ queryKey: ['reports-summary'] });
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['team'] });
+            toast.success('Reporting currency settings saved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Reporting currency settings could not be saved.');
+        },
+    });
+
+    const health = settings.health || {};
+
+    return (
+        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                <div>
+                    <h3 className="text-lg font-semibold text-slate-900">Reporting Currency</h3>
+                    <p className="mt-1 text-sm text-slate-500">Controls normalized revenue totals on Dashboard, Reports, Team, and Payments.</p>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${health.status === 'configured' ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'}`}>
+                    {health.status || 'not checked'}
+                </span>
+            </header>
+
+            <div className="grid gap-4 px-5 py-4 lg:grid-cols-4">
+                <label className="space-y-1">
+                    <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Target</span>
+                    <input
+                        value={draft.target_currency}
+                        onChange={(event) => setDraft((current) => ({ ...current, target_currency: event.target.value.toUpperCase().slice(0, 8) }))}
+                        className="crm-input w-full"
+                        placeholder="USD"
+                    />
+                </label>
+                <label className="space-y-1">
+                    <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Provider</span>
+                    <input
+                        value={draft.provider}
+                        onChange={(event) => setDraft((current) => ({ ...current, provider: event.target.value }))}
+                        className="crm-input w-full"
+                        placeholder="currencyapi"
+                    />
+                </label>
+                <label className="space-y-1">
+                    <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Stale days</span>
+                    <input
+                        type="number"
+                        min="0"
+                        value={draft.stale_days}
+                        onChange={(event) => setDraft((current) => ({ ...current, stale_days: event.target.value }))}
+                        className="crm-input w-full"
+                    />
+                </label>
+                <div className="flex flex-col justify-end gap-2">
+                    <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                        <input
+                            type="checkbox"
+                            checked={draft.enabled}
+                            onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))}
+                            className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                        />
+                        Enabled
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                        <input
+                            type="checkbox"
+                            checked={draft.allow_user_override}
+                            onChange={(event) => setDraft((current) => ({ ...current, allow_user_override: event.target.checked }))}
+                            className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                        />
+                        Page override
+                    </label>
+                </div>
+            </div>
+
+            <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
+                <p className="text-xs text-slate-500">{health.message || 'Cached historical rates are used for normalized reporting.'}</p>
+                <button
+                    type="button"
+                    onClick={() => saveMutation.mutate()}
+                    disabled={saveMutation.isPending || !draft.target_currency.trim()}
+                    className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    {saveMutation.isPending ? 'Saving...' : 'Save reporting currency'}
+                </button>
+            </footer>
+        </section>
+    );
+}
+
 export default function Settings() {
     const { user } = useAuth();
     const isSales = (user?.role || '') === 'sales';
@@ -6916,6 +7049,7 @@ export default function Settings() {
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
             {activeTab === 'dashboard' ? (
                 <div className="space-y-4">
+                    <ReportingCurrencySettingsPanel />
                     <DashboardSettingsPanel />
                     <SalesDashboardSettingsPanel />
                 </div>
