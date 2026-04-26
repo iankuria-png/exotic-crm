@@ -199,6 +199,13 @@ class ReportingCurrencyService
             ->groupByRaw($currencyExpression)
             ->get();
 
+        return $this->normalizeEventRows($rows, $target);
+    }
+
+    public function normalizeEventRows(iterable $rows, ?string $targetCurrency = null): array
+    {
+        $settings = $this->settings();
+        $target = $this->normalizeCurrency($targetCurrency ?? $settings['target_currency'] ?? self::DEFAULT_TARGET_CURRENCY, self::DEFAULT_TARGET_CURRENCY);
         $sourceBreakdown = [];
         $normalizedRows = [];
         $normalizedTotal = 0.0;
@@ -207,9 +214,9 @@ class ReportingCurrencyService
         $asOfDates = [];
 
         foreach ($rows as $row) {
-            $currency = $this->normalizeCurrency($row->currency, $target);
-            $amount = round((float) $row->amount, 2);
-            $eventDate = (string) $row->event_date;
+            $currency = $this->normalizeCurrency(data_get($row, 'currency'), $target);
+            $amount = round((float) data_get($row, 'amount'), 2);
+            $eventDate = (string) data_get($row, 'event_date', now()->toDateString());
             $sourceBreakdown[$currency] = ($sourceBreakdown[$currency] ?? 0.0) + $amount;
 
             $normalized = $this->normalizeBreakdown([$currency => $amount], Carbon::parse($eventDate), $target);

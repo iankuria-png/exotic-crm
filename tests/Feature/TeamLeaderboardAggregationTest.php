@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Lead;
+use App\Models\ReportingFxRate;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -26,18 +27,32 @@ class TeamLeaderboardAggregationTest extends TestCase
             'updated_at' => now()->subHours(2),
         ]);
 
-        $this->createTeamDeal($platformKes, $agent, [
+        $dealKes = $this->createTeamDeal($platformKes, $agent, [
             'amount' => 5000,
             'currency' => 'KES',
             'status' => 'expired',
             'activated_at' => now()->subHour(),
         ]);
-        $this->createTeamDeal($platformTzs, $agent, [
+        $dealTzs = $this->createTeamDeal($platformTzs, $agent, [
             'amount' => 8000,
             'currency' => 'TZS',
             'status' => 'cancelled',
             'activated_at' => now()->subMinutes(30),
         ]);
+        $this->createTeamPayment($platformKes, $dealKes, [
+            'amount' => 5000,
+            'currency' => 'KES',
+            'created_at' => now()->subHour(),
+            'completed_at' => now()->subHour(),
+        ]);
+        $this->createTeamPayment($platformTzs, $dealTzs, [
+            'amount' => 8000,
+            'currency' => 'TZS',
+            'created_at' => now()->subMinutes(30),
+            'completed_at' => now()->subMinutes(30),
+        ]);
+        $this->createRate('KES', 'USD', now(), 0.0077);
+        $this->createRate('TZS', 'USD', now(), 0.00038);
 
         $this->createTeamAudit([
             'platform_id' => $platformKes->id,
@@ -110,9 +125,11 @@ class TeamLeaderboardAggregationTest extends TestCase
 
         Sanctum::actingAs($admin);
 
-        $response = $this->getJson('/api/crm/team/leaderboard?period=today');
+        $response = $this->getJson('/api/crm/team/leaderboard?period=today&currency_mode=flat&reporting_currency=USD');
 
         $response->assertOk()
+            ->assertJsonPath('currency_mode', 'flat')
+            ->assertJsonPath('reporting_currency', 'USD')
             ->assertJsonPath('data.0.user_id', $agent->id)
             ->assertJsonPath('data.0.subs_activated', 2)
             ->assertJsonPath('data.0.payments_matched', 1)
@@ -124,6 +141,8 @@ class TeamLeaderboardAggregationTest extends TestCase
         $this->assertCount(2, $response->json('data.0.revenue_by_currency'));
         $this->assertStringContainsString('KES 5,000', (string) $response->json('data.0.revenue_display'));
         $this->assertStringContainsString('TZS 8,000', (string) $response->json('data.0.revenue_display'));
+        $this->assertSame(41.54, (float) $response->json('data.0.normalized_revenue_total'));
+        $this->assertSame(false, $response->json('data.0.revenue_normalization_meta.partial'));
     }
 
     public function test_week_leaderboard_combines_historical_daily_stats_with_live_today_activity(): void
@@ -267,5 +286,78 @@ class TeamLeaderboardAggregationTest extends TestCase
             ->assertJsonPath('role_filter', 'marketing')
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.user_id', $marketing->id);
+    }
+
+    public function test_flat_leaderboard_ranks_by_collected_payment_revenue_not_activated_deals(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-04-20 12:00:00'));
+
+        $admin = $this->createTeamUser('admin');
+        $platformKes = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $platformGhs = $this->createTeamPlatform(['name' => 'Ghana', 'currency_code' => 'GHS', 'domain' => 'gh.test']);
+        $agentA = $this->createTeamUser('sales', [$platformKes->id], ['name' => 'Agent A', 'email' => 'agent-a@example.test']);
+        $agentB = $this->createTeamUser('sales', [$platformGhs->id], ['name' => 'Agent B', 'email' => 'agent-b@example.test']);
+
+        $unpaidHighValueDeal = $this->createTeamDeal($platformKes, $agentA, [
+            'amount' => 500000,
+            'currency' => 'KES',
+            'activated_at' => now()->subHour(),
+        ]);
+        $paidDeal = $this->createTeamDeal($platformGhs, $agentB, [
+            'amount' => 200,
+            'currency' => 'GHS',
+            'activated_at' => now()->subHour(),
+        ]);
+        $this->createTeamPayment($platformGhs, $paidDeal, [
+            'amount' => 200,
+            'currency' => 'GHS',
+            'created_at' => now()->subHour(),
+            'completed_at' => now()->subHour(),
+        ]);
+        $this->createRate('GHS', 'USD', now(), 0.085);
+        $this->createRate('KES', 'USD', now(), 0.0077);
+
+        $this->createTeamAudit([
+            'platform_id' => $platformKes->id,
+            'actor_id' => $agentA->id,
+            'action' => 'deal_activate',
+            'entity_type' => 'deal',
+            'entity_id' => $unpaidHighValueDeal->id,
+            'after_state' => ['deal_status' => 'active'],
+            'created_at' => now()->subHour(),
+        ]);
+        $this->createTeamAudit([
+            'platform_id' => $platformGhs->id,
+            'actor_id' => $agentB->id,
+            'action' => 'payment_match_auto',
+            'entity_type' => 'payment',
+            'entity_id' => $paidDeal->id,
+            'created_at' => now()->subMinutes(30),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/leaderboard?period=today&currency_mode=flat&reporting_currency=USD');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.user_id', $agentB->id)
+            ->assertJsonPath('data.0.normalized_revenue_total', 17)
+            ->assertJsonPath('data.1.user_id', $agentA->id)
+            ->assertJsonPath('data.1.normalized_revenue_total', 0);
+
+        Carbon::setTestNow();
+    }
+
+    private function createRate(string $source, string $target, Carbon $date, float $rate): void
+    {
+        ReportingFxRate::query()->create([
+            'provider' => 'currencyapi',
+            'source_currency' => $source,
+            'target_currency' => $target,
+            'rate_date' => $date->toDateString(),
+            'rate' => $rate,
+            'fetched_at' => $date,
+            'payload_hash' => sha1($source . $target . $date->toDateString() . $rate),
+        ]);
     }
 }

@@ -30,14 +30,14 @@ class ComputeDailyStatsCommandTest extends TestCase
             'last_heartbeat_at' => $targetDate->copy()->addHours(11),
         ]);
 
-        $this->createTeamDeal($platform, $agent, [
+        $dealOne = $this->createTeamDeal($platform, $agent, [
             'amount' => 5000,
             'currency' => 'KES',
             'status' => 'expired',
             'activated_at' => $targetDate->copy()->addHours(9),
             'is_free_trial' => false,
         ]);
-        $this->createTeamDeal($platform, $agent, [
+        $dealTwo = $this->createTeamDeal($platform, $agent, [
             'amount' => 3000,
             'currency' => 'KES',
             'status' => 'cancelled',
@@ -50,6 +50,18 @@ class ComputeDailyStatsCommandTest extends TestCase
             'status' => 'active',
             'activated_at' => $targetDate->copy()->addHours(11),
             'is_free_trial' => true,
+        ]);
+        $this->createTeamPayment($platform, $dealOne, [
+            'amount' => 5000,
+            'currency' => 'KES',
+            'created_at' => $targetDate->copy()->addHours(9),
+            'completed_at' => $targetDate->copy()->addHours(9),
+        ]);
+        $this->createTeamPayment($platform, $dealTwo, [
+            'amount' => 3000,
+            'currency' => 'KES',
+            'created_at' => $targetDate->copy()->addHours(10),
+            'completed_at' => $targetDate->copy()->addHours(10),
         ]);
 
         $this->createTeamAudit([

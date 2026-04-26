@@ -9,11 +9,13 @@ use App\Models\AgentSession;
 use App\Models\AuditLog;
 use App\Models\Deal;
 use App\Models\Lead;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class TeamActivityService
 {
@@ -109,7 +111,8 @@ class TeamActivityService
     ];
 
     public function __construct(
-        private readonly MarketAuthorizationService $marketAuthorizationService
+        private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly ReportingCurrencyService $reportingCurrencyService
     ) {
     }
 
@@ -285,12 +288,21 @@ class TeamActivityService
         ];
     }
 
-    public function getLeaderboard(string $period, ?int $platformId, User $viewer, string $roleFilter = self::ROLE_FILTER_ALL): array
+    public function getLeaderboard(
+        string $period,
+        ?int $platformId,
+        User $viewer,
+        string $roleFilter = self::ROLE_FILTER_ALL,
+        ?string $currencyMode = null,
+        ?string $targetCurrency = null
+    ): array
     {
         $this->assertManager($viewer);
         $this->assertPlatformAccessible($viewer, $platformId);
 
         $roleFilter = $this->normalizeLeaderboardRoleFilter($roleFilter);
+        $currencyMode = $this->reportingCurrencyService->resolveMode($currencyMode, $platformId === null);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
         $agents = $this->visibleTeamMembersForViewer($viewer, $platformId, $roleFilter);
         $agentIds = $agents->pluck('id')->all();
 
@@ -299,6 +311,8 @@ class TeamActivityService
                 'period' => $this->normalizeNamedPeriod($period),
                 'platform_id' => $platformId,
                 'role_filter' => $roleFilter,
+                'currency_mode' => $currencyMode,
+                'reporting_currency' => $targetCurrency,
                 'data' => [],
             ];
         }
@@ -307,7 +321,7 @@ class TeamActivityService
 
         $actionMetrics = $this->aggregateActionMetricsForRange($start, $end, $viewer, $platformId, $agentIds);
         $sessionTotals = $this->aggregateSessionTotals($agentIds, $start, $end);
-        $revenueTotals = $this->aggregateRevenueByUser($agentIds, $start, $end, $viewer, $platformId);
+        $revenueTotals = $this->aggregateRevenueByUser($agentIds, $start, $end, $viewer, $platformId, $targetCurrency);
         $presenceFlags = $this->presenceFlagsByUser($agentIds);
 
         $rowIds = collect(array_merge(array_keys($actionMetrics), array_keys($revenueTotals)))
@@ -340,7 +354,14 @@ class TeamActivityService
                 ], $metrics, $revenue);
             })
             ->filter()
-            ->sort(function (array $left, array $right) {
+            ->sort(function (array $left, array $right) use ($currencyMode) {
+                $leftRevenue = $this->leaderboardRevenueSortValue($left, $currencyMode);
+                $rightRevenue = $this->leaderboardRevenueSortValue($right, $currencyMode);
+
+                if ($leftRevenue !== null && $rightRevenue !== null && $leftRevenue !== $rightRevenue) {
+                    return $rightRevenue <=> $leftRevenue;
+                }
+
                 return [
                     $right['total_actions'] <=> $left['total_actions'],
                     $right['subs_activated'] <=> $left['subs_activated'],
@@ -360,6 +381,8 @@ class TeamActivityService
             'period' => $this->normalizeNamedPeriod($period),
             'platform_id' => $platformId,
             'role_filter' => $roleFilter,
+            'currency_mode' => $currencyMode,
+            'reporting_currency' => $targetCurrency,
             'data' => $rows->all(),
         ];
     }
@@ -369,7 +392,8 @@ class TeamActivityService
         CarbonInterface $from,
         CarbonInterface $to,
         ?int $platformId = null,
-        ?User $viewer = null
+        ?User $viewer = null,
+        ?string $targetCurrency = null
     ): array {
         if ($viewer) {
             $this->assertTeamMemberVisibleToViewer($viewer, $agent);
@@ -385,8 +409,9 @@ class TeamActivityService
         $previousMetrics = $this->aggregateActionMetricsForRange($previousRange['start'], $previousRange['end'], $viewerForScope, $platformId, [$agent->id]);
         $currentSessions = $this->aggregateSessionTotals([$agent->id], $start, $end);
         $previousSessions = $this->aggregateSessionTotals([$agent->id], $previousRange['start'], $previousRange['end']);
-        $currentRevenue = $this->aggregateRevenueByUser([$agent->id], $start, $end, $viewerForScope, $platformId);
-        $previousRevenue = $this->aggregateRevenueByUser([$agent->id], $previousRange['start'], $previousRange['end'], $viewerForScope, $platformId);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
+        $currentRevenue = $this->aggregateRevenueByUser([$agent->id], $start, $end, $viewerForScope, $platformId, $targetCurrency);
+        $previousRevenue = $this->aggregateRevenueByUser([$agent->id], $previousRange['start'], $previousRange['end'], $viewerForScope, $platformId, $targetCurrency);
         $goalProgress = $this->getGoalProgress($agent, $platformId);
 
         $currentSummary = $this->buildUserSummary(
@@ -411,6 +436,7 @@ class TeamActivityService
             'from' => $start->toDateString(),
             'to' => Carbon::instance($to)->toDateString(),
             'platform_id' => $platformId,
+            'reporting_currency' => $targetCurrency,
             'summary' => $currentSummary,
             'previous_summary' => $previousSummary,
             'trend' => $this->buildTrendPayload($currentSummary, $previousSummary),
@@ -418,19 +444,20 @@ class TeamActivityService
         ];
     }
 
-    public function getMyStats(User $user, string $period = self::PERIOD_WEEK, ?int $platformId = null): array
+    public function getMyStats(User $user, string $period = self::PERIOD_WEEK, ?int $platformId = null, ?string $targetCurrency = null): array
     {
         $this->assertPlatformAccessible($user, $platformId);
 
         ['start' => $start, 'end' => $end] = $this->resolveNamedPeriodRange($period);
         $previousRange = $this->previousRange($start, $end);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
 
         $currentMetrics = $this->aggregateActionMetricsForRange($start, $end, $user, $platformId, [$user->id]);
         $previousMetrics = $this->aggregateActionMetricsForRange($previousRange['start'], $previousRange['end'], $user, $platformId, [$user->id]);
         $currentSessions = $this->aggregateSessionTotals([$user->id], $start, $end);
         $previousSessions = $this->aggregateSessionTotals([$user->id], $previousRange['start'], $previousRange['end']);
-        $currentRevenue = $this->aggregateRevenueByUser([$user->id], $start, $end, $user, $platformId);
-        $previousRevenue = $this->aggregateRevenueByUser([$user->id], $previousRange['start'], $previousRange['end'], $user, $platformId);
+        $currentRevenue = $this->aggregateRevenueByUser([$user->id], $start, $end, $user, $platformId, $targetCurrency);
+        $previousRevenue = $this->aggregateRevenueByUser([$user->id], $previousRange['start'], $previousRange['end'], $user, $platformId, $targetCurrency);
 
         $summary = $this->buildUserSummary(
             $currentMetrics[$user->id] ?? $this->emptyMetricRow(),
@@ -447,6 +474,7 @@ class TeamActivityService
         return [
             'period' => $this->normalizeNamedPeriod($period),
             'platform_id' => $platformId,
+            'reporting_currency' => $targetCurrency,
             'platforms' => $this->availablePlatformsForUser($user),
             'summary' => $summary,
             'previous_summary' => $previousSummary,
@@ -1003,42 +1031,66 @@ class TeamActivityService
         CarbonInterface $start,
         CarbonInterface $end,
         ?User $viewer,
-        ?int $platformId
+        ?int $platformId,
+        string $targetCurrency
     ): array {
         if (empty($userIds) || $start->gte($end)) {
             return [];
         }
 
-        $query = Deal::query()
-            ->whereIn('assigned_to', $userIds)
-            ->whereNotNull('activated_at')
-            ->where('activated_at', '>=', $start)
-            ->where('activated_at', '<', $end)
-            ->where('is_free_trial', false);
+        $driver = DB::connection()->getDriverName();
+        $dateExpression = $driver === 'sqlite'
+            ? "date(COALESCE(payments.completed_at, payments.created_at))"
+            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+        $currencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), '{$targetCurrency}')";
+
+        $query = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->whereIn('deals.assigned_to', $userIds)
+            ->where('payments.created_at', '>=', $start)
+            ->where('payments.created_at', '<', $end);
 
         if ($platformId) {
-            $query->where('platform_id', $platformId);
+            $query->where('payments.platform_id', $platformId);
         } elseif ($viewer) {
-            $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
+            $this->marketAuthorizationService->applyPlatformScope($query, $viewer, 'payments.platform_id');
         }
 
-        $rows = $query->get(['assigned_to', 'amount', 'currency']);
+        $rows = $query
+            ->select(DB::raw('deals.assigned_to as user_id'))
+            ->selectRaw("{$dateExpression} as event_date")
+            ->selectRaw("{$currencyExpression} as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->groupBy('deals.assigned_to')
+            ->groupByRaw($dateExpression)
+            ->groupByRaw($currencyExpression)
+            ->get();
         $grouped = [];
+        $eventRowsByUser = [];
 
         foreach ($rows as $row) {
-            $userKey = (int) $row->assigned_to;
+            $userKey = (int) $row->user_id;
             $currency = strtoupper((string) ($row->currency ?: ''));
             if ($currency === '') {
                 continue;
             }
 
-            $grouped[$userKey][$currency] = ($grouped[$userKey][$currency] ?? 0.0) + (float) $row->amount;
+            $amount = (float) $row->amount;
+            $grouped[$userKey][$currency] = ($grouped[$userKey][$currency] ?? 0.0) + $amount;
+            $eventRowsByUser[$userKey][] = [
+                'event_date' => (string) $row->event_date,
+                'currency' => $currency,
+                'amount' => $amount,
+            ];
         }
 
         $payloads = [];
         foreach ($grouped as $userKey => $currencyBreakdown) {
             ksort($currencyBreakdown);
-            $payloads[$userKey] = $this->buildRevenuePayload($currencyBreakdown, $platformId);
+            $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRowsByUser[$userKey] ?? [], $targetCurrency);
+            $payloads[$userKey] = $this->buildRevenuePayload($currencyBreakdown, $platformId, $normalized);
         }
 
         return $payloads;
@@ -1046,13 +1098,23 @@ class TeamActivityService
 
     private function aggregateDailyRevenueRows(CarbonInterface $start, CarbonInterface $end): array
     {
-        $rows = Deal::query()
-            ->whereNotNull('activated_at')
-            ->where('activated_at', '>=', $start)
-            ->where('activated_at', '<', $end)
-            ->whereNotNull('assigned_to')
-            ->where('is_free_trial', false)
-            ->get(['assigned_to', 'platform_id', 'amount', 'currency']);
+        $currencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), '')";
+
+        $rows = Payment::query()
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->join('deals', 'deals.id', '=', 'payments.deal_id')
+            ->whereNotNull('deals.assigned_to')
+            ->where('payments.created_at', '>=', $start)
+            ->where('payments.created_at', '<', $end)
+            ->selectRaw('deals.assigned_to as assigned_to')
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("{$currencyExpression} as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->groupBy('deals.assigned_to')
+            ->groupBy('payments.platform_id')
+            ->groupByRaw($currencyExpression)
+            ->get();
 
         $grouped = [];
 
@@ -1833,7 +1895,7 @@ class TeamActivityService
         );
     }
 
-    private function buildRevenuePayload(array $currencyBreakdown, ?int $platformId): array
+    private function buildRevenuePayload(array $currencyBreakdown, ?int $platformId, ?array $normalized = null): array
     {
         $rows = collect($currencyBreakdown)
             ->filter(fn ($amount) => round((float) $amount, 2) > 0)
@@ -1848,28 +1910,37 @@ class TeamActivityService
             ->map(fn (array $row) => $row['currency'] . ' ' . $this->formatMoney((float) $row['amount']))
             ->implode(' | ');
 
+        $normalized ??= $this->reportingCurrencyService->normalizeBreakdown($currencyBreakdown);
+        $normalizedFields = [
+            'revenue_source' => 'collected_payments',
+            'normalized_revenue_total' => $normalized['normalized_total'],
+            'normalized_revenue_currency' => $normalized['normalized_currency'],
+            'normalized_revenue_display' => $normalized['normalized_display'],
+            'revenue_normalization_meta' => $normalized['normalization_meta'],
+        ];
+
         if ($platformId !== null) {
             $single = $rows[0] ?? [
                 'currency' => null,
                 'amount' => '0.00',
             ];
 
-            return [
+            return array_merge([
                 'revenue_total' => $single['amount'],
                 'revenue_currency' => $single['currency'],
                 'revenue_by_currency' => $rows,
                 'revenue_display' => $single['currency']
                     ? ($single['currency'] . ' ' . $this->formatMoney((float) $single['amount']))
                     : '--',
-            ];
+            ], $normalizedFields);
         }
 
-        return [
+        return array_merge([
             'revenue_total' => null,
             'revenue_currency' => null,
             'revenue_by_currency' => $rows,
             'revenue_display' => $display !== '' ? $display : '--',
-        ];
+        ], $normalizedFields);
     }
 
     private function emptyRevenuePayload(?int $platformId): array
@@ -1879,7 +1950,25 @@ class TeamActivityService
             'revenue_currency' => null,
             'revenue_by_currency' => [],
             'revenue_display' => '--',
+            'revenue_source' => 'collected_payments',
+            'normalized_revenue_total' => 0.0,
+            'normalized_revenue_currency' => $this->reportingCurrencyService->resolveTargetCurrency(),
+            'normalized_revenue_display' => $this->reportingCurrencyService->normalizeBreakdown([])['normalized_display'],
+            'revenue_normalization_meta' => $this->reportingCurrencyService->normalizeBreakdown([])['normalization_meta'],
         ];
+    }
+
+    private function leaderboardRevenueSortValue(array $row, string $currencyMode): ?float
+    {
+        if ($currencyMode === ReportingCurrencyService::MODE_FLAT && $row['normalized_revenue_total'] !== null) {
+            return (float) $row['normalized_revenue_total'];
+        }
+
+        if ($row['revenue_total'] !== null) {
+            return (float) $row['revenue_total'];
+        }
+
+        return null;
     }
 
     private function metricLabel(string $metric): string

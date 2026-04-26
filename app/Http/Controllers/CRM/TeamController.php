@@ -6,13 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\AgentGoal;
 use App\Models\AgentGoalOverride;
 use App\Models\User;
+use App\Services\ReportingCurrencyService;
 use App\Services\TeamActivityService;
 use Illuminate\Http\Request;
 
 class TeamController extends Controller
 {
     public function __construct(
-        private readonly TeamActivityService $teamActivityService
+        private readonly TeamActivityService $teamActivityService,
+        private readonly ReportingCurrencyService $reportingCurrencyService
     ) {
     }
 
@@ -52,14 +54,23 @@ class TeamController extends Controller
             'period' => 'nullable|in:today,week,month',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'role_filter' => 'nullable|in:all,admin,sub_admin,sales,marketing',
+            'currency_mode' => 'nullable|in:native,flat',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode(
+            $validated['currency_mode'] ?? null,
+            !isset($validated['platform_id'])
+        );
 
         return response()->json(
             $this->teamActivityService->getLeaderboard(
                 (string) ($validated['period'] ?? TeamActivityService::PERIOD_WEEK),
                 isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
                 $request->user(),
-                (string) ($validated['role_filter'] ?? TeamActivityService::ROLE_FILTER_ALL)
+                (string) ($validated['role_filter'] ?? TeamActivityService::ROLE_FILTER_ALL),
+                $currencyMode,
+                $targetCurrency
             )
         );
     }
@@ -70,7 +81,9 @@ class TeamController extends Controller
             'from' => 'required|date',
             'to' => 'required|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
 
         return response()->json(
             $this->teamActivityService->getAgentStats(
@@ -78,7 +91,8 @@ class TeamController extends Controller
                 now()->parse((string) $validated['from']),
                 now()->parse((string) $validated['to']),
                 isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
-                $request->user()
+                $request->user(),
+                $targetCurrency
             )
         );
     }
@@ -127,13 +141,16 @@ class TeamController extends Controller
         $validated = $request->validate([
             'period' => 'nullable|in:today,week,month',
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
 
         return response()->json(
             $this->teamActivityService->getMyStats(
                 $request->user(),
                 (string) ($validated['period'] ?? TeamActivityService::PERIOD_WEEK),
-                isset($validated['platform_id']) ? (int) $validated['platform_id'] : null
+                isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
+                $targetCurrency
             )
         );
     }

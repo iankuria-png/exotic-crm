@@ -8,6 +8,7 @@ use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Lead;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
@@ -85,6 +86,24 @@ trait InteractsWithTeamActivityFixtures
             'expires_at' => now()->addMonth(),
             'assigned_to' => $agent->id,
             'is_free_trial' => false,
+        ], $overrides));
+    }
+
+    private function createTeamPayment(Platform $platform, ?Deal $deal = null, array $overrides = []): Payment
+    {
+        return Payment::factory()->create(array_merge([
+            'platform_id' => $platform->id,
+            'product_id' => $deal?->product_id,
+            'deal_id' => $deal?->id,
+            'client_id' => $deal?->client_id,
+            'amount' => $deal ? (float) $deal->amount : 5000,
+            'currency' => $deal?->currency ?: $platform->currency_code,
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => now()->subHour(),
+            'completed_at' => now()->subHour(),
+            'reconciliation_state' => 'resolved',
+            'record_classification' => Payment::RECORD_CLASSIFICATION_LIVE,
         ], $overrides));
     }
 
