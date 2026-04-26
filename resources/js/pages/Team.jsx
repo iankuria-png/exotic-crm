@@ -819,7 +819,7 @@ export default function Team() {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...(activitySearch ? { search: activitySearch } : {}),
                     ...(activityEntityType ? { entity_type: activityEntityType } : {}),
-                    include_system: activityIncludeSystem,
+                    include_system: activityIncludeSystem ? 1 : 0,
                     page: activityPage,
                     per_page: ACTIVITY_PER_PAGE,
                 },
