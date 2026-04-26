@@ -4,6 +4,7 @@ const STORAGE_KEY = 'exoticcrm.dashboard.widget_config';
 
 const DEFAULT_CONFIG = {
     country_revenue: true,
+    revenue_by_package: true,
     expiring_subs: true,
     follow_ups: true,
     profile_engagement: true,
@@ -16,6 +17,7 @@ const DEFAULT_CONFIG = {
 
 const WIDGET_LABELS = {
     country_revenue: { name: 'Top Performing Countries', description: 'Revenue by market with trend arrows' },
+    revenue_by_package: { name: 'Revenue by Package', description: 'Collected revenue split by subscription tier' },
     expiring_subs: { name: 'Expiring Subscriptions', description: 'Subscriptions due for renewal soon' },
     follow_ups: { name: 'Upcoming Follow-ups', description: 'Scheduled client callbacks due soon' },
     profile_engagement: { name: 'Profile Engagement', description: 'Top and bottom profile performers by market engagement' },

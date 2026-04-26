@@ -8,6 +8,7 @@ import QuickStatsWidget from '../components/dashboard/QuickStatsWidget';
 import RecentActivityWidget from '../components/dashboard/RecentActivityWidget';
 import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
+import RevenueByPackageWidget from '../components/dashboard/RevenueByPackageWidget';
 import SalesDashboardView from '../components/dashboard/SalesDashboardView';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import useReportingCurrency from '../hooks/useReportingCurrency';
@@ -803,6 +804,16 @@ function OperationsDashboard() {
                 </div>
 
                 <div className="space-y-4 xl:col-span-4">
+                    {widgetConfig.revenue_by_package ? (
+                        <RevenueByPackageWidget
+                            platformFilter={platformFilter}
+                            fromDate={appliedRangeFrom}
+                            toDate={appliedRangeTo}
+                            reportingCurrency={reportingCurrency}
+                            onOpenReport={() => navigate('/reports')}
+                        />
+                    ) : null}
+
                     {widgetConfig.performance_pulse ? (
                         <SectionFrame title="Performance Pulse" subtitle="Health indicators for today">
                             <div className="space-y-4">

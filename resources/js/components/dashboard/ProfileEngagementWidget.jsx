@@ -45,7 +45,7 @@ function MiniStat({ label, value, delta, deltaSuffix }) {
     return (
         <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3.5 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-[0.10em] text-slate-400">{label}</p>
-            <p className="mt-1.5 text-xl font-semibold tracking-tight text-slate-900">{value}</p>
+            <p className="mt-1.5 text-base font-semibold tracking-tight text-slate-900">{value}</p>
             {delta !== undefined ? (
                 <p className={`mt-1 text-[11px] font-medium ${deltaColor}`}>
                     {sign}{asNumber(delta).toFixed(1)}{deltaSuffix} vs prev.
