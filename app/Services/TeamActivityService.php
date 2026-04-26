@@ -354,20 +354,33 @@ class TeamActivityService
                 ], $metrics, $revenue);
             })
             ->filter()
-            ->sort(function (array $left, array $right) use ($currencyMode) {
+            ->sort(function (array $left, array $right) use ($currencyMode, $roleFilter) {
                 $leftRevenue = $this->leaderboardRevenueSortValue($left, $currencyMode);
                 $rightRevenue = $this->leaderboardRevenueSortValue($right, $currencyMode);
+
+                if ($roleFilter === MarketAuthorizationService::ROLE_SALES) {
+                    $leftPositive = $leftRevenue !== null && $leftRevenue > 0;
+                    $rightPositive = $rightRevenue !== null && $rightRevenue > 0;
+                    if ($leftPositive !== $rightPositive) {
+                        return $rightPositive ? 1 : -1;
+                    }
+                }
 
                 if ($leftRevenue !== null && $rightRevenue !== null && $leftRevenue !== $rightRevenue) {
                     return $rightRevenue <=> $leftRevenue;
                 }
 
-                return [
-                    $right['total_actions'] <=> $left['total_actions'],
-                    $right['subs_activated'] <=> $left['subs_activated'],
-                    $right['subs_renewed'] <=> $left['subs_renewed'],
-                    strcasecmp($left['name'], $right['name']),
-                ];
+                if (($cmp = $right['total_actions'] <=> $left['total_actions']) !== 0) {
+                    return $cmp;
+                }
+                if (($cmp = $right['subs_activated'] <=> $left['subs_activated']) !== 0) {
+                    return $cmp;
+                }
+                if (($cmp = $right['subs_renewed'] <=> $left['subs_renewed']) !== 0) {
+                    return $cmp;
+                }
+
+                return strcasecmp($left['name'], $right['name']);
             })
             ->values()
             ->map(function (array $row, int $index) {

@@ -280,6 +280,11 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
     Route::get('/settings/reporting-currency', [SettingsController::class, 'reportingCurrency'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/settings/reporting-currency', [SettingsController::class, 'updateReportingCurrency'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/reporting-currency/test', [SettingsController::class, 'testReportingCurrencyProvider'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/reporting-fx-rates', [SettingsController::class, 'listReportingFxRates'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/reporting-fx-rates', [SettingsController::class, 'createReportingFxRate'])->middleware('role:admin,sub_admin');
+    Route::patch('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'updateReportingFxRate'])->middleware('role:admin,sub_admin');
+    Route::delete('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'deleteReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::get('/settings/sales-dashboard-widgets', [SettingsController::class, 'getSalesDashboardWidgets']);
     Route::patch('/settings/sales-dashboard-widgets', [SettingsController::class, 'updateSalesDashboardWidgets'])->middleware('role:admin,sub_admin');
     Route::get('/settings/billing/overview', [SettingsController::class, 'billingOverview']);

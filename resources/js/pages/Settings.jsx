@@ -6829,6 +6829,77 @@ function DashboardSettingsPanel() {
     );
 }
 
+function ReportingFxRateCard({ rate, onSave, onDelete }) {
+    const [editing, setEditing] = useState(false);
+    const [rateValue, setRateValue] = useState(String(rate.rate ?? ''));
+    const [notes, setNotes] = useState(rate.notes ?? '');
+    const [confirmDelete, setConfirmDelete] = useState(false);
+
+    const handleSave = () => {
+        onSave({ rate: rateValue, notes });
+        setEditing(false);
+    };
+
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-900">
+                        {rate.source_currency} → {rate.target_currency}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                        {rate.rate_date} · Rate: {rate.rate}
+                        {rate.notes ? ` · ${rate.notes}` : ''}
+                    </p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => { setEditing((v) => !v); setConfirmDelete(false); }}
+                        className="crm-btn-secondary px-2.5 py-1 text-xs"
+                    >
+                        {editing ? 'Cancel' : 'Edit'}
+                    </button>
+                    {confirmDelete ? (
+                        <>
+                            <span className="text-xs text-rose-700">Remove?</span>
+                            <button type="button" onClick={onDelete} className="crm-btn-secondary px-2.5 py-1 text-xs text-rose-700 hover:border-rose-200 hover:bg-rose-50">Yes</button>
+                            <button type="button" onClick={() => setConfirmDelete(false)} className="crm-btn-secondary px-2.5 py-1 text-xs">No</button>
+                        </>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => { setConfirmDelete(true); setEditing(false); }}
+                            className="crm-btn-secondary px-2.5 py-1 text-xs text-rose-700 hover:border-rose-200 hover:bg-rose-50"
+                        >
+                            Remove
+                        </button>
+                    )}
+                </div>
+            </div>
+            {editing ? (
+                <div className="mt-3 flex flex-wrap items-end gap-2">
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-500">Rate</span>
+                        <input
+                            type="number"
+                            step="any"
+                            className="crm-input w-32"
+                            value={rateValue}
+                            onChange={(e) => setRateValue(e.target.value)}
+                        />
+                    </label>
+                    <label className="flex-1 space-y-1">
+                        <span className="text-xs font-medium text-slate-500">Notes</span>
+                        <input type="text" className="crm-input w-full" value={notes} onChange={(e) => setNotes(e.target.value)} />
+                    </label>
+                    <button type="button" onClick={handleSave} className="crm-btn-primary px-3 py-2 text-xs">Save</button>
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 function ReportingCurrencySettingsPanel() {
     const toast = useToast();
     const queryClient = useQueryClient();
@@ -6838,7 +6909,11 @@ function ReportingCurrencySettingsPanel() {
         provider: 'currencyapi',
         allow_user_override: true,
         stale_days: 7,
+        api_key: '',
     });
+    const [testResult, setTestResult] = useState(null);
+    const [newRate, setNewRate] = useState({ source_currency: '', target_currency: '', rate_date: '', rate: '', notes: '' });
+    const [showAddRate, setShowAddRate] = useState(false);
 
     const settingsQuery = useQuery({
         queryKey: ['reporting-currency-settings'],
@@ -6846,18 +6921,25 @@ function ReportingCurrencySettingsPanel() {
     });
     const settings = settingsQuery.data?.settings || {};
 
+    const fxRatesQuery = useQuery({
+        queryKey: ['reporting-fx-rates'],
+        queryFn: () => api.get('/crm/settings/reporting-fx-rates').then((response) => response.data),
+    });
+    const fxRates = fxRatesQuery.data?.data || [];
+
     useEffect(() => {
         if (!settingsQuery.data?.settings) {
             return;
         }
 
-        setDraft({
+        setDraft((current) => ({
+            ...current,
             enabled: Boolean(settings.enabled),
             target_currency: String(settings.target_currency || 'USD').toUpperCase(),
             provider: settings.provider || 'currencyapi',
             allow_user_override: settings.allow_user_override !== false,
             stale_days: Number(settings.stale_days ?? 7),
-        });
+        }));
     }, [settingsQuery.data, settings]);
 
     const saveMutation = useMutation({
@@ -6867,19 +6949,61 @@ function ReportingCurrencySettingsPanel() {
             provider: draft.provider.trim() || 'currencyapi',
             allow_user_override: draft.allow_user_override,
             stale_days: Number(draft.stale_days || 0),
+            ...(draft.api_key.trim() ? { api_key: draft.api_key.trim() } : {}),
         }).then((response) => response.data?.settings || {}),
-        onSuccess: (settings) => {
-            queryClient.setQueryData(['reporting-currency-settings'], { settings });
+        onSuccess: (updatedSettings) => {
+            queryClient.setQueryData(['reporting-currency-settings'], { settings: updatedSettings });
             queryClient.invalidateQueries({ queryKey: ['reporting-currency-settings'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             queryClient.invalidateQueries({ queryKey: ['reports-summary'] });
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             queryClient.invalidateQueries({ queryKey: ['team'] });
+            setDraft((current) => ({ ...current, api_key: '' }));
             toast.success('Reporting currency settings saved.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Reporting currency settings could not be saved.');
         },
+    });
+
+    const testMutation = useMutation({
+        mutationFn: () => api.get('/crm/settings/reporting-currency/test').then((response) => response.data),
+        onSuccess: (result) => {
+            setTestResult(result);
+            queryClient.invalidateQueries({ queryKey: ['reporting-currency-settings'] });
+        },
+        onError: (error) => {
+            setTestResult({ ok: false, error: error?.response?.data?.error || 'Connection test failed.' });
+        },
+    });
+
+    const createFxRateMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/settings/reporting-fx-rates', payload).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['reporting-fx-rates'] });
+            setNewRate({ source_currency: '', target_currency: '', rate_date: '', rate: '', notes: '' });
+            setShowAddRate(false);
+            toast.success('Manual rate saved.');
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'Could not save rate.'),
+    });
+
+    const updateFxRateMutation = useMutation({
+        mutationFn: ({ id, ...payload }) => api.patch(`/crm/settings/reporting-fx-rates/${id}`, payload).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['reporting-fx-rates'] });
+            toast.success('Rate updated.');
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'Could not update rate.'),
+    });
+
+    const deleteFxRateMutation = useMutation({
+        mutationFn: (id) => api.delete(`/crm/settings/reporting-fx-rates/${id}`),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['reporting-fx-rates'] });
+            toast.success('Rate removed.');
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'Could not remove rate.'),
     });
 
     const health = settings.health || {};
@@ -6945,6 +7069,113 @@ function ReportingCurrencySettingsPanel() {
                         Page override
                     </label>
                 </div>
+            </div>
+
+            <div className="border-t border-slate-100 px-5 py-4">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">API Key</p>
+                <input
+                    type="password"
+                    className="crm-input w-full max-w-md"
+                    placeholder="API key (leave blank to keep current)"
+                    value={draft.api_key}
+                    onChange={(event) => setDraft((current) => ({ ...current, api_key: event.target.value }))}
+                    autoComplete="new-password"
+                />
+                <p className={`mt-1.5 text-xs ${settings.api_key_configured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    {settings.api_key_configured
+                        ? 'API key stored. Enter a new value only when rotating credentials.'
+                        : 'No API key configured — rates will not auto-refresh from CurrencyAPI.'}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={() => testMutation.mutate()}
+                        disabled={testMutation.isPending}
+                        className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {testMutation.isPending ? 'Testing…' : 'Test connection'}
+                    </button>
+                    {testResult ? (
+                        <span className={`text-xs font-medium ${testResult.ok ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            {testResult.ok
+                                ? `Connected — ${testResult.quotas_used ?? 0}/${testResult.quotas_total ?? '?'} requests used`
+                                : testResult.error}
+                        </span>
+                    ) : null}
+                </div>
+            </div>
+
+            <div className="border-t border-slate-100 px-5 py-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Manual Override Rates</p>
+                    <button
+                        type="button"
+                        onClick={() => setShowAddRate((v) => !v)}
+                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                    >
+                        {showAddRate ? 'Cancel' : '+ Add rate'}
+                    </button>
+                </div>
+
+                {showAddRate ? (
+                    <div className="mb-3 rounded-xl border border-teal-200 bg-teal-50/50 p-4">
+                        <div className="flex flex-wrap items-end gap-2">
+                            <label className="space-y-1">
+                                <span className="text-xs font-medium text-slate-500">From</span>
+                                <input type="text" className="crm-input w-20" placeholder="EUR" maxLength={8}
+                                    value={newRate.source_currency}
+                                    onChange={(e) => setNewRate((r) => ({ ...r, source_currency: e.target.value.toUpperCase() }))} />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-xs font-medium text-slate-500">To</span>
+                                <input type="text" className="crm-input w-20" placeholder="USD" maxLength={8}
+                                    value={newRate.target_currency}
+                                    onChange={(e) => setNewRate((r) => ({ ...r, target_currency: e.target.value.toUpperCase() }))} />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-xs font-medium text-slate-500">Date</span>
+                                <input type="date" className="crm-input"
+                                    value={newRate.rate_date}
+                                    onChange={(e) => setNewRate((r) => ({ ...r, rate_date: e.target.value }))} />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-xs font-medium text-slate-500">Rate</span>
+                                <input type="number" step="any" className="crm-input w-28"
+                                    value={newRate.rate}
+                                    onChange={(e) => setNewRate((r) => ({ ...r, rate: e.target.value }))} />
+                            </label>
+                            <label className="flex-1 space-y-1">
+                                <span className="text-xs font-medium text-slate-500">Notes</span>
+                                <input type="text" className="crm-input w-full"
+                                    value={newRate.notes}
+                                    onChange={(e) => setNewRate((r) => ({ ...r, notes: e.target.value }))} />
+                            </label>
+                            <button
+                                type="button"
+                                onClick={() => createFxRateMutation.mutate(newRate)}
+                                disabled={createFxRateMutation.isPending || !newRate.source_currency || !newRate.target_currency || !newRate.rate_date || !newRate.rate}
+                                className="crm-btn-primary px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {createFxRateMutation.isPending ? 'Saving…' : 'Save rate'}
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
+
+                {fxRates.length === 0 && !showAddRate ? (
+                    <p className="text-xs text-slate-400">No manual override rates. These take precedence over live and cached provider rates for the exact date and currency pair.</p>
+                ) : (
+                    <div className="space-y-2">
+                        {fxRates.map((rate) => (
+                            <ReportingFxRateCard
+                                key={rate.id}
+                                rate={rate}
+                                onSave={(payload) => updateFxRateMutation.mutate({ id: rate.id, ...payload })}
+                                onDelete={() => deleteFxRateMutation.mutate(rate.id)}
+                            />
+                        ))}
+                    </div>
+                )}
             </div>
 
             <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">

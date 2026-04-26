@@ -24,6 +24,7 @@ const PERIOD_OPTIONS = [
     { value: 'today', label: 'Today' },
     { value: 'week', label: 'This Week' },
     { value: 'month', label: 'This Month' },
+    { value: 'custom', label: 'Custom Range' },
 ];
 const GOAL_PERIOD_OPTIONS = [
     { value: 'weekly', label: 'Weekly' },
@@ -34,6 +35,17 @@ const GOAL_ROLE_SCOPE_OPTIONS = [
     { value: 'marketing', label: 'Marketing only' },
     { value: 'all', label: 'Everyone' },
 ];
+const ACTIVITY_ENTITY_TYPE_OPTIONS = [
+    { value: '', label: 'All types' },
+    { value: 'client', label: 'Client' },
+    { value: 'lead', label: 'Lead' },
+    { value: 'payment', label: 'Payment' },
+    { value: 'deal', label: 'Deal' },
+    { value: 'user', label: 'User' },
+    { value: 'platform', label: 'Platform' },
+];
+const ACTIVITY_PER_PAGE = 25;
+
 const LEADERBOARD_ROLE_FILTER_OPTIONS = [
     { value: 'all', label: 'All roles' },
     { value: 'admin', label: 'Admin' },
@@ -112,6 +124,14 @@ function getPeriodDateRange(period) {
     };
 }
 
+function getEffectiveDateRange(period, customFrom, customTo) {
+    if (period === 'custom' && customFrom && customTo) {
+        return { from: customFrom, to: customTo };
+    }
+
+    return getPeriodDateRange(period);
+}
+
 function periodLabel(period) {
     return PERIOD_OPTIONS.find((option) => option.value === period)?.label || 'This Week';
 }
@@ -130,6 +150,9 @@ function comparisonLabel(period) {
     }
     if (period === 'month') {
         return 'last month';
+    }
+    if (period === 'custom') {
+        return 'the previous period';
     }
 
     return 'last week';
@@ -318,6 +341,35 @@ function getApiErrorMessage(error, fallback) {
     return error?.response?.data?.message || fallback;
 }
 
+function formatDayHeader(isoString) {
+    if (!isoString) {
+        return '';
+    }
+
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return date.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+function groupActivityByDay(items) {
+    const groups = [];
+    let currentDay = null;
+
+    for (const item of items) {
+        const day = item.created_at ? item.created_at.slice(0, 10) : '';
+        if (day !== currentDay) {
+            currentDay = day;
+            groups.push({ type: 'header', day, label: formatDayHeader(item.created_at) });
+        }
+        groups.push({ type: 'item', item });
+    }
+
+    return groups;
+}
+
 function toCsvCell(value) {
     const stringValue = String(value ?? '');
     if (/[",\n]/.test(stringValue)) {
@@ -440,34 +492,50 @@ function GoalProgressBar({ current, target }) {
     );
 }
 
-function ActivityList({ items, emptyTitle, emptyMessage }) {
+function ActivityList({ items, emptyTitle, emptyMessage, grouped = false }) {
     if (!items?.length) {
         return <TeamEmptyState title={emptyTitle} message={emptyMessage} />;
     }
 
+    const renderItem = (item) => (
+        <article key={item.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-900">{item.label}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                        {item.entity_type ? `${item.entity_type} #${item.entity_id}` : 'Operational activity'}
+                        {item.reason ? ` • ${item.reason}` : ''}
+                    </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>{formatDateTime(item.created_at)}</span>
+                    {item.entity_url ? (
+                        <Link className="font-semibold text-teal-700 hover:text-teal-800" to={item.entity_url}>
+                            Open record
+                        </Link>
+                    ) : null}
+                </div>
+            </div>
+        </article>
+    );
+
+    if (!grouped) {
+        return <div className="space-y-3">{items.map(renderItem)}</div>;
+    }
+
+    const groups = groupActivityByDay(items);
+
     return (
-        <div className="space-y-3">
-            {items.map((item) => (
-                <article key={item.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-900">{item.label}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                                {item.entity_type ? `${item.entity_type} #${item.entity_id}` : 'Operational activity'}
-                                {item.reason ? ` • ${item.reason}` : ''}
-                            </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                            <span>{formatDateTime(item.created_at)}</span>
-                            {item.entity_url ? (
-                                <Link className="font-semibold text-teal-700 hover:text-teal-800" to={item.entity_url}>
-                                    Open record
-                                </Link>
-                            ) : null}
-                        </div>
-                    </div>
-                </article>
-            ))}
+        <div className="space-y-1">
+            {groups.map((entry, index) =>
+                entry.type === 'header' ? (
+                    <p key={`header-${entry.day}-${index}`} className="pt-3 pb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400 first:pt-0">
+                        {entry.label}
+                    </p>
+                ) : (
+                    renderItem(entry.item)
+                ),
+            )}
         </div>
     );
 }
@@ -523,6 +591,8 @@ export default function Team() {
 
         return normalizePeriod(window.localStorage.getItem(TEAM_PERIOD_STORAGE_KEY));
     });
+    const [customFrom, setCustomFrom] = useState(() => getPeriodDateRange('week').from);
+    const [customTo, setCustomTo] = useState(() => getPeriodDateRange('week').to);
     const [platformFilter, setPlatformFilter] = useState('');
     const [activeTab, setActiveTab] = useState(() => (isManager ? 'presence' : 'my-stats'));
     const [leaderboardRoleFilter, setLeaderboardRoleFilter] = useState(DEFAULT_LEADERBOARD_ROLE_FILTER);
@@ -536,6 +606,12 @@ export default function Team() {
     const [selectedAgent, setSelectedAgent] = useState(null);
     const [goalToDelete, setGoalToDelete] = useState(null);
     const [goalOverrideToDelete, setGoalOverrideToDelete] = useState(null);
+    const [activitySearch, setActivitySearch] = useState('');
+    const [activityEntityType, setActivityEntityType] = useState('');
+    const [activityIncludeSystem, setActivityIncludeSystem] = useState(false);
+    const [activityPage, setActivityPage] = useState(1);
+    const [activityItems, setActivityItems] = useState([]);
+    const [activityLastPage, setActivityLastPage] = useState(1);
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     useEffect(() => {
@@ -568,15 +644,19 @@ export default function Team() {
     }, [activeTab, isManager, selectedAgent]);
 
     const myStatsQuery = useQuery({
-        queryKey: ['team', 'me', period, platformFilter || 'all', reportingCurrency.targetCurrency],
-        queryFn: () =>
-            api.get('/crm/team/me', {
+        queryKey: ['team', 'me', period, period === 'custom' ? customFrom : null, period === 'custom' ? customTo : null, platformFilter || 'all', reportingCurrency.targetCurrency],
+        queryFn: () => {
+            const dateRange = getEffectiveDateRange(period, customFrom, customTo);
+            return api.get('/crm/team/me', {
                 params: {
-                    period,
+                    ...(period !== 'custom' ? { period } : {}),
+                    from: dateRange.from,
+                    to: dateRange.to,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     reporting_currency: reportingCurrency.targetCurrency,
                 },
-            }).then((response) => response.data),
+            }).then((response) => response.data);
+        },
         placeholderData: keepPreviousData,
         refetchOnWindowFocus: false,
     });
@@ -617,16 +697,20 @@ export default function Team() {
 
     const leaderboardQuery = useQuery({
         enabled: isManager && activeTab === 'leaderboard',
-        queryKey: ['team', 'leaderboard', period, platformFilter || 'all', leaderboardRoleFilter, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
-        queryFn: () =>
-            api.get('/crm/team/leaderboard', {
+        queryKey: ['team', 'leaderboard', period, period === 'custom' ? customFrom : null, period === 'custom' ? customTo : null, platformFilter || 'all', leaderboardRoleFilter, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryFn: () => {
+            const dateRange = getEffectiveDateRange(period, customFrom, customTo);
+            return api.get('/crm/team/leaderboard', {
                 params: {
-                    period,
+                    ...(period !== 'custom' ? { period } : {}),
+                    from: dateRange.from,
+                    to: dateRange.to,
                     role_filter: leaderboardRoleFilter,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...reportingCurrency.queryParams,
                 },
-            }).then((response) => response.data),
+            }).then((response) => response.data);
+        },
         placeholderData: keepPreviousData,
         refetchInterval: isManager && activeTab === 'leaderboard' && period === 'today' ? 30_000 : false,
         refetchOnWindowFocus: false,
@@ -703,7 +787,10 @@ export default function Team() {
         setGoalOverrideAssigneeId(String(assignableAgents[0].user_id));
     }, [assignableAgents, goalOverrideAssigneeId]);
 
-    const agentDateRange = useMemo(() => getPeriodDateRange(period), [period]);
+    const agentDateRange = useMemo(
+        () => getEffectiveDateRange(period, customFrom, customTo),
+        [period, customFrom, customTo],
+    );
 
     const agentStatsQuery = useQuery({
         enabled: isManager && activeTab === 'agent-detail' && Boolean(selectedAgent?.user_id),
@@ -723,19 +810,47 @@ export default function Team() {
 
     const agentActivityQuery = useQuery({
         enabled: isManager && activeTab === 'agent-detail' && Boolean(selectedAgent?.user_id),
-        queryKey: ['team', 'agent-activity', selectedAgent?.user_id, period, agentDateRange.from, agentDateRange.to, platformFilter || 'all'],
+        queryKey: ['team', 'agent-activity', selectedAgent?.user_id, agentDateRange.from, agentDateRange.to, platformFilter || 'all', activitySearch, activityEntityType, activityIncludeSystem, activityPage],
         queryFn: () =>
             api.get(`/crm/team/${selectedAgent.user_id}/activity`, {
                 params: {
                     from: agentDateRange.from,
                     to: agentDateRange.to,
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                    ...(activitySearch ? { search: activitySearch } : {}),
+                    ...(activityEntityType ? { entity_type: activityEntityType } : {}),
+                    include_system: activityIncludeSystem,
+                    page: activityPage,
+                    per_page: ACTIVITY_PER_PAGE,
                 },
             }).then((response) => response.data),
         placeholderData: keepPreviousData,
         refetchInterval: activeTab === 'agent-detail' && period === 'today' ? 30_000 : false,
         refetchOnWindowFocus: false,
     });
+
+    useEffect(() => {
+        setActivityPage(1);
+        setActivityItems([]);
+        setActivityLastPage(1);
+    }, [selectedAgent?.user_id, agentDateRange.from, agentDateRange.to, platformFilter, activitySearch, activityEntityType, activityIncludeSystem]);
+
+    useEffect(() => {
+        const incoming = agentActivityQuery.data;
+        if (!incoming) {
+            return;
+        }
+
+        const newItems = incoming.data || [];
+        const meta = incoming.meta || {};
+        if (activityPage === 1) {
+            setActivityItems(newItems);
+        } else {
+            setActivityItems((prev) => [...prev, ...newItems]);
+        }
+        setActivityLastPage(meta.last_page || 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [agentActivityQuery.data]);
 
     const createGoalMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/team/goals', payload).then((response) => response.data),
@@ -822,7 +937,6 @@ export default function Team() {
     const agentSummary = agentStatsQuery.data?.summary || {};
     const agentTrend = agentStatsQuery.data?.trend || {};
     const agentGoals = agentStatsQuery.data?.goals || [];
-    const agentActivity = agentActivityQuery.data?.data || [];
     const managerGoals = useMemo(() => [...defaultGoals, ...individualGoals], [defaultGoals, individualGoals]);
 
     const topLevelManagerMetrics = useMemo(() => [
@@ -1160,6 +1274,27 @@ export default function Team() {
                 options={PERIOD_OPTIONS}
                 className="min-w-[11rem]"
             />
+            {period === 'custom' ? (
+                <div className="flex items-center gap-2">
+                    <input
+                        type="date"
+                        className="crm-input"
+                        value={customFrom}
+                        max={customTo}
+                        onChange={(e) => setCustomFrom(e.target.value)}
+                        aria-label="From date"
+                    />
+                    <span className="text-sm text-slate-400">to</span>
+                    <input
+                        type="date"
+                        className="crm-input"
+                        value={customTo}
+                        min={customFrom}
+                        onChange={(e) => setCustomTo(e.target.value)}
+                        aria-label="To date"
+                    />
+                </div>
+            ) : null}
             {isManager ? (
                 <FilterSelect
                     label="Market"
@@ -1928,17 +2063,54 @@ export default function Team() {
                         title="Recent activity"
                         subtitle={`Recent timeline for the selected agent in ${periodLabel(period).toLowerCase()}.`}
                     >
+                        <div className="mb-4 flex flex-wrap items-center gap-2">
+                            <input
+                                type="text"
+                                className="crm-input min-w-[12rem] flex-1"
+                                placeholder="Search activity…"
+                                value={activitySearch}
+                                onChange={(e) => setActivitySearch(e.target.value)}
+                            />
+                            <FilterSelect
+                                label="Type"
+                                value={activityEntityType}
+                                onChange={(e) => setActivityEntityType(e.target.value)}
+                                options={ACTIVITY_ENTITY_TYPE_OPTIONS}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setActivityIncludeSystem((v) => !v)}
+                                className={`crm-btn-secondary px-3 py-2 text-xs ${activityIncludeSystem ? 'border-teal-300 bg-teal-50 text-teal-800' : ''}`}
+                            >
+                                {activityIncludeSystem ? 'Hiding system' : 'Show system'}
+                            </button>
+                        </div>
                         {agentActivityQuery.isError ? (
                             <TeamErrorState
                                 message={getApiErrorMessage(agentActivityQuery.error, 'Recent activity could not be loaded.')}
                                 onRetry={() => agentActivityQuery.refetch()}
                             />
                         ) : (
-                            <ActivityList
-                                items={agentActivity}
-                                emptyTitle="No activity yet"
-                                emptyMessage={`No tracked activity has been recorded for this agent in ${periodLabel(period).toLowerCase()}.`}
-                            />
+                            <>
+                                <ActivityList
+                                    items={activityItems}
+                                    emptyTitle="No activity yet"
+                                    emptyMessage={`No tracked activity for this agent in the selected period.`}
+                                    grouped
+                                />
+                                {activityPage < activityLastPage ? (
+                                    <div className="mt-4 text-center">
+                                        <button
+                                            type="button"
+                                            onClick={() => setActivityPage((p) => p + 1)}
+                                            disabled={agentActivityQuery.isFetching}
+                                            className="crm-btn-secondary px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                            {agentActivityQuery.isFetching ? 'Loading…' : 'Load more'}
+                                        </button>
+                                    </div>
+                                ) : null}
+                            </>
                         )}
                     </SectionFrame>
                 </>

@@ -7,7 +7,9 @@ use App\Models\ReportingFxRate;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class ReportingCurrencyService
 {
@@ -29,6 +31,8 @@ class ReportingCurrencyService
         );
         $provider = trim((string) ($stored['provider'] ?? config('services.reporting_fx.provider', 'currencyapi')));
 
+        $apiKeyConfigured = !empty($stored['api_key_encrypted']) || !empty(config('services.reporting_fx.api_key'));
+
         return [
             'enabled' => (bool) ($stored['enabled'] ?? config('services.reporting_fx.enabled', false)),
             'target_currency' => $targetCurrency,
@@ -38,9 +42,10 @@ class ReportingCurrencyService
             'rate_policy' => (string) ($stored['rate_policy'] ?? 'historical_locked'),
             'fallback_behavior' => (string) ($stored['fallback_behavior'] ?? 'partial_with_native'),
             'last_checked_at' => $stored['last_checked_at'] ?? null,
+            'api_key_configured' => $apiKeyConfigured,
             'health' => $stored['health'] ?? [
-                'status' => config('services.reporting_fx.api_key') ? 'configured' : 'missing_api_key',
-                'message' => config('services.reporting_fx.api_key')
+                'status' => $apiKeyConfigured ? 'configured' : 'missing_api_key',
+                'message' => $apiKeyConfigured
                     ? 'FX provider credentials are configured.'
                     : 'FX provider API key is not configured; cached rates can still be used.',
             ],
@@ -50,7 +55,13 @@ class ReportingCurrencyService
     public function updateSettings(array $input, ?int $userId = null): array
     {
         $current = $this->settings();
-        $next = array_merge($current, [
+
+        $stored = IntegrationSetting::query()
+            ->where('key', self::SETTINGS_KEY)
+            ->value('value');
+        $stored = is_array($stored) ? $stored : [];
+
+        $next = array_merge($stored, [
             'enabled' => array_key_exists('enabled', $input) ? (bool) $input['enabled'] : $current['enabled'],
             'target_currency' => $this->normalizeCurrency($input['target_currency'] ?? $current['target_currency'], self::DEFAULT_TARGET_CURRENCY),
             'provider' => trim((string) ($input['provider'] ?? $current['provider'])) ?: 'currencyapi',
@@ -60,6 +71,12 @@ class ReportingCurrencyService
             'fallback_behavior' => (string) ($input['fallback_behavior'] ?? $current['fallback_behavior']),
         ]);
 
+        if (array_key_exists('api_key', $input) && trim((string) $input['api_key']) !== '') {
+            $next['api_key_encrypted'] = Crypt::encryptString(trim((string) $input['api_key']));
+        } else {
+            $next['api_key_encrypted'] = $stored['api_key_encrypted'] ?? '';
+        }
+
         IntegrationSetting::query()->updateOrCreate(
             ['key' => self::SETTINGS_KEY],
             [
@@ -68,7 +85,7 @@ class ReportingCurrencyService
             ]
         );
 
-        return $next;
+        return $this->settings();
     }
 
     public function resolveMode(?string $requestedMode, bool $preferFlat = false): string
@@ -264,13 +281,87 @@ class ReportingCurrencyService
         ];
     }
 
+    public function resolvedApiKey(): string
+    {
+        $stored = IntegrationSetting::query()
+            ->where('key', self::SETTINGS_KEY)
+            ->value('value');
+        $stored = is_array($stored) ? $stored : [];
+        $encrypted = (string) ($stored['api_key_encrypted'] ?? '');
+
+        if ($encrypted !== '') {
+            try {
+                return Crypt::decryptString($encrypted);
+            } catch (\Throwable) {
+            }
+        }
+
+        return (string) config('services.reporting_fx.api_key', '');
+    }
+
+    public function testProvider(): array
+    {
+        $apiKey = $this->resolvedApiKey();
+
+        if ($apiKey === '') {
+            return [
+                'ok' => false,
+                'error' => 'No API key configured. Enter your CurrencyAPI key in settings.',
+            ];
+        }
+
+        $baseUrl = rtrim((string) config('services.reporting_fx.base_url', 'https://api.currencyapi.com/v3'), '/');
+
+        try {
+            $response = Http::timeout(8)
+                ->withHeaders(['apikey' => $apiKey])
+                ->get("{$baseUrl}/status");
+
+            if (!$response->successful()) {
+                return [
+                    'ok' => false,
+                    'error' => "CurrencyAPI responded with HTTP {$response->status()}.",
+                ];
+            }
+
+            $body = $response->json();
+            $month = $body['quotas']['month'] ?? [];
+
+            return [
+                'ok' => true,
+                'plan' => $body['account_id'] ?? 'unknown',
+                'quotas_used' => (int) ($month['used'] ?? 0),
+                'quotas_total' => (int) ($month['total'] ?? 0),
+                'quotas_remaining' => (int) ($month['remaining'] ?? 0),
+                'checked_at' => now()->toIso8601String(),
+            ];
+        } catch (\Throwable $e) {
+            return [
+                'ok' => false,
+                'error' => 'Connection failed: ' . $e->getMessage(),
+            ];
+        }
+    }
+
     private function resolveRate(string $sourceCurrency, string $targetCurrency, string $date, array $settings): ?ReportingFxRate
     {
         $provider = (string) ($settings['provider'] ?? 'currencyapi');
         $staleDays = max(0, (int) ($settings['stale_days'] ?? 7));
         $fromDate = Carbon::parse($date)->subDays($staleDays)->toDateString();
 
-        return ReportingFxRate::query()
+        // Manual overrides take precedence: exact date match for the (source, target) pair.
+        $manual = ReportingFxRate::query()
+            ->where('provider', 'manual')
+            ->where('source_currency', $sourceCurrency)
+            ->where('target_currency', $targetCurrency)
+            ->whereDate('rate_date', $date)
+            ->first();
+
+        if ($manual) {
+            return $manual;
+        }
+
+        $cached = ReportingFxRate::query()
             ->where('provider', $provider)
             ->where('source_currency', $sourceCurrency)
             ->where('target_currency', $targetCurrency)
@@ -278,6 +369,71 @@ class ReportingCurrencyService
             ->whereDate('rate_date', '>=', $fromDate)
             ->orderByDesc('rate_date')
             ->first();
+
+        if ($cached) {
+            return $cached;
+        }
+
+        // Cache miss: attempt a live fetch from CurrencyAPI if a key is available.
+        if ($provider === 'currencyapi') {
+            return $this->fetchAndCacheLiveRate($sourceCurrency, $targetCurrency, $date);
+        }
+
+        return null;
+    }
+
+    private function fetchAndCacheLiveRate(string $sourceCurrency, string $targetCurrency, string $date): ?ReportingFxRate
+    {
+        $apiKey = $this->resolvedApiKey();
+
+        if ($apiKey === '') {
+            return null;
+        }
+
+        $baseUrl = rtrim((string) config('services.reporting_fx.base_url', 'https://api.currencyapi.com/v3'), '/');
+        $today = now()->toDateString();
+        $endpoint = $date === $today ? "{$baseUrl}/latest" : "{$baseUrl}/historical";
+
+        try {
+            $params = [
+                'base_currency' => $sourceCurrency,
+                'currencies' => $targetCurrency,
+            ];
+
+            if ($date !== $today) {
+                $params['date'] = $date;
+            }
+
+            $response = Http::timeout(5)
+                ->withHeaders(['apikey' => $apiKey])
+                ->get($endpoint, $params);
+
+            if (!$response->successful()) {
+                return null;
+            }
+
+            $rateValue = (float) ($response->json("data.{$targetCurrency}.value") ?? 0.0);
+
+            if ($rateValue <= 0.0) {
+                return null;
+            }
+
+            return ReportingFxRate::query()->updateOrCreate(
+                [
+                    'provider' => 'currencyapi',
+                    'source_currency' => $sourceCurrency,
+                    'target_currency' => $targetCurrency,
+                    'rate_date' => $date,
+                ],
+                [
+                    'rate' => $rateValue,
+                    'fetched_at' => now(),
+                    'metadata' => ['source' => 'live_fetch', 'fetched_at' => now()->toIso8601String()],
+                ]
+            );
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**

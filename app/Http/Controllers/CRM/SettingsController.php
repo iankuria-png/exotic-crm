@@ -28,6 +28,7 @@ use App\Models\BillingRoutingRule;
 use App\Models\BillingWalletRule;
 use App\Models\BillingSubscriptionRule;
 use App\Models\BillingManualPaymentMethod;
+use App\Models\ReportingFxRate;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingMarketProviderBinding;
 use App\Services\AuditService;
@@ -255,6 +256,7 @@ class SettingsController extends Controller
             'stale_days' => 'sometimes|integer|min:0|max:31',
             'rate_policy' => ['sometimes', 'string', Rule::in(['historical_locked'])],
             'fallback_behavior' => ['sometimes', 'string', Rule::in(['partial_with_native', 'native_only'])],
+            'api_key' => 'sometimes|nullable|string|max:200',
         ]);
 
         $settings = $this->reportingCurrencyService->updateSettings($validated, $request->user()?->id);
@@ -262,6 +264,127 @@ class SettingsController extends Controller
         return response()->json([
             'settings' => $settings,
         ]);
+    }
+
+    public function testReportingCurrencyProvider(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can test FX provider connectivity.'
+        );
+
+        $result = $this->reportingCurrencyService->testProvider();
+
+        return response()->json($result, $result['ok'] ? 200 : 422);
+    }
+
+    public function listReportingFxRates(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can manage manual FX rates.'
+        );
+
+        $rates = ReportingFxRate::query()
+            ->where('provider', 'manual')
+            ->orderByDesc('rate_date')
+            ->orderBy('source_currency')
+            ->get()
+            ->map(fn (ReportingFxRate $r) => $this->formatFxRate($r));
+
+        return response()->json(['data' => $rates]);
+    }
+
+    public function createReportingFxRate(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can manage manual FX rates.'
+        );
+
+        $validated = $request->validate([
+            'source_currency' => 'required|string|min:3|max:8',
+            'target_currency' => 'required|string|min:3|max:8',
+            'rate_date' => 'required|date',
+            'rate' => 'required|numeric|min:0.0000000001',
+            'notes' => 'nullable|string|max:255',
+        ]);
+
+        $rate = ReportingFxRate::query()->updateOrCreate(
+            [
+                'provider' => 'manual',
+                'source_currency' => strtoupper(trim($validated['source_currency'])),
+                'target_currency' => strtoupper(trim($validated['target_currency'])),
+                'rate_date' => $validated['rate_date'],
+            ],
+            [
+                'rate' => (float) $validated['rate'],
+                'fetched_at' => now(),
+                'metadata' => array_filter(['notes' => $validated['notes'] ?? null]),
+            ]
+        );
+
+        return response()->json(['rate' => $this->formatFxRate($rate)], 201);
+    }
+
+    public function updateReportingFxRate(Request $request, ReportingFxRate $reportingFxRate)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can manage manual FX rates.'
+        );
+
+        if ($reportingFxRate->provider !== 'manual') {
+            return response()->json(['message' => 'Only manual rates can be edited.'], 422);
+        }
+
+        $validated = $request->validate([
+            'rate' => 'sometimes|numeric|min:0.0000000001',
+            'notes' => 'nullable|string|max:255',
+        ]);
+
+        if (isset($validated['rate'])) {
+            $reportingFxRate->rate = (float) $validated['rate'];
+        }
+        if (array_key_exists('notes', $validated)) {
+            $meta = (array) ($reportingFxRate->metadata ?? []);
+            $meta['notes'] = $validated['notes'];
+            $reportingFxRate->metadata = array_filter($meta);
+        }
+        $reportingFxRate->fetched_at = now();
+        $reportingFxRate->save();
+
+        return response()->json(['rate' => $this->formatFxRate($reportingFxRate)]);
+    }
+
+    public function deleteReportingFxRate(Request $request, ReportingFxRate $reportingFxRate)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can manage manual FX rates.'
+        );
+
+        if ($reportingFxRate->provider !== 'manual') {
+            return response()->json(['message' => 'Only manual rates can be deleted.'], 422);
+        }
+
+        $reportingFxRate->delete();
+
+        return response()->noContent();
+    }
+
+    private function formatFxRate(ReportingFxRate $rate): array
+    {
+        return [
+            'id' => $rate->id,
+            'provider' => $rate->provider,
+            'source_currency' => $rate->source_currency,
+            'target_currency' => $rate->target_currency,
+            'rate_date' => $rate->rate_date?->toDateString(),
+            'rate' => (float) $rate->rate,
+            'notes' => $rate->metadata['notes'] ?? null,
+            'updated_at' => $rate->updated_at?->toIso8601String(),
+        ];
     }
 
     public function getSalesDashboardWidgets(Request $request)

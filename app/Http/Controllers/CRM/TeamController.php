@@ -52,6 +52,8 @@ class TeamController extends Controller
     {
         $validated = $request->validate([
             'period' => 'nullable|in:today,week,month',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'role_filter' => 'nullable|in:all,admin,sub_admin,sales,marketing',
             'currency_mode' => 'nullable|in:native,flat',
@@ -70,7 +72,9 @@ class TeamController extends Controller
                 $request->user(),
                 (string) ($validated['role_filter'] ?? TeamActivityService::ROLE_FILTER_ALL),
                 $currencyMode,
-                $targetCurrency
+                $targetCurrency,
+                isset($validated['from']) ? now()->parse((string) $validated['from']) : null,
+                isset($validated['to']) ? now()->parse((string) $validated['to']) : null,
             )
         );
     }
@@ -104,6 +108,11 @@ class TeamController extends Controller
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
+            'entity_type' => 'nullable|in:client,lead,payment,deal,user,platform',
+            'search' => 'nullable|string|max:120',
+            'include_system' => 'nullable|boolean',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:5|max:100',
         ]);
 
         $hasDate = isset($validated['date']);
@@ -131,7 +140,14 @@ class TeamController extends Controller
                 $from,
                 $to,
                 isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
-                $request->user()
+                $request->user(),
+                [
+                    'entity_type' => isset($validated['entity_type']) ? (string) $validated['entity_type'] : null,
+                    'search' => isset($validated['search']) ? (string) $validated['search'] : null,
+                    'include_system' => (bool) ($validated['include_system'] ?? false),
+                    'page' => (int) ($validated['page'] ?? 1),
+                    'per_page' => (int) ($validated['per_page'] ?? 25),
+                ]
             )
         );
     }
@@ -140,6 +156,8 @@ class TeamController extends Controller
     {
         $validated = $request->validate([
             'period' => 'nullable|in:today,week,month',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
@@ -150,7 +168,9 @@ class TeamController extends Controller
                 $request->user(),
                 (string) ($validated['period'] ?? TeamActivityService::PERIOD_WEEK),
                 isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
-                $targetCurrency
+                $targetCurrency,
+                isset($validated['from']) ? now()->parse((string) $validated['from']) : null,
+                isset($validated['to']) ? now()->parse((string) $validated['to']) : null,
             )
         );
     }
