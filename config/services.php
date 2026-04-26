@@ -96,4 +96,14 @@ return [
         'auto_match_min_margin' => (int) env('PUSH_CAMPAIGNS_AUTO_MATCH_MIN_MARGIN', 15),
     ],
 
+    'reporting_fx' => [
+        'enabled' => filter_var(env('REPORTING_FX_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'default_currency' => env('REPORTING_CURRENCY', 'USD'),
+        'provider' => env('REPORTING_FX_PROVIDER', 'currencyapi'),
+        'api_key' => env('CURRENCYAPI_API_KEY'),
+        'base_url' => env('CURRENCYAPI_BASE_URL', 'https://api.currencyapi.com/v3'),
+        'allow_user_override' => filter_var(env('REPORTING_FX_ALLOW_USER_OVERRIDE', true), FILTER_VALIDATE_BOOL),
+        'stale_days' => (int) env('REPORTING_FX_STALE_DAYS', 7),
+    ],
+
 ];

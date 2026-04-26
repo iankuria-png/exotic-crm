@@ -38,6 +38,7 @@ use App\Services\SbLeadImportRunService;
 use App\Services\SupportBoardLeadImportService;
 use App\Services\NotificationService;
 use App\Services\PushNotification\PushProviderService;
+use App\Services\ReportingCurrencyService;
 use App\Services\ScraperSourceService;
 use App\Services\SupportBoardSyncRunService;
 use App\Services\SupportBoardService;
@@ -96,6 +97,7 @@ class SettingsController extends Controller
         private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService,
+        private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly BillingDiagnosticsAssemblerContract $billingDiagnosticsAssembler,
         private readonly BillingDiagnosticsPresenter $billingDiagnosticsPresenter,
         private readonly BillingProviderRegistryContract $billingProviderRegistry,
@@ -211,6 +213,54 @@ class SettingsController extends Controller
                 'dedupe_modes' => ScraperSourceService::DEDUPE_MODES,
             ],
             'last_checked_at' => now()->toDateTimeString(),
+        ]);
+    }
+
+    public function reportingCurrency(Request $request)
+    {
+        $settings = $this->reportingCurrencyService->settings();
+
+        return response()->json([
+            'settings' => $settings,
+            'mode_options' => [
+                ['value' => ReportingCurrencyService::MODE_FLAT, 'label' => 'Converted USD'],
+                ['value' => ReportingCurrencyService::MODE_NATIVE, 'label' => 'Native currencies'],
+            ],
+            'recommended_defaults' => [
+                'all_market_management' => ReportingCurrencyService::MODE_FLAT,
+                'single_market_operations' => ReportingCurrencyService::MODE_NATIVE,
+                'payments_rows' => ReportingCurrencyService::MODE_NATIVE,
+                'exports' => 'both',
+            ],
+            'guardrails' => [
+                'Reporting FX is read-only and does not mutate payment, subscription, wallet, or matching records.',
+                'Native transaction currency remains authoritative for payment operations and reconciliation.',
+                'Missing rates mark converted totals as partial instead of silently presenting bad totals.',
+            ],
+        ]);
+    }
+
+    public function updateReportingCurrency(Request $request)
+    {
+        $this->marketAuthorizationService->ensureManager(
+            $request->user(),
+            'Only admin or sub-admin users can update reporting currency settings.'
+        );
+
+        $validated = $request->validate([
+            'enabled' => 'sometimes|boolean',
+            'target_currency' => 'sometimes|string|min:3|max:8',
+            'provider' => ['sometimes', 'string', 'max:40', Rule::in(['currencyapi', 'manual'])],
+            'allow_user_override' => 'sometimes|boolean',
+            'stale_days' => 'sometimes|integer|min:0|max:31',
+            'rate_policy' => ['sometimes', 'string', Rule::in(['historical_locked'])],
+            'fallback_behavior' => ['sometimes', 'string', Rule::in(['partial_with_native', 'native_only'])],
+        ]);
+
+        $settings = $this->reportingCurrencyService->updateSettings($validated, $request->user()?->id);
+
+        return response()->json([
+            'settings' => $settings,
         ]);
     }
 
