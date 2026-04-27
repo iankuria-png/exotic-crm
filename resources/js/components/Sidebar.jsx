@@ -39,7 +39,7 @@ const pushCampaignNavItem = {
 };
 
 export default function Sidebar({ onClose }) {
-    const { user, logout } = useAuth();
+    const { user, logout, impersonation } = useAuth();
     const role = user?.role || '';
 
     const filteredNavGroups = role === 'marketing'
@@ -147,6 +147,11 @@ export default function Sidebar({ onClose }) {
                         <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-medium text-slate-100">{user?.name || 'User'}</p>
                             <p className="truncate text-xs text-slate-400">{user?.email || 'No email'}</p>
+                            {impersonation ? (
+                                <p className="mt-1 truncate text-[11px] font-medium uppercase tracking-[0.12em] text-amber-300">
+                                    Acting from {impersonation.impersonator?.email || impersonation.impersonator?.name}
+                                </p>
+                            ) : null}
                         </div>
                     </div>
 
@@ -157,7 +162,7 @@ export default function Sidebar({ onClose }) {
                         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                         </svg>
-                        Sign out
+                        {impersonation ? 'Return to admin' : 'Sign out'}
                     </button>
                 </div>
             </div>

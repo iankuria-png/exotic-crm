@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { clearAuthSnapshot } from '../utils/authStorage';
+import { readImpersonationSnapshot } from '../utils/authStorage';
 
 const api = axios.create({
     baseURL: '/api',
@@ -16,6 +17,12 @@ api.interceptors.request.use((config) => {
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
+
+    const impersonation = readImpersonationSnapshot();
+    if (impersonation?.user?.id) {
+        config.headers['X-CRM-Impersonate-User'] = String(impersonation.user.id);
+    }
+
     return config;
 });
 

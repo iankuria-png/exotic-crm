@@ -63,7 +63,7 @@ Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
 });
 
 // CRM Protected Routes (Sanctum token required)
-Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
+Route::middleware(['auth:sanctum', 'crm.impersonation'])->prefix('crm')->group(function () {
     // Auth
     Route::get('/me', [CrmAuthController::class, 'me']);
     Route::post('/logout', [CrmAuthController::class, 'logout']);
@@ -361,6 +361,7 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('/settings/roles', [SettingsController::class, 'roles'])->middleware('role:admin');
     Route::post('/settings/roles/users', [SettingsController::class, 'storeUser'])->middleware('role:admin');
     Route::patch('/settings/roles/{user}', [SettingsController::class, 'updateRole'])->middleware('role:admin');
+    Route::post('/settings/roles/{user}/impersonation-link', [SettingsController::class, 'impersonationLink'])->middleware('role:admin');
 });
 
 // ==================== ALL ROUTES ARE PUBLIC (No authentication required) ====================

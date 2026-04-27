@@ -49,10 +49,12 @@ use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use App\Support\MarketTimezone;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -4064,6 +4066,78 @@ class SettingsController extends Controller
         ]);
     }
 
+    public function impersonationLink(Request $request, User $user)
+    {
+        $actor = $request->user();
+
+        if (($actor->role ?? null) !== 'admin') {
+            return response()->json([
+                'message' => 'Only admins can open CRM users in impersonation mode.',
+            ], 403);
+        }
+
+        if ((int) $actor->id === (int) $user->id) {
+            return response()->json([
+                'message' => 'Use your current session instead of impersonating your own account.',
+            ], 422);
+        }
+
+        if (($user->status ?? 'active') !== 'active') {
+            return response()->json([
+                'message' => 'Inactive users cannot be opened in impersonation mode.',
+            ], 422);
+        }
+
+        if (($user->role ?? null) === 'admin') {
+            return response()->json([
+                'message' => 'Admin accounts cannot be opened in impersonation mode.',
+            ], 422);
+        }
+
+        $bridge = Str::random(48);
+        Cache::put('crm_impersonation_bridge:' . $bridge, [
+            'user' => [
+                'id' => (int) $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $user->role,
+                'status' => $user->status ?? 'active',
+            ],
+            'impersonator' => [
+                'id' => (int) $actor->id,
+                'name' => $actor->name,
+                'email' => $actor->email,
+                'role' => $actor->role,
+            ],
+            'redirect_to' => '/',
+            'started_at' => now()->toIso8601String(),
+        ], now()->addMinutes(5));
+
+        $this->auditService->fromRequest(
+            $request,
+            $this->resolveAuditPlatformId($this->decodeMarketIds($user->assigned_market_ids)),
+            CrmAuditAction::USER_IMPERSONATION_START,
+            'user',
+            (int) $user->id,
+            null,
+            [
+                'impersonation_link_generated' => true,
+                'target_role' => $user->role,
+                'target_status' => $user->status ?? 'active',
+                'bridge_expires_at' => now()->addMinutes(5)->toIso8601String(),
+            ],
+            'Admin opened CRM impersonation session from settings'
+        );
+
+        return response()->json([
+            'url' => URL::temporarySignedRoute(
+                'crm.impersonation.consume',
+                now()->addMinutes(5),
+                ['bridge' => $bridge]
+            ),
+        ]);
+    }
+
     private function serializeScraperSource(ScraperSource $source): array
     {
         return [
@@ -5232,6 +5306,13 @@ class SettingsController extends Controller
                 'severity' => 'medium',
                 'summary' => 'User role or market scope was updated.',
                 'suggested_action' => 'Confirm least-privilege policy is still enforced.',
+            ],
+            CrmAuditAction::USER_IMPERSONATION_START => [
+                'title' => 'Impersonation session opened',
+                'category' => 'access',
+                'severity' => 'medium',
+                'summary' => 'An admin opened a CRM session as another user.',
+                'suggested_action' => 'Confirm the session was intentional and return to the admin account after verification.',
             ],
             CrmAuditAction::USER_CREATE => [
                 'title' => 'User account created',

@@ -13,6 +13,7 @@ final class CrmAuditAction
     public const LEAD_SCRAPE_INTAKE = 'lead_scrape_intake';
     public const USER_CREATE = 'user_create';
     public const ROLE_UPDATE = 'role_update';
+    public const USER_IMPERSONATION_START = 'user_impersonation_start';
     public const INTEGRATION_PLATFORM_CREATE = 'integration_platform_create';
     public const INTEGRATION_PLATFORM_UPDATE = 'integration_platform_update';
     public const INTEGRATION_CONNECTION_TEST = 'integration_connection_test';

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate } from 'react-router-dom';
 import api from '../services/api';
@@ -6110,6 +6110,8 @@ function paymentFailureSmsStateLabel(state) {
 function RolesWorkspace() {
     const queryClient = useQueryClient();
     const toast = useToast();
+    const launchWindowRef = useRef(null);
+    const { user: currentUser } = useAuth();
     const [selectedUser, setSelectedUser] = useState(null);
     const [editor, setEditor] = useState(null);
     const [createOpen, setCreateOpen] = useState(false);
@@ -6164,6 +6166,29 @@ function RolesWorkspace() {
         },
     });
 
+    const impersonationLinkMutation = useMutation({
+        mutationFn: (userId) => api.post(`/crm/settings/roles/${userId}/impersonation-link`).then((response) => response.data),
+        onSuccess: (result) => {
+            const popup = launchWindowRef.current;
+            if (popup && !popup.closed) {
+                popup.location.href = result.url;
+                popup.focus();
+            } else {
+                window.open(result.url, '_blank', 'noopener,noreferrer');
+            }
+            launchWindowRef.current = null;
+            toast.success('CRM user session opened in a new tab.');
+        },
+        onError: (error) => {
+            const popup = launchWindowRef.current;
+            if (popup && !popup.closed) {
+                popup.close();
+            }
+            launchWindowRef.current = null;
+            toast.error(error?.response?.data?.message || 'Unable to open CRM user session.');
+        },
+    });
+
     const testAlertSmsMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/settings/integrations/sms-provider/test', payload).then((response) => response.data),
     });
@@ -6185,6 +6210,21 @@ function RolesWorkspace() {
             phone: user.phone || '',
             notification_prefs: user.notification_prefs ?? null,
         });
+    };
+
+    const canImpersonateUser = (user) => (
+        user?.status === 'active'
+        && user?.role !== 'admin'
+        && Number(user?.id) !== Number(currentUser?.id)
+    );
+
+    const handleImpersonationLaunch = (user) => {
+        launchWindowRef.current = window.open('', '_blank');
+        if (launchWindowRef.current && !launchWindowRef.current.closed) {
+            launchWindowRef.current.document.write('<p style="font-family: sans-serif; padding: 16px;">Opening CRM user session...</p>');
+        }
+
+        impersonationLinkMutation.mutate(user.id);
     };
 
     const toggleMarket = (marketId) => {
@@ -6400,13 +6440,25 @@ function RolesWorkspace() {
                                                 </span>
                                             </td>
                                             <td className="px-4 py-2.5">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => openEditor(user)}
-                                                    className="crm-btn-secondary px-3 py-1.5 text-xs"
-                                                >
-                                                    Edit
-                                                </button>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openEditor(user)}
+                                                        className="crm-btn-secondary px-3 py-1.5 text-xs"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                    {canImpersonateUser(user) ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleImpersonationLaunch(user)}
+                                                            disabled={impersonationLinkMutation.isPending}
+                                                            className="crm-btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            {impersonationLinkMutation.isPending ? 'Opening...' : 'Log in as user'}
+                                                        </button>
+                                                    ) : null}
+                                                </div>
                                             </td>
                                         </tr>
                                     );

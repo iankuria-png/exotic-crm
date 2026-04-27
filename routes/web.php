@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\API\PaymentController;
 use App\Http\Controllers\API\BillingController;
+use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 
 
 /*
@@ -49,9 +50,11 @@ use App\Http\Controllers\GoogleAuthController;
 Route::get('/auth/google/redirect', [GoogleAuthController::class, 'redirectToGoogle'])->name('google.redirect');
 Route::get('/auth/google/callback', [GoogleAuthController::class, 'handleGoogleCallback'])->name('google.callback');
 Route::get('/google-auth-success', [GoogleAuthController::class, 'googleAuthSuccess']);
+Route::get('/crm/impersonation/{bridge}', [CrmAuthController::class, 'consumeImpersonationBridge'])
+    ->middleware('signed')
+    ->name('crm.impersonation.consume');
 
 // CRM SPA — serve React for all frontend routes after explicit web endpoints.
 Route::get('/{any?}', function () {
     return view('crm');
 })->where('any', '^(?!api|response|cancel|success|failed|error|auth|debug|billing).*$');
-

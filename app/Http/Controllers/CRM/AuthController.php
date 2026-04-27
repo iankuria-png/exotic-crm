@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Services\TeamActivityService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use App\Models\User;
@@ -84,5 +85,18 @@ class AuthController extends Controller
         $request->session()->regenerateToken();
 
         return response()->json(['message' => 'Logged out']);
+    }
+
+    public function consumeImpersonationBridge(Request $request, string $bridge)
+    {
+        $payload = Cache::pull('crm_impersonation_bridge:' . $bridge);
+
+        if (!is_array($payload)) {
+            abort(410, 'This CRM impersonation link has expired.');
+        }
+
+        return response()->view('crm-impersonation-bridge', [
+            'payload' => $payload,
+        ]);
     }
 }

@@ -2,12 +2,15 @@ const AUTH_TOKEN_KEY = 'crm_token';
 const AUTH_USER_KEY = 'crm_user';
 const SESSION_TOKEN_KEY = 'crm_session_token';
 const AUTH_CHANGE_EVENT = 'crm-auth-changed';
+const IMPERSONATION_KEY = 'crm_impersonation';
 
 let lastToken = null;
 let lastUserValue = null;
+let lastImpersonationValue = null;
 let lastSnapshot = {
     token: null,
     user: null,
+    impersonation: null,
 };
 
 function canUseBrowserStorage() {
@@ -21,6 +24,34 @@ function parseStoredUser(value) {
 
     try {
         return JSON.parse(value);
+    } catch {
+        return null;
+    }
+}
+
+function parseStoredImpersonation(value) {
+    if (!value) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(value);
+        if (!parsed || typeof parsed !== 'object') {
+            return null;
+        }
+
+        const user = parsed.user && typeof parsed.user === 'object' ? parsed.user : null;
+        const impersonator = parsed.impersonator && typeof parsed.impersonator === 'object' ? parsed.impersonator : null;
+        if (!user?.id || !impersonator?.id) {
+            return null;
+        }
+
+        return {
+            user,
+            impersonator,
+            started_at: parsed.started_at || null,
+            redirect_to: parsed.redirect_to || '/',
+        };
     } catch {
         return null;
     }
@@ -45,16 +76,22 @@ export function readAuthSnapshot() {
 
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     const userValue = localStorage.getItem(AUTH_USER_KEY);
+    const impersonationValue = sessionStorage.getItem(IMPERSONATION_KEY);
 
-    if (token === lastToken && userValue === lastUserValue) {
+    if (token === lastToken && userValue === lastUserValue && impersonationValue === lastImpersonationValue) {
         return lastSnapshot;
     }
 
     lastToken = token;
     lastUserValue = userValue;
+    lastImpersonationValue = impersonationValue;
+    const impersonation = parseStoredImpersonation(impersonationValue);
+    const storedUser = parseStoredUser(userValue);
+    const hasToken = Boolean(token);
     lastSnapshot = {
         token,
-        user: parseStoredUser(userValue),
+        user: hasToken ? (impersonation?.user || storedUser) : null,
+        impersonation: hasToken ? impersonation : null,
     };
 
     return lastSnapshot;
@@ -81,6 +118,7 @@ export function storeAuthSnapshot(token, user) {
         return;
     }
 
+    sessionStorage.removeItem(IMPERSONATION_KEY);
     localStorage.setItem(AUTH_TOKEN_KEY, token);
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
     emitAuthChange();
@@ -88,6 +126,16 @@ export function storeAuthSnapshot(token, user) {
 
 export function updateStoredUser(user) {
     if (!canUseBrowserStorage()) {
+        return;
+    }
+
+    const impersonation = readImpersonationSnapshot();
+    if (impersonation) {
+        sessionStorage.setItem(IMPERSONATION_KEY, JSON.stringify({
+            ...impersonation,
+            user,
+        }));
+        emitAuthChange();
         return;
     }
 
@@ -102,6 +150,28 @@ export function clearAuthSnapshot({ clearSessionToken = false } = {}) {
 
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
+
+    if (clearSessionToken) {
+        sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    }
+
+    emitAuthChange();
+}
+
+export function readImpersonationSnapshot() {
+    if (!canUseBrowserStorage()) {
+        return null;
+    }
+
+    return parseStoredImpersonation(sessionStorage.getItem(IMPERSONATION_KEY));
+}
+
+export function clearImpersonationSnapshot({ clearSessionToken = false } = {}) {
+    if (!canUseBrowserStorage()) {
+        return;
+    }
+
+    sessionStorage.removeItem(IMPERSONATION_KEY);
 
     if (clearSessionToken) {
         sessionStorage.removeItem(SESSION_TOKEN_KEY);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import api from '../services/api';
 import {
     clearAuthSnapshot,
+    clearImpersonationSnapshot,
     ensureSessionToken,
     readAuthSnapshot,
     readSessionToken,
@@ -19,6 +20,7 @@ export function useAuth() {
     );
     const user = auth.user;
     const token = auth.token;
+    const impersonation = auth.impersonation || null;
     const [isLoading, setIsLoading] = useState(() => Boolean(token && !user));
 
     useEffect(() => {
@@ -70,6 +72,12 @@ export function useAuth() {
     }, []);
 
     const logout = useCallback(async () => {
+        if (impersonation) {
+            clearImpersonationSnapshot({ clearSessionToken: true });
+            setIsLoading(false);
+            return;
+        }
+
         const sessionToken = readSessionToken();
 
         try {
@@ -78,7 +86,7 @@ export function useAuth() {
             clearAuthSnapshot({ clearSessionToken: true });
             setIsLoading(false);
         }
-    }, []);
+    }, [impersonation]);
 
-    return { user, isLoading, login, logout };
+    return { user, isLoading, login, logout, impersonation };
 }
