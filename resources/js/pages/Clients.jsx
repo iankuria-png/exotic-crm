@@ -1747,8 +1747,8 @@ export default function Clients() {
 
             {showCreateModal ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setShowCreateModal(false)}>
-                    <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
-                        <header className="crm-panel-header">
+                    <div className="flex w-full max-w-2xl flex-col rounded-lg border border-slate-200 bg-white shadow-xl max-h-[90vh]" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header shrink-0">
                             <div>
                                 <h3 className="crm-panel-title">Add Client</h3>
                                 <p className="crm-panel-subtitle">
@@ -1759,6 +1759,7 @@ export default function Clients() {
                             </div>
                         </header>
 
+                        <div className="min-h-0 flex-1 overflow-y-auto">
                         <div className="grid gap-3 p-4 md:grid-cols-2">
                             <div className="md:col-span-2">
                                 <label htmlFor="client-market" className="mb-1 block text-sm font-medium text-slate-700">Market</label>
@@ -1934,8 +1935,9 @@ export default function Clients() {
                                 </p>
                             ) : null}
                         </div>
+                        </div>
 
-                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
+                        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 p-4">
                             <button type="button" className="crm-btn-secondary" onClick={() => setShowCreateModal(false)}>
                                 Cancel
                             </button>

@@ -3740,13 +3740,14 @@ export default function ClientDetail() {
 
             {activationDialog.open ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={closeActivationDialog}>
-                    <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
-                        <header className="crm-panel-header">
+                    <div className="flex w-full max-w-lg flex-col rounded-lg border border-slate-200 bg-white shadow-xl max-h-[90vh]" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header shrink-0">
                             <div>
                                 <h3 className="crm-panel-title">Activate Subscription</h3>
                                 <p className="crm-panel-subtitle">{client.name} • {activationDialog.dealLabel}</p>
                             </div>
                         </header>
+                        <div className="min-h-0 flex-1 overflow-y-auto">
                         <div className="space-y-4 p-4">
                             <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
                                 <p className="text-sm font-semibold text-slate-800">Payment Method</p>
@@ -3992,7 +3993,8 @@ export default function ClientDetail() {
                                 />
                             </div>
                         </div>
-                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
+                        </div>
+                        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
                             <button
                                 type="button"
                                 onClick={closeActivationDialog}
