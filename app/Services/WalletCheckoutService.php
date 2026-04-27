@@ -19,7 +19,8 @@ class WalletCheckoutService
     public function __construct(
         private readonly WalletService $walletService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
-        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder
+        private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
+        private readonly SelfServiceIncentiveService $selfServiceIncentiveService
     ) {
     }
 
@@ -82,6 +83,13 @@ class WalletCheckoutService
         }
 
         $pricing = $this->resolveSubscriptionPricing($product, $duration);
+        $incentivePercent = $this->selfServiceIncentiveService->resolveForPlatform((int) $product->platform_id, 'wallet');
+        $incentive = $this->selfServiceIncentiveService->applyToAmount((float) $pricing['amount'], $incentivePercent);
+        if ($incentive) {
+            $pricing['original_amount'] = $incentive['original_amount'];
+            $pricing['amount'] = number_format($incentive['amount'], 2, '.', '');
+            $pricing['discount_percent'] = $incentive['percent'];
+        }
         $referenceNumber = $this->walletReference('WSUB', [
             $client->platform_id,
             $client->id,
@@ -147,6 +155,11 @@ class WalletCheckoutService
                     'idempotency_key' => $idempotencyKey,
                     'origin' => $options['origin'] ?? 'wallet_subscribe',
                     'topup_payment_id' => isset($options['topup_payment_id']) ? (int) $options['topup_payment_id'] : null,
+                    'self_service_incentive' => !empty($pricing['discount_percent']) ? [
+                        'original_amount' => (float) $pricing['original_amount'],
+                        'percent' => (float) $pricing['discount_percent'],
+                        'source' => 'self_service_incentive',
+                    ] : null,
                 ],
             ]);
 

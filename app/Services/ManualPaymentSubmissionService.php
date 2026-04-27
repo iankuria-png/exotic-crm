@@ -165,6 +165,11 @@ class ManualPaymentSubmissionService
                             'transaction_reference' => $normalizedReference,
                             'activated_on_submit' => $activatedOnSubmit,
                         ],
+                        'self_service_incentive' => !empty($pricing['discount_percent']) ? [
+                            'original_amount' => (float) $pricing['original_amount'],
+                            'percent' => (float) $pricing['discount_percent'],
+                            'source' => 'self_service_incentive',
+                        ] : null,
                     ],
                 ]);
 

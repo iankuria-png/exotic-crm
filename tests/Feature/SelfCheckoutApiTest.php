@@ -87,7 +87,17 @@ class SelfCheckoutApiTest extends TestCase
             'activation_method_json' => ['methods' => ['manual', 'payment_link']],
             'renewal_method_json' => ['methods' => ['wallet_balance', 'payment_link'], 'wallet_auto_renew' => true],
             'free_trial_json' => ['enabled' => false],
-            'discount_json' => ['enabled' => true],
+            'discount_json' => [
+                'enabled' => true,
+                'self_service_incentive' => [
+                    'enabled' => true,
+                    'percent' => 10,
+                    'label' => 'Weekend special',
+                    'starts_at' => now()->subMinute()->toIso8601String(),
+                    'expires_at' => now()->addDay()->toIso8601String(),
+                    'sources' => ['wallet', 'self_checkout', 'manual_submission'],
+                ],
+            ],
             'expiry_policy_json' => ['grace_period_days' => 7],
         ]);
 
@@ -124,6 +134,9 @@ class SelfCheckoutApiTest extends TestCase
             ->assertJsonPath('provider', 'paystack')
             ->assertJsonPath('provider_config_key', 'primary')
             ->assertJsonPath('checkout_url', 'https://checkout.paystack.test/redirect')
+            ->assertJsonPath('pricing.original_amount', 1400)
+            ->assertJsonPath('pricing.discount_percent', 10)
+            ->assertJsonPath('pricing.discount_source', 'self_service_incentive')
             ->assertJsonPath('billing_method_policy.version', '2026-04-08')
             ->assertJsonPath('billing_method_policy.activation.methods', ['manual', 'payment_link'])
             ->assertJsonPath('billing_method_policy.renewal.methods', ['wallet_balance', 'payment_link']);
@@ -136,15 +149,17 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('primary', data_get($payment->payment_data, 'provider_config_key'));
         $this->assertSame('paystack', data_get($payment->payment_data, 'provider'));
         $this->assertSame('https://checkout.paystack.test/redirect', data_get($payment->payment_data, 'checkout_url'));
-        $this->assertSame('1400.00', data_get($payment->payment_data, 'quoted_pricing.amount'));
+        $this->assertSame('1260.00', data_get($payment->payment_data, 'quoted_pricing.amount'));
         $this->assertSame('GHS', data_get($payment->payment_data, 'quoted_pricing.currency'));
-        $this->assertSame('15750.00', data_get($payment->payment_data, 'charge_pricing.amount'));
+        $this->assertSame('14175.00', data_get($payment->payment_data, 'charge_pricing.amount'));
         $this->assertSame('KES', data_get($payment->payment_data, 'charge_pricing.currency'));
+        $this->assertSame(1400.0, (float) data_get($payment->payment_data, 'self_service_incentive.original_amount'));
+        $this->assertSame(10.0, (float) data_get($payment->payment_data, 'self_service_incentive.percent'));
         $this->assertTrue((bool) data_get($payment->payment_data, 'fx_override.enabled'));
         $this->assertTrue((bool) data_get($payment->payment_data, 'fx_override.applied'));
         $this->assertSame(11.25, data_get($payment->payment_data, 'fx_override.rate'));
         $this->assertSame('KES', data_get($payment->payment_data, 'fx_override.target_currency'));
-        $this->assertSame(15750.0, (float) $payment->amount);
+        $this->assertSame(14175.0, (float) $payment->amount);
         $this->assertSame('KES', $payment->currency);
         $this->assertNotNull($decision);
         $this->assertSame('self_checkout', $decision->billing_surface);
@@ -173,7 +188,7 @@ class SelfCheckoutApiTest extends TestCase
         Http::assertSent(function ($request) use ($payment) {
             return $request->url() === 'https://api.paystack.co/transaction/initialize'
                 && $request['currency'] === 'KES'
-                && $request['amount'] === 1575000
+                && $request['amount'] === 1417500
                 && $request['reference'] === $payment->reference_number;
         });
     }

@@ -24,6 +24,7 @@ use App\Services\ManualPaymentSubmissionService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentAttemptService;
+use App\Services\SelfServiceIncentiveService;
 use App\Services\WalletCheckoutService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -44,7 +45,8 @@ class PaymentController extends Controller
         private readonly ManualPaymentSubmissionService $manualPaymentSubmissionService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
-        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy
+        private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
+        private readonly SelfServiceIncentiveService $selfServiceIncentiveService
     ) {
     }
 
@@ -2359,6 +2361,14 @@ class PaymentController extends Controller
                 $providerKey = 'pawapay';
             }
 
+            $incentivePercent = $this->selfServiceIncentiveService->resolveForPlatform((int) $platform->id, 'self_checkout');
+            $incentive = $this->selfServiceIncentiveService->applyToAmount((float) $pricing['amount'], $incentivePercent);
+            if ($incentive) {
+                $pricing['original_amount'] = $incentive['original_amount'];
+                $pricing['amount'] = number_format($incentive['amount'], 2, '.', '');
+                $pricing['discount_percent'] = $incentive['percent'];
+            }
+
             $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider);
             $attemptProvider = $providerKey !== '' ? $providerKey : $providerConfigKey;
 
@@ -2447,6 +2457,11 @@ class PaymentController extends Controller
                         'currency' => $chargePricing['currency'],
                     ],
                     'fx_override' => $chargePricing['fx_override'],
+                    'self_service_incentive' => !empty($pricing['discount_percent']) ? [
+                        'original_amount' => (float) $pricing['original_amount'],
+                        'percent' => (float) $pricing['discount_percent'],
+                        'source' => 'self_service_incentive',
+                    ] : null,
                     'customer' => [
                         'first_name' => trim((string) $validated['first_name']),
                         'last_name' => trim((string) $validated['last_name']),
@@ -2560,6 +2575,9 @@ class PaymentController extends Controller
                     'charge_amount' => $chargePricing['amount'],
                     'charge_currency' => $chargePricing['currency'],
                     'fx_override' => $chargePricing['fx_override'],
+                    'original_amount' => $pricing['original_amount'] ?? null,
+                    'discount_percent' => $pricing['discount_percent'] ?? null,
+                    'discount_source' => !empty($pricing['discount_percent']) ? 'self_service_incentive' : null,
                 ],
                 'action' => $action,
             ], 201);
@@ -2677,6 +2695,13 @@ class PaymentController extends Controller
             }
 
             $pricing = $this->walletCheckoutService->resolveSubscriptionPricing($product, (string) $validated['duration']);
+            $incentivePercent = $this->selfServiceIncentiveService->resolveForPlatform((int) $platform->id, 'manual_submission');
+            $incentive = $this->selfServiceIncentiveService->applyToAmount((float) $pricing['amount'], $incentivePercent);
+            if ($incentive) {
+                $pricing['original_amount'] = $incentive['original_amount'];
+                $pricing['amount'] = number_format($incentive['amount'], 2, '.', '');
+                $pricing['discount_percent'] = $incentive['percent'];
+            }
             $normalizedPhone = $this->normalizeSubscriptionCheckoutPhone(
                 (string) $validated['phone'],
                 $platform

@@ -377,6 +377,61 @@ class WalletApiPhaseFiveTest extends TestCase
         $this->assertSame(321, data_get($routingDecision->snapshot_json, 'wallet_policy.topup_payment_id'));
     }
 
+    public function test_wallet_subscribe_applies_active_self_service_incentive_and_stamps_the_deal(): void
+    {
+        [
+            'platform' => $platform,
+            'product' => $product,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 5000,
+        ]);
+
+        BillingSubscriptionRule::query()->create([
+            'market_id' => $platform->id,
+            'activation_method_json' => ['methods' => ['manual', 'payment_link']],
+            'renewal_method_json' => ['methods' => ['wallet_balance', 'payment_link'], 'wallet_auto_renew' => true],
+            'free_trial_json' => ['enabled' => false],
+            'discount_json' => [
+                'enabled' => true,
+                'self_service_incentive' => [
+                    'enabled' => true,
+                    'percent' => 10,
+                    'label' => 'Wallet special',
+                    'starts_at' => now()->subMinute()->toIso8601String(),
+                    'expires_at' => now()->addDay()->toIso8601String(),
+                    'sources' => ['wallet', 'self_checkout', 'manual_submission'],
+                ],
+            ],
+            'expiry_policy_json' => ['grace_period_days' => 7],
+        ]);
+
+        $this->fakeProvisioningApis($platform, $client, [
+            'premium' => true,
+            'premium_expire' => now()->addDays(30)->timestamp,
+        ]);
+
+        $checkout = app(WalletCheckoutService::class)->payForSubscriptionFromWallet(
+            $client,
+            $product,
+            '1_month',
+            'wallet-incentive-' . Str::uuid()
+        );
+
+        $payment = $checkout['payment']->fresh(['deal']);
+        $deal = $checkout['deal']->fresh();
+
+        $this->assertSame(2160.0, (float) $payment->amount);
+        $this->assertSame(2400.0, (float) data_get($payment->payment_data, 'self_service_incentive.original_amount'));
+        $this->assertSame(10.0, (float) data_get($payment->payment_data, 'self_service_incentive.percent'));
+        $this->assertSame('self_service_incentive', data_get($payment->payment_data, 'self_service_incentive.source'));
+        $this->assertSame('2840.00', number_format((float) $checkout['client']->wallet_balance, 2, '.', ''));
+        $this->assertSame(2400.0, (float) $deal->original_amount);
+        $this->assertSame(10.0, (float) $deal->discount_percentage);
+        $this->assertSame('self_service_incentive', $deal->discount_source);
+        $this->assertNull($deal->discount_approved_by);
+    }
+
     public function test_billing_initiate_supports_paystack_and_rejects_cybersource(): void
     {
         [

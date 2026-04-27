@@ -186,7 +186,7 @@ class SubscriptionProvisioningService
             $duration = $this->resolveDurationForPayment($payment, $product);
             $planType = $this->resolvePlanTypeFromProduct($product);
 
-            $existingDeal = Deal::create([
+            $dealData = [
                 'platform_id' => (int) $payment->platform_id,
                 'client_id' => (int) $client->id,
                 'payment_id' => (int) $payment->id,
@@ -198,7 +198,16 @@ class SubscriptionProvisioningService
                 'status' => 'pending',
                 'assigned_to' => $options['assigned_to'] ?? $client->assigned_to,
                 'payment_reference' => $payment->transaction_reference ?? $payment->reference_number,
-            ] + $this->resolveLifecycleAttributes(null, $payment, $options));
+            ] + $this->resolveLifecycleAttributes(null, $payment, $options);
+
+            $incentive = data_get($payment->payment_data, 'self_service_incentive');
+            if ($incentive && !empty($incentive['original_amount']) && !empty($incentive['percent'])) {
+                $dealData['original_amount'] = (float) $incentive['original_amount'];
+                $dealData['discount_percentage'] = (float) $incentive['percent'];
+                $dealData['discount_source'] = 'self_service_incentive';
+            }
+
+            $existingDeal = Deal::create($dealData);
         }
 
         return $this->activateDeal($existingDeal, array_merge($options, [
