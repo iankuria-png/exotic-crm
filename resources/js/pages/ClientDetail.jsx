@@ -622,6 +622,16 @@ export default function ClientDetail() {
         enabled: activeTab === 'profile_health',
     });
 
+    const { data: citiesData } = useQuery({
+        queryKey: ['cities', clientPlatformId],
+        queryFn: () =>
+            api.get('/crm/clients/cities', {
+                params: clientPlatformId ? { platform_id: clientPlatformId } : {},
+            }).then((r) => r.data),
+        enabled: activeTab === 'edit_profile' && profileSection === 'contact',
+    });
+    const availableCities = citiesData?.cities || [];
+
     const {
         data: walletData,
         isLoading: walletLoading,
@@ -3384,7 +3394,12 @@ export default function ClientDetail() {
                                 <div className="grid gap-3 md:grid-cols-2">
                                     <input value={profileForm?.phone || ''} onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))} className="crm-input" placeholder="Phone" />
                                     <input value={profileForm?.email || ''} onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))} className="crm-input" placeholder="Email" />
-                                    <input value={profileForm?.city || ''} onChange={(event) => setProfileForm((current) => ({ ...current, city: event.target.value }))} className="crm-input" placeholder="City" />
+                                    <select value={profileForm?.city || ''} onChange={(event) => setProfileForm((current) => ({ ...current, city: event.target.value }))} className="crm-input">
+                                        <option value="">City</option>
+                                        {availableCities.map((city) => (
+                                            <option key={city} value={city}>{city}</option>
+                                        ))}
+                                    </select>
                                     <input value={profileForm?.whatsapp || ''} onChange={(event) => setProfileForm((current) => ({ ...current, whatsapp: event.target.value }))} className="crm-input" placeholder="WhatsApp" />
                                     <input value={profileForm?.instagram || ''} onChange={(event) => setProfileForm((current) => ({ ...current, instagram: event.target.value }))} className="crm-input" placeholder="Instagram URL" />
                                     <input value={profileForm?.twitter || ''} onChange={(event) => setProfileForm((current) => ({ ...current, twitter: event.target.value }))} className="crm-input" placeholder="Twitter URL" />
