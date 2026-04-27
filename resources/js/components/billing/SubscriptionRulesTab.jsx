@@ -94,6 +94,11 @@ function normalizeRule(rule) {
         discountRequiresPin:
             Boolean(rule?.discount_json?.requires_pin) ||
             Boolean(rule?.discount_json?.pin_required),
+        selfServiceEnabled: Boolean(rule?.discount_json?.self_service_incentive?.enabled),
+        selfServicePercent: rule?.discount_json?.self_service_incentive?.percent ?? '',
+        selfServiceLabel: rule?.discount_json?.self_service_incentive?.label ?? '',
+        selfServiceStartsAt: toDateTimeInputValue(rule?.discount_json?.self_service_incentive?.starts_at),
+        selfServiceExpiresAt: toDateTimeInputValue(rule?.discount_json?.self_service_incentive?.expires_at),
         gracePeriodDays:
             rule?.expiry_policy_json?.grace_period_days ??
             rule?.expiry_policy_json?.grace_days ??
@@ -122,6 +127,14 @@ function buildPayload(form) {
             enabled: Boolean(form.discountEnabled),
             max_percent: form.discountPercent === '' ? null : Number(form.discountPercent),
             requires_pin: Boolean(form.discountRequiresPin),
+            self_service_incentive: {
+                enabled: Boolean(form.selfServiceEnabled),
+                percent: form.selfServicePercent === '' ? null : Number(form.selfServicePercent),
+                label: form.selfServiceLabel || null,
+                starts_at: form.selfServiceStartsAt ? new Date(form.selfServiceStartsAt).toISOString() : null,
+                expires_at: form.selfServiceExpiresAt ? new Date(form.selfServiceExpiresAt).toISOString() : null,
+                sources: ['wallet', 'self_checkout', 'manual_submission'],
+            },
         },
         expiry_policy_json: {
             grace_period_days: form.gracePeriodDays === '' ? null : Number(form.gracePeriodDays),
@@ -140,6 +153,38 @@ function firstErrorMessage(error) {
     }
 
     return error?.response?.data?.message || 'CRM could not save subscription rules.';
+}
+
+function toDateTimeInputValue(value) {
+    if (!value) {
+        return '';
+    }
+
+    const parsed = new Date(value);
+
+    if (Number.isNaN(parsed.getTime())) {
+        return '';
+    }
+
+    const timezoneOffsetMs = parsed.getTimezoneOffset() * 60 * 1000;
+
+    return new Date(parsed.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
+function formatIncentivePreview(form) {
+    if (!form?.selfServiceEnabled || form?.selfServicePercent === '') {
+        return 'Save 10% - offer ends Sun 29 Apr at midnight';
+    }
+
+    const label = form.selfServiceLabel ? `${form.selfServiceLabel}: ` : '';
+    const amount = `Save ${form.selfServicePercent}%`;
+    const expiresAt = form.selfServiceExpiresAt ? new Date(form.selfServiceExpiresAt) : null;
+
+    if (!expiresAt || Number.isNaN(expiresAt.getTime())) {
+        return `${label}${amount}`;
+    }
+
+    return `${label}${amount} - offer ends ${expiresAt.toLocaleString()}`;
 }
 
 export default function SubscriptionRulesTab({ platforms = [] }) {
@@ -446,6 +491,77 @@ export default function SubscriptionRulesTab({ platforms = [] }) {
                             }
                         />
                     </div>
+                    <section className="mt-4 rounded-xl border border-dashed border-emerald-200 bg-emerald-50/70 p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                            Self-Service Incentive
+                        </p>
+                        <ToggleRow
+                            className="mt-3 border-emerald-100 bg-white/80"
+                            label="Enable self-service incentive"
+                            description="Automatically discount wallet, hosted checkout, and manual MPESA submission. No PIN required and agent discount limits stay unchanged."
+                            checked={Boolean(form.selfServiceEnabled)}
+                            disabled={!editable}
+                            onChange={(value) =>
+                                setForm((current) => ({
+                                    ...current,
+                                    selfServiceEnabled: value,
+                                }))
+                            }
+                        />
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                            <NumberField
+                                label="Incentive discount"
+                                suffix="%"
+                                value={form.selfServicePercent}
+                                disabled={!editable || !form.selfServiceEnabled}
+                                onChange={(value) =>
+                                    setForm((current) => ({
+                                        ...current,
+                                        selfServicePercent: value,
+                                    }))
+                                }
+                            />
+                            <TextField
+                                label="Promo label"
+                                placeholder="Weekend special"
+                                value={form.selfServiceLabel}
+                                disabled={!editable || !form.selfServiceEnabled}
+                                onChange={(value) =>
+                                    setForm((current) => ({
+                                        ...current,
+                                        selfServiceLabel: value,
+                                    }))
+                                }
+                            />
+                        </div>
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                            <DateTimeField
+                                label="Start datetime"
+                                value={form.selfServiceStartsAt}
+                                disabled={!editable || !form.selfServiceEnabled}
+                                onChange={(value) =>
+                                    setForm((current) => ({
+                                        ...current,
+                                        selfServiceStartsAt: value,
+                                    }))
+                                }
+                            />
+                            <DateTimeField
+                                label="End datetime"
+                                value={form.selfServiceExpiresAt}
+                                disabled={!editable || !form.selfServiceEnabled}
+                                onChange={(value) =>
+                                    setForm((current) => ({
+                                        ...current,
+                                        selfServiceExpiresAt: value,
+                                    }))
+                                }
+                            />
+                        </div>
+                        <p className="mt-4 text-sm text-emerald-900">
+                            <span className="font-semibold">Preview:</span> {formatIncentivePreview(form)}
+                        </p>
+                    </section>
                 </PolicyPanel>
             </div>
 
@@ -573,6 +689,41 @@ function NumberField({ label, suffix, value, disabled, onChange, className = '' 
                     className="w-full bg-transparent py-3 text-sm text-slate-900 outline-none disabled:cursor-not-allowed disabled:text-slate-400"
                 />
                 <span className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">{suffix}</span>
+            </div>
+        </label>
+    );
+}
+
+function TextField({ label, value, disabled, onChange, className = '', placeholder = '' }) {
+    return (
+        <label className={`block ${className}`}>
+            <span className="text-sm font-semibold text-slate-900">{label}</span>
+            <div className="mt-2 rounded-xl border border-slate-200 bg-white px-4">
+                <input
+                    type="text"
+                    value={value}
+                    placeholder={placeholder}
+                    disabled={disabled}
+                    onChange={(event) => onChange(event.target.value)}
+                    className="w-full bg-transparent py-3 text-sm text-slate-900 outline-none disabled:cursor-not-allowed disabled:text-slate-400"
+                />
+            </div>
+        </label>
+    );
+}
+
+function DateTimeField({ label, value, disabled, onChange, className = '' }) {
+    return (
+        <label className={`block ${className}`}>
+            <span className="text-sm font-semibold text-slate-900">{label}</span>
+            <div className="mt-2 rounded-xl border border-slate-200 bg-white px-4">
+                <input
+                    type="datetime-local"
+                    value={value}
+                    disabled={disabled}
+                    onChange={(event) => onChange(event.target.value)}
+                    className="w-full bg-transparent py-3 text-sm text-slate-900 outline-none disabled:cursor-not-allowed disabled:text-slate-400"
+                />
             </div>
         </label>
     );

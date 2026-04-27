@@ -26,7 +26,7 @@ class Deal extends Model
         'product_id', 'plan_type', 'amount', 'currency',
         'duration', 'status', 'activated_at', 'expires_at',
         'assigned_to', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
-        'discount_percentage', 'original_amount', 'discount_approved_by',
+        'discount_percentage', 'original_amount', 'discount_approved_by', 'discount_source',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
         'origin', 'subscription_lifecycle', 'subscription_lifecycle_source', 'subscription_lifecycle_reason',
         'cancellation_reason_code', 'cancellation_notes', 'cancelled_payment_id',

@@ -1669,6 +1669,22 @@ class SettingsController extends Controller
             'discount_json.enabled' => ['nullable', 'boolean'],
             'discount_json.max_percent' => ['nullable', 'integer', 'min:0', 'max:100'],
             'discount_json.requires_pin' => ['nullable', 'boolean'],
+            'discount_json.self_service_incentive' => ['nullable', 'array'],
+            'discount_json.self_service_incentive.enabled' => ['nullable', 'boolean'],
+            'discount_json.self_service_incentive.percent' => ['nullable', 'numeric', 'min:0', 'max:99'],
+            'discount_json.self_service_incentive.label' => ['nullable', 'string', 'max:80'],
+            'discount_json.self_service_incentive.starts_at' => ['nullable', 'string', 'date'],
+            'discount_json.self_service_incentive.expires_at' => [
+                'nullable',
+                'string',
+                'date',
+                'after_or_equal:discount_json.self_service_incentive.starts_at',
+            ],
+            'discount_json.self_service_incentive.sources' => ['nullable', 'array'],
+            'discount_json.self_service_incentive.sources.*' => [
+                'string',
+                Rule::in(['wallet', 'self_checkout', 'manual_submission']),
+            ],
             'expiry_policy_json' => ['nullable', 'array'],
             'expiry_policy_json.grace_period_days' => ['nullable', 'integer', 'min:0', 'max:365'],
             'expiry_policy_json.suspend_after_days' => ['nullable', 'integer', 'min:0', 'max:3650'],
@@ -1698,10 +1714,21 @@ class SettingsController extends Controller
             'duration_days' => data_get($validated, 'free_trial_json.duration_days'),
         ];
 
+        $incentiveInput = data_get($validated, 'discount_json.self_service_incentive');
         $discountJson = [
             'enabled' => (bool) data_get($validated, 'discount_json.enabled', false),
             'max_percent' => data_get($validated, 'discount_json.max_percent'),
             'requires_pin' => (bool) data_get($validated, 'discount_json.requires_pin', false),
+            'self_service_incentive' => $incentiveInput ? [
+                'enabled' => (bool) data_get($incentiveInput, 'enabled', false),
+                'percent' => data_get($incentiveInput, 'percent') !== null
+                    ? round((float) data_get($incentiveInput, 'percent'), 2)
+                    : null,
+                'label' => data_get($incentiveInput, 'label') ?: null,
+                'starts_at' => data_get($incentiveInput, 'starts_at') ?: null,
+                'expires_at' => data_get($incentiveInput, 'expires_at') ?: null,
+                'sources' => data_get($incentiveInput, 'sources') ?? ['wallet', 'self_checkout', 'manual_submission'],
+            ] : null,
         ];
 
         $expiryPolicyJson = [

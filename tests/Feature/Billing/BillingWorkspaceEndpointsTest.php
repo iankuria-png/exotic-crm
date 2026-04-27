@@ -784,6 +784,14 @@ class BillingWorkspaceEndpointsTest extends TestCase
                 'enabled' => true,
                 'max_percent' => 25,
                 'requires_pin' => true,
+                'self_service_incentive' => [
+                    'enabled' => true,
+                    'percent' => 10,
+                    'label' => 'Weekend special',
+                    'starts_at' => '2026-04-27T00:00:00.000Z',
+                    'expires_at' => '2026-04-29T23:59:59.000Z',
+                    'sources' => ['wallet', 'self_checkout', 'manual_submission'],
+                ],
             ],
             'expiry_policy_json' => [
                 'grace_period_days' => 7,
@@ -797,11 +805,65 @@ class BillingWorkspaceEndpointsTest extends TestCase
             ->assertJsonPath('subscription_rule.renewal_method_json.wallet_auto_renew', true)
             ->assertJsonPath('subscription_rule.free_trial_json.duration_days', 14)
             ->assertJsonPath('subscription_rule.discount_json.max_percent', 25)
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.percent', 10)
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.label', 'Weekend special')
             ->assertJsonPath('subscription_rule.expiry_policy_json.grace_period_days', 7);
 
         $this->assertDatabaseHas('billing_subscription_rules', [
             'market_id' => $platform->id,
         ]);
+
+        $this->getJson("/api/crm/settings/billing/subscription-rules/{$platform->id}")
+            ->assertOk()
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.enabled', true)
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.starts_at', '2026-04-27T00:00:00.000Z')
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.expires_at', '2026-04-29T23:59:59.000Z')
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.sources.2', 'manual_submission');
+    }
+
+    public function test_subscription_rules_reject_incentive_expiry_before_start(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+
+        Sanctum::actingAs($this->createUser('admin'));
+
+        $this->putJson("/api/crm/settings/billing/subscription-rules/{$platform->id}", [
+            'discount_json' => [
+                'enabled' => true,
+                'max_percent' => 25,
+                'self_service_incentive' => [
+                    'enabled' => true,
+                    'percent' => 10,
+                    'starts_at' => '2026-04-29T00:00:00.000Z',
+                    'expires_at' => '2026-04-28T23:59:59.000Z',
+                ],
+            ],
+        ])->assertStatus(422)
+            ->assertJsonValidationErrors(['discount_json.self_service_incentive.expires_at']);
+    }
+
+    public function test_subscription_rules_accept_equal_incentive_start_and_expiry(): void
+    {
+        $platform = $this->createPlatform('Kenya');
+
+        Sanctum::actingAs($this->createUser('admin'));
+
+        $timestamp = '2026-04-29T23:59:59.000Z';
+
+        $this->putJson("/api/crm/settings/billing/subscription-rules/{$platform->id}", [
+            'discount_json' => [
+                'enabled' => true,
+                'max_percent' => 25,
+                'self_service_incentive' => [
+                    'enabled' => true,
+                    'percent' => 10,
+                    'starts_at' => $timestamp,
+                    'expires_at' => $timestamp,
+                ],
+            ],
+        ])->assertOk()
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.starts_at', $timestamp)
+            ->assertJsonPath('subscription_rule.discount_json.self_service_incentive.expires_at', $timestamp);
     }
 
     public function test_sub_admin_cannot_store_subscription_rules(): void
