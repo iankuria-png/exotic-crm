@@ -194,6 +194,11 @@ class ReportController extends Controller
         $paymentCurrencyExpression = $this->paymentCurrencyExpression();
         $packageNameExpression = $this->paymentPackageExpression();
         $ownerNameExpression = $this->paymentOwnerExpression();
+        $paymentDateExpression = DB::connection()->getDriverName() === 'sqlite'
+            ? "date(COALESCE(payments.completed_at, payments.created_at))"
+            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+        $platformCountryExpression = "(SELECT country FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
+        $platformNameExpression = "(SELECT name FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
 
         $revenueTrendRows = Payment::query()
             ->reportableSuccessful()
@@ -256,18 +261,36 @@ class ReportController extends Controller
             ->leftJoin('products as payment_products', 'payment_products.id', '=', 'payments.product_id')
             ->leftJoin('products as deal_products', 'deal_products.id', '=', 'deals.product_id')
             ->selectRaw("{$packageNameExpression} as package_name")
+            ->selectRaw("{$paymentDateExpression} as event_date")
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("{$platformCountryExpression} as platform_country")
+            ->selectRaw("{$platformNameExpression} as platform_name")
             ->selectRaw("{$paymentCurrencyExpression} as currency")
             ->selectRaw('SUM(payments.amount) as total')
-            ->groupByRaw("{$packageNameExpression}, {$paymentCurrencyExpression}")
+            ->groupByRaw($packageNameExpression)
+            ->groupByRaw($paymentDateExpression)
+            ->groupBy('payments.platform_id')
+            ->groupByRaw($platformCountryExpression)
+            ->groupByRaw($platformNameExpression)
+            ->groupByRaw($paymentCurrencyExpression)
             ->get()
             ->groupBy(fn ($row) => $row->package_name ?: 'Unknown package')
-            ->map(function ($rows, $label) use ($targetCurrency, $to) {
+            ->map(function ($rows, $label) use ($targetCurrency) {
                 $breakdown = [];
+                $eventRows = [];
                 foreach ($rows as $row) {
                     $breakdown[$row->currency] = ($breakdown[$row->currency] ?? 0.0) + (float) $row->total;
+                    $eventRows[] = [
+                        'event_date' => (string) $row->event_date,
+                        'platform_id' => $row->platform_id,
+                        'platform_country' => $row->platform_country,
+                        'platform_name' => $row->platform_name,
+                        'currency' => $row->currency,
+                        'amount' => (float) $row->total,
+                    ];
                 }
                 ksort($breakdown);
-                $normalized = $this->reportingCurrencyService->normalizeBreakdown($breakdown, $to, $targetCurrency);
+                $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency);
 
                 return [
                     'label' => $label,
@@ -295,18 +318,36 @@ class ReportController extends Controller
             ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
             ->leftJoin('users', 'users.id', '=', 'deals.assigned_to')
             ->selectRaw("{$ownerNameExpression} as owner_name")
+            ->selectRaw("{$paymentDateExpression} as event_date")
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("{$platformCountryExpression} as platform_country")
+            ->selectRaw("{$platformNameExpression} as platform_name")
             ->selectRaw("{$paymentCurrencyExpression} as currency")
             ->selectRaw('SUM(payments.amount) as total')
             ->selectRaw('COUNT(payments.id) as payments_count')
-            ->groupByRaw("{$ownerNameExpression}, {$paymentCurrencyExpression}")
+            ->groupByRaw($ownerNameExpression)
+            ->groupByRaw($paymentDateExpression)
+            ->groupBy('payments.platform_id')
+            ->groupByRaw($platformCountryExpression)
+            ->groupByRaw($platformNameExpression)
+            ->groupByRaw($paymentCurrencyExpression)
             ->get()
             ->groupBy(fn ($row) => $row->owner_name ?: 'Unassigned')
-            ->map(function ($rows, $owner) use ($targetCurrency, $to) {
+            ->map(function ($rows, $owner) use ($targetCurrency) {
                 $breakdown = [];
+                $eventRows = [];
                 $paymentCount = 0;
                 foreach ($rows as $row) {
                     $breakdown[$row->currency] = ($breakdown[$row->currency] ?? 0.0) + (float) $row->total;
                     $paymentCount += (int) $row->payments_count;
+                    $eventRows[] = [
+                        'event_date' => (string) $row->event_date,
+                        'platform_id' => $row->platform_id,
+                        'platform_country' => $row->platform_country,
+                        'platform_name' => $row->platform_name,
+                        'currency' => $row->currency,
+                        'amount' => (float) $row->total,
+                    ];
                 }
                 ksort($breakdown);
 
@@ -318,7 +359,7 @@ class ReportController extends Controller
                 $scalarAverage = count($breakdown) === 1 && $paymentCount > 0
                     ? round(array_values($breakdown)[0] / $paymentCount, 2)
                     : null;
-                $normalized = $this->reportingCurrencyService->normalizeBreakdown($breakdown, $to, $targetCurrency);
+                $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency);
                 $normalizedAverage = $paymentCount > 0 && $normalized['normalized_total'] !== null
                     ? round((float) $normalized['normalized_total'] / $paymentCount, 2)
                     : null;

@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentImportDrawer from '../components/PaymentImportDrawer';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
+import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { candidateScore, scoreTone, toneClasses } from '../utils/scoring';
@@ -1375,22 +1376,27 @@ export default function Payments() {
                 awaitingAmount: toAmount(data.stats.pending_amount),
                 awaitingBreakdown: data.stats.pending_amount_breakdown ?? {},
                 awaitingNormalized: data.stats.pending_normalized_amount,
+                awaitingNormalizationMeta: data.stats.pending_normalization_meta,
                 confirmedCount: Number(data.stats.confirmed || 0),
                 confirmedAmount: toAmount(data.stats.confirmed_amount),
                 confirmedBreakdown: data.stats.confirmed_amount_breakdown ?? {},
                 confirmedNormalized: data.stats.confirmed_normalized_amount,
+                confirmedNormalizationMeta: data.stats.confirmed_normalization_meta,
                 reversedCount: Number(data.stats.reversed || 0),
                 reversedAmount: toAmount(data.stats.reversed_amount),
                 reversedBreakdown: data.stats.reversed_amount_breakdown ?? {},
                 reversedNormalized: data.stats.reversed_normalized_amount,
+                reversedNormalizationMeta: data.stats.reversed_normalization_meta,
                 unmatchedCount: Number((data.stats.unmatched_review ?? data.stats.unmatched) || 0),
                 unmatchedAmount: toAmount(data.stats.unmatched_review_amount),
                 unmatchedBreakdown: data.stats.unmatched_review_amount_breakdown ?? {},
                 unmatchedNormalized: data.stats.unmatched_review_normalized_amount,
+                unmatchedNormalizationMeta: data.stats.unmatched_review_normalization_meta,
                 failedCount: Number(data.stats.failed || 0),
                 failedAmount: toAmount(data.stats.failed_amount),
                 failedBreakdown: data.stats.failed_amount_breakdown ?? {},
                 failedNormalized: data.stats.failed_normalized_amount,
+                failedNormalizationMeta: data.stats.failed_normalization_meta,
             };
         }
 
@@ -1420,12 +1426,22 @@ export default function Payments() {
     const statsScope = String(data?.stats_scope || 'business');
     const visibilityMode = canViewTests ? testVisibility : 'hide';
     const normalizedCurrency = data?.stats?.normalized_currency || reportingCurrency.targetCurrency;
-    const renderSummaryAmount = (breakdown, scalarAmount, normalizedAmount) => {
+    const renderSummaryAmount = (breakdown, scalarAmount, normalizedAmount, normalizationMeta) => {
         if (reportingCurrency.isFlat && normalizedAmount !== null && normalizedAmount !== undefined) {
             return (
                 <div>
                     <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(normalizedAmount, normalizedCurrency)}</p>
                     <CurrencyAmount breakdown={breakdown} scalarAmount={scalarAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                    <FxNormalizationNotice meta={normalizationMeta} className="mt-2" />
+                </div>
+            );
+        }
+
+        if (reportingCurrency.isFlat) {
+            return (
+                <div>
+                    <CurrencyAmount breakdown={breakdown} scalarAmount={scalarAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
+                    <FxNormalizationNotice meta={normalizationMeta} className="mt-2" />
                 </div>
             );
         }
@@ -2001,7 +2017,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Awaiting Payment</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.awaitingCount.toLocaleString()}</p>
-                    {renderSummaryAmount(summary.awaitingBreakdown, summary.awaitingAmount, summary.awaitingNormalized)}
+                    {renderSummaryAmount(summary.awaitingBreakdown, summary.awaitingAmount, summary.awaitingNormalized, summary.awaitingNormalizationMeta)}
                     <p className="mt-1 text-xs text-slate-500">Initiated + pending transactions</p>
                 </button>
 
@@ -2027,7 +2043,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.confirmedCount.toLocaleString()}</p>
-                    {renderSummaryAmount(summary.confirmedBreakdown, summary.confirmedAmount, summary.confirmedNormalized)}
+                    {renderSummaryAmount(summary.confirmedBreakdown, summary.confirmedAmount, summary.confirmedNormalized, summary.confirmedNormalizationMeta)}
                     <p className="mt-1 text-xs text-slate-500">Completed + expired successful payments</p>
                     {summary.reversedCount > 0 ? (
                         <button
@@ -2068,7 +2084,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Unmatched Confirmed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.unmatchedCount.toLocaleString()}</p>
-                    {renderSummaryAmount(summary.unmatchedBreakdown, summary.unmatchedAmount, summary.unmatchedNormalized)}
+                    {renderSummaryAmount(summary.unmatchedBreakdown, summary.unmatchedAmount, summary.unmatchedNormalized, summary.unmatchedNormalizationMeta)}
                     <p className="mt-1 text-xs text-slate-500">Successful payments, no client linked</p>
                 </button>
 
@@ -2086,7 +2102,7 @@ export default function Payments() {
                         <p className="text-sm font-semibold text-slate-700">Failed</p>
                     </div>
                     <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.failedCount.toLocaleString()}</p>
-                    {renderSummaryAmount(summary.failedBreakdown, summary.failedAmount, summary.failedNormalized)}
+                    {renderSummaryAmount(summary.failedBreakdown, summary.failedAmount, summary.failedNormalized, summary.failedNormalizationMeta)}
                     <p className="mt-1 text-xs text-slate-500">Needs retry or follow-up</p>
                 </button>
             </section>

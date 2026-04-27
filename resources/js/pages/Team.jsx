@@ -9,6 +9,7 @@ import DataTable from '../components/DataTable';
 import FilterSelect from '../components/FilterSelect';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
+import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
 import useReportingCurrency from '../hooks/useReportingCurrency';
@@ -967,11 +968,18 @@ export default function Team() {
     ], [managerGoals, presenceQuery.data]);
 
     const renderRevenueValue = (summary) => {
-        if (reportingCurrency.isFlat && summary.normalized_revenue_total !== null && summary.normalized_revenue_total !== undefined) {
+        if (reportingCurrency.isFlat) {
             return (
                 <div>
-                    <p>{summary.normalized_revenue_display || formatCurrency(summary.normalized_revenue_total, summary.normalized_revenue_currency || reportingCurrency.targetCurrency)}</p>
-                    <p className="mt-1 text-xs font-medium text-slate-500">{summary.revenue_display || '--'}</p>
+                    {summary.normalized_revenue_total !== null && summary.normalized_revenue_total !== undefined ? (
+                        <p>{summary.normalized_revenue_display || formatCurrency(summary.normalized_revenue_total, summary.normalized_revenue_currency || reportingCurrency.targetCurrency)}</p>
+                    ) : (
+                        <p>{summary.revenue_display || '--'}</p>
+                    )}
+                    {summary.normalized_revenue_total !== null && summary.normalized_revenue_total !== undefined ? (
+                        <p className="mt-1 text-xs font-medium text-slate-500">{summary.revenue_display || '--'}</p>
+                    ) : null}
+                    <FxNormalizationNotice meta={summary.revenue_normalization_meta} className="mt-2" />
                 </div>
             );
         }
@@ -1131,6 +1139,12 @@ export default function Team() {
                                 {row.normalized_revenue_display || formatCurrency(row.normalized_revenue_total, row.normalized_revenue_currency || reportingCurrency.targetCurrency)}
                             </p>
                             <p className="text-[11px] font-medium text-slate-500">{row.revenue_display || '--'}</p>
+                            <FxNormalizationNotice meta={row.revenue_normalization_meta} className="mt-1 justify-end" />
+                        </>
+                    ) : reportingCurrency.isFlat ? (
+                        <>
+                            <p className="text-[11px] font-medium text-slate-500">{row.revenue_display || '--'}</p>
+                            <FxNormalizationNotice meta={row.revenue_normalization_meta} className="mt-1 justify-end" />
                         </>
                     ) : (
                         formatCurrencyRows(row.revenue_by_currency).map((value) => (

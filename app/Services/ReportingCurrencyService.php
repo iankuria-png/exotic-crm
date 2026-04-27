@@ -18,6 +18,11 @@ class ReportingCurrencyService
     public const MODE_FLAT = 'flat';
     public const DEFAULT_TARGET_CURRENCY = 'USD';
 
+    public function __construct(
+        private readonly CurrencyCanonicalizer $currencyCanonicalizer
+    ) {
+    }
+
     public function settings(): array
     {
         $stored = IntegrationSetting::query()
@@ -118,14 +123,13 @@ class ReportingCurrencyService
         $settings = $this->settings();
         $target = $this->normalizeCurrency($targetCurrency ?? $settings['target_currency'] ?? self::DEFAULT_TARGET_CURRENCY, self::DEFAULT_TARGET_CURRENCY);
         $date = $eventDate ? Carbon::instance($eventDate)->toDateString() : now()->toDateString();
-        $sourceBreakdown = $this->normalizeBreakdownInput($breakdown);
+        [$sourceBreakdown, $conversionBreakdown, $unresolvedRows, $missing, $missingDetails, $aliasRows] = $this->prepareBreakdownForNormalization($breakdown);
         $rows = [];
         $normalizedTotal = 0.0;
-        $missing = [];
         $stale = false;
         $asOfDates = [];
 
-        foreach ($sourceBreakdown as $currency => $amount) {
+        foreach ($conversionBreakdown as $currency => $amount) {
             if ($currency === $target) {
                 $rate = 1.0;
                 $rateDate = $date;
@@ -136,6 +140,7 @@ class ReportingCurrencyService
 
                 if (!$snapshot) {
                     $missing[] = $currency;
+                    $missingDetails[$currency] ??= 'No cached or provider FX rate is available.';
                     $rows[] = [
                         'source_currency' => $currency,
                         'source_amount' => $amount,
@@ -169,6 +174,8 @@ class ReportingCurrencyService
         }
 
         sort($asOfDates);
+        $missing = array_values(array_unique($missing));
+        ksort($missingDetails);
         $partial = count($missing) > 0;
         $normalizedValue = count($sourceBreakdown) === 0
             ? 0.0
@@ -191,7 +198,10 @@ class ReportingCurrencyService
                 'missing_currencies' => $missing,
                 'as_of' => end($asOfDates) ?: $date,
                 'target_currency' => $target,
-                'rows' => $rows,
+                'rows' => array_merge($unresolvedRows, $rows),
+                'unresolved_rows' => $unresolvedRows,
+                'currency_aliases' => $aliasRows,
+                'missing_currency_reasons' => $missingDetails,
             ],
         ];
     }
@@ -205,14 +215,22 @@ class ReportingCurrencyService
             ? "date(COALESCE(payments.completed_at, payments.created_at))"
             : "DATE(COALESCE(payments.completed_at, payments.created_at))";
         $currencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), '{$target}')";
+        $platformCountryExpression = "(SELECT country FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
+        $platformNameExpression = "(SELECT name FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
 
         $aggregateQuery = clone $query;
 
         $rows = $aggregateQuery
             ->select(DB::raw("{$dateExpression} as event_date"))
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("{$platformCountryExpression} as platform_country")
+            ->selectRaw("{$platformNameExpression} as platform_name")
             ->selectRaw("{$currencyExpression} as currency")
             ->selectRaw('SUM(payments.amount) as amount')
             ->groupByRaw($dateExpression)
+            ->groupBy('payments.platform_id')
+            ->groupByRaw($platformCountryExpression)
+            ->groupByRaw($platformNameExpression)
             ->groupByRaw($currencyExpression)
             ->get();
 
@@ -227,14 +245,52 @@ class ReportingCurrencyService
         $normalizedRows = [];
         $normalizedTotal = 0.0;
         $missing = [];
+        $missingDetails = [];
+        $aliasRows = [];
         $stale = false;
         $asOfDates = [];
 
         foreach ($rows as $row) {
-            $currency = $this->normalizeCurrency(data_get($row, 'currency'), $target);
+            $originalCurrency = $this->normalizeCurrency(data_get($row, 'currency'), $target);
             $amount = round((float) data_get($row, 'amount'), 2);
             $eventDate = (string) data_get($row, 'event_date', now()->toDateString());
-            $sourceBreakdown[$currency] = ($sourceBreakdown[$currency] ?? 0.0) + $amount;
+            $sourceBreakdown[$originalCurrency] = ($sourceBreakdown[$originalCurrency] ?? 0.0) + $amount;
+
+            $resolution = $this->currencyCanonicalizer->resolve($originalCurrency, [
+                'platform_id' => data_get($row, 'platform_id'),
+                'platform_country' => data_get($row, 'platform_country'),
+                'platform_name' => data_get($row, 'platform_name'),
+            ]);
+
+            $currency = $resolution['code'];
+
+            if ($currency === null) {
+                $missingKey = $resolution['original'] !== '' ? $resolution['original'] : $originalCurrency;
+                $missing[] = $missingKey;
+                $missingDetails[$missingKey] = $resolution['reason'] ?? 'Currency could not be resolved.';
+                $normalizedRows[] = [
+                    'event_date' => $eventDate,
+                    'source_currency' => $originalCurrency,
+                    'source_amount' => $amount,
+                    'rate_source_currency' => null,
+                    'rate' => null,
+                    'rate_date' => null,
+                    'normalized_amount' => null,
+                    'stale' => false,
+                    'resolution_status' => $resolution['status'],
+                    'resolution_reason' => $resolution['reason'],
+                ];
+                continue;
+            }
+
+            if ($resolution['status'] === 'canonicalized') {
+                $aliasRows[] = [
+                    'source_currency' => $originalCurrency,
+                    'canonical_currency' => $currency,
+                    'reason' => $resolution['reason'],
+                    'platform_id' => data_get($row, 'platform_id'),
+                ];
+            }
 
             $normalized = $this->normalizeBreakdown([$currency => $amount], Carbon::parse($eventDate), $target);
             $meta = $normalized['normalization_meta'] ?? [];
@@ -242,6 +298,9 @@ class ReportingCurrencyService
 
             if (($meta['partial'] ?? false) === true) {
                 $missing[] = $currency;
+                foreach (($meta['missing_currency_reasons'] ?? []) as $missingCurrency => $reason) {
+                    $missingDetails[$missingCurrency] = $reason;
+                }
             } else {
                 $normalizedTotal += (float) ($normalized['normalized_total'] ?? 0);
             }
@@ -250,12 +309,17 @@ class ReportingCurrencyService
             $asOfDates[] = (string) ($meta['as_of'] ?? $eventDate);
             $normalizedRows[] = array_merge($line, [
                 'event_date' => $eventDate,
+                'source_currency' => $originalCurrency,
+                'rate_source_currency' => $currency,
+                'resolution_status' => $resolution['status'],
+                'resolution_reason' => $resolution['reason'],
             ]);
         }
 
         ksort($sourceBreakdown);
         sort($asOfDates);
         $missing = array_values(array_unique($missing));
+        ksort($missingDetails);
         $partial = count($missing) > 0;
         $normalizedValue = $partial ? null : round($normalizedTotal, 2);
 
@@ -277,6 +341,8 @@ class ReportingCurrencyService
                 'as_of' => end($asOfDates) ?: null,
                 'target_currency' => $target,
                 'rows' => $normalizedRows,
+                'currency_aliases' => $aliasRows,
+                'missing_currency_reasons' => $missingDetails,
             ],
         ];
     }
@@ -438,26 +504,77 @@ class ReportingCurrencyService
 
     /**
      * @param  array<string, float|int|string|null>  $breakdown
-     * @return array<string, float>
+     * @return array{
+     *     0: array<string, float>,
+     *     1: array<string, float>,
+     *     2: array<int, array<string, mixed>>,
+     *     3: array<int, string>,
+     *     4: array<string, string>,
+     *     5: array<int, array<string, mixed>>
+     * }
      */
-    private function normalizeBreakdownInput(array $breakdown): array
+    private function prepareBreakdownForNormalization(array $breakdown): array
     {
-        $normalized = [];
+        $sourceBreakdown = [];
+        $conversionBreakdown = [];
+        $unresolvedRows = [];
+        $missing = [];
+        $missingDetails = [];
+        $aliasRows = [];
 
         foreach ($breakdown as $currency => $amount) {
-            $code = $this->normalizeCurrency($currency, '');
             $numeric = round((float) $amount, 2);
+            $original = $this->normalizeCurrency($currency, '');
 
-            if ($code === '' || $numeric === 0.0) {
+            if ($original === '' || $numeric === 0.0) {
                 continue;
             }
 
-            $normalized[$code] = ($normalized[$code] ?? 0.0) + $numeric;
+            $sourceBreakdown[$original] = ($sourceBreakdown[$original] ?? 0.0) + $numeric;
+            $resolution = $this->currencyCanonicalizer->resolve($original);
+
+            if ($resolution['code'] === null) {
+                $missingKey = $resolution['original'] !== '' ? $resolution['original'] : $original;
+                $missing[] = $missingKey;
+                $missingDetails[$missingKey] = $resolution['reason'] ?? 'Currency could not be resolved.';
+                $unresolvedRows[] = [
+                    'source_currency' => $original,
+                    'source_amount' => $numeric,
+                    'rate_source_currency' => null,
+                    'rate' => null,
+                    'rate_date' => null,
+                    'normalized_amount' => null,
+                    'stale' => false,
+                    'resolution_status' => $resolution['status'],
+                    'resolution_reason' => $resolution['reason'],
+                ];
+                continue;
+            }
+
+            $canonical = $resolution['code'];
+            $conversionBreakdown[$canonical] = ($conversionBreakdown[$canonical] ?? 0.0) + $numeric;
+
+            if ($resolution['status'] === 'canonicalized') {
+                $aliasRows[] = [
+                    'source_currency' => $original,
+                    'canonical_currency' => $canonical,
+                    'reason' => $resolution['reason'],
+                ];
+            }
         }
 
-        ksort($normalized);
+        ksort($sourceBreakdown);
+        ksort($conversionBreakdown);
+        ksort($missingDetails);
 
-        return $normalized;
+        return [
+            $sourceBreakdown,
+            $conversionBreakdown,
+            $unresolvedRows,
+            array_values(array_unique($missing)),
+            $missingDetails,
+            $aliasRows,
+        ];
     }
 
     private function normalizeCurrency(mixed $value, string $fallback): string

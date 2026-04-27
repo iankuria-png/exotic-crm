@@ -18,6 +18,7 @@ import { formatCurrency, asNumber } from '../utils/currency';
 import CurrencyAmount from '../components/CurrencyAmount';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import MetricCard from '../components/MetricCard';
+import FxNormalizationNotice from '../components/FxNormalizationNotice';
 
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
@@ -418,6 +419,7 @@ function OperationsDashboard() {
     const revenueWindow = kpis.revenue_window ?? kpis.revenue_mtd ?? null;
     const revenueWindowBreakdown = kpis.revenue_window_breakdown ?? kpis.revenue_mtd_breakdown ?? {};
     const revenueWindowNormalized = kpis.revenue_window_normalized ?? kpis.revenue_mtd_normalized ?? null;
+    const revenueWindowNormalizationMeta = kpis.revenue_window_normalization_meta ?? kpis.revenue_mtd_normalization_meta ?? null;
     const revenueWindowNormalizedDisplay = kpis.revenue_window_normalized_display
         || (revenueWindowNormalized !== null ? formatCurrency(revenueWindowNormalized, kpis.normalized_currency || reportingCurrency.targetCurrency) : null);
     const isMixedRevenue = kpis.revenue_is_mixed ?? Object.keys(revenueWindowBreakdown).length > 1;
@@ -459,6 +461,12 @@ function OperationsDashboard() {
                 <div>
                     <p className="text-2xl leading-tight font-semibold tracking-tight text-slate-900">{revenueWindowNormalizedDisplay}</p>
                     <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                    <FxNormalizationNotice meta={revenueWindowNormalizationMeta} className="mt-2" />
+                </div>
+            ) : reportingCurrency.isFlat ? (
+                <div>
+                    <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-2xl leading-tight font-semibold tracking-tight text-slate-900" />
+                    <FxNormalizationNotice meta={revenueWindowNormalizationMeta} className="mt-2" />
                 </div>
             ) : (
                 <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-2xl leading-tight font-semibold tracking-tight text-slate-900" />

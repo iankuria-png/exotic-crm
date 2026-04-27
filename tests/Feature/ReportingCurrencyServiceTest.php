@@ -9,6 +9,7 @@ use App\Models\ReportingFxRate;
 use App\Models\User;
 use App\Services\ReportingCurrencyService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -69,6 +70,70 @@ class ReportingCurrencyServiceTest extends TestCase
         $this->assertTrue($payload['normalization_meta']['partial']);
         $this->assertSame(1, $payload['normalization_meta']['missing_rate_count']);
         $this->assertSame(['GHS'], $payload['normalization_meta']['missing_currencies']);
+    }
+
+    public function test_contextual_cfa_is_resolved_without_mutating_native_payment_currency(): void
+    {
+        config(['services.reporting_fx.enabled' => true]);
+
+        $platform = Platform::factory()->create([
+            'name' => 'Benin',
+            'country' => 'Benin Republic',
+            'currency_code' => 'CFA',
+        ]);
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'amount' => 1000,
+            'currency' => 'CFA',
+            'status' => 'completed',
+            'completed_at' => '2026-04-23 10:00:00',
+            'created_at' => '2026-04-23 09:00:00',
+        ]);
+
+        ReportingFxRate::query()->create([
+            'provider' => 'currencyapi',
+            'source_currency' => 'XOF',
+            'target_currency' => 'USD',
+            'rate_date' => '2026-04-23',
+            'rate' => '0.0016500000',
+            'fetched_at' => now(),
+        ]);
+
+        $payload = app(ReportingCurrencyService::class)->normalizePaymentQuery(
+            Payment::query()->whereKey($payment->id),
+            'USD'
+        );
+
+        $this->assertSame(['CFA' => 1000.0], $payload['source_breakdown']);
+        $this->assertSame(1.65, $payload['normalized_total']);
+        $this->assertFalse($payload['normalization_meta']['partial']);
+        $this->assertSame('CFA', $payload['normalization_meta']['currency_aliases'][0]['source_currency']);
+        $this->assertSame('XOF', $payload['normalization_meta']['currency_aliases'][0]['canonical_currency']);
+
+        $payment->refresh();
+        $this->assertSame('CFA', $payment->currency);
+        $this->assertSame(1000.0, (float) $payment->amount);
+    }
+
+    public function test_ambiguous_cfa_marks_partial_without_calling_fx_provider(): void
+    {
+        config([
+            'services.reporting_fx.enabled' => true,
+            'services.reporting_fx.api_key' => 'test-key',
+        ]);
+        Http::fake();
+
+        $payload = app(ReportingCurrencyService::class)->normalizeBreakdown(
+            ['CFA' => 1000],
+            now()->parse('2026-04-23'),
+            'USD'
+        );
+
+        $this->assertNull($payload['normalized_total']);
+        $this->assertTrue($payload['normalization_meta']['partial']);
+        $this->assertSame(['CFA'], $payload['normalization_meta']['missing_currencies']);
+        $this->assertStringContainsString('ambiguous', $payload['normalization_meta']['missing_currency_reasons']['CFA']);
+        Http::assertNothingSent();
     }
 
     public function test_reporting_currency_settings_endpoint_defaults_to_usd(): void

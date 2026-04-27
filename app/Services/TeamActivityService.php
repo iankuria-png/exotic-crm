@@ -1056,6 +1056,8 @@ class TeamActivityService
             ? "date(COALESCE(payments.completed_at, payments.created_at))"
             : "DATE(COALESCE(payments.completed_at, payments.created_at))";
         $currencyExpression = "COALESCE(payments.currency, (SELECT currency_code FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1), '{$targetCurrency}')";
+        $platformCountryExpression = "(SELECT country FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
+        $platformNameExpression = "(SELECT name FROM platforms WHERE platforms.id = payments.platform_id LIMIT 1)";
 
         $query = Payment::query()
             ->reportableSuccessful()
@@ -1074,10 +1076,16 @@ class TeamActivityService
         $rows = $query
             ->select(DB::raw('deals.assigned_to as user_id'))
             ->selectRaw("{$dateExpression} as event_date")
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw("{$platformCountryExpression} as platform_country")
+            ->selectRaw("{$platformNameExpression} as platform_name")
             ->selectRaw("{$currencyExpression} as currency")
             ->selectRaw('SUM(payments.amount) as amount')
             ->groupBy('deals.assigned_to')
             ->groupByRaw($dateExpression)
+            ->groupBy('payments.platform_id')
+            ->groupByRaw($platformCountryExpression)
+            ->groupByRaw($platformNameExpression)
             ->groupByRaw($currencyExpression)
             ->get();
         $grouped = [];
@@ -1094,6 +1102,9 @@ class TeamActivityService
             $grouped[$userKey][$currency] = ($grouped[$userKey][$currency] ?? 0.0) + $amount;
             $eventRowsByUser[$userKey][] = [
                 'event_date' => (string) $row->event_date,
+                'platform_id' => $row->platform_id,
+                'platform_country' => $row->platform_country,
+                'platform_name' => $row->platform_name,
                 'currency' => $currency,
                 'amount' => $amount,
             ];

@@ -5,6 +5,7 @@ import api from '../services/api';
 import PageHeader from '../components/PageHeader';
 import MetricCard from '../components/MetricCard';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
+import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
 import useReportingCurrency from '../hooks/useReportingCurrency';
@@ -659,6 +660,12 @@ export default function Reports() {
                                 <div>
                                     <p>{kpis.total_revenue_normalized_display || formatCurrency(kpis.total_revenue_normalized, normalizedCurrency)}</p>
                                     <CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                                    <FxNormalizationNotice meta={kpis.total_revenue_normalization_meta} className="mt-2" />
+                                </div>
+                            ) : reportingCurrency.isFlat ? (
+                                <div>
+                                    <CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} />
+                                    <FxNormalizationNotice meta={kpis.total_revenue_normalization_meta} className="mt-2" />
                                 </div>
                             ) : (
                                 <CurrencyAmount breakdown={kpis.total_revenue_breakdown ?? {}} scalarAmount={kpis.total_revenue} fallbackCurrency={resolvedReportCurrency} />

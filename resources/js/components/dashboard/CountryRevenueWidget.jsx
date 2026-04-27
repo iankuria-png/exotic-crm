@@ -3,6 +3,7 @@ import SectionFrame from '../SectionFrame';
 import { getCountryFlag } from '../../utils/flags';
 import { formatCurrency } from '../../utils/currency';
 import CurrencyAmount from '../CurrencyAmount';
+import FxNormalizationNotice from '../FxNormalizationNotice';
 
 function TrendArrow({ trend }) {
     if (trend === null || trend === undefined) {
@@ -99,6 +100,18 @@ export default function CountryRevenueWidget({ data = [], period = 'week', onPer
                                             className="text-xs font-medium text-slate-500"
                                             stackClassName="text-xs font-medium text-slate-500"
                                         />
+                                        <FxNormalizationNotice meta={market.current_revenue_normalization_meta} className="mt-1 justify-end" />
+                                    </>
+                                ) : currencyMode === 'flat' ? (
+                                    <>
+                                        <CurrencyAmount
+                                            breakdown={market.current_revenue_breakdown}
+                                            scalarAmount={market.current_revenue}
+                                            fallbackCurrency={market.currency}
+                                            className="crm-mono text-sm font-semibold text-slate-900"
+                                            stackClassName="crm-mono text-sm font-semibold text-slate-900"
+                                        />
+                                        <FxNormalizationNotice meta={market.current_revenue_normalization_meta} className="mt-1 justify-end" />
                                     </>
                                 ) : (
                                     <CurrencyAmount
