@@ -581,6 +581,16 @@ export default function Clients() {
         enabled: showCreateModal && !!createForm.platform_id,
     });
 
+    const { data: createModalCitiesData } = useQuery({
+        queryKey: ['client-cities', createForm.platform_id],
+        queryFn: () =>
+            api.get('/crm/clients/cities', {
+                params: createForm.platform_id ? { platform_id: Number(createForm.platform_id) } : {},
+            }).then((response) => response.data),
+        enabled: showCreateModal && !!createForm.platform_id,
+    });
+    const createModalCities = createModalCitiesData?.cities || [];
+
     const createMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/clients', payload).then((response) => response.data),
         onSuccess: (createdClient, variables) => {
@@ -1833,14 +1843,17 @@ export default function Clients() {
 
                             <div>
                                 <label htmlFor="client-city" className="mb-1 block text-sm font-medium text-slate-700">City</label>
-                                <input
+                                <select
                                     id="client-city"
-                                    type="text"
                                     value={createForm.city}
                                     onChange={(event) => setCreateForm((current) => ({ ...current, city: event.target.value }))}
                                     className="crm-input"
-                                    placeholder="Nairobi"
-                                />
+                                >
+                                    <option value="">Select city</option>
+                                    {createModalCities.map((city) => (
+                                        <option key={city} value={city}>{city}</option>
+                                    ))}
+                                </select>
                             </div>
 
                             <div>
