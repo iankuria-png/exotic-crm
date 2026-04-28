@@ -12,6 +12,7 @@ use App\Services\PaymentLinkService;
 use App\Services\WalletSettingsService;
 use App\Services\WalletPayloadService;
 use App\Services\BillingModeService;
+use App\Models\BillingSubscriptionRule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -122,6 +123,20 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
     {
         ['platform' => $platform, 'client' => $client] = $this->seedProxyPayment('paystack');
 
+        BillingSubscriptionRule::query()->create([
+            'market_id' => $platform->id,
+            'discount_json' => [
+                'self_service_incentive' => [
+                    'enabled' => true,
+                    'percent' => 10,
+                    'label' => 'Self-service special',
+                    'starts_at' => now()->subHour()->toIso8601String(),
+                    'expires_at' => now()->addDay()->toIso8601String(),
+                    'sources' => ['wallet', 'self_checkout', 'manual_submission'],
+                ],
+            ],
+        ]);
+
         $context = app(BillingModeService::class)->walletContext($platform);
         $syncedAt = '2026-04-03T12:00:00Z';
         
@@ -149,6 +164,8 @@ class BaselineDiagnosticsSnapshotTest extends TestCase
 
         $this->assertSame('disabled', $configPayload['mode']);
         $this->assertSame('KES', data_get($configPayload, 'config.market.currency'));
+        $this->assertSame(10.0, (float) data_get($configPayload, 'config.self_service_incentive.percent'));
+        $this->assertSame('Self-service special', data_get($configPayload, 'config.self_service_incentive.label'));
         $this->assertSame('5000.00', $balancePayload['balance']);
         $this->assertSame('disabled', $balancePayload['mode']);
 

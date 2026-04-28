@@ -21,6 +21,56 @@
         "topup_poll_interval_seconds": 10,
         "sandbox_badge": false,
         "business_name": "Exotic Ads Test",
-        "description": "Ad credit top-up"
+        "description": "Ad credit top-up",
+        "billing_method_policy": {
+            "version": "2026-04-08",
+            "market": {
+                "platform_id": 1,
+                "currency": "KES"
+            },
+            "activation": {
+                "methods": [
+                    "manual",
+                    "stk_push",
+                    "payment_link",
+                    "wallet_balance"
+                ],
+                "crm_methods": [
+                    "manual",
+                    "stk",
+                    "link"
+                ],
+                "manual_methods": []
+            },
+            "renewal": {
+                "methods": [
+                    "manual",
+                    "stk_push",
+                    "payment_link",
+                    "wallet_balance"
+                ],
+                "crm_methods": [
+                    "manual",
+                    "stk",
+                    "link"
+                ],
+                "wallet_auto_renew": false
+            },
+            "free_trial": {
+                "enabled": false
+            }
+        },
+        "self_service_incentive": {
+            "enabled": true,
+            "percent": 10,
+            "label": "Self-service special",
+            "starts_at": "2026-04-28T02:53:29+00:00",
+            "expires_at": "2026-04-29T03:53:29+00:00",
+            "sources": [
+                "wallet",
+                "self_checkout",
+                "manual_submission"
+            ]
+        }
     }
 }

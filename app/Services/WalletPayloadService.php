@@ -12,7 +12,8 @@ class WalletPayloadService
 {
     public function __construct(
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
-        private readonly BillingConfigurationRepository $billingConfigurationRepository
+        private readonly BillingConfigurationRepository $billingConfigurationRepository,
+        private readonly SelfServiceIncentiveService $selfServiceIncentiveService
     ) {
     }
 
@@ -90,6 +91,7 @@ class WalletPayloadService
             'business_name' => data_get($system, 'billing_branding.' . $context['environment'] . '.business_name'),
             'description' => data_get($system, 'billing_branding.' . $context['environment'] . '.description'),
             'billing_method_policy' => $this->marketBillingMethodPolicy->contract($platform),
+            'self_service_incentive' => $this->selfServiceIncentiveService->resolveActiveIncentive((int) $platform->id),
         ];
     }
 
