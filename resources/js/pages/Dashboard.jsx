@@ -476,6 +476,7 @@ function OperationsDashboard() {
     const resolvedRevenueCurrency = Object.keys(revenueWindowBreakdown).length === 1
         ? Object.keys(revenueWindowBreakdown)[0]
         : selectedCurrency;
+    const isAllMarketsScope = !platformFilter;
     const revenueDeltaLabel = hasDashboardError || kpis.revenue_delta_percent == null ? null : formatDelta(kpis.revenue_delta_percent);
     const recentPaymentsCount = hasDashboardError ? null : asNumber(kpis.completed_payments_window ?? kpis.completed_payments_mtd ?? kpis.recent_payments);
     const unmatchedPaymentsWindow = hasDashboardError ? null : asNumber(kpis.unmatched_payments_window ?? kpis.unmatched_payments);
@@ -501,6 +502,45 @@ function OperationsDashboard() {
         month: 'long',
         day: 'numeric',
     }).format(new Date());
+
+    const revenueValue = reportingCurrency.isFlat && revenueWindowNormalized !== null
+        ? (
+            isAllMarketsScope ? revenueWindowNormalizedDisplay : (
+                <div>
+                    <p className="text-2xl leading-tight font-semibold tracking-tight text-slate-900">{revenueWindowNormalizedDisplay}</p>
+                    <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
+                    <FxNormalizationNotice meta={revenueWindowNormalizationMeta} className="mt-2" />
+                </div>
+            )
+        )
+        : reportingCurrency.isFlat
+            ? (
+                isAllMarketsScope ? 'Mixed scope' : (
+                    <div>
+                        <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-2xl leading-tight font-semibold tracking-tight text-slate-900" />
+                        <FxNormalizationNotice meta={revenueWindowNormalizationMeta} className="mt-2" />
+                    </div>
+                )
+            )
+            : (
+                isAllMarketsScope && isMixedRevenue
+                    ? 'Mixed currencies'
+                    : <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-2xl leading-tight font-semibold tracking-tight text-slate-900" />
+            );
+
+    const revenueHint = recentPaymentsCount > 0
+        ? isAllMarketsScope
+            ? `${recentPaymentsCount} payments across accessible markets`
+            : isMixedRevenue
+                ? `${recentPaymentsCount} payments • ${reportingCurrency.isFlat ? `normalized to ${kpis.normalized_currency || reportingCurrency.targetCurrency}` : 'mixed currencies'}`
+                : `${recentPaymentsCount} payments • avg ${formatCurrency(averageTicketWindow, resolvedRevenueCurrency)}`
+        : 'No successful payments in selected range';
+
+    const revenueSubHint = isAllMarketsScope
+        ? reportingCurrency.isFlat
+            ? 'Market-level revenue detail is shown in Top Performing Countries below.'
+            : 'Switch to Flat for one pan-African total, or use Top Performing Countries below.'
+        : revenueDeltaLabel || 'No comparable single-currency baseline';
 
     const metrics = hasDashboardError ? [
         {
@@ -544,26 +584,9 @@ function OperationsDashboard() {
         {
             key: 'revenue',
             label: 'Collected Revenue',
-            value: reportingCurrency.isFlat && revenueWindowNormalized !== null ? (
-                <div>
-                    <p className="text-2xl leading-tight font-semibold tracking-tight text-slate-900">{revenueWindowNormalizedDisplay}</p>
-                    <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
-                    <FxNormalizationNotice meta={revenueWindowNormalizationMeta} className="mt-2" />
-                </div>
-            ) : reportingCurrency.isFlat ? (
-                <div>
-                    <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-2xl leading-tight font-semibold tracking-tight text-slate-900" />
-                    <FxNormalizationNotice meta={revenueWindowNormalizationMeta} className="mt-2" />
-                </div>
-            ) : (
-                <CurrencyAmount breakdown={revenueWindowBreakdown} scalarAmount={revenueWindow} fallbackCurrency={selectedCurrency} stackClassName="text-2xl leading-tight font-semibold tracking-tight text-slate-900" />
-            ),
-            hint: recentPaymentsCount > 0
-                ? isMixedRevenue
-                    ? `${recentPaymentsCount} payments • ${reportingCurrency.isFlat ? `normalized to ${kpis.normalized_currency || reportingCurrency.targetCurrency}` : 'mixed currencies'}`
-                    : `${recentPaymentsCount} payments • avg ${formatCurrency(averageTicketWindow, resolvedRevenueCurrency)}`
-                : 'No successful payments in selected range',
-            subHint: revenueDeltaLabel || 'No comparable single-currency baseline',
+            value: revenueValue,
+            hint: revenueHint,
+            subHint: revenueSubHint,
             tone: 'accent',
             onClick: () => navigate(withMarketScope('/payments?status=completed')),
         },
