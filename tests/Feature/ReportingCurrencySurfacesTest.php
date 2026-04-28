@@ -175,6 +175,7 @@ class ReportingCurrencySurfacesTest extends TestCase
         ]);
 
         $dashboard = $this->getJson('/api/crm/dashboard?from=2026-04-20&to=2026-04-20&currency_mode=native&reporting_currency=USD');
+        $countryRevenue = $this->getJson('/api/crm/dashboard/country-revenue?from=2026-04-20&to=2026-04-20&currency_mode=native&reporting_currency=USD');
 
         $dashboard->assertOk()
             ->assertJsonPath('filters.currency_mode', 'native')
@@ -183,8 +184,9 @@ class ReportingCurrencySurfacesTest extends TestCase
             ->assertJsonPath('kpis.revenue_window_normalization_meta.as_of', null);
         $this->assertSame(1000.0, (float) $dashboard->json('kpis.revenue_window_breakdown.KES'));
         $this->assertSame(200.0, (float) $dashboard->json('kpis.revenue_window_breakdown.GHS'));
-        $this->assertSame(1000.0, (float) $dashboard->json('country_revenue.0.current_revenue_breakdown.KES'));
-        $this->assertSame(200.0, (float) $dashboard->json('country_revenue.1.current_revenue_breakdown.GHS'));
+        $countryRevenue->assertOk();
+        $this->assertSame(1000.0, (float) $countryRevenue->json('0.current_revenue_breakdown.KES'));
+        $this->assertSame(200.0, (float) $countryRevenue->json('1.current_revenue_breakdown.GHS'));
 
         Http::assertNothingSent();
     }
@@ -276,13 +278,13 @@ class ReportingCurrencySurfacesTest extends TestCase
             'completed_at' => '2026-04-20 09:10:00',
         ]);
 
-        $dashboard = $this->getJson('/api/crm/dashboard?from=2026-04-20&to=2026-04-20&currency_mode=flat&reporting_currency=USD');
+        $dashboard = $this->getJson('/api/crm/dashboard/country-revenue?from=2026-04-20&to=2026-04-20&currency_mode=flat&reporting_currency=USD');
 
         $dashboard->assertOk()
-            ->assertJsonPath('country_revenue.0.name', 'Kenya')
-            ->assertJsonPath('country_revenue.0.current_revenue', 1000)
-            ->assertJsonPath('country_revenue.0.current_revenue_normalized', 7.7)
-            ->assertJsonPath('country_revenue.0.current_revenue_normalization_meta.partial', false);
+            ->assertJsonPath('0.name', 'Kenya')
+            ->assertJsonPath('0.current_revenue', 1000)
+            ->assertJsonPath('0.current_revenue_normalized', 7.7)
+            ->assertJsonPath('0.current_revenue_normalization_meta.partial', false);
     }
 
     private function rate(string $sourceCurrency, string $rateDate, float $rate): void

@@ -56,7 +56,7 @@ function PeriodToggle({ period, onChange }) {
     );
 }
 
-export default function CountryRevenueWidget({ data = [], period = 'week', onPeriodChange, isLoading, currencyMode = 'native', targetCurrency = 'USD' }) {
+export default function CountryRevenueWidget({ data = [], period = 'week', onPeriodChange, isLoading, errorMessage = null, currencyMode = 'native', targetCurrency = 'USD' }) {
     const subtitle = period === 'month'
         ? 'Revenue by market in selected 30-day window'
         : 'Revenue by market in selected 7-day window';
@@ -72,6 +72,10 @@ export default function CountryRevenueWidget({ data = [], period = 'week', onPer
                     {[1, 2].map((item) => (
                         <div key={item} className="h-14 animate-pulse rounded-md bg-slate-100" />
                     ))}
+                </div>
+            ) : errorMessage ? (
+                <div className="rounded-md border border-dashed border-rose-200 bg-rose-50 px-4 py-8 text-center text-sm text-rose-700">
+                    {errorMessage}
                 </div>
             ) : data.length > 0 ? (
                 <div className="space-y-1">

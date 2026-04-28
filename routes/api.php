@@ -72,6 +72,7 @@ Route::middleware(['auth:sanctum', 'crm.impersonation'])->prefix('crm')->group(f
 
     // Dashboard
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
+    Route::get('/dashboard/country-revenue', [CrmDashboardController::class, 'countryRevenue']);
     Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/products', [CrmDashboardController::class, 'products']);
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales');

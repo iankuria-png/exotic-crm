@@ -54,6 +54,17 @@ function toInputDateString(date) {
     return `${year}-${month}-${day}`;
 }
 
+function buildRelativeDaysWindow(days) {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - (days - 1));
+
+    return {
+        from: toInputDateString(start),
+        to: toInputDateString(end),
+    };
+}
+
 function formatRelativeTime(value) {
     if (!value) return '--';
     const timestamp = new Date(value).getTime();
@@ -354,10 +365,9 @@ function OperationsDashboard() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
-    const [fromDate, setFromDate] = useState('');
-    const [toDate, setToDate] = useState('');
+    const [fromDate, setFromDate] = useState(() => buildRelativeDaysWindow(30).from);
+    const [toDate, setToDate] = useState(() => buildRelativeDaysWindow(30).to);
     const [countryPeriod, setCountryPeriod] = useState('week');
-    const [didHydrateDefaultRange, setDidHydrateDefaultRange] = useState(false);
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data, error, isError, isLoading, refetch } = useQuery({
@@ -368,6 +378,22 @@ function OperationsDashboard() {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...(fromDate ? { from: fromDate } : {}),
                     ...(toDate ? { to: toDate } : {}),
+                    country_period: countryPeriod,
+                    ...reportingCurrency.queryParams,
+                },
+            }).then((response) => response.data),
+        retry: false,
+        refetchInterval: (query) => (query.state.status === 'error' ? false : DASHBOARD_REFRESH_MS),
+    });
+
+    const countryRevenueQuery = useQuery({
+        queryKey: ['dashboard-country-revenue', platformFilter, fromDate, toDate, countryPeriod, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryFn: () =>
+            api.get('/crm/dashboard/country-revenue', {
+                params: {
+                    ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+                    from: fromDate,
+                    to: toDate,
                     country_period: countryPeriod,
                     ...reportingCurrency.queryParams,
                 },
@@ -398,8 +424,8 @@ function OperationsDashboard() {
 
         return query ? `${pathname}?${query}` : pathname;
     };
-    const defaultWindowFrom = data?.window?.default_from || data?.filters?.from || '';
-    const defaultWindowTo = data?.window?.default_to || data?.filters?.to || '';
+    const allTimeWindowFrom = data?.window?.all_time_from || data?.window?.default_from || data?.filters?.from || '';
+    const allTimeWindowTo = data?.window?.all_time_to || data?.window?.default_to || data?.filters?.to || '';
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -428,26 +454,12 @@ function OperationsDashboard() {
         }
     }, [platformFilter, platforms]);
 
-    useEffect(() => {
-        if (didHydrateDefaultRange) {
-            return;
-        }
-
-        if (!defaultWindowFrom || !defaultWindowTo) {
-            return;
-        }
-
-        if (!fromDate && !toDate) {
-            setFromDate(defaultWindowFrom);
-            setToDate(defaultWindowTo);
-        }
-
-        setDidHydrateDefaultRange(true);
-    }, [defaultWindowFrom, defaultWindowTo, didHydrateDefaultRange, fromDate, toDate]);
-
     const hasDashboardError = isError;
     const dashboardErrorMessage = describeDashboardError(error);
     const dashboardDependencyErrorMessage = 'This widget depends on the main dashboard summary, which is currently unavailable.';
+    const countryRevenueErrorMessage = countryRevenueQuery.isError
+        ? 'Top-performing countries could not be loaded for this scope right now.'
+        : null;
     const kpis = data?.kpis || {};
     const activeClients = hasDashboardError ? null : asNumber(kpis.active_clients);
     const totalClients = hasDashboardError ? null : asNumber(kpis.total_clients);
@@ -605,35 +617,34 @@ function OperationsDashboard() {
     const hiddenFollowUpCount = Math.max(0, followUps.length - LIST_PREVIEW_LIMIT);
     const appliedRangeFrom = data?.window?.applied_from || data?.filters?.from || fromDate || '';
     const appliedRangeTo = data?.window?.applied_to || data?.filters?.to || toDate || '';
-    const isDefaultDateWindow = Boolean(data?.window?.is_default);
-    const hasNonDefaultDateRange = Boolean(
-        fromDate
-        && toDate
-        && defaultWindowFrom
-        && defaultWindowTo
-        && (fromDate !== defaultWindowFrom || toDate !== defaultWindowTo)
+    const last30DayWindow = buildRelativeDaysWindow(30);
+    const isThirtyDayRange = fromDate === last30DayWindow.from && toDate === last30DayWindow.to;
+    const isAllTimeRange = Boolean(
+        allTimeWindowFrom
+        && allTimeWindowTo
+        && fromDate === allTimeWindowFrom
+        && toDate === allTimeWindowTo
     );
+    const countryRevenue = Array.isArray(countryRevenueQuery.data) ? countryRevenueQuery.data : [];
 
     const applyAllTimeWindow = () => {
-        if (!defaultWindowFrom || !defaultWindowTo) {
+        if (!allTimeWindowFrom || !allTimeWindowTo) {
             return;
         }
 
-        setFromDate(defaultWindowFrom);
-        setToDate(defaultWindowTo);
+        setFromDate(allTimeWindowFrom);
+        setToDate(allTimeWindowTo);
     };
 
     const applyRelativeDaysWindow = (days) => {
-        const end = new Date();
-        const start = new Date();
-        start.setDate(end.getDate() - (days - 1));
-        setFromDate(toInputDateString(start));
-        setToDate(toInputDateString(end));
+        const nextWindow = buildRelativeDaysWindow(days);
+        setFromDate(nextWindow.from);
+        setToDate(nextWindow.to);
     };
 
     const resetFilters = () => {
         setPlatformFilter('');
-        applyAllTimeWindow();
+        applyRelativeDaysWindow(30);
     };
 
     return (
@@ -717,7 +728,7 @@ function OperationsDashboard() {
                             >
                                 7d
                             </button>
-                            {(platformFilter || hasNonDefaultDateRange) ? (
+                            {(platformFilter || !isThirtyDayRange) ? (
                                 <button
                                     type="button"
                                     onClick={resetFilters}
@@ -734,7 +745,7 @@ function OperationsDashboard() {
                             Range: <span className="crm-mono font-medium text-slate-700">{formatDate(appliedRangeFrom)}</span> to <span className="crm-mono font-medium text-slate-700">{formatDate(appliedRangeTo)}</span>
                         </span>
                         <span className="rounded border border-slate-200 bg-white px-2.5 py-1">
-                            {isDefaultDateWindow ? 'Default: oldest to today' : 'Custom range'}
+                            {isThirtyDayRange ? 'Default: last 30 days' : isAllTimeRange ? 'All-time range' : 'Custom range'}
                         </span>
                         {platformFilter ? (
                             <span className="rounded border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700">
@@ -769,20 +780,15 @@ function OperationsDashboard() {
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
                     {widgetConfig.country_revenue ? (
-                        hasDashboardError ? (
-                            <SectionFrame title="Top Performing Countries" subtitle="Revenue by market in selected 7-day window">
-                                <EmptyState message={dashboardDependencyErrorMessage} />
-                            </SectionFrame>
-                        ) : (
-                            <CountryRevenueWidget
-                                data={data?.country_revenue || []}
-                                period={countryPeriod}
-                                onPeriodChange={setCountryPeriod}
-                                isLoading={isLoading}
-                                currencyMode={reportingCurrency.displayMode}
-                                targetCurrency={kpis.normalized_currency || reportingCurrency.targetCurrency}
-                            />
-                        )
+                        <CountryRevenueWidget
+                            data={countryRevenue}
+                            period={countryPeriod}
+                            onPeriodChange={setCountryPeriod}
+                            isLoading={countryRevenueQuery.isLoading}
+                            errorMessage={countryRevenueErrorMessage}
+                            currencyMode={reportingCurrency.displayMode}
+                            targetCurrency={kpis.normalized_currency || reportingCurrency.targetCurrency}
+                        />
                     ) : null}
 
                     <div className="grid gap-4 xl:grid-cols-2">

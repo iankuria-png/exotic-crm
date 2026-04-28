@@ -64,7 +64,6 @@ class DashboardTimingInstrumentationTest extends TestCase
             'resolve_oldest_dashboard_record_at',
             'normalize_revenue_windows',
             'renewal_summary',
-            'country_revenue',
             'retention_summary',
             'completed',
         ] as $section) {

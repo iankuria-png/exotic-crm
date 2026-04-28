@@ -1107,6 +1107,21 @@ export default function SalesDashboardView({ user, navigate }) {
         refetchOnWindowFocus: false,
     });
 
+    const countriesQuery = useQuery({
+        queryKey: ['sales-dashboard-country-revenue', marketFilter, rangeKey],
+        queryFn: () => api.get('/crm/dashboard/country-revenue', {
+            params: {
+                from: fromDate,
+                to: toDate,
+                country_period: selectedRange.days > 7 ? 'month' : 'week',
+                ...(marketFilter ? { platform_id: Number(marketFilter) } : {}),
+            },
+        }).then((response) => response.data),
+        staleTime: 60_000,
+        refetchInterval: DASHBOARD_REFRESH_MS,
+        refetchOnWindowFocus: false,
+    });
+
     const myStatsQuery = useQuery({
         queryKey: ['sales-dashboard-my-stats', marketFilter, selectedRange.days > 7 ? 'month' : 'week'],
         queryFn: () => api.get('/crm/team/me', {
@@ -1217,7 +1232,7 @@ export default function SalesDashboardView({ user, navigate }) {
     const activeClients = asNumber(kpis.active_clients);
     const totalClients = asNumber(kpis.total_clients);
     const expiringDeals = summary.expiring_deals || [];
-    const countries = summary.country_revenue || [];
+    const countries = Array.isArray(countriesQuery.data) ? countriesQuery.data : [];
     const packages = summary.top_packages || [];
     const missedChatsCount = kpis.missed_chats_count;
     const isHeroBooting = (!summaryQuery.data && summaryQuery.isLoading) || (!myStatsQuery.data && myStatsQuery.isLoading);
@@ -1384,7 +1399,7 @@ export default function SalesDashboardView({ user, navigate }) {
                         <MomentumCanvas
                             countries={widgetConfig.top_countries ? countries : []}
                             packages={widgetConfig.top_packages ? packages : []}
-                            isLoading={summaryQuery.isLoading}
+                            isLoading={summaryQuery.isLoading || countriesQuery.isLoading}
                         />
                     </div>
                 ) : null}

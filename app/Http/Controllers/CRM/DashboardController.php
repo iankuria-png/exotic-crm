@@ -280,21 +280,6 @@ class DashboardController extends Controller
             $renewalPipeline14d = (int) ($renewalSummary['pending'] ?? 0);
             $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
-            $countryPeriod = $validated['country_period'] ?? 'week';
-            $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to, $targetCurrency, $shouldNormalizeRevenue);
-            $this->recordDashboardTimingCheckpoint(
-                'country_revenue',
-                $dashboardTimingStartedAt,
-                $dashboardTimings,
-                $selectedPlatformId,
-                $platformIds,
-                $validated,
-                $currencyMode,
-                $targetCurrency,
-                $from,
-                $to
-            );
-
             $activeCampaignsQuery = RenewalCampaign::enabled();
             if (is_array($platformIds)) {
                 $activeCampaignsQuery->whereHas('product', function ($query) use ($platformIds) {
@@ -352,12 +337,15 @@ class DashboardController extends Controller
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),
                 'search' => $search !== '' ? $search : null,
+                'country_period' => $validated['country_period'] ?? 'week',
                 'currency_mode' => $currencyMode,
                 'reporting_currency' => $targetCurrency,
             ],
             'window' => [
                 'default_from' => $defaultFrom->toDateString(),
                 'default_to' => $defaultTo->toDateString(),
+                'all_time_from' => $defaultFrom->toDateString(),
+                'all_time_to' => $defaultTo->toDateString(),
                 'applied_from' => $from->toDateString(),
                 'applied_to' => $to->toDateString(),
                 'is_default' => $isDefaultDateWindow,
@@ -413,7 +401,7 @@ class DashboardController extends Controller
             'payment_review_queue' => $paymentReviewQueue,
             'recent_payments' => $paymentReviewQueue,
             'upcoming_follow_ups' => $upcomingFollowUps,
-            'country_revenue' => $countryRevenue,
+            'country_revenue' => [],
             'top_packages' => $topPackages,
             'active_campaigns_count' => $activeCampaignsCount,
             'recent_activity' => $recentActivity,
@@ -536,6 +524,56 @@ class DashboardController extends Controller
         return response()->json($products);
     }
 
+    public function countryRevenue(Request $request)
+    {
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'country_period' => 'nullable|in:week,month',
+            'currency_mode' => 'nullable|in:native,flat',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
+        ]);
+
+        $selectedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
+            $request,
+            'platform_id',
+            'You do not have access to this dashboard market.'
+        );
+
+        $platformIds = $selectedPlatformId
+            ? [(int) $selectedPlatformId]
+            : $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode(
+            $validated['currency_mode'] ?? null,
+            $selectedPlatformId === null
+        );
+        $shouldNormalizeRevenue = $currencyMode === ReportingCurrencyService::MODE_FLAT;
+
+        $oldestRecordAt = $this->resolveOldestDashboardRecordAt($platformIds);
+        $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
+        $defaultTo = now()->endOfDay();
+
+        $from = !empty($validated['from'])
+            ? Carbon::parse($validated['from'])->startOfDay()
+            : (clone $defaultFrom);
+        $to = !empty($validated['to'])
+            ? Carbon::parse($validated['to'])->endOfDay()
+            : (clone $defaultTo);
+
+        return response()->json(
+            $this->buildCountryRevenue(
+                $platformIds,
+                $validated['country_period'] ?? 'week',
+                $from,
+                $to,
+                $targetCurrency,
+                $shouldNormalizeRevenue
+            )
+        );
+    }
+
     private function buildCountryRevenue(?array $platformIds, string $period, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency, bool $shouldNormalizeRevenue): array
     {
         $windowDays = $period === 'month' ? 30 : 7;
@@ -557,22 +595,20 @@ class DashboardController extends Controller
             ->orderBy('name')
             ->get();
 
+        $currentRevenueRows = $this->aggregateCountryRevenueRows($platformIds, $currentFrom, $currentTo);
+        $previousRevenueRows = $this->aggregateCountryRevenueRows($platformIds, $previousFrom, $previousTo);
+        $currentRowsByPlatform = $currentRevenueRows->groupBy(fn ($row) => (int) $row->platform_id);
+        $previousRowsByPlatform = $previousRevenueRows->groupBy(fn ($row) => (int) $row->platform_id);
+
         $result = [];
         foreach ($platforms as $platform) {
-            $currentRevenueQuery = Payment::where('platform_id', $platform->id)
-                ->reportableSuccessful()
-                ->excludingWalletTopups()
-                ->whereBetween('created_at', [$currentFrom, $currentTo]);
+            $platformCurrentRows = $currentRowsByPlatform->get((int) $platform->id, collect())->values();
+            $platformPreviousRows = $previousRowsByPlatform->get((int) $platform->id, collect())->values();
 
-            $previousRevenueQuery = Payment::where('platform_id', $platform->id)
-                ->reportableSuccessful()
-                ->excludingWalletTopups()
-                ->whereBetween('created_at', [$previousFrom, $previousTo]);
-
-            $currentRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $currentRevenueQuery, $platform->currency_code ?: 'KES');
-            $previousRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery, $platform->currency_code ?: 'KES');
-            $currentRevenueNormalized = $this->normalizePaymentQueryForMode(clone $currentRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
-            $previousRevenueNormalized = $this->normalizePaymentQueryForMode(clone $previousRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $currentRevenueBreakdown = $this->buildCurrencyBreakdownFromRows($platformCurrentRows);
+            $previousRevenueBreakdown = $this->buildCurrencyBreakdownFromRows($platformPreviousRows);
+            $currentRevenueNormalized = $this->normalizeCountryRevenueRowsForMode($platformCurrentRows, $targetCurrency, $shouldNormalizeRevenue);
+            $previousRevenueNormalized = $this->normalizeCountryRevenueRowsForMode($platformPreviousRows, $targetCurrency, $shouldNormalizeRevenue);
             $currentRevenue = $currentRevenueBreakdown['scalar_amount'];
             $previousRevenue = $previousRevenueBreakdown['scalar_amount'];
             $trend = $this->calculateComparableCountryTrend($currentRevenueBreakdown, $previousRevenueBreakdown);
@@ -621,6 +657,64 @@ class DashboardController extends Controller
         });
 
         return $result;
+    }
+
+    private function aggregateCountryRevenueRows(?array $platformIds, Carbon $from, Carbon $to)
+    {
+        $driver = DB::connection()->getDriverName();
+        $dateExpression = $driver === 'sqlite'
+            ? "date(COALESCE(payments.completed_at, payments.created_at))"
+            : "DATE(COALESCE(payments.completed_at, payments.created_at))";
+        $currencyExpression = "COALESCE(payments.currency, platforms.currency_code, 'KES')";
+
+        $query = Payment::query()
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->whereBetween('payments.created_at', [$from, $to])
+            ->select(DB::raw("{$dateExpression} as event_date"))
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw('platforms.country as platform_country')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw("{$currencyExpression} as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->groupByRaw($dateExpression)
+            ->groupBy('payments.platform_id')
+            ->groupBy('platforms.country')
+            ->groupBy('platforms.name')
+            ->groupByRaw($currencyExpression);
+
+        if (is_array($platformIds)) {
+            $query->whereIn('payments.platform_id', $platformIds);
+        }
+
+        return $query->get();
+    }
+
+    private function buildCurrencyBreakdownFromRows($rows): array
+    {
+        $breakdown = collect($rows)
+            ->groupBy(fn ($row) => (string) $row->currency)
+            ->map(fn ($group) => round((float) $group->sum(fn ($row) => (float) $row->amount), 2))
+            ->all();
+
+        ksort($breakdown);
+        $count = count($breakdown);
+
+        return [
+            'breakdown' => $breakdown,
+            'currency_count' => $count,
+            'scalar_amount' => $count === 1 ? array_values($breakdown)[0] : null,
+        ];
+    }
+
+    private function normalizeCountryRevenueRowsForMode($rows, string $targetCurrency, bool $shouldNormalizeRevenue): array
+    {
+        if ($shouldNormalizeRevenue) {
+            return $this->reportingCurrencyService->normalizeEventRows($rows, $targetCurrency, false);
+        }
+
+        return $this->emptyNormalizationPayload($targetCurrency);
     }
 
     private function normalizePaymentQueryForMode(Builder $query, string $targetCurrency, bool $shouldNormalizeRevenue): array

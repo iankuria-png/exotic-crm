@@ -679,14 +679,17 @@ class WalletSettingsPhaseFourTest extends TestCase
         ]);
 
         $dashboard = $this->getJson('/api/crm/dashboard?platform_id=' . $platform->id);
+        $countryRevenue = $this->getJson('/api/crm/dashboard/country-revenue?platform_id=' . $platform->id);
 
         $dashboard->assertOk()
             ->assertJsonPath('kpis.completed_payments_window', 2)
             ->assertJsonPath('kpis.revenue_window', 7200)
             ->assertJsonPath('kpis.average_ticket_window', 3600)
             ->assertJsonPath('kpis.wallet_topups_window', 1)
-            ->assertJsonPath('kpis.wallet_topup_revenue_window', 1200)
-            ->assertJsonPath('country_revenue.0.current_revenue', 7200);
+            ->assertJsonPath('kpis.wallet_topup_revenue_window', 1200);
+
+        $countryRevenue->assertOk()
+            ->assertJsonPath('0.current_revenue', 7200);
 
         $reports = $this->getJson('/api/crm/reports/summary?platform_id=' . $platform->id);
 
@@ -812,15 +815,17 @@ class WalletSettingsPhaseFourTest extends TestCase
         $to = now()->toDateString();
 
         $dashboard = $this->getJson("/api/crm/dashboard?platform_id={$platform->id}&from={$from}&to={$to}&country_period=month");
+        $countryRevenue = $this->getJson("/api/crm/dashboard/country-revenue?platform_id={$platform->id}&from={$from}&to={$to}&country_period=month");
 
         $dashboard->assertOk()
             ->assertJsonPath('kpis.completed_payments_window', 2)
             ->assertJsonPath('kpis.revenue_window', 118.4)
-            ->assertJsonPath('kpis.average_ticket_window', 59.2)
-            ->assertJsonPath('country_revenue.0.current_revenue', 118.4);
+            ->assertJsonPath('kpis.average_ticket_window', 59.2);
 
         $this->assertSame(118.4, (float) $dashboard->json('kpis.revenue_window_breakdown.KES'));
-        $this->assertSame(118.4, (float) $dashboard->json('country_revenue.0.current_revenue_breakdown.KES'));
+        $countryRevenue->assertOk()
+            ->assertJsonPath('0.current_revenue', 118.4);
+        $this->assertSame(118.4, (float) $countryRevenue->json('0.current_revenue_breakdown.KES'));
     }
 
     private function createCompletedPayment(
