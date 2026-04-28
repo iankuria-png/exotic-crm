@@ -20,8 +20,10 @@ use App\Services\RenewalService;
 use App\Services\ReportingCurrencyService;
 use App\Services\SupportBoardService;
 use Carbon\Carbon;
+use Throwable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class DashboardController extends Controller
@@ -68,218 +70,283 @@ class DashboardController extends Controller
             $selectedPlatformId === null
         );
         $shouldNormalizeRevenue = $currencyMode === ReportingCurrencyService::MODE_FLAT;
-        $oldestRecordAt = $this->resolveOldestDashboardRecordAt($platformIds);
-        $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
-        $defaultTo = now()->endOfDay();
+        $dashboardTimingStartedAt = hrtime(true);
+        $dashboardTimings = [];
 
-        $from = !empty($validated['from'])
-            ? Carbon::parse($validated['from'])->startOfDay()
-            : (clone $defaultFrom);
-        $to = !empty($validated['to'])
-            ? Carbon::parse($validated['to'])->endOfDay()
-            : (clone $defaultTo);
-        $hasExplicitDateFilter = !empty($validated['from']) || !empty($validated['to']);
-        $requestedFromDate = !empty($validated['from']) ? Carbon::parse($validated['from'])->toDateString() : null;
-        $requestedToDate = !empty($validated['to']) ? Carbon::parse($validated['to'])->toDateString() : null;
-        $isDefaultDateWindow = (empty($validated['from']) && empty($validated['to']))
-            || (
-                $requestedFromDate !== null
-                && $requestedToDate !== null
-                && $requestedFromDate === $defaultFrom->toDateString()
-                && $requestedToDate === $defaultTo->toDateString()
+        try {
+            $oldestRecordAt = $this->resolveOldestDashboardRecordAt($platformIds);
+            $this->recordDashboardTimingCheckpoint(
+                'resolve_oldest_dashboard_record_at',
+                $dashboardTimingStartedAt,
+                $dashboardTimings,
+                $selectedPlatformId,
+                $platformIds,
+                $validated,
+                $currencyMode,
+                $targetCurrency
             );
 
-        $expiringDeals = $this->buildExpiringSubscriptionsWidget($platformIds, $search);
+            $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
+            $defaultTo = now()->endOfDay();
 
-        $reviewBaselineCutoff = $this->resolveBaselineCutoff();
-        $salesView = $request->boolean('sales_view') || $request->user()?->role === MarketAuthorizationService::ROLE_SALES;
-        $paymentReviewQueueQuery = Payment::query()
-            ->reportableSuccessful()
-            ->whereNull('client_id')
-            ->with(['platform', 'product'])
-            ->orderBy('created_at', 'desc');
-        if ($reviewBaselineCutoff) {
-            $paymentReviewQueueQuery->where('created_at', '>=', $reviewBaselineCutoff);
-        }
-        if (is_array($platformIds)) {
-            $paymentReviewQueueQuery->whereIn('platform_id', $platformIds);
-        }
-        if ($search !== '') {
-            $paymentReviewQueueQuery->where(function ($query) use ($search) {
-                $query->where('phone', 'like', "%{$search}%")
-                    ->orWhere('transaction_reference', 'like', "%{$search}%");
-            });
-        }
-        if ($hasExplicitDateFilter) {
-            $paymentReviewQueueQuery->whereBetween('created_at', [$from, $to]);
-        }
-        $paymentReviewQueue = $paymentReviewQueueQuery->limit(10)->get();
+            $from = !empty($validated['from'])
+                ? Carbon::parse($validated['from'])->startOfDay()
+                : (clone $defaultFrom);
+            $to = !empty($validated['to'])
+                ? Carbon::parse($validated['to'])->endOfDay()
+                : (clone $defaultTo);
+            $hasExplicitDateFilter = !empty($validated['from']) || !empty($validated['to']);
+            $requestedFromDate = !empty($validated['from']) ? Carbon::parse($validated['from'])->toDateString() : null;
+            $requestedToDate = !empty($validated['to']) ? Carbon::parse($validated['to'])->toDateString() : null;
+            $isDefaultDateWindow = (empty($validated['from']) && empty($validated['to']))
+                || (
+                    $requestedFromDate !== null
+                    && $requestedToDate !== null
+                    && $requestedFromDate === $defaultFrom->toDateString()
+                    && $requestedToDate === $defaultTo->toDateString()
+                );
 
-        $upcomingFollowUpsQuery = ClientNote::withPendingFollowUp()
-            ->with(['client', 'author'])
-            ->orderBy('follow_up_at');
-        if (is_array($platformIds)) {
-            $upcomingFollowUpsQuery->whereHas('client', function ($query) use ($platformIds) {
-                $query->whereIn('platform_id', $platformIds);
-            });
-        }
-        if ($hasExplicitDateFilter) {
-            $upcomingFollowUpsQuery->whereBetween('follow_up_at', [$from, $to]);
-        }
-        if ($search !== '') {
-            $upcomingFollowUpsQuery->where(function ($query) use ($search) {
-                $query->where('content', 'like', "%{$search}%")
-                    ->orWhereHas('client', function ($clientQuery) use ($search) {
-                        $clientQuery->where('name', 'like', "%{$search}%")
-                            ->orWhere('phone_normalized', 'like', "%{$search}%");
-                    });
-            });
-        }
-        $upcomingFollowUps = $upcomingFollowUpsQuery->limit(10)->get();
+            $expiringDeals = $this->buildExpiringSubscriptionsWidget($platformIds, $search);
 
-        $activeClientsQuery = Client::active();
-        $totalClientsQuery = Client::query();
-        $pendingLeadsQuery = Lead::new();
-        $totalLeadsQuery = Lead::query();
-        $activeDealsQuery = Deal::active();
-        $expiringSoonQuery = Deal::expiringSoon(7);
-        $paymentsWindowQuery = Payment::query()
-            ->reportableSuccessful()
-            ->excludingWalletTopups()
-            ->whereBetween('created_at', [$from, $to]);
-        $walletTopupsWindowQuery = Payment::query()
-            ->reportableSuccessful()
-            ->walletTopups()
-            ->whereBetween('created_at', [$from, $to]);
-        $unmatchedPaymentsWindowQuery = Payment::query()
-            ->reportableSuccessful()
-            ->whereNull('client_id')
-            ->whereBetween('created_at', [$from, $to]);
-        $baselineCutoff = $this->resolveBaselineCutoff();
-        $awaitingPaymentsQuery = Payment::query()->businessVisible()->whereIn('status', ['initiated', 'pending']);
-        $failedPaymentsQuery = Payment::query()->businessVisible()->where('status', 'failed');
-        $unmatchedQueueQuery = Payment::query()
-            ->reportableSuccessful()
-            ->whereNull('client_id')
-            ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
-        if ($baselineCutoff) {
-            $awaitingPaymentsQuery->where('created_at', '>=', $baselineCutoff);
-            $failedPaymentsQuery->where('created_at', '>=', $baselineCutoff);
-            $unmatchedQueueQuery->where('created_at', '>=', $baselineCutoff);
-        }
-        if (is_array($platformIds)) {
-            $activeClientsQuery->whereIn('platform_id', $platformIds);
-            $totalClientsQuery->whereIn('platform_id', $platformIds);
-            $pendingLeadsQuery->whereIn('platform_id', $platformIds);
-            $totalLeadsQuery->whereIn('platform_id', $platformIds);
-            $activeDealsQuery->whereIn('platform_id', $platformIds);
-            $expiringSoonQuery->whereIn('platform_id', $platformIds);
-            $paymentsWindowQuery->whereIn('platform_id', $platformIds);
-            $walletTopupsWindowQuery->whereIn('platform_id', $platformIds);
-            $unmatchedPaymentsWindowQuery->whereIn('platform_id', $platformIds);
-            $awaitingPaymentsQuery->whereIn('platform_id', $platformIds);
-            $failedPaymentsQuery->whereIn('platform_id', $platformIds);
-            $unmatchedQueueQuery->whereIn('platform_id', $platformIds);
-        }
+            $reviewBaselineCutoff = $this->resolveBaselineCutoff();
+            $salesView = $request->boolean('sales_view') || $request->user()?->role === MarketAuthorizationService::ROLE_SALES;
+            $paymentReviewQueueQuery = Payment::query()
+                ->reportableSuccessful()
+                ->whereNull('client_id')
+                ->with(['platform', 'product'])
+                ->orderBy('created_at', 'desc');
+            if ($reviewBaselineCutoff) {
+                $paymentReviewQueueQuery->where('created_at', '>=', $reviewBaselineCutoff);
+            }
+            if (is_array($platformIds)) {
+                $paymentReviewQueueQuery->whereIn('platform_id', $platformIds);
+            }
+            if ($search !== '') {
+                $paymentReviewQueueQuery->where(function ($query) use ($search) {
+                    $query->where('phone', 'like', "%{$search}%")
+                        ->orWhere('transaction_reference', 'like', "%{$search}%");
+                });
+            }
+            if ($hasExplicitDateFilter) {
+                $paymentReviewQueueQuery->whereBetween('created_at', [$from, $to]);
+            }
+            $paymentReviewQueue = $paymentReviewQueueQuery->limit(10)->get();
 
-        $windowSeconds = max(1, $to->diffInSeconds($from) + 1);
-        $previousFrom = (clone $from)->subSeconds($windowSeconds);
-        $previousTo = (clone $from)->subSecond();
-        $previousRevenueQuery = Payment::query()
-            ->reportableSuccessful()
-            ->excludingWalletTopups()
-            ->whereBetween('created_at', [$previousFrom, $previousTo]);
-        if (is_array($platformIds)) {
-            $previousRevenueQuery->whereIn('platform_id', $platformIds);
-        }
+            $upcomingFollowUpsQuery = ClientNote::withPendingFollowUp()
+                ->with(['client', 'author'])
+                ->orderBy('follow_up_at');
+            if (is_array($platformIds)) {
+                $upcomingFollowUpsQuery->whereHas('client', function ($query) use ($platformIds) {
+                    $query->whereIn('platform_id', $platformIds);
+                });
+            }
+            if ($hasExplicitDateFilter) {
+                $upcomingFollowUpsQuery->whereBetween('follow_up_at', [$from, $to]);
+            }
+            if ($search !== '') {
+                $upcomingFollowUpsQuery->where(function ($query) use ($search) {
+                    $query->where('content', 'like', "%{$search}%")
+                        ->orWhereHas('client', function ($clientQuery) use ($search) {
+                            $clientQuery->where('name', 'like', "%{$search}%")
+                                ->orWhere('phone_normalized', 'like', "%{$search}%");
+                        });
+                });
+            }
+            $upcomingFollowUps = $upcomingFollowUpsQuery->limit(10)->get();
 
-        $completedPaymentsWindow = (clone $paymentsWindowQuery)->count();
+            $activeClientsQuery = Client::active();
+            $totalClientsQuery = Client::query();
+            $pendingLeadsQuery = Lead::new();
+            $totalLeadsQuery = Lead::query();
+            $activeDealsQuery = Deal::active();
+            $expiringSoonQuery = Deal::expiringSoon(7);
+            $paymentsWindowQuery = Payment::query()
+                ->reportableSuccessful()
+                ->excludingWalletTopups()
+                ->whereBetween('created_at', [$from, $to]);
+            $walletTopupsWindowQuery = Payment::query()
+                ->reportableSuccessful()
+                ->walletTopups()
+                ->whereBetween('created_at', [$from, $to]);
+            $unmatchedPaymentsWindowQuery = Payment::query()
+                ->reportableSuccessful()
+                ->whereNull('client_id')
+                ->whereBetween('created_at', [$from, $to]);
+            $baselineCutoff = $this->resolveBaselineCutoff();
+            $awaitingPaymentsQuery = Payment::query()->businessVisible()->whereIn('status', ['initiated', 'pending']);
+            $failedPaymentsQuery = Payment::query()->businessVisible()->where('status', 'failed');
+            $unmatchedQueueQuery = Payment::query()
+                ->reportableSuccessful()
+                ->whereNull('client_id')
+                ->whereIn('status', Payment::SUCCESSFUL_STATUSES);
+            if ($baselineCutoff) {
+                $awaitingPaymentsQuery->where('created_at', '>=', $baselineCutoff);
+                $failedPaymentsQuery->where('created_at', '>=', $baselineCutoff);
+                $unmatchedQueueQuery->where('created_at', '>=', $baselineCutoff);
+            }
+            if (is_array($platformIds)) {
+                $activeClientsQuery->whereIn('platform_id', $platformIds);
+                $totalClientsQuery->whereIn('platform_id', $platformIds);
+                $pendingLeadsQuery->whereIn('platform_id', $platformIds);
+                $totalLeadsQuery->whereIn('platform_id', $platformIds);
+                $activeDealsQuery->whereIn('platform_id', $platformIds);
+                $expiringSoonQuery->whereIn('platform_id', $platformIds);
+                $paymentsWindowQuery->whereIn('platform_id', $platformIds);
+                $walletTopupsWindowQuery->whereIn('platform_id', $platformIds);
+                $unmatchedPaymentsWindowQuery->whereIn('platform_id', $platformIds);
+                $awaitingPaymentsQuery->whereIn('platform_id', $platformIds);
+                $failedPaymentsQuery->whereIn('platform_id', $platformIds);
+                $unmatchedQueueQuery->whereIn('platform_id', $platformIds);
+            }
 
-        // Per-currency breakdowns for all revenue KPIs.  scalar_amount is null when
-        // multiple currencies are present so the frontend cannot display a wrong total.
-        $revenueWindowBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $paymentsWindowQuery);
-        $revenuePreviousBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery);
-        $walletTopupBreakdown      = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsWindowQuery);
-        $revenueWindowNormalized   = $this->normalizePaymentQueryForMode(clone $paymentsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
-        $revenuePreviousNormalized = $this->normalizePaymentQueryForMode(clone $previousRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
-        $walletTopupNormalized     = $this->normalizePaymentQueryForMode(clone $walletTopupsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $windowSeconds = max(1, $to->diffInSeconds($from) + 1);
+            $previousFrom = (clone $from)->subSeconds($windowSeconds);
+            $previousTo = (clone $from)->subSecond();
+            $previousRevenueQuery = Payment::query()
+                ->reportableSuccessful()
+                ->excludingWalletTopups()
+                ->whereBetween('created_at', [$previousFrom, $previousTo]);
+            if (is_array($platformIds)) {
+                $previousRevenueQuery->whereIn('platform_id', $platformIds);
+            }
 
-        $revenueWindow         = $revenueWindowBreakdown['scalar_amount'];
-        $revenuePreviousWindow = $revenuePreviousBreakdown['scalar_amount'];
-        $walletTopupRevenueWindow = $walletTopupBreakdown['scalar_amount'];
+            $completedPaymentsWindow = (clone $paymentsWindowQuery)->count();
 
-        $isMixed = $revenueWindowBreakdown['currency_count'] > 1;
+            // Per-currency breakdowns for all revenue KPIs. scalar_amount is null when
+            // multiple currencies are present so the frontend cannot display a wrong total.
+            $revenueWindowBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $paymentsWindowQuery);
+            $revenuePreviousBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery);
+            $walletTopupBreakdown      = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsWindowQuery);
+            $revenueWindowNormalized   = $this->normalizePaymentQueryForMode(clone $paymentsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $revenuePreviousNormalized = $this->normalizePaymentQueryForMode(clone $previousRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $walletTopupNormalized     = $this->normalizePaymentQueryForMode(clone $walletTopupsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $this->recordDashboardTimingCheckpoint(
+                'normalize_revenue_windows',
+                $dashboardTimingStartedAt,
+                $dashboardTimings,
+                $selectedPlatformId,
+                $platformIds,
+                $validated,
+                $currencyMode,
+                $targetCurrency,
+                $from,
+                $to
+            );
 
-        $walletTopupsWindow = (clone $walletTopupsWindowQuery)->count();
+            $revenueWindow         = $revenueWindowBreakdown['scalar_amount'];
+            $revenuePreviousWindow = $revenuePreviousBreakdown['scalar_amount'];
+            $walletTopupRevenueWindow = $walletTopupBreakdown['scalar_amount'];
 
-        // Average ticket and delta only make sense for a single-currency scope.
-        $averageTicket = (!$isMixed && $completedPaymentsWindow > 0 && $revenueWindow !== null)
-            ? round($revenueWindow / $completedPaymentsWindow, 2)
-            : null;
+            $isMixed = $revenueWindowBreakdown['currency_count'] > 1;
 
-        $prevRevScalar = $revenuePreviousBreakdown['scalar_amount'];
-        $revenueDeltaPercent = (!$isMixed && $revenuePreviousBreakdown['currency_count'] <= 1 && $prevRevScalar !== null && $prevRevScalar > 0 && $revenueWindow !== null)
-            ? round((($revenueWindow - $prevRevScalar) / $prevRevScalar) * 100, 1)
-            : null;
+            $walletTopupsWindow = (clone $walletTopupsWindowQuery)->count();
 
-        $paymentRecoveryPending = (clone $awaitingPaymentsQuery)->count();
-        $paymentRecoveryFailed = (clone $failedPaymentsQuery)->count();
-        $paymentRecoveryUnmatched = (clone $unmatchedQueueQuery)->count();
-        $unmatchedPaymentsWindow = (clone $unmatchedPaymentsWindowQuery)->count();
-        $paymentRecoveryTotal = $paymentRecoveryPending + $paymentRecoveryFailed + $paymentRecoveryUnmatched;
+            // Average ticket and delta only make sense for a single-currency scope.
+            $averageTicket = (!$isMixed && $completedPaymentsWindow > 0 && $revenueWindow !== null)
+                ? round($revenueWindow / $completedPaymentsWindow, 2)
+                : null;
 
-        $renewalSummary = $this->renewalService->buildSummary([
-            'platform_ids' => is_array($platformIds) ? $platformIds : null,
-            'platform_id' => !is_array($platformIds) && $selectedPlatformId ? (int) $selectedPlatformId : null,
-            'search' => $search,
-            'include_untracked' => true,
-        ]);
-        $renewalRisk72h = (int) ($renewalSummary['risk'] ?? 0);
-        $renewalPipeline14d = (int) ($renewalSummary['pending'] ?? 0);
-        $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
+            $prevRevScalar = $revenuePreviousBreakdown['scalar_amount'];
+            $revenueDeltaPercent = (!$isMixed && $revenuePreviousBreakdown['currency_count'] <= 1 && $prevRevScalar !== null && $prevRevScalar > 0 && $revenueWindow !== null)
+                ? round((($revenueWindow - $prevRevScalar) / $prevRevScalar) * 100, 1)
+                : null;
 
-        $countryPeriod = $validated['country_period'] ?? 'week';
-        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to, $targetCurrency, $shouldNormalizeRevenue);
+            $paymentRecoveryPending = (clone $awaitingPaymentsQuery)->count();
+            $paymentRecoveryFailed = (clone $failedPaymentsQuery)->count();
+            $paymentRecoveryUnmatched = (clone $unmatchedQueueQuery)->count();
+            $unmatchedPaymentsWindow = (clone $unmatchedPaymentsWindowQuery)->count();
+            $paymentRecoveryTotal = $paymentRecoveryPending + $paymentRecoveryFailed + $paymentRecoveryUnmatched;
 
-        $activeCampaignsQuery = RenewalCampaign::enabled();
-        if (is_array($platformIds)) {
-            $activeCampaignsQuery->whereHas('product', function ($query) use ($platformIds) {
-                $query->whereIn('platform_id', $platformIds);
-            });
-        }
-        $activeCampaignsCount = $activeCampaignsQuery->count();
+            $renewalSummary = $this->renewalService->buildSummary([
+                'platform_ids' => is_array($platformIds) ? $platformIds : null,
+                'platform_id' => !is_array($platformIds) && $selectedPlatformId ? (int) $selectedPlatformId : null,
+                'search' => $search,
+                'include_untracked' => true,
+            ]);
+            $this->recordDashboardTimingCheckpoint(
+                'renewal_summary',
+                $dashboardTimingStartedAt,
+                $dashboardTimings,
+                $selectedPlatformId,
+                $platformIds,
+                $validated,
+                $currencyMode,
+                $targetCurrency,
+                $from,
+                $to
+            );
 
-        $recentActivityQuery = TimelineEvent::orderBy('created_at', 'desc');
-        if (is_array($platformIds)) {
-            $recentActivityQuery->whereIn('platform_id', $platformIds);
-        }
-        $recentActivity = $recentActivityQuery->limit(5)->get(['id', 'entity_type', 'event_type', 'created_at']);
+            $renewalRisk72h = (int) ($renewalSummary['risk'] ?? 0);
+            $renewalPipeline14d = (int) ($renewalSummary['pending'] ?? 0);
+            $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
-        $upcomingFollowUpsCountQuery = ClientNote::withPendingFollowUp();
-        if (is_array($platformIds)) {
-            $upcomingFollowUpsCountQuery->whereHas('client', function ($query) use ($platformIds) {
-                $query->whereIn('platform_id', $platformIds);
-            });
-        }
-        $upcomingFollowUpsCount = $upcomingFollowUpsCountQuery->count();
+            $countryPeriod = $validated['country_period'] ?? 'week';
+            $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to, $targetCurrency, $shouldNormalizeRevenue);
+            $this->recordDashboardTimingCheckpoint(
+                'country_revenue',
+                $dashboardTimingStartedAt,
+                $dashboardTimings,
+                $selectedPlatformId,
+                $platformIds,
+                $validated,
+                $currencyMode,
+                $targetCurrency,
+                $from,
+                $to
+            );
 
-        $commsStatsQuery = TimelineEvent::whereIn('event_type', ['sms_sent', 'sms_delivered', 'sms_failed', 'whatsapp_sent', 'whatsapp_delivered', 'whatsapp_failed'])
-            ->where('created_at', '>=', now()->subDays(30));
-        if (is_array($platformIds)) {
-            $commsStatsQuery->whereIn('platform_id', $platformIds);
-        }
-        $commsEvents = $commsStatsQuery->get(['event_type']);
-        $commsSentCount = $commsEvents->whereIn('event_type', ['sms_sent', 'whatsapp_sent'])->count();
-        $commsDeliveredCount = $commsEvents->whereIn('event_type', ['sms_delivered', 'whatsapp_delivered'])->count();
-        $commsFailedCount = $commsEvents->whereIn('event_type', ['sms_failed', 'whatsapp_failed'])->count();
-        $retentionSummary = $this->clientRetentionInsightService->buildDashboardSummary(
-            is_array($platformIds) ? $platformIds : null
-        );
-        $newUsers = $salesView ? $this->buildNewUsersKpi(is_array($platformIds) ? $platformIds : null) : null;
-        $topPackages = $salesView ? $this->buildTopPackages(is_array($platformIds) ? $platformIds : null, $from, $to) : [];
-        $missedChatsCount = $salesView ? $this->resolveMissedChatsCount(is_array($platformIds) ? $platformIds : null) : null;
+            $activeCampaignsQuery = RenewalCampaign::enabled();
+            if (is_array($platformIds)) {
+                $activeCampaignsQuery->whereHas('product', function ($query) use ($platformIds) {
+                    $query->whereIn('platform_id', $platformIds);
+                });
+            }
+            $activeCampaignsCount = $activeCampaignsQuery->count();
 
-        return response()->json([
+            $recentActivityQuery = TimelineEvent::orderBy('created_at', 'desc');
+            if (is_array($platformIds)) {
+                $recentActivityQuery->whereIn('platform_id', $platformIds);
+            }
+            $recentActivity = $recentActivityQuery->limit(5)->get(['id', 'entity_type', 'event_type', 'created_at']);
+
+            $upcomingFollowUpsCountQuery = ClientNote::withPendingFollowUp();
+            if (is_array($platformIds)) {
+                $upcomingFollowUpsCountQuery->whereHas('client', function ($query) use ($platformIds) {
+                    $query->whereIn('platform_id', $platformIds);
+                });
+            }
+            $upcomingFollowUpsCount = $upcomingFollowUpsCountQuery->count();
+
+            $commsStatsQuery = TimelineEvent::whereIn('event_type', ['sms_sent', 'sms_delivered', 'sms_failed', 'whatsapp_sent', 'whatsapp_delivered', 'whatsapp_failed'])
+                ->where('created_at', '>=', now()->subDays(30));
+            if (is_array($platformIds)) {
+                $commsStatsQuery->whereIn('platform_id', $platformIds);
+            }
+            $commsEvents = $commsStatsQuery->get(['event_type']);
+            $commsSentCount = $commsEvents->whereIn('event_type', ['sms_sent', 'whatsapp_sent'])->count();
+            $commsDeliveredCount = $commsEvents->whereIn('event_type', ['sms_delivered', 'whatsapp_delivered'])->count();
+            $commsFailedCount = $commsEvents->whereIn('event_type', ['sms_failed', 'whatsapp_failed'])->count();
+            $retentionSummary = $this->clientRetentionInsightService->buildDashboardSummary(
+                is_array($platformIds) ? $platformIds : null
+            );
+            $this->recordDashboardTimingCheckpoint(
+                'retention_summary',
+                $dashboardTimingStartedAt,
+                $dashboardTimings,
+                $selectedPlatformId,
+                $platformIds,
+                $validated,
+                $currencyMode,
+                $targetCurrency,
+                $from,
+                $to
+            );
+
+            $newUsers = $salesView ? $this->buildNewUsersKpi(is_array($platformIds) ? $platformIds : null) : null;
+            $topPackages = $salesView ? $this->buildTopPackages(is_array($platformIds) ? $platformIds : null, $from, $to) : [];
+            $missedChatsCount = $salesView ? $this->resolveMissedChatsCount(is_array($platformIds) ? $platformIds : null) : null;
+
+            $response = response()->json([
             'filters' => [
                 'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
                 'from' => $from->toDateString(),
@@ -356,7 +423,36 @@ class DashboardController extends Controller
                 'delivered_count' => $commsDeliveredCount,
                 'failed_count' => $commsFailedCount,
             ],
-        ]);
+            ]);
+
+            $this->recordDashboardTimingCheckpoint(
+                'completed',
+                $dashboardTimingStartedAt,
+                $dashboardTimings,
+                $selectedPlatformId,
+                $platformIds,
+                $validated,
+                $currencyMode,
+                $targetCurrency,
+                $from,
+                $to
+            );
+
+            return $response;
+        } catch (Throwable $exception) {
+            $this->recordDashboardTimingFailure(
+                $dashboardTimingStartedAt,
+                $dashboardTimings,
+                $selectedPlatformId,
+                $platformIds,
+                $validated,
+                $currencyMode,
+                $targetCurrency,
+                $exception
+            );
+
+            throw $exception;
+        }
     }
 
     public function myMarkets(Request $request)
@@ -905,5 +1001,74 @@ class DashboardController extends Controller
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function recordDashboardTimingCheckpoint(
+        string $section,
+        int $startedAt,
+        array &$timings,
+        ?int $selectedPlatformId,
+        ?array $platformIds,
+        array $validated,
+        string $currencyMode,
+        string $targetCurrency,
+        ?Carbon $from = null,
+        ?Carbon $to = null
+    ): void {
+        $elapsedMs = round((hrtime(true) - $startedAt) / 1_000_000, 1);
+        $timings[$section] = $elapsedMs;
+
+        Log::info('CRM dashboard timing checkpoint', array_merge(
+            $this->dashboardTimingContext($selectedPlatformId, $platformIds, $validated, $currencyMode, $targetCurrency, $from, $to),
+            [
+                'section' => $section,
+                'elapsed_ms' => $elapsedMs,
+                'timings_ms' => $timings,
+            ]
+        ));
+    }
+
+    private function recordDashboardTimingFailure(
+        int $startedAt,
+        array $timings,
+        ?int $selectedPlatformId,
+        ?array $platformIds,
+        array $validated,
+        string $currencyMode,
+        string $targetCurrency,
+        Throwable $exception,
+        ?Carbon $from = null,
+        ?Carbon $to = null
+    ): void {
+        Log::error('CRM dashboard timing failure', array_merge(
+            $this->dashboardTimingContext($selectedPlatformId, $platformIds, $validated, $currencyMode, $targetCurrency, $from, $to),
+            [
+                'elapsed_ms' => round((hrtime(true) - $startedAt) / 1_000_000, 1),
+                'timings_ms' => $timings,
+                'exception_class' => $exception::class,
+                'exception_message' => $exception->getMessage(),
+            ]
+        ));
+    }
+
+    private function dashboardTimingContext(
+        ?int $selectedPlatformId,
+        ?array $platformIds,
+        array $validated,
+        string $currencyMode,
+        string $targetCurrency,
+        ?Carbon $from = null,
+        ?Carbon $to = null
+    ): array {
+        return [
+            'platform_id' => $selectedPlatformId ? (int) $selectedPlatformId : null,
+            'platform_scope' => $selectedPlatformId ? 'single_market' : 'all_accessible_markets',
+            'platform_count' => is_array($platformIds) ? count($platformIds) : null,
+            'country_period' => $validated['country_period'] ?? 'week',
+            'currency_mode' => $currencyMode,
+            'reporting_currency' => $targetCurrency,
+            'from' => $from?->toDateString() ?? ($validated['from'] ?? null),
+            'to' => $to?->toDateString() ?? ($validated['to'] ?? null),
+        ];
     }
 }
