@@ -124,6 +124,69 @@ class ReportingCurrencySurfacesTest extends TestCase
             ->assertJsonPath('kpis.revenue_window_normalization_meta.partial', true)
             ->assertJsonPath('kpis.revenue_window_normalization_meta.missing_currencies.0', 'GHS');
         $this->assertSame(2360.0, (float) $dashboard->json('kpis.revenue_window_breakdown.GHS'));
+        Http::assertNothingSent();
+    }
+
+    public function test_dashboard_native_all_markets_does_not_call_fx_provider(): void
+    {
+        config([
+            'services.reporting_fx.enabled' => true,
+            'services.reporting_fx.api_key' => 'test-key',
+        ]);
+        Http::fake([
+            '*' => Http::response(['message' => 'Unexpected FX call'], 500),
+        ]);
+
+        $admin = User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+            'email' => Str::random(8) . '@example.test',
+        ]);
+        Sanctum::actingAs($admin);
+
+        $kenya = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'KES',
+        ]);
+        $ghana = Platform::factory()->create([
+            'name' => 'Ghana',
+            'country' => 'Ghana',
+            'currency_code' => 'GHS',
+        ]);
+
+        Payment::factory()->create([
+            'platform_id' => $kenya->id,
+            'amount' => 1000,
+            'currency' => 'KES',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => '2026-04-20 09:00:00',
+            'completed_at' => '2026-04-20 09:10:00',
+        ]);
+        Payment::factory()->create([
+            'platform_id' => $ghana->id,
+            'amount' => 200,
+            'currency' => 'GHS',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => '2026-04-20 10:00:00',
+            'completed_at' => '2026-04-20 10:10:00',
+        ]);
+
+        $dashboard = $this->getJson('/api/crm/dashboard?from=2026-04-20&to=2026-04-20&currency_mode=native&reporting_currency=USD');
+
+        $dashboard->assertOk()
+            ->assertJsonPath('filters.currency_mode', 'native')
+            ->assertJsonPath('kpis.revenue_window', null)
+            ->assertJsonPath('kpis.revenue_window_normalized', null)
+            ->assertJsonPath('kpis.revenue_window_normalization_meta.as_of', null);
+        $this->assertSame(1000.0, (float) $dashboard->json('kpis.revenue_window_breakdown.KES'));
+        $this->assertSame(200.0, (float) $dashboard->json('kpis.revenue_window_breakdown.GHS'));
+        $this->assertSame(1000.0, (float) $dashboard->json('country_revenue.0.current_revenue_breakdown.KES'));
+        $this->assertSame(200.0, (float) $dashboard->json('country_revenue.1.current_revenue_breakdown.GHS'));
+
+        Http::assertNothingSent();
     }
 
     public function test_reports_package_and_owner_rollups_use_platform_context_for_cfa(): void

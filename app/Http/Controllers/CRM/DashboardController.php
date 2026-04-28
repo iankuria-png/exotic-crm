@@ -67,6 +67,7 @@ class DashboardController extends Controller
             $validated['currency_mode'] ?? null,
             $selectedPlatformId === null
         );
+        $shouldNormalizeRevenue = $currencyMode === ReportingCurrencyService::MODE_FLAT;
         $oldestRecordAt = $this->resolveOldestDashboardRecordAt($platformIds);
         $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
         $defaultTo = now()->endOfDay();
@@ -199,9 +200,9 @@ class DashboardController extends Controller
         $revenueWindowBreakdown    = CurrencyBreakdown::fromPaymentQuery(clone $paymentsWindowQuery);
         $revenuePreviousBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery);
         $walletTopupBreakdown      = CurrencyBreakdown::fromPaymentQuery(clone $walletTopupsWindowQuery);
-        $revenueWindowNormalized   = $this->reportingCurrencyService->normalizePaymentQuery(clone $paymentsWindowQuery, $targetCurrency);
-        $revenuePreviousNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $previousRevenueQuery, $targetCurrency);
-        $walletTopupNormalized     = $this->reportingCurrencyService->normalizePaymentQuery(clone $walletTopupsWindowQuery, $targetCurrency);
+        $revenueWindowNormalized   = $this->normalizePaymentQueryForMode(clone $paymentsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
+        $revenuePreviousNormalized = $this->normalizePaymentQueryForMode(clone $previousRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
+        $walletTopupNormalized     = $this->normalizePaymentQueryForMode(clone $walletTopupsWindowQuery, $targetCurrency, $shouldNormalizeRevenue);
 
         $revenueWindow         = $revenueWindowBreakdown['scalar_amount'];
         $revenuePreviousWindow = $revenuePreviousBreakdown['scalar_amount'];
@@ -238,7 +239,7 @@ class DashboardController extends Controller
         $renewalWorkload14d = $renewalRisk72h + $renewalPipeline14d;
 
         $countryPeriod = $validated['country_period'] ?? 'week';
-        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to, $targetCurrency);
+        $countryRevenue = $this->buildCountryRevenue($platformIds, $countryPeriod, $from, $to, $targetCurrency, $shouldNormalizeRevenue);
 
         $activeCampaignsQuery = RenewalCampaign::enabled();
         if (is_array($platformIds)) {
@@ -439,7 +440,7 @@ class DashboardController extends Controller
         return response()->json($products);
     }
 
-    private function buildCountryRevenue(?array $platformIds, string $period, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency): array
+    private function buildCountryRevenue(?array $platformIds, string $period, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency, bool $shouldNormalizeRevenue): array
     {
         $windowDays = $period === 'month' ? 30 : 7;
         $currentTo = $rangeTo->copy();
@@ -474,13 +475,15 @@ class DashboardController extends Controller
 
             $currentRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $currentRevenueQuery, $platform->currency_code ?: 'KES');
             $previousRevenueBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $previousRevenueQuery, $platform->currency_code ?: 'KES');
-            $currentRevenueNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $currentRevenueQuery, $targetCurrency);
-            $previousRevenueNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $previousRevenueQuery, $targetCurrency);
+            $currentRevenueNormalized = $this->normalizePaymentQueryForMode(clone $currentRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
+            $previousRevenueNormalized = $this->normalizePaymentQueryForMode(clone $previousRevenueQuery, $targetCurrency, $shouldNormalizeRevenue);
             $currentRevenue = $currentRevenueBreakdown['scalar_amount'];
             $previousRevenue = $previousRevenueBreakdown['scalar_amount'];
             $trend = $this->calculateComparableCountryTrend($currentRevenueBreakdown, $previousRevenueBreakdown);
             $normalizedTrend = null;
             if (
+                $shouldNormalizeRevenue
+                &&
                 !($currentRevenueNormalized['normalization_meta']['partial'] ?? true)
                 && !($previousRevenueNormalized['normalization_meta']['partial'] ?? true)
                 && (float) ($previousRevenueNormalized['normalized_total'] ?? 0) > 0
@@ -522,6 +525,25 @@ class DashboardController extends Controller
         });
 
         return $result;
+    }
+
+    private function normalizePaymentQueryForMode(Builder $query, string $targetCurrency, bool $shouldNormalizeRevenue): array
+    {
+        if ($shouldNormalizeRevenue) {
+            return $this->reportingCurrencyService->normalizePaymentQuery($query, $targetCurrency, false);
+        }
+
+        return $this->emptyNormalizationPayload($targetCurrency);
+    }
+
+    private function emptyNormalizationPayload(string $targetCurrency): array
+    {
+        $payload = $this->reportingCurrencyService->normalizeBreakdown([], null, $targetCurrency);
+        $payload['normalized_total'] = null;
+        $payload['normalized_display'] = null;
+        $payload['normalization_meta']['as_of'] = null;
+
+        return $payload;
     }
 
     private function buildNewUsersKpi(?array $platformIds): array

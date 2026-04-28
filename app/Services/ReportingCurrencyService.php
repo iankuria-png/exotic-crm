@@ -118,7 +118,7 @@ class ReportingCurrencyService
     /**
      * @param  array<string, float|int|string|null>  $breakdown
      */
-    public function normalizeBreakdown(array $breakdown, ?CarbonInterface $eventDate = null, ?string $targetCurrency = null): array
+    public function normalizeBreakdown(array $breakdown, ?CarbonInterface $eventDate = null, ?string $targetCurrency = null, bool $allowLiveFetch = true): array
     {
         $settings = $this->settings();
         $target = $this->normalizeCurrency($targetCurrency ?? $settings['target_currency'] ?? self::DEFAULT_TARGET_CURRENCY, self::DEFAULT_TARGET_CURRENCY);
@@ -136,7 +136,7 @@ class ReportingCurrencyService
                 $provider = 'identity';
                 $rateStale = false;
             } else {
-                $snapshot = $this->resolveRate($currency, $target, $date, $settings);
+                $snapshot = $this->resolveRate($currency, $target, $date, $settings, $allowLiveFetch);
 
                 if (!$snapshot) {
                     $missing[] = $currency;
@@ -206,7 +206,7 @@ class ReportingCurrencyService
         ];
     }
 
-    public function normalizePaymentQuery($query, ?string $targetCurrency = null): array
+    public function normalizePaymentQuery($query, ?string $targetCurrency = null, bool $allowLiveFetch = true): array
     {
         $settings = $this->settings();
         $target = $this->normalizeCurrency($targetCurrency ?? $settings['target_currency'] ?? self::DEFAULT_TARGET_CURRENCY, self::DEFAULT_TARGET_CURRENCY);
@@ -234,10 +234,10 @@ class ReportingCurrencyService
             ->groupByRaw($currencyExpression)
             ->get();
 
-        return $this->normalizeEventRows($rows, $target);
+        return $this->normalizeEventRows($rows, $target, $allowLiveFetch);
     }
 
-    public function normalizeEventRows(iterable $rows, ?string $targetCurrency = null): array
+    public function normalizeEventRows(iterable $rows, ?string $targetCurrency = null, bool $allowLiveFetch = true): array
     {
         $settings = $this->settings();
         $target = $this->normalizeCurrency($targetCurrency ?? $settings['target_currency'] ?? self::DEFAULT_TARGET_CURRENCY, self::DEFAULT_TARGET_CURRENCY);
@@ -292,7 +292,7 @@ class ReportingCurrencyService
                 ];
             }
 
-            $normalized = $this->normalizeBreakdown([$currency => $amount], Carbon::parse($eventDate), $target);
+            $normalized = $this->normalizeBreakdown([$currency => $amount], Carbon::parse($eventDate), $target, $allowLiveFetch);
             $meta = $normalized['normalization_meta'] ?? [];
             $line = ($meta['rows'] ?? [])[0] ?? [];
 
@@ -409,7 +409,7 @@ class ReportingCurrencyService
         }
     }
 
-    private function resolveRate(string $sourceCurrency, string $targetCurrency, string $date, array $settings): ?ReportingFxRate
+    private function resolveRate(string $sourceCurrency, string $targetCurrency, string $date, array $settings, bool $allowLiveFetch = true): ?ReportingFxRate
     {
         $provider = (string) ($settings['provider'] ?? 'currencyapi');
         $staleDays = max(0, (int) ($settings['stale_days'] ?? 7));
@@ -441,7 +441,7 @@ class ReportingCurrencyService
         }
 
         // Cache miss: attempt a live fetch from CurrencyAPI if a key is available.
-        if ($provider === 'currencyapi') {
+        if ($allowLiveFetch && $provider === 'currencyapi') {
             return $this->fetchAndCacheLiveRate($sourceCurrency, $targetCurrency, $date);
         }
 
