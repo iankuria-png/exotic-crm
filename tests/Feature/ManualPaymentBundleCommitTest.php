@@ -4,9 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Deal;
-use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\Product;
 use App\Models\User;
+use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -20,11 +21,17 @@ class ManualPaymentBundleCommitTest extends TestCase
     public function test_commit_creates_bundle_child_payments_and_activates_target_rows(): void
     {
         [$platform, $admin] = $this->createAuthContext('admin');
-        [$pendingDeal, $expiredDeal] = $this->createEligibleDeals($platform);
+        $bundleItems = $this->createBundleItems($platform);
 
         Http::fake([
             'https://manual-bundle-commit.example.test/wp-json/exotic-crm-sync/v1/clients/*/activate' => Http::response(['ok' => true], 200),
         ]);
+
+        app(WalletSettingsService::class)->updateDiscountConfig([
+            'max_percentage_by_platform' => [
+                (string) $platform->id => 20,
+            ],
+        ], $admin->id);
 
         Sanctum::actingAs($admin);
 
@@ -34,8 +41,18 @@ class ManualPaymentBundleCommitTest extends TestCase
             'total_amount' => 5000,
             'idempotency_key' => (string) Str::uuid(),
             'items' => [
-                ['deal_id' => $pendingDeal->id, 'allocated_amount' => 2500],
-                ['deal_id' => $expiredDeal->id, 'allocated_amount' => 2500],
+                [
+                    'client_id' => $bundleItems[0]['client']->id,
+                    'product_id' => $bundleItems[0]['product']->id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
+                [
+                    'client_id' => $bundleItems[1]['client']->id,
+                    'product_id' => $bundleItems[1]['product']->id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
             ],
         ]);
 
@@ -65,30 +82,37 @@ class ManualPaymentBundleCommitTest extends TestCase
             'status' => 'completed',
         ]);
 
-        $pendingDeal->refresh();
-        $this->assertSame('active', $pendingDeal->status);
-        $this->assertSame('COMMIT001-1', $pendingDeal->payment_reference);
+        $firstDeal = Deal::query()->where('payment_reference', 'COMMIT001-1')->firstOrFail();
+        $secondDeal = Deal::query()->where('payment_reference', 'COMMIT001-2')->firstOrFail();
 
-        $renewedDeal = Deal::query()
-            ->where('client_id', $expiredDeal->client_id)
-            ->where('origin', 'manual_payment_bundle')
-            ->where('status', 'active')
-            ->latest('id')
-            ->first();
+        $this->assertSame('active', $firstDeal->status);
+        $this->assertSame('manual_payment_bundle', $firstDeal->origin);
+        $this->assertSame('agent_manual', $firstDeal->discount_source);
+        $this->assertSame(16.67, round((float) $firstDeal->discount_percentage, 2));
+        $this->assertSame(3000.0, (float) $firstDeal->original_amount);
 
-        $this->assertNotNull($renewedDeal);
-        $this->assertSame('COMMIT001-2', $renewedDeal->payment_reference);
+        $this->assertSame('active', $secondDeal->status);
+        $this->assertSame('manual_payment_bundle', $secondDeal->origin);
+        $this->assertSame('agent_manual', $secondDeal->discount_source);
+        $this->assertSame(16.67, round((float) $secondDeal->discount_percentage, 2));
+        $this->assertSame(3000.0, (float) $secondDeal->original_amount);
     }
 
     public function test_sales_cannot_review_bundle_owned_manual_review_rows(): void
     {
         [$platform, $admin] = $this->createAuthContext('admin');
         [, $sales] = $this->createAuthContext('sales', $platform);
-        [$pendingDeal] = $this->createEligibleDeals($platform);
+        $bundleItems = $this->createBundleItems($platform);
 
         Http::fake([
             'https://manual-bundle-commit.example.test/wp-json/exotic-crm-sync/v1/clients/*/activate' => Http::response(['ok' => true], 200),
         ]);
+
+        app(WalletSettingsService::class)->updateDiscountConfig([
+            'max_percentage_by_platform' => [
+                (string) $platform->id => 20,
+            ],
+        ], $admin->id);
 
         Sanctum::actingAs($admin);
 
@@ -98,7 +122,12 @@ class ManualPaymentBundleCommitTest extends TestCase
             'total_amount' => 2500,
             'idempotency_key' => (string) Str::uuid(),
             'items' => [
-                ['deal_id' => $pendingDeal->id, 'allocated_amount' => 2500],
+                [
+                    'client_id' => $bundleItems[0]['client']->id,
+                    'product_id' => $bundleItems[0]['product']->id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
             ],
         ])->assertCreated();
 
@@ -131,9 +160,9 @@ class ManualPaymentBundleCommitTest extends TestCase
     }
 
     /**
-     * @return array{0: Deal, 1?: Deal}
+     * @return array<int, array{client: Client, product: Product}>
      */
-    private function createEligibleDeals(Platform $platform): array
+    private function createBundleItems(Platform $platform): array
     {
         $clientA = Client::factory()->create([
             'platform_id' => $platform->id,
@@ -149,25 +178,36 @@ class ManualPaymentBundleCommitTest extends TestCase
             'phone_normalized' => '254700009222',
         ]);
 
-        $pendingDeal = Deal::factory()->create([
+        $productA = Product::factory()->create([
             'platform_id' => $platform->id,
-            'client_id' => $clientA->id,
-            'status' => 'pending',
-            'amount' => 2500,
+            'name' => 'Premium Bundle Plan A',
+            'display_name' => 'Premium Bundle Plan A',
+            'slug' => 'premium-bundle-plan-a-' . Str::lower(Str::random(6)),
+            'tier' => 'premium',
+            'weekly_price' => 750,
+            'biweekly_price' => 1500,
+            'monthly_price' => 3000,
             'currency' => 'KES',
-            'duration' => 'monthly',
+            'is_active' => true,
         ]);
 
-        $expiredDeal = Deal::factory()->create([
+        $productB = Product::factory()->create([
             'platform_id' => $platform->id,
-            'client_id' => $clientB->id,
-            'status' => 'expired',
-            'amount' => 2500,
+            'name' => 'Premium Bundle Plan B',
+            'display_name' => 'Premium Bundle Plan B',
+            'slug' => 'premium-bundle-plan-b-' . Str::lower(Str::random(6)),
+            'tier' => 'premium',
+            'weekly_price' => 750,
+            'biweekly_price' => 1500,
+            'monthly_price' => 3000,
             'currency' => 'KES',
-            'duration' => 'monthly',
+            'is_active' => true,
         ]);
 
-        return [$pendingDeal, $expiredDeal];
+        return [
+            ['client' => $clientA, 'product' => $productA],
+            ['client' => $clientB, 'product' => $productB],
+        ];
     }
 
     private function createPlatform(): Platform

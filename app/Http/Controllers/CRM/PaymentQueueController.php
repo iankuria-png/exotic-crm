@@ -90,6 +90,7 @@ class PaymentQueueController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'environment' => 'nullable|in:production,sandbox',
             'test_visibility' => 'nullable|in:hide,include,only',
+            'has_discount' => 'nullable|in:0,1',
             'resolution_code' => 'nullable|in:reversed,invalid_reference',
             'currency_mode' => 'nullable|in:native,flat',
             'reporting_currency' => 'nullable|string|min:3|max:8',
@@ -115,7 +116,14 @@ class PaymentQueueController extends Controller
         $latestProviderTransactionOrder = 'COALESCE(last_status_at, created_at) DESC, id DESC';
 
         $baseQuery = Payment::query()
-            ->with(['platform', 'product', 'client', 'manualSubmission', 'manualPaymentBundle'])
+            ->with([
+                'platform',
+                'product',
+                'client',
+                'deal:id,payment_id,discount_percentage,original_amount,discount_source,discount_approved_by',
+                'manualSubmission',
+                'manualPaymentBundle',
+            ])
             ->select('payments.*')
             ->selectSub(
                 BillingProviderTransaction::query()
@@ -201,6 +209,22 @@ class PaymentQueueController extends Controller
             $query->where('source', $request->source);
         }
 
+        $hasDiscountFilter = trim((string) ($validated['has_discount'] ?? ''));
+        if ($hasDiscountFilter !== '') {
+            if ($hasDiscountFilter === '1') {
+                $query->whereHas('deal', function (Builder $dealQuery) {
+                    $dealQuery->whereNotNull('discount_percentage');
+                });
+            } else {
+                $query->where(function (Builder $builder) {
+                    $builder->whereNull('deal_id')
+                        ->orWhereHas('deal', function (Builder $dealQuery) {
+                            $dealQuery->whereNull('discount_percentage');
+                        });
+                });
+            }
+        }
+
         $confidenceFilter = trim((string) $request->input('match_confidence', ''));
         if ($confidenceFilter !== '') {
             if (in_array($confidenceFilter, ['high', 'medium', 'low'], true)) {
@@ -259,11 +283,18 @@ class PaymentQueueController extends Controller
         // silently display a meaningless mixed-currency total.
         $pendingBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
         $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $confirmedStatsQuery);
+        $discountedConfirmedStatsQuery = (clone $confirmedStatsQuery)
+            ->whereIn('payments.deal_id', Deal::query()
+                ->select('id')
+                ->whereNotNull('discount_percentage'))
+            ->distinct();
+        $discountedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $discountedConfirmedStatsQuery);
         $reversedBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
         $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
         $pendingNormalized   = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
         $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedStatsQuery, $targetCurrency);
+        $discountedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $discountedConfirmedStatsQuery, $targetCurrency);
         $reversedNormalized  = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
         $failedNormalized    = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->where('status', 'failed'), $targetCurrency);
         $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'), $targetCurrency);
@@ -288,6 +319,12 @@ class PaymentQueueController extends Controller
             'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
             'confirmed_normalized_amount' => $confirmedNormalized['normalized_total'],
             'confirmed_normalization_meta' => $confirmedNormalized['normalization_meta'],
+            'discounted' => (clone $discountedConfirmedStatsQuery)->count(),
+            'discounted_amount' => $discountedBreakdown['scalar_amount'],
+            'discounted_amount_breakdown' => $discountedBreakdown['breakdown'],
+            'discounted_currency_count' => $discountedBreakdown['currency_count'],
+            'discounted_normalized_amount' => $discountedNormalized['normalized_total'],
+            'discounted_normalization_meta' => $discountedNormalized['normalization_meta'],
             'reversed' => (clone $reversedStatsQuery)->count(),
             'reversed_amount' => $reversedBreakdown['scalar_amount'],
             'reversed_amount_breakdown' => $reversedBreakdown['breakdown'],

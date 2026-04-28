@@ -1240,7 +1240,7 @@ class DealController extends Controller
         static $missingColumns = null;
         if ($missingColumns === null) {
             $missingColumns = [];
-            foreach (['is_free_trial', 'free_trial_approved_by', 'payment_reference', 'discount_percentage', 'original_amount', 'discount_approved_by'] as $column) {
+            foreach (['is_free_trial', 'free_trial_approved_by', 'payment_reference', 'discount_percentage', 'original_amount', 'discount_approved_by', 'discount_source'] as $column) {
                 if (!Schema::hasColumn('deals', $column)) {
                     $missingColumns[] = $column;
                 }
@@ -1399,6 +1399,7 @@ class DealController extends Controller
             'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
             'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
             'discount_approved_by' => $deal->discount_approved_by ? (int) $deal->discount_approved_by : null,
+            'discount_source' => $deal->discount_source,
         ];
 
         $baseAmount = $deal->original_amount !== null
@@ -1411,6 +1412,7 @@ class DealController extends Controller
                 'original_amount' => null,
                 'discount_percentage' => null,
                 'discount_approved_by' => null,
+                'discount_source' => null,
             ]);
 
             return [
@@ -1421,6 +1423,7 @@ class DealController extends Controller
                     'original_amount' => null,
                     'discount_percentage' => null,
                     'discount_approved_by' => null,
+                    'discount_source' => null,
                 ],
             ];
         }
@@ -1432,6 +1435,7 @@ class DealController extends Controller
             'original_amount' => round($baseAmount, 2),
             'discount_percentage' => $discountPercentage,
             'discount_approved_by' => $actorId,
+            'discount_source' => 'agent_manual',
         ]);
 
         return [
@@ -1442,6 +1446,7 @@ class DealController extends Controller
                 'original_amount' => $deal->original_amount !== null ? (float) $deal->original_amount : null,
                 'discount_percentage' => $deal->discount_percentage !== null ? (float) $deal->discount_percentage : null,
                 'discount_approved_by' => $deal->discount_approved_by ? (int) $deal->discount_approved_by : null,
+                'discount_source' => $deal->discount_source,
             ],
         ];
     }

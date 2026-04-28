@@ -585,6 +585,7 @@ function StructuredDiagnosticsSection({ section }) {
 export default function Payments() {
     const allowedStatuses = new Set(['awaiting_payment', 'completed', 'expired', 'initiated', 'pending', 'failed', 'recovery_queue', 'reversed']);
     const allowedMatchFilters = new Set(['matched', 'unmatched']);
+    const allowedHasDiscountFilters = new Set(['0', '1']);
     const allowedSourceFilters = new Set(['gateway', 'excel_import']);
     const allowedEnvironmentFilters = new Set(['production', 'sandbox']);
     const allowedConfidenceFilters = new Set(['high', 'medium', 'low']);
@@ -612,6 +613,10 @@ export default function Payments() {
     const [matchFilter, setMatchFilter] = useState(() => {
         const requested = (searchParams.get('matched') || '').trim();
         return allowedMatchFilters.has(requested) ? requested : '';
+    });
+    const [hasDiscountFilter, setHasDiscountFilter] = useState(() => {
+        const requested = (searchParams.get('has_discount') || '').trim();
+        return allowedHasDiscountFilters.has(requested) ? requested : '';
     });
     const [sourceFilter, setSourceFilter] = useState(() => {
         const requested = (searchParams.get('source') || '').trim();
@@ -649,7 +654,7 @@ export default function Payments() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
-    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter || resolutionFilter || testVisibility !== 'hide'));
+    const [showAdvancedFilters, setShowAdvancedFilters] = useState(() => !!(hasDiscountFilter || sourceFilter || environmentFilter || confidenceFilter || reviewStateFilter || resolutionFilter || testVisibility !== 'hide'));
     const [selectedPayment, setSelectedPayment] = useState(null);
     const [selectedClientId, setSelectedClientId] = useState('');
     const [confirmReason, setConfirmReason] = useState('Manual payment match from queue');
@@ -744,7 +749,7 @@ export default function Payments() {
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -753,6 +758,7 @@ export default function Payments() {
                     ...(search && { search }),
                     ...(statusFilter && { status: statusFilter }),
                     ...(matchFilter && { matched: matchFilter }),
+                    ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
                     ...(platformFilter && { platform_id: Number(platformFilter) }),
                     ...(sourceFilter && { source: sourceFilter }),
                     ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
@@ -1382,6 +1388,11 @@ export default function Payments() {
                 confirmedBreakdown: data.stats.confirmed_amount_breakdown ?? {},
                 confirmedNormalized: data.stats.confirmed_normalized_amount,
                 confirmedNormalizationMeta: data.stats.confirmed_normalization_meta,
+                discountedCount: Number(data.stats.discounted || 0),
+                discountedAmount: toAmount(data.stats.discounted_amount),
+                discountedBreakdown: data.stats.discounted_amount_breakdown ?? {},
+                discountedNormalized: data.stats.discounted_normalized_amount,
+                discountedNormalizationMeta: data.stats.discounted_normalization_meta,
                 reversedCount: Number(data.stats.reversed || 0),
                 reversedAmount: toAmount(data.stats.reversed_amount),
                 reversedBreakdown: data.stats.reversed_amount_breakdown ?? {},
@@ -1402,6 +1413,7 @@ export default function Payments() {
 
         const awaitingRows = rows.filter((row) => ['initiated', 'pending'].includes(row.status));
         const completedRows = rows.filter((row) => SUCCESSFUL_PAYMENT_STATUSES.includes(row.status));
+        const discountedRows = completedRows.filter((row) => row.deal?.discount_percentage);
         const reversedRows = rows.filter((row) => row.status === 'reversed'
             || (SUCCESSFUL_PAYMENT_STATUSES.includes(row.status) && String(row.resolution_code || '').toLowerCase() === 'reversed'));
         const unmatchedRows = completedRows.filter((row) => !row.client_id);
@@ -1413,6 +1425,8 @@ export default function Payments() {
             awaitingAmount: sumAmount(awaitingRows),
             confirmedCount: completedRows.length,
             confirmedAmount: sumAmount(completedRows),
+            discountedCount: discountedRows.length,
+            discountedAmount: sumAmount(discountedRows),
             reversedCount: reversedRows.length,
             reversedAmount: sumAmount(reversedRows),
             reversedBreakdown: {},
@@ -1453,29 +1467,39 @@ export default function Payments() {
 
     const activeMetric = useMemo(() => {
         if (statusFilter === 'awaiting_payment') return 'awaiting';
+        if (statusFilter === 'completed' && hasDiscountFilter === '1') return 'discounted';
         if (statusFilter === 'completed' && matchFilter === '') return 'confirmed';
         if (statusFilter === 'reversed') return 'reversed';
         if (statusFilter === 'completed' && matchFilter === 'unmatched') return 'unmatched';
         if (statusFilter === 'failed') return 'failed';
         return '';
-    }, [statusFilter, matchFilter]);
+    }, [statusFilter, matchFilter, hasDiscountFilter]);
 
     const applyMetricFilter = (metricKey) => {
         if (metricKey === 'awaiting') {
             setStatusFilter('awaiting_payment');
             setMatchFilter('');
+            setHasDiscountFilter('');
         } else if (metricKey === 'confirmed') {
             setStatusFilter('completed');
             setMatchFilter('');
+            setHasDiscountFilter('');
+        } else if (metricKey === 'discounted') {
+            setStatusFilter('completed');
+            setMatchFilter('');
+            setHasDiscountFilter('1');
         } else if (metricKey === 'reversed') {
             setStatusFilter('reversed');
             setMatchFilter('');
+            setHasDiscountFilter('');
         } else if (metricKey === 'unmatched') {
             setStatusFilter('completed');
             setMatchFilter('unmatched');
+            setHasDiscountFilter('');
         } else if (metricKey === 'failed') {
             setStatusFilter('failed');
             setMatchFilter('');
+            setHasDiscountFilter('');
         }
         setPage(1);
     };
@@ -1761,6 +1785,24 @@ export default function Payments() {
             render: (row) => <span className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount, resolveCurrency(row.currency))}</span>,
         },
         {
+            key: 'discount',
+            label: 'Discount',
+            width: '11rem',
+            render: (row) => {
+                const discountPercentage = row.deal?.discount_percentage;
+                if (!discountPercentage) {
+                    return <span className="text-xs text-slate-400">—</span>;
+                }
+
+                return (
+                    <div className="flex flex-col gap-1 text-xs">
+                        <span className="font-semibold text-violet-700">{discountPercentage}% off</span>
+                        <span className="text-slate-500">{titleize(row.deal?.discount_source || 'discounted')}</span>
+                    </div>
+                );
+            },
+        },
+        {
             key: 'product',
             label: 'Product',
             width: '11rem',
@@ -2002,7 +2044,7 @@ export default function Payments() {
                 )}
             />
 
-            <section className="grid gap-4 md:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-5">
                 <button
                     type="button"
                     onClick={() => applyMetricFilter('awaiting')}
@@ -2069,6 +2111,24 @@ export default function Payments() {
                         </button>
                     ) : null}
                 </div>
+
+                <button
+                    type="button"
+                    onClick={() => applyMetricFilter('discounted')}
+                    className={`h-full rounded-xl border px-4 py-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                        activeMetric === 'discounted'
+                            ? 'border-violet-300 bg-violet-50/60'
+                            : 'border-slate-200 bg-white hover:border-violet-200 hover:bg-violet-50/30'
+                    }`}
+                >
+                    <div className="flex items-center gap-2">
+                        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-violet-500" />
+                        <p className="text-sm font-semibold text-slate-700">Discounted</p>
+                    </div>
+                    <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.discountedCount.toLocaleString()}</p>
+                    {renderSummaryAmount(summary.discountedBreakdown, summary.discountedAmount, summary.discountedNormalized, summary.discountedNormalizationMeta)}
+                    <p className="mt-1 text-xs text-slate-500">Confirmed payments tied to discounted deals</p>
+                </button>
 
                 <button
                     type="button"
@@ -2215,6 +2275,17 @@ export default function Payments() {
                             ) : null}
 
                             <FilterSelect
+                                label="Discount"
+                                value={hasDiscountFilter}
+                                onChange={(event) => { setHasDiscountFilter(event.target.value); setPage(1); }}
+                                options={[
+                                    { value: '', label: 'All payments' },
+                                    { value: '1', label: 'Discounted only' },
+                                    { value: '0', label: 'No discount' },
+                                ]}
+                            />
+
+                            <FilterSelect
                                 label="Source"
                                 value={sourceFilter}
                                 onChange={(event) => { setSourceFilter(event.target.value); setPage(1); }}
@@ -2284,7 +2355,7 @@ export default function Payments() {
                         </button>
                     )}
 
-                    {(search || statusFilter || matchFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter) ? (
+                    {(search || statusFilter || matchFilter || hasDiscountFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -2292,6 +2363,7 @@ export default function Payments() {
                                 setSearchInput('');
                                 setStatusFilter('');
                                 setMatchFilter('');
+                                setHasDiscountFilter('');
                                 setPlatformFilter('');
                                 setSourceFilter('');
                                 setEnvironmentFilter('');

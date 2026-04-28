@@ -131,6 +131,7 @@ class ManualPaymentBundleService
                     'discount_percentage' => (float) $item['discount_percentage'] > 0 ? (float) $item['discount_percentage'] : null,
                     'original_amount' => (float) $item['discount_percentage'] > 0 ? (float) $item['base_amount'] : null,
                     'discount_approved_by' => (float) $item['discount_percentage'] > 0 ? $actorId : null,
+                    'discount_source' => (float) $item['discount_percentage'] > 0 ? 'agent_manual' : null,
                 ])->save();
 
                 $payment = $this->dealPaymentService->createManualPaymentForDeal(
@@ -977,6 +978,7 @@ class ManualPaymentBundleService
                     'original_amount' => $discountPercentage > 0 ? $baseAmount : null,
                     'discount_percentage' => $discountPercentage > 0 ? $discountPercentage : null,
                     'discount_approved_by' => $discountPercentage > 0 ? $actorId : null,
+                    'discount_source' => $discountPercentage > 0 ? 'agent_manual' : null,
                     'is_free_trial' => false,
                     'free_trial_approved_by' => null,
                 ])->save();

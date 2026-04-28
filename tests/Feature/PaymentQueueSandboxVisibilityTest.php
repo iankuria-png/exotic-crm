@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\Deal;
 use App\Models\ManualPaymentBundle;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -491,6 +492,70 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $references = collect($response->json('data'))->pluck('reference_number')->all();
         $this->assertContains('LIVE-VISIBLE-001', $references);
         $this->assertNotContains('BUNDLE-HIDDEN-001', $references);
+    }
+
+
+    public function test_payment_workspace_surfaces_discounted_stats_and_filters(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+
+        $discountedPayment = $this->createPayment($platform, [
+            'transaction_reference' => 'DISCOUNTED-001',
+            'reference_number' => 'DISCOUNTED-001',
+            'amount' => 1600,
+            'status' => 'completed',
+        ]);
+
+        $discountedDeal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'payment_id' => $discountedPayment->id,
+            'amount' => 1600,
+            'currency' => 'KES',
+            'original_amount' => 2000,
+            'discount_percentage' => 20,
+            'discount_source' => 'self_service_incentive',
+            'discount_approved_by' => null,
+            'status' => 'active',
+        ]);
+
+        $discountedPayment->forceFill([
+            'deal_id' => $discountedDeal->id,
+            'client_id' => $discountedDeal->client_id,
+            'product_id' => $discountedDeal->product_id,
+        ])->save();
+
+        $this->createPayment($platform, [
+            'transaction_reference' => 'FULL-PRICE-001',
+            'reference_number' => 'FULL-PRICE-001',
+            'amount' => 2400,
+            'status' => 'completed',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $summaryResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id);
+
+        $summaryResponse->assertOk()
+            ->assertJsonPath('stats.confirmed', 2)
+            ->assertJsonPath('stats.discounted', 1)
+            ->assertJsonPath('stats.discounted_amount', 1600)
+            ->assertJsonPath('stats.discounted_currency_count', 1)
+            ->assertJsonPath('data.0.deal.discount_source', 'self_service_incentive');
+
+        $discountedOnlyResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&has_discount=1');
+
+        $discountedOnlyResponse->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'DISCOUNTED-001')
+            ->assertJsonPath('data.0.deal.discount_percentage', '20.00')
+            ->assertJsonPath('data.0.deal.discount_source', 'self_service_incentive');
+
+        $fullPriceResponse = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&has_discount=0');
+
+        $fullPriceResponse->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'FULL-PRICE-001');
     }
 
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform

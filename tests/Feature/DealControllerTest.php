@@ -422,6 +422,7 @@ class DealControllerTest extends TestCase
         $this->assertSame(3200.0, (float) $deal->original_amount);
         $this->assertSame(20.0, (float) $deal->discount_percentage);
         $this->assertSame($user->id, (int) $deal->discount_approved_by);
+        $this->assertSame('agent_manual', $deal->discount_source);
         $this->assertSame(2560.0, (float) $payment->amount);
         $this->assertDatabaseHas('audit_log', [
             'action' => 'deal_discount',
@@ -519,6 +520,7 @@ class DealControllerTest extends TestCase
         $this->assertSame(3200.0, (float) $newDeal->original_amount);
         $this->assertSame(10.0, (float) $newDeal->discount_percentage);
         $this->assertSame($user->id, (int) $newDeal->discount_approved_by);
+        $this->assertSame('agent_manual', $newDeal->discount_source);
         $this->assertSame(2880.0, (float) $payment->amount);
     }
 
