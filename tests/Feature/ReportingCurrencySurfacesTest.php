@@ -183,6 +183,45 @@ class ReportingCurrencySurfacesTest extends TestCase
         $this->assertSame(1000.0, (float) $reports->json('owner_performance.0.revenue_breakdown.CFA'));
     }
 
+    public function test_dashboard_all_markets_country_revenue_includes_accessible_inactive_market_rows(): void
+    {
+        config(['services.reporting_fx.enabled' => true]);
+
+        $admin = User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+            'email' => Str::random(8) . '@example.test',
+        ]);
+        Sanctum::actingAs($admin);
+
+        $inactiveKenya = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'KES',
+            'is_active' => false,
+        ]);
+
+        $this->rate('KES', '2026-04-20', 0.0077);
+
+        Payment::factory()->create([
+            'platform_id' => $inactiveKenya->id,
+            'amount' => 1000,
+            'currency' => 'KES',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => '2026-04-20 09:00:00',
+            'completed_at' => '2026-04-20 09:10:00',
+        ]);
+
+        $dashboard = $this->getJson('/api/crm/dashboard?from=2026-04-20&to=2026-04-20&currency_mode=flat&reporting_currency=USD');
+
+        $dashboard->assertOk()
+            ->assertJsonPath('country_revenue.0.name', 'Kenya')
+            ->assertJsonPath('country_revenue.0.current_revenue', 1000)
+            ->assertJsonPath('country_revenue.0.current_revenue_normalized', 7.7)
+            ->assertJsonPath('country_revenue.0.current_revenue_normalization_meta.partial', false);
+    }
+
     private function rate(string $sourceCurrency, string $rateDate, float $rate): void
     {
         ReportingFxRate::query()->create([

@@ -454,10 +454,11 @@ class DashboardController extends Controller
         $platforms = Platform::query();
         if (is_array($platformIds)) {
             $platforms->whereIn('id', $platformIds);
-        } else {
-            $platforms->where('is_active', true);
         }
-        $platforms = $platforms->get();
+        $platforms = $platforms
+            ->orderBy('country')
+            ->orderBy('name')
+            ->get();
 
         $result = [];
         foreach ($platforms as $platform) {

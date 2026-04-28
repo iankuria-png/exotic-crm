@@ -129,7 +129,7 @@ export default function CountryRevenueWidget({ data = [], period = 'week', onPer
                 </div>
             ) : (
                 <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                    No active markets configured.
+                    No markets in scope for this view.
                 </div>
             )}
         </SectionFrame>
