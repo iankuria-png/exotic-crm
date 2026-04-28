@@ -155,36 +155,50 @@ class ClientRetentionInsightService
 
     public function buildDashboardSummary(?array $platformIds = null, int $topLimit = 5): array
     {
-        $query = ClientRetentionInsight::query()->with('client.platform');
-        if (is_array($platformIds) && !empty($platformIds)) {
-            $query->whereIn('platform_id', array_map('intval', $platformIds));
+        $scopePlatformIds = is_array($platformIds) && !empty($platformIds)
+            ? array_map('intval', $platformIds)
+            : null;
+
+        $baseQuery = ClientRetentionInsight::query();
+        if ($scopePlatformIds !== null) {
+            $baseQuery->whereIn('platform_id', $scopePlatformIds);
         }
 
-        $rows = $query->get([
-            'client_id',
-            'platform_id',
-            'score',
-            'band',
-            'primary_tag',
-            'signals',
-            'computed_at',
-        ]);
+        $bandCounts = (clone $baseQuery)
+            ->selectRaw('band, COUNT(*) as aggregate')
+            ->groupBy('band')
+            ->pluck('aggregate', 'band');
 
         $bandDistribution = collect(self::BANDS)->mapWithKeys(
-            fn (string $band): array => [$band => (int) $rows->where('band', $band)->count()]
+            fn (string $band): array => [$band => (int) ($bandCounts[$band] ?? 0)]
         )->all();
 
-        $behaviorDistribution = $rows
+        $behaviorDistribution = (clone $baseQuery)
+            ->selectRaw('primary_tag, COUNT(*) as aggregate')
             ->groupBy('primary_tag')
-            ->map(fn (Collection $group): int => $group->count())
+            ->pluck('aggregate', 'primary_tag')
+            ->map(fn ($count): int => (int) $count)
             ->sortDesc()
             ->all();
 
-        $topWatchClients = $rows
-            ->filter(fn (ClientRetentionInsight $row): bool => in_array((string) $row->band, self::WATCH_BANDS, true))
-            ->sortByDesc('score')
-            ->take($topLimit)
-            ->values()
+        $watchCount = (clone $baseQuery)
+            ->whereIn('band', self::WATCH_BANDS)
+            ->count();
+
+        $topWatchClients = (clone $baseQuery)
+            ->with('client.platform')
+            ->whereIn('band', self::WATCH_BANDS)
+            ->orderByDesc('score')
+            ->limit($topLimit)
+            ->get([
+                'client_id',
+                'platform_id',
+                'score',
+                'band',
+                'primary_tag',
+                'signals',
+                'computed_at',
+            ])
             ->map(function (ClientRetentionInsight $row): array {
                 $client = $row->client;
 
@@ -208,10 +222,6 @@ class ClientRetentionInsightService
             $snapshotQuery->whereDate('snapshot_date', $latestSnapshotDate);
         }
 
-        $scopePlatformIds = is_array($platformIds) && !empty($platformIds)
-            ? array_map('intval', $platformIds)
-            : null;
-
         if ($scopePlatformIds !== null) {
             $snapshotQuery->whereIn('platform_id', $scopePlatformIds);
         } else {
@@ -232,7 +242,7 @@ class ClientRetentionInsightService
         $logoChurn = $baselineTotal > 0 ? round(($churnedTotal / $baselineTotal) * 100, 2) : 0.0;
 
         return [
-            'watch_count' => (int) $rows->whereIn('band', self::WATCH_BANDS)->count(),
+            'watch_count' => (int) $watchCount,
             'band_distribution' => $bandDistribution,
             'behavior_distribution' => $behaviorDistribution,
             'logo_churn_30d' => $logoChurn,
