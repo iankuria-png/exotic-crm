@@ -88,6 +88,19 @@ function formatDelta(value) {
     return `${numeric > 0 ? '+' : ''}${numeric}% vs previous window`;
 }
 
+function describeDashboardError(error) {
+    const status = error?.response?.status;
+    if (status === 500) {
+        return 'The server returned a 500 error for this dashboard scope. Metrics are hidden until a successful refresh.';
+    }
+
+    if (typeof error?.message === 'string' && error.message.trim() !== '') {
+        return error.message.trim();
+    }
+
+    return 'We could not load the latest dashboard metrics for this view.';
+}
+
 function LoadingRows() {
     return (
         <div className="space-y-2">
@@ -102,6 +115,26 @@ function EmptyState({ message }) {
     return (
         <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
             {message}
+        </div>
+    );
+}
+
+function DashboardErrorBanner({ message, onRetry }) {
+    return (
+        <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <p className="font-semibold">Dashboard data is temporarily unavailable.</p>
+                    <p className="mt-1 text-rose-700">{message}</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={onRetry}
+                    className="rounded-md border border-rose-300 bg-white px-3 py-1.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
+                >
+                    Retry
+                </button>
+            </div>
         </div>
     );
 }
@@ -327,7 +360,7 @@ function OperationsDashboard() {
     const [didHydrateDefaultRange, setDidHydrateDefaultRange] = useState(false);
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
-    const { data, isLoading } = useQuery({
+    const { data, error, isError, isLoading, refetch } = useQuery({
         queryKey: ['dashboard', platformFilter, fromDate, toDate, countryPeriod, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/dashboard', {
@@ -339,7 +372,8 @@ function OperationsDashboard() {
                     ...reportingCurrency.queryParams,
                 },
             }).then((response) => response.data),
-        refetchInterval: DASHBOARD_REFRESH_MS,
+        retry: false,
+        refetchInterval: (query) => (query.state.status === 'error' ? false : DASHBOARD_REFRESH_MS),
     });
 
     const { data: integrationData } = useQuery({
@@ -411,41 +445,44 @@ function OperationsDashboard() {
         setDidHydrateDefaultRange(true);
     }, [defaultWindowFrom, defaultWindowTo, didHydrateDefaultRange, fromDate, toDate]);
 
+    const hasDashboardError = isError;
+    const dashboardErrorMessage = describeDashboardError(error);
+    const dashboardDependencyErrorMessage = 'This widget depends on the main dashboard summary, which is currently unavailable.';
     const kpis = data?.kpis || {};
-    const activeClients = asNumber(kpis.active_clients);
-    const totalClients = asNumber(kpis.total_clients);
-    const pendingLeads = asNumber(kpis.pending_leads);
-    const totalLeads = asNumber(kpis.total_leads);
-    const revenueWindow = kpis.revenue_window ?? kpis.revenue_mtd ?? null;
-    const revenueWindowBreakdown = kpis.revenue_window_breakdown ?? kpis.revenue_mtd_breakdown ?? {};
-    const revenueWindowNormalized = kpis.revenue_window_normalized ?? kpis.revenue_mtd_normalized ?? null;
-    const revenueWindowNormalizationMeta = kpis.revenue_window_normalization_meta ?? kpis.revenue_mtd_normalization_meta ?? null;
+    const activeClients = hasDashboardError ? null : asNumber(kpis.active_clients);
+    const totalClients = hasDashboardError ? null : asNumber(kpis.total_clients);
+    const pendingLeads = hasDashboardError ? null : asNumber(kpis.pending_leads);
+    const totalLeads = hasDashboardError ? null : asNumber(kpis.total_leads);
+    const revenueWindow = hasDashboardError ? null : (kpis.revenue_window ?? kpis.revenue_mtd ?? null);
+    const revenueWindowBreakdown = hasDashboardError ? {} : (kpis.revenue_window_breakdown ?? kpis.revenue_mtd_breakdown ?? {});
+    const revenueWindowNormalized = hasDashboardError ? null : (kpis.revenue_window_normalized ?? kpis.revenue_mtd_normalized ?? null);
+    const revenueWindowNormalizationMeta = hasDashboardError ? null : (kpis.revenue_window_normalization_meta ?? kpis.revenue_mtd_normalization_meta ?? null);
     const revenueWindowNormalizedDisplay = kpis.revenue_window_normalized_display
         || (revenueWindowNormalized !== null ? formatCurrency(revenueWindowNormalized, kpis.normalized_currency || reportingCurrency.targetCurrency) : null);
     const isMixedRevenue = kpis.revenue_is_mixed ?? Object.keys(revenueWindowBreakdown).length > 1;
-    const averageTicketWindow = kpis.average_ticket_window ?? null;
+    const averageTicketWindow = hasDashboardError ? null : (kpis.average_ticket_window ?? null);
     const resolvedRevenueCurrency = Object.keys(revenueWindowBreakdown).length === 1
         ? Object.keys(revenueWindowBreakdown)[0]
         : selectedCurrency;
-    const revenueDeltaLabel = kpis.revenue_delta_percent != null ? formatDelta(kpis.revenue_delta_percent) : null;
-    const recentPaymentsCount = asNumber(kpis.completed_payments_window ?? kpis.completed_payments_mtd ?? kpis.recent_payments);
-    const unmatchedPaymentsWindow = asNumber(kpis.unmatched_payments_window ?? kpis.unmatched_payments);
-    const paymentRecoveryPending = asNumber(kpis.payment_recovery_pending);
-    const paymentRecoveryFailed = asNumber(kpis.payment_recovery_failed);
-    const paymentRecoveryUnmatched = asNumber(kpis.payment_recovery_unmatched);
-    const paymentRecoveryQueueTotal = asNumber(kpis.payment_recovery_queue_total);
-    const renewalRisk72h = asNumber(kpis.renewal_risk_72h ?? kpis.expiring_soon);
-    const renewalPipeline14d = asNumber(kpis.renewal_pipeline_4_14d);
-    const renewalWorkload14d = asNumber(kpis.renewal_workload_14d ?? (renewalRisk72h + renewalPipeline14d));
-    const retentionSummary = data?.retention_summary || {};
-    const retentionWatchCount = asNumber(retentionSummary.watch_count);
-    const logoChurn30d = Number(retentionSummary.logo_churn_30d || 0);
+    const revenueDeltaLabel = hasDashboardError || kpis.revenue_delta_percent == null ? null : formatDelta(kpis.revenue_delta_percent);
+    const recentPaymentsCount = hasDashboardError ? null : asNumber(kpis.completed_payments_window ?? kpis.completed_payments_mtd ?? kpis.recent_payments);
+    const unmatchedPaymentsWindow = hasDashboardError ? null : asNumber(kpis.unmatched_payments_window ?? kpis.unmatched_payments);
+    const paymentRecoveryPending = hasDashboardError ? null : asNumber(kpis.payment_recovery_pending);
+    const paymentRecoveryFailed = hasDashboardError ? null : asNumber(kpis.payment_recovery_failed);
+    const paymentRecoveryUnmatched = hasDashboardError ? null : asNumber(kpis.payment_recovery_unmatched);
+    const paymentRecoveryQueueTotal = hasDashboardError ? null : asNumber(kpis.payment_recovery_queue_total);
+    const renewalRisk72h = hasDashboardError ? null : asNumber(kpis.renewal_risk_72h ?? kpis.expiring_soon);
+    const renewalPipeline14d = hasDashboardError ? null : asNumber(kpis.renewal_pipeline_4_14d);
+    const renewalWorkload14d = hasDashboardError ? null : asNumber(kpis.renewal_workload_14d ?? ((renewalRisk72h ?? 0) + (renewalPipeline14d ?? 0)));
+    const retentionSummary = hasDashboardError ? {} : (data?.retention_summary || {});
+    const retentionWatchCount = hasDashboardError ? null : asNumber(retentionSummary.watch_count);
+    const logoChurn30d = hasDashboardError ? null : Number(retentionSummary.logo_churn_30d || 0);
 
-    const matchQuality = recentPaymentsCount > 0
+    const matchQuality = !hasDashboardError && recentPaymentsCount > 0
         ? clampPercent(((recentPaymentsCount - unmatchedPaymentsWindow) / recentPaymentsCount) * 100)
         : 100;
-    const leadBacklog = totalLeads > 0 ? clampPercent((pendingLeads / totalLeads) * 100) : 0;
-    const activeCoverage = totalClients > 0 ? clampPercent((activeClients / totalClients) * 100) : 0;
+    const leadBacklog = !hasDashboardError && totalLeads > 0 ? clampPercent((pendingLeads / totalLeads) * 100) : 0;
+    const activeCoverage = !hasDashboardError && totalClients > 0 ? clampPercent((activeClients / totalClients) * 100) : 0;
 
     const todayLabel = new Intl.DateTimeFormat('en-KE', {
         weekday: 'long',
@@ -453,7 +490,45 @@ function OperationsDashboard() {
         day: 'numeric',
     }).format(new Date());
 
-    const metrics = [
+    const metrics = hasDashboardError ? [
+        {
+            key: 'revenue',
+            label: 'Collected Revenue',
+            value: 'Unavailable',
+            hint: 'The dashboard summary request failed before revenue KPIs could load.',
+            subHint: 'Use Retry above after the backend issue is resolved.',
+            tone: 'danger',
+        },
+        {
+            key: 'clients',
+            label: 'Active Clients',
+            value: 'Unavailable',
+            hint: 'Coverage metrics are hidden until the dashboard summary succeeds.',
+            tone: 'danger',
+        },
+        {
+            key: 'recovery',
+            label: 'Payment Recovery Queue',
+            value: 'Unavailable',
+            hint: 'Recovery queue metrics could not be loaded.',
+            tone: 'danger',
+        },
+        {
+            key: 'renewals',
+            label: 'Renewal Workload (14d)',
+            value: 'Unavailable',
+            hint: 'Renewal workload is unavailable for this failed dashboard refresh.',
+            tone: 'danger',
+        },
+        {
+            key: 'retention_watch',
+            label: 'Retention Watch',
+            value: 'Unavailable',
+            hint: 'Retention signals are hidden until the summary endpoint recovers.',
+            subHint: 'Separately-fetched widgets below may still load.',
+            tone: 'danger',
+        },
+    ] : [
         {
             key: 'revenue',
             label: 'Collected Revenue',
@@ -521,11 +596,11 @@ function OperationsDashboard() {
         },
     ];
 
-    const expiringDeals = data?.expiring_deals || [];
+    const expiringDeals = hasDashboardError ? [] : (data?.expiring_deals || []);
     const expiringPreview = expiringDeals.slice(0, LIST_PREVIEW_LIMIT);
     const hiddenExpiringCount = Math.max(0, expiringDeals.length - LIST_PREVIEW_LIMIT);
 
-    const followUps = data?.upcoming_follow_ups || [];
+    const followUps = hasDashboardError ? [] : (data?.upcoming_follow_ups || []);
     const followUpPreview = followUps.slice(0, LIST_PREVIEW_LIMIT);
     const hiddenFollowUpCount = Math.max(0, followUps.length - LIST_PREVIEW_LIMIT);
     const appliedRangeFrom = data?.window?.applied_from || data?.filters?.from || fromDate || '';
@@ -667,6 +742,10 @@ function OperationsDashboard() {
                             </span>
                         ) : null}
                     </div>
+
+                    {hasDashboardError ? (
+                        <DashboardErrorBanner message={dashboardErrorMessage} onRetry={() => refetch()} />
+                    ) : null}
                 </div>
             </section>
 
@@ -690,14 +769,20 @@ function OperationsDashboard() {
             <section className="grid gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
                     {widgetConfig.country_revenue ? (
-                        <CountryRevenueWidget
-                            data={data?.country_revenue || []}
-                            period={countryPeriod}
-                            onPeriodChange={setCountryPeriod}
-                            isLoading={isLoading}
-                            currencyMode={reportingCurrency.displayMode}
-                            targetCurrency={kpis.normalized_currency || reportingCurrency.targetCurrency}
-                        />
+                        hasDashboardError ? (
+                            <SectionFrame title="Top Performing Countries" subtitle="Revenue by market in selected 7-day window">
+                                <EmptyState message={dashboardDependencyErrorMessage} />
+                            </SectionFrame>
+                        ) : (
+                            <CountryRevenueWidget
+                                data={data?.country_revenue || []}
+                                period={countryPeriod}
+                                onPeriodChange={setCountryPeriod}
+                                isLoading={isLoading}
+                                currencyMode={reportingCurrency.displayMode}
+                                targetCurrency={kpis.normalized_currency || reportingCurrency.targetCurrency}
+                            />
+                        )
                     ) : null}
 
                     <div className="grid gap-4 xl:grid-cols-2">
@@ -725,6 +810,8 @@ function OperationsDashboard() {
                         >
                             {isLoading ? (
                                 <LoadingRows />
+                            ) : hasDashboardError ? (
+                                <EmptyState message={dashboardDependencyErrorMessage} />
                             ) : expiringPreview.length > 0 ? (
                                 <div className="space-y-2">
                                     {expiringPreview.map((deal) => (
@@ -783,6 +870,8 @@ function OperationsDashboard() {
                         >
                             {isLoading ? (
                                 <LoadingRows />
+                            ) : hasDashboardError ? (
+                                <EmptyState message={dashboardDependencyErrorMessage} />
                             ) : followUpPreview.length > 0 ? (
                                 <div className="space-y-2">
                                     {followUpPreview.map((note) => (
@@ -824,29 +913,33 @@ function OperationsDashboard() {
 
                     {widgetConfig.performance_pulse ? (
                         <SectionFrame title="Performance Pulse" subtitle="Health indicators for today">
-                            <div className="space-y-4">
-                                <MetricProgress
-                                    label="Payment match quality"
-                                    helper={`${Math.round(matchQuality)}% matched this month`}
-                                    value={matchQuality}
-                                    tone="accent"
-                                    tooltip="Percentage of successful payments in the selected window that are linked to a client."
-                                />
-                                <MetricProgress
-                                    label="Lead backlog pressure"
-                                    helper={`${pendingLeads.toLocaleString()} pending of ${totalLeads.toLocaleString()} leads`}
-                                    value={leadBacklog}
-                                    tone="warning"
-                                    tooltip="Proportion of leads still in 'new' or 'contacted' status vs. total leads."
-                                />
-                                <MetricProgress
-                                    label="Active client coverage"
-                                    helper={`${activeClients.toLocaleString()} active profiles`}
-                                    value={activeCoverage}
-                                    tone="success"
-                                    tooltip="Share of all client records that have an active (published) profile."
-                                />
-                            </div>
+                            {hasDashboardError ? (
+                                <EmptyState message={dashboardDependencyErrorMessage} />
+                            ) : (
+                                <div className="space-y-4">
+                                    <MetricProgress
+                                        label="Payment match quality"
+                                        helper={`${Math.round(matchQuality)}% matched this month`}
+                                        value={matchQuality}
+                                        tone="accent"
+                                        tooltip="Percentage of successful payments in the selected window that are linked to a client."
+                                    />
+                                    <MetricProgress
+                                        label="Lead backlog pressure"
+                                        helper={`${pendingLeads.toLocaleString()} pending of ${totalLeads.toLocaleString()} leads`}
+                                        value={leadBacklog}
+                                        tone="warning"
+                                        tooltip="Proportion of leads still in 'new' or 'contacted' status vs. total leads."
+                                    />
+                                    <MetricProgress
+                                        label="Active client coverage"
+                                        helper={`${activeClients.toLocaleString()} active profiles`}
+                                        value={activeCoverage}
+                                        tone="success"
+                                        tooltip="Share of all client records that have an active (published) profile."
+                                    />
+                                </div>
+                            )}
                         </SectionFrame>
                     ) : null}
 
@@ -861,33 +954,57 @@ function OperationsDashboard() {
                     ) : null}
 
                     {widgetConfig.retention_watch ? (
-                        <RetentionWatchWidget
-                            summary={retentionSummary}
-                            isLoading={isLoading}
-                            onOpenWatchlist={() => navigate(withMarketScope('/clients?retention_band=watch'))}
-                        />
+                        hasDashboardError ? (
+                            <SectionFrame title="Retention Watch" subtitle="Churn signals">
+                                <EmptyState message={dashboardDependencyErrorMessage} />
+                            </SectionFrame>
+                        ) : (
+                            <RetentionWatchWidget
+                                summary={retentionSummary}
+                                isLoading={isLoading}
+                                onOpenWatchlist={() => navigate(withMarketScope('/clients?retention_band=watch'))}
+                            />
+                        )
                     ) : null}
 
                     {widgetConfig.quick_stats ? (
-                        <QuickStatsWidget
-                            kpis={kpis}
-                            activeCampaigns={data?.active_campaigns_count || 0}
-                            isLoading={isLoading}
-                        />
+                        hasDashboardError ? (
+                            <SectionFrame title="Quick Stats" subtitle="Summary snapshot">
+                                <EmptyState message={dashboardDependencyErrorMessage} />
+                            </SectionFrame>
+                        ) : (
+                            <QuickStatsWidget
+                                kpis={kpis}
+                                activeCampaigns={data?.active_campaigns_count || 0}
+                                isLoading={isLoading}
+                            />
+                        )
                     ) : null}
 
                     {widgetConfig.recent_activity ? (
-                        <RecentActivityWidget
-                            events={data?.recent_activity || []}
-                            isLoading={isLoading}
-                        />
+                        hasDashboardError ? (
+                            <SectionFrame title="Recent Activity" subtitle="Latest CRM events">
+                                <EmptyState message={dashboardDependencyErrorMessage} />
+                            </SectionFrame>
+                        ) : (
+                            <RecentActivityWidget
+                                events={data?.recent_activity || []}
+                                isLoading={isLoading}
+                            />
+                        )
                     ) : null}
 
                     {widgetConfig.comms_balance ? (
-                        <CommsBalanceWidget
-                            stats={data?.comms_stats || {}}
-                            isLoading={isLoading}
-                        />
+                        hasDashboardError ? (
+                            <SectionFrame title="Comms Balance" subtitle="Delivery outcomes">
+                                <EmptyState message={dashboardDependencyErrorMessage} />
+                            </SectionFrame>
+                        ) : (
+                            <CommsBalanceWidget
+                                stats={data?.comms_stats || {}}
+                                isLoading={isLoading}
+                            />
+                        )
                     ) : null}
                 </div>
             </section>
