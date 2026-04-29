@@ -62,6 +62,8 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
         $this->assertNotNull($payment->start_date);
         $this->assertNotNull($payment->end_date);
         $this->assertSame('publish', $client->profile_status);
+        $this->assertFalse((bool) $client->needs_payment);
+        $this->assertFalse((bool) $client->notactive);
 
         $this->assertDatabaseHas('timeline_events', [
             'platform_id' => $platform->id,
@@ -76,7 +78,7 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
             'event_type' => 'deal_activated',
         ]);
 
-        $this->assertProvisioningRequestsSent($platform, $client);
+        $this->assertProvisioningRequestsSent($platform, $client, 'basic');
     }
 
     public function test_payment_queue_create_subscription_provisions_matched_completed_payment_through_wp_sync(): void
@@ -124,6 +126,9 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
         $this->assertSame($payment->id, $deal->payment_id);
         $this->assertSame($client->id, $deal->client_id);
         $this->assertSame('publish', $client->profile_status);
+        $this->assertTrue((bool) $client->premium);
+        $this->assertFalse((bool) $client->needs_payment);
+        $this->assertFalse((bool) $client->notactive);
         $this->assertNotNull($payment->start_date);
         $this->assertNotNull($payment->end_date);
 
@@ -140,7 +145,7 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
             'event_type' => 'deal_activated',
         ]);
 
-        $this->assertProvisioningRequestsSent($platform, $client);
+        $this->assertProvisioningRequestsSent($platform, $client, 'premium');
     }
 
     public function test_manual_payment_status_update_activates_existing_awaiting_payment_deal(): void
@@ -222,7 +227,7 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
             'event_type' => 'deal_activated',
         ]);
 
-        $this->assertProvisioningRequestsSent($platform, $client);
+        $this->assertProvisioningRequestsSent($platform, $client, 'vip');
     }
 
     private function createPlatform(): Platform
@@ -306,6 +311,8 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
             'premium_expire' => null,
             'featured_expire' => null,
             'escort_expire' => now()->addDays(30)->timestamp,
+            'needs_payment' => false,
+            'notactive' => false,
             'last_online' => null,
         ], $profileOverrides);
 
@@ -322,11 +329,13 @@ class SubscriptionProvisioningConvergenceTest extends TestCase
         Http::fake($fakes);
     }
 
-    private function assertProvisioningRequestsSent(Platform $platform, Client $client): void
+    private function assertProvisioningRequestsSent(Platform $platform, Client $client, string $expectedProductType): void
     {
         $baseUrl = rtrim((string) $platform->wp_api_url, '/');
 
-        Http::assertSent(fn ($request) => $request->url() === "{$baseUrl}/clients/{$client->wp_post_id}/activate");
+        Http::assertSent(fn ($request) => $request->url() === "{$baseUrl}/clients/{$client->wp_post_id}/activate"
+            && data_get($request->data(), 'product_type') === $expectedProductType
+            && (int) data_get($request->data(), 'duration_days') > 0);
         Http::assertSent(fn ($request) => $request->url() === "{$baseUrl}/clients/{$client->wp_post_id}");
     }
 }
