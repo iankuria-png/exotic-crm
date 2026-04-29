@@ -19,7 +19,10 @@ use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
 use App\Services\ReportingCurrencyService;
 use App\Services\SupportBoardService;
+use App\Services\WpSyncService;
 use Carbon\Carbon;
+use Carbon\CarbonInterval;
+use Carbon\CarbonPeriod;
 use Throwable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -565,7 +568,6 @@ class DashboardController extends Controller
         return response()->json(
             $this->buildCountryRevenue(
                 $platformIds,
-                $validated['country_period'] ?? 'week',
                 $from,
                 $to,
                 $targetCurrency,
@@ -574,17 +576,112 @@ class DashboardController extends Controller
         );
     }
 
-    private function buildCountryRevenue(?array $platformIds, string $period, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency, bool $shouldNormalizeRevenue): array
+    public function countryPerformance(Request $request, Platform $platform)
     {
-        $windowDays = $period === 'month' ? 30 : 7;
-        $currentTo = $rangeTo->copy();
-        $periodFrom = $rangeTo->copy()->subDays($windowDays - 1)->startOfDay();
-        $currentFrom = $rangeFrom->copy()->greaterThan($periodFrom)
-            ? $rangeFrom->copy()
-            : $periodFrom;
+        $validated = $request->validate([
+            'from' => 'nullable|date',
+            'to' => 'nullable|date|after_or_equal:from',
+            'currency_mode' => 'nullable|in:native,flat',
+            'reporting_currency' => 'nullable|string|min:3|max:8',
+        ]);
 
-        $previousTo = $currentFrom->copy()->subSecond();
-        $previousFrom = $previousTo->copy()->subDays($windowDays - 1)->startOfDay();
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this dashboard market.'
+        );
+
+        $platformIds = [(int) $platform->id];
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
+        $currencyMode = $this->reportingCurrencyService->resolveMode(
+            $validated['currency_mode'] ?? null,
+            false
+        );
+        $shouldNormalizeRevenue = $currencyMode === ReportingCurrencyService::MODE_FLAT;
+
+        $oldestRecordAt = $this->resolveOldestDashboardRecordAt($platformIds);
+        $defaultFrom = ($oldestRecordAt ? (clone $oldestRecordAt) : now()->startOfMonth())->startOfDay();
+        $defaultTo = now()->endOfDay();
+
+        $from = !empty($validated['from'])
+            ? Carbon::parse($validated['from'])->startOfDay()
+            : (clone $defaultFrom);
+        $to = !empty($validated['to'])
+            ? Carbon::parse($validated['to'])->endOfDay()
+            : (clone $defaultTo);
+
+        [$previousFrom, $previousTo] = $this->resolvePreviousMatchingWindow($from, $to);
+
+        $currentRevenueRows = $this->aggregateCountryRevenueRows($platformIds, $from, $to)->values();
+        $previousRevenueRows = $this->aggregateCountryRevenueRows($platformIds, $previousFrom, $previousTo)->values();
+
+        $currentRevenueBreakdown = $this->buildCurrencyBreakdownFromRows($currentRevenueRows);
+        $previousRevenueBreakdown = $this->buildCurrencyBreakdownFromRows($previousRevenueRows);
+        $currentRevenueNormalized = $this->normalizeCountryRevenueRowsForMode($currentRevenueRows, $targetCurrency, $shouldNormalizeRevenue);
+        $previousRevenueNormalized = $this->normalizeCountryRevenueRowsForMode($previousRevenueRows, $targetCurrency, $shouldNormalizeRevenue);
+        $trendPoints = $this->buildCountryPerformanceTrend(
+            $currentRevenueRows,
+            $from,
+            $to,
+            $targetCurrency,
+            $shouldNormalizeRevenue
+        );
+        $insights = $this->buildCountryPerformanceInsights($trendPoints);
+        $engagement = $this->fetchCountryEngagementSummary($platform, $from, $to);
+
+        return response()->json([
+            'market' => [
+                'platform_id' => (int) $platform->id,
+                'name' => $platform->name,
+                'country' => $platform->country,
+                'currency' => $platform->currency_code,
+            ],
+            'range' => [
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+                'previous_from' => $previousFrom->toDateString(),
+                'previous_to' => $previousTo->toDateString(),
+            ],
+            'summary' => [
+                'current_revenue_breakdown' => $currentRevenueBreakdown['breakdown'],
+                'current_revenue' => $currentRevenueBreakdown['scalar_amount'],
+                'current_revenue_normalized' => $currentRevenueNormalized['normalized_total'],
+                'current_revenue_normalized_display' => $currentRevenueNormalized['normalized_display'],
+                'current_revenue_normalization_meta' => $currentRevenueNormalized['normalization_meta'],
+                'previous_revenue_breakdown' => $previousRevenueBreakdown['breakdown'],
+                'previous_revenue' => $previousRevenueBreakdown['scalar_amount'],
+                'previous_revenue_normalized' => $previousRevenueNormalized['normalized_total'],
+                'previous_revenue_normalization_meta' => $previousRevenueNormalized['normalization_meta'],
+                'trend' => $this->calculateComparableCountryTrend($currentRevenueBreakdown, $previousRevenueBreakdown),
+                'normalized_trend' => $this->calculateNormalizedCountryTrend(
+                    $currentRevenueNormalized,
+                    $previousRevenueNormalized,
+                    $shouldNormalizeRevenue
+                ),
+                'payments_count' => (int) collect($currentRevenueRows)->sum(fn ($row) => (int) ($row->payments_count ?? 0)),
+                'previous_payments_count' => (int) collect($previousRevenueRows)->sum(fn ($row) => (int) ($row->payments_count ?? 0)),
+                'last_payment_at' => collect($currentRevenueRows)->pluck('event_date')->filter()->max(),
+            ],
+            'trend' => [
+                'bucket' => $this->resolveTrendBucketType($from, $to),
+                'points' => $trendPoints,
+            ],
+            'insights' => $insights,
+            'user_summary' => [
+                'active_users' => Client::query()
+                    ->active()
+                    ->where('platform_id', $platform->id)
+                    ->count(),
+                'engagement' => $engagement['engagement'],
+            ],
+            'contact_mix' => $engagement['contact_mix'],
+            'availability' => $engagement['availability'],
+        ]);
+    }
+
+    private function buildCountryRevenue(?array $platformIds, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency, bool $shouldNormalizeRevenue): array
+    {
+        [$previousFrom, $previousTo] = $this->resolvePreviousMatchingWindow($rangeFrom, $rangeTo);
 
         $platforms = Platform::query();
         if (is_array($platformIds)) {
@@ -595,7 +692,7 @@ class DashboardController extends Controller
             ->orderBy('name')
             ->get();
 
-        $currentRevenueRows = $this->aggregateCountryRevenueRows($platformIds, $currentFrom, $currentTo);
+        $currentRevenueRows = $this->aggregateCountryRevenueRows($platformIds, $rangeFrom, $rangeTo);
         $previousRevenueRows = $this->aggregateCountryRevenueRows($platformIds, $previousFrom, $previousTo);
         $currentRowsByPlatform = $currentRevenueRows->groupBy(fn ($row) => (int) $row->platform_id);
         $previousRowsByPlatform = $previousRevenueRows->groupBy(fn ($row) => (int) $row->platform_id);
@@ -678,6 +775,7 @@ class DashboardController extends Controller
             ->selectRaw('platforms.name as platform_name')
             ->selectRaw("{$currencyExpression} as currency")
             ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(payments.id) as payments_count')
             ->groupByRaw($dateExpression)
             ->groupBy('payments.platform_id')
             ->groupBy('platforms.country')
@@ -715,6 +813,295 @@ class DashboardController extends Controller
         }
 
         return $this->emptyNormalizationPayload($targetCurrency);
+    }
+
+    private function resolvePreviousMatchingWindow(Carbon $from, Carbon $to): array
+    {
+        $windowSeconds = max(1, $to->diffInSeconds($from) + 1);
+        $previousFrom = $from->copy()->subSeconds($windowSeconds);
+        $previousTo = $from->copy()->subSecond();
+
+        return [$previousFrom, $previousTo];
+    }
+
+    private function calculateNormalizedCountryTrend(array $currentNormalized, array $previousNormalized, bool $shouldNormalizeRevenue): ?float
+    {
+        if (
+            !$shouldNormalizeRevenue
+            || ($currentNormalized['normalized_total'] ?? null) === null
+            || ($previousNormalized['normalized_total'] ?? null) === null
+            || ($currentNormalized['normalization_meta']['partial'] ?? true)
+            || ($previousNormalized['normalization_meta']['partial'] ?? true)
+        ) {
+            return null;
+        }
+
+        $previousTotal = (float) ($previousNormalized['normalized_total'] ?? 0);
+        if ($previousTotal <= 0) {
+            return null;
+        }
+
+        return round(
+            (((float) $currentNormalized['normalized_total'] - $previousTotal) / $previousTotal) * 100,
+            1
+        );
+    }
+
+    private function resolveTrendBucketType(Carbon $from, Carbon $to): string
+    {
+        return $from->diffInDays($to) + 1 > 31 ? 'week' : 'day';
+    }
+
+    private function buildCountryPerformanceTrend($rows, Carbon $from, Carbon $to, string $targetCurrency, bool $shouldNormalizeRevenue): array
+    {
+        $bucketType = $this->resolveTrendBucketType($from, $to);
+        $groupedRows = collect($rows)->groupBy(function ($row) use ($bucketType) {
+            $eventDate = Carbon::parse((string) $row->event_date);
+
+            return $bucketType === 'week'
+                ? $eventDate->copy()->startOfWeek()->toDateString()
+                : $eventDate->toDateString();
+        });
+
+        $period = $bucketType === 'week'
+            ? CarbonPeriod::create($from->copy()->startOfWeek(), CarbonInterval::week(), $to->copy()->startOfWeek())
+            : CarbonPeriod::create($from->copy()->startOfDay(), CarbonInterval::day(), $to->copy()->startOfDay());
+
+        $points = [];
+        foreach ($period as $pointDate) {
+            $bucketStart = $bucketType === 'week'
+                ? $pointDate->copy()->startOfWeek()
+                : $pointDate->copy()->startOfDay();
+            $bucketEnd = $bucketType === 'week'
+                ? $bucketStart->copy()->endOfWeek()->min($to->copy())
+                : $bucketStart->copy()->endOfDay();
+            $bucketKey = $bucketStart->toDateString();
+            $bucketRows = $groupedRows->get($bucketKey, collect())->values();
+            $breakdown = $this->buildCurrencyBreakdownFromRows($bucketRows);
+            $normalized = $this->normalizeCountryRevenueRowsForMode($bucketRows, $targetCurrency, $shouldNormalizeRevenue);
+
+            $points[] = [
+                'bucket_key' => $bucketKey,
+                'bucket_start' => $bucketStart->toDateString(),
+                'bucket_end' => $bucketEnd->toDateString(),
+                'label' => $bucketType === 'week'
+                    ? sprintf('%s - %s', $bucketStart->format('j M'), $bucketEnd->format('j M'))
+                    : $bucketStart->format('j M'),
+                'revenue_breakdown' => $breakdown['breakdown'],
+                'revenue' => $breakdown['scalar_amount'],
+                'normalized_total' => $normalized['normalized_total'],
+                'normalized_display' => $normalized['normalized_display'],
+                'normalization_meta' => $normalized['normalization_meta'],
+                'payments_count' => (int) $bucketRows->sum(fn ($row) => (int) ($row->payments_count ?? 0)),
+            ];
+        }
+
+        return $points;
+    }
+
+    private function buildCountryPerformanceInsights(array $trendPoints): array
+    {
+        if (empty($trendPoints)) {
+            return [
+                'strongest_period' => null,
+                'weakest_period' => null,
+                'momentum' => null,
+                'recent_movement' => null,
+            ];
+        }
+
+        $comparablePoints = collect($trendPoints)->map(function (array $point) {
+            $comparisonValue = $point['normalized_total'] ?? $point['revenue'] ?? array_sum($point['revenue_breakdown'] ?? []);
+            $point['comparison_value'] = round((float) $comparisonValue, 2);
+
+            return $point;
+        });
+
+        $strongest = $comparablePoints->sortByDesc('comparison_value')->first();
+        $weakest = $comparablePoints->sortBy('comparison_value')->first();
+        $recentWindow = $comparablePoints->take(-3)->values();
+        $previousWindow = $comparablePoints->slice(max(0, $comparablePoints->count() - 6), 3)->values();
+
+        $recentTotal = (float) $recentWindow->sum('comparison_value');
+        $previousTotal = (float) $previousWindow->sum('comparison_value');
+        $recentDelta = $previousTotal > 0
+            ? round((($recentTotal - $previousTotal) / $previousTotal) * 100, 1)
+            : ($recentTotal > 0 ? 100.0 : null);
+
+        $lastPoint = $comparablePoints->last();
+        $priorPoint = $comparablePoints->count() > 1 ? $comparablePoints->slice(-2, 1)->first() : null;
+        $momentumDelta = $priorPoint && (float) $priorPoint['comparison_value'] > 0
+            ? round(((float) $lastPoint['comparison_value'] - (float) $priorPoint['comparison_value']) / (float) $priorPoint['comparison_value'] * 100, 1)
+            : null;
+
+        return [
+            'strongest_period' => $strongest ? $this->mapInsightPoint($strongest) : null,
+            'weakest_period' => $weakest ? $this->mapInsightPoint($weakest) : null,
+            'momentum' => [
+                'direction' => $momentumDelta === null ? 'flat' : ($momentumDelta > 0 ? 'up' : ($momentumDelta < 0 ? 'down' : 'flat')),
+                'delta_percent' => $momentumDelta,
+                'label' => $momentumDelta === null ? 'No recent movement yet' : ($momentumDelta > 0 ? 'Building upward' : ($momentumDelta < 0 ? 'Cooling off' : 'Holding steady')),
+            ],
+            'recent_movement' => [
+                'direction' => $recentDelta === null ? 'flat' : ($recentDelta > 0 ? 'up' : ($recentDelta < 0 ? 'down' : 'flat')),
+                'delta_percent' => $recentDelta,
+                'label' => $recentDelta === null ? 'No prior comparison window' : ($recentDelta > 0 ? 'Recent revenue is up' : ($recentDelta < 0 ? 'Recent revenue is down' : 'Recent revenue is flat')),
+            ],
+        ];
+    }
+
+    private function mapInsightPoint(array $point): array
+    {
+        return [
+            'label' => $point['label'],
+            'bucket_start' => $point['bucket_start'],
+            'bucket_end' => $point['bucket_end'],
+            'revenue_breakdown' => $point['revenue_breakdown'],
+            'revenue' => $point['revenue'],
+            'normalized_total' => $point['normalized_total'],
+            'normalized_display' => $point['normalized_display'],
+            'payments_count' => $point['payments_count'],
+        ];
+    }
+
+    private function fetchCountryEngagementSummary(Platform $platform, Carbon $from, Carbon $to): array
+    {
+        try {
+            $payload = WpSyncService::forPlatform((int) $platform->id)->getAnalyticsRankings([
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+                'per_page' => 1,
+                'sort_by' => 'engagement_score',
+                'order' => 'desc',
+            ]);
+        } catch (\Throwable $exception) {
+            return [
+                'engagement' => [
+                    'available' => false,
+                    'message' => 'Profile engagement analytics are currently unavailable.',
+                ],
+                'contact_mix' => [],
+                'availability' => [
+                    'engagement' => false,
+                    'contact_mix' => false,
+                ],
+            ];
+        }
+
+        $platformTotals = is_array($payload['platform_totals'] ?? null) ? $payload['platform_totals'] : [];
+        $marketAverages = is_array($payload['market_averages'] ?? null) ? $payload['market_averages'] : [];
+        $contactRate = $this->extractAnalyticsMetricValue($platformTotals['contact_rate_percent'] ?? null);
+        $marketContactRate = (float) ($marketAverages['contact_rate_percent'] ?? 0);
+        $health = 'steady';
+        $healthLabel = 'Steady with market';
+        if ($contactRate > $marketContactRate + 0.5) {
+            $health = 'above_market';
+            $healthLabel = 'Above market baseline';
+        } elseif ($contactRate < $marketContactRate - 0.5) {
+            $health = 'below_market';
+            $healthLabel = 'Below market baseline';
+        }
+
+        return [
+            'engagement' => [
+                'available' => true,
+                'views' => (int) $this->extractAnalyticsMetricTotal($platformTotals['profile_view'] ?? null),
+                'views_delta_percent' => $this->extractAnalyticsMetricDelta($platformTotals['profile_view'] ?? null),
+                'contacts' => (int) $this->extractAnalyticsMetricTotal($platformTotals['contact_actions'] ?? null),
+                'contacts_delta_percent' => $this->extractAnalyticsMetricDelta($platformTotals['contact_actions'] ?? null),
+                'contact_rate_percent' => $contactRate,
+                'contact_rate_delta_pp' => $this->extractAnalyticsContactRateDelta($payload, $platformTotals),
+                'market_contact_rate_percent' => $marketContactRate,
+                'health' => $health,
+                'health_label' => $healthLabel,
+            ],
+            'contact_mix' => $this->normalizeAnalyticsContactMix($payload['platform_contact_mix'] ?? []),
+            'availability' => [
+                'engagement' => true,
+                'contact_mix' => true,
+            ],
+        ];
+    }
+
+    private function extractAnalyticsMetricTotal($metric): float
+    {
+        if (is_array($metric)) {
+            return (float) ($metric['total'] ?? 0);
+        }
+
+        return (float) $metric;
+    }
+
+    private function extractAnalyticsMetricDelta($metric): ?float
+    {
+        if (!is_array($metric)) {
+            return null;
+        }
+
+        foreach (['delta_percent', 'delta_total_percent', 'delta'] as $key) {
+            if (array_key_exists($key, $metric) && $metric[$key] !== null) {
+                return round((float) $metric[$key], 1);
+            }
+        }
+
+        return null;
+    }
+
+    private function extractAnalyticsMetricValue($metric): float
+    {
+        if (is_array($metric)) {
+            return round((float) ($metric['value'] ?? 0), 1);
+        }
+
+        return round((float) $metric, 1);
+    }
+
+    private function extractAnalyticsContactRateDelta(array $payload, array $platformTotals): ?float
+    {
+        $contactRate = $platformTotals['contact_rate_percent'] ?? null;
+        if (is_array($contactRate) && array_key_exists('delta_pp', $contactRate)) {
+            return round((float) $contactRate['delta_pp'], 1);
+        }
+
+        if (array_key_exists('delta_contact_rate_pp', $platformTotals)) {
+            return round((float) $platformTotals['delta_contact_rate_pp'], 1);
+        }
+
+        if (array_key_exists('delta_contact_rate_pp', $payload)) {
+            return round((float) $payload['delta_contact_rate_pp'], 1);
+        }
+
+        return null;
+    }
+
+    private function normalizeAnalyticsContactMix($mix): array
+    {
+        if (!is_array($mix)) {
+            return [];
+        }
+
+        $rows = array_is_list($mix)
+            ? $mix
+            : array_map(function ($value, $key) {
+                if (is_array($value)) {
+                    $value['event_type'] = $value['event_type'] ?? $key;
+                }
+
+                return $value;
+            }, $mix, array_keys($mix));
+
+        return collect($rows)
+            ->filter(fn ($row) => is_array($row))
+            ->map(function (array $row) {
+                return [
+                    'key' => (string) ($row['event_type'] ?? 'unknown'),
+                    'label' => (string) ($row['label'] ?? Str::headline((string) ($row['event_type'] ?? 'unknown'))),
+                    'total' => (int) ($row['total'] ?? 0),
+                    'percent' => round((float) ($row['share_percent'] ?? $row['percent'] ?? 0), 1),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     private function normalizePaymentQueryForMode(Builder $query, string $targetCurrency, bool $shouldNormalizeRevenue): array
