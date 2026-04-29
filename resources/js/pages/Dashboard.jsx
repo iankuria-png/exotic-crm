@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
@@ -379,6 +379,7 @@ function OperationsDashboard() {
 
         return normalizePlatformFilter(window.localStorage.getItem(DASHBOARD_MARKET_STORAGE_KEY));
     });
+    const fromDateInputRef = useRef(null);
     const [fromDate, setFromDate] = useState(() => buildRelativeDaysWindow(30).from);
     const [toDate, setToDate] = useState(() => buildRelativeDaysWindow(30).to);
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
@@ -722,6 +723,7 @@ function OperationsDashboard() {
                         <label className="space-y-1">
                             <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">From</span>
                             <input
+                                ref={fromDateInputRef}
                                 type="date"
                                 value={fromDate}
                                 onChange={(event) => setFromDate(event.target.value)}
@@ -822,6 +824,7 @@ function OperationsDashboard() {
                             rangeMode={countryRangeMode}
                             onSetWeek={() => applyRelativeDaysWindow(7)}
                             onSetMonth={() => applyRelativeDaysWindow(30)}
+                            onSetCustom={() => fromDateInputRef.current?.focus()}
                             isLoading={countryRevenueQuery.isLoading}
                             errorMessage={countryRevenueErrorMessage}
                             currencyMode={reportingCurrency.displayMode}

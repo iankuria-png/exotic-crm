@@ -91,20 +91,20 @@ function describeWindow(rangeMode, fromDate, toDate) {
     return `Revenue by market from ${formatDateLabel(fromDate)} to ${formatDateLabel(toDate)}`;
 }
 
-function PeriodToggle({ rangeMode, onSetWeek, onSetMonth }) {
+function PeriodToggle({ rangeMode, onSetWeek, onSetMonth, onSetCustom }) {
     return (
         <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
             {['week', 'month', 'custom'].map((option) => (
                 <button
                     key={option}
                     type="button"
-                    onClick={option === 'week' ? onSetWeek : option === 'month' ? onSetMonth : undefined}
+                    onClick={option === 'week' ? onSetWeek : option === 'month' ? onSetMonth : onSetCustom}
                     className={`rounded-md px-3 py-1 text-xs font-semibold capitalize transition ${
                         rangeMode === option
                             ? 'bg-white text-slate-900 shadow-sm'
                             : 'text-slate-500 hover:text-slate-700'
                     }`}
-                    disabled={option === 'custom'}
+                    title={option === 'custom' ? 'Use the dashboard date fields for a custom range.' : undefined}
                 >
                     {option}
                 </button>
@@ -394,6 +394,7 @@ export default function CountryRevenueWidget({
     rangeMode = 'month',
     onSetWeek,
     onSetMonth,
+    onSetCustom,
     isLoading,
     errorMessage = null,
     currencyMode = 'native',
@@ -429,7 +430,7 @@ export default function CountryRevenueWidget({
             title="Top Performing Countries"
             subtitle={subtitle}
             className="overflow-hidden"
-            action={<PeriodToggle rangeMode={rangeMode} onSetWeek={onSetWeek} onSetMonth={onSetMonth} />}
+            action={<PeriodToggle rangeMode={rangeMode} onSetWeek={onSetWeek} onSetMonth={onSetMonth} onSetCustom={onSetCustom} />}
         >
             {isLoading ? (
                 <div className="space-y-3">
