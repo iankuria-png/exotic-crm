@@ -143,6 +143,7 @@ function MoneyStack({
     targetCurrency,
     emphasisClass = 'crm-mono text-sm font-semibold text-slate-900',
     secondaryClass = 'text-xs font-medium text-slate-500',
+    showFxNotice = true,
 }) {
     if (currencyMode === 'flat' && normalizedTotal !== null && normalizedTotal !== undefined) {
         return (
@@ -157,7 +158,7 @@ function MoneyStack({
                     className={secondaryClass}
                     stackClassName={secondaryClass}
                 />
-                <FxNormalizationNotice meta={normalizationMeta} className="mt-1" />
+                {showFxNotice ? <FxNormalizationNotice meta={normalizationMeta} className="mt-1" /> : null}
             </>
         );
     }
@@ -171,7 +172,7 @@ function MoneyStack({
                 className={emphasisClass}
                 stackClassName={emphasisClass}
             />
-            {currencyMode === 'flat' ? <FxNormalizationNotice meta={normalizationMeta} className="mt-1" /> : null}
+            {currencyMode === 'flat' && showFxNotice ? <FxNormalizationNotice meta={normalizationMeta} className="mt-1" /> : null}
         </>
     );
 }
@@ -232,10 +233,13 @@ function CollapsedRevenueMeta({ market, currencyMode }) {
                 stackClassName="font-medium text-slate-500"
             />
             {currencyMode === 'flat' ? (
-                <FxNormalizationNotice
-                    meta={market.current_revenue_normalization_meta}
-                    className="text-[11px] font-medium text-slate-400"
-                />
+                <span
+                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400"
+                    title="Revenue is normalized to the reporting currency using available FX rates."
+                >
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-300" aria-hidden="true" />
+                    FX
+                </span>
             ) : null}
         </div>
     );
@@ -293,10 +297,11 @@ function DetailPanel({ detail, detailQuery, currencyMode, targetCurrency, fallba
     const contactMix = Array.isArray(detail?.contact_mix) ? detail.contact_mix : [];
     const momentumTone = detail?.insights?.momentum?.direction === 'up' ? 'positive' : detail?.insights?.momentum?.direction === 'down' ? 'negative' : 'default';
     const recentTone = detail?.insights?.recent_movement?.direction === 'up' ? 'positive' : detail?.insights?.recent_movement?.direction === 'down' ? 'negative' : 'default';
+    const engagementTone = engagement.health === 'above_market' ? 'positive' : engagement.health === 'below_market' ? 'negative' : 'default';
 
     return (
-        <div className="grid gap-4 rounded-xl border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)]">
-            <div className="space-y-4">
+        <div className="grid gap-4 rounded-xl border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4 xl:grid-cols-12">
+            <div className="space-y-4 xl:col-span-7">
                 <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Revenue Trend</p>
                     <p className="mt-1 text-sm text-slate-500">See when this market accelerated, softened, or went quiet in the current window.</p>
@@ -336,7 +341,7 @@ function DetailPanel({ detail, detailQuery, currencyMode, targetCurrency, fallba
                 )}
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-4 xl:col-span-5">
                 <div className="grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Current Revenue</p>
@@ -351,6 +356,7 @@ function DetailPanel({ detail, detailQuery, currencyMode, targetCurrency, fallba
                                 currencyMode={currencyMode}
                                 targetCurrency={targetCurrency}
                                 emphasisClass="crm-mono text-base font-semibold text-slate-900"
+                                showFxNotice={false}
                             />
                         </div>
                     </div>
@@ -367,6 +373,7 @@ function DetailPanel({ detail, detailQuery, currencyMode, targetCurrency, fallba
                                 currencyMode={currencyMode}
                                 targetCurrency={targetCurrency}
                                 emphasisClass="crm-mono text-base font-semibold text-slate-900"
+                                showFxNotice={false}
                             />
                         </div>
                     </div>
@@ -396,20 +403,38 @@ function DetailPanel({ detail, detailQuery, currencyMode, targetCurrency, fallba
                         tone="default"
                     />
                 </div>
+            </div>
 
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">User Summary</p>
-                            <p className="mt-1 text-sm text-slate-500">Helps you judge whether revenue is being supported by audience attention and contact intent.</p>
-                        </div>
-                        <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-semibold text-slate-700">
-                            {Number(detail?.user_summary?.active_users || 0).toLocaleString()} active users
-                        </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-4 xl:col-span-12">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">User Summary</p>
+                        <p className="mt-1 max-w-3xl text-sm text-slate-500">Read whether this market is winning attention, turning that attention into contact intent, and concentrating demand into a preferred channel.</p>
                     </div>
+                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-semibold text-slate-700">
+                        {Number(detail?.user_summary?.active_users || 0).toLocaleString()} active users
+                    </div>
+                </div>
 
-                    {detail?.availability?.engagement ? (
-                        <div className="mt-4 space-y-4">
+                {detail?.availability?.engagement ? (
+                    <div className="mt-4 space-y-4">
+                        <div className="grid gap-4 xl:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.45fr)]">
+                            <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-4">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Executive read</p>
+                                <div className="mt-3 space-y-3 text-sm text-slate-600">
+                                    <StatusLine
+                                        tone={engagementTone}
+                                        label={`${engagement.health_label || 'Steady'}${engagement.contact_rate_percent !== null && engagement.contact_rate_percent !== undefined ? ` • ${engagement.contact_rate_percent.toFixed(1)}% contact rate` : ''}`}
+                                    />
+                                    <p>
+                                        {Number(engagement.views || 0).toLocaleString()} views are producing {Number(engagement.contacts || 0).toLocaleString()} contact actions in this market window.
+                                    </p>
+                                    <p>
+                                        Use this block to decide whether revenue is being reinforced by demand quality, or is running ahead of engagement.
+                                    </p>
+                                </div>
+                            </div>
+
                             <div className="grid gap-3 sm:grid-cols-3">
                                 <InsightChip
                                     label="Views"
@@ -422,37 +447,43 @@ function DetailPanel({ detail, detailQuery, currencyMode, targetCurrency, fallba
                                 <InsightChip
                                     label="Engagement Health"
                                     value={`${engagement.health_label || 'Steady'}${engagement.contact_rate_percent !== null && engagement.contact_rate_percent !== undefined ? ` · ${engagement.contact_rate_percent.toFixed(1)}%` : ''}`}
-                                    tone={engagement.health === 'above_market' ? 'positive' : engagement.health === 'below_market' ? 'negative' : 'default'}
+                                    tone={engagementTone}
                                 />
                             </div>
+                        </div>
 
-                            <div className="space-y-3">
+                        <div className="space-y-3 border-t border-slate-100 pt-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Contact Preference Mix</p>
-                                {contactMix.length > 0 ? (
-                                    contactMix.map((channel) => (
-                                        <div key={channel.key} className="space-y-1.5">
-                                            <div className="flex items-center justify-between gap-3 text-sm">
-                                                <p className="font-semibold text-slate-800">{channel.label}</p>
-                                                <p className="font-medium text-slate-500">{channel.total.toLocaleString()} · {channel.percent.toFixed(1)}%</p>
+                                <p className="text-xs text-slate-500">Shows which channel is capturing demand most efficiently right now.</p>
+                            </div>
+                            {contactMix.length > 0 ? (
+                                <div className="grid gap-3 lg:grid-cols-3">
+                                    {contactMix.map((channel) => (
+                                        <div key={channel.key} className="rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="text-sm font-semibold text-slate-800">{channel.label}</p>
+                                                <p className="text-sm font-medium text-slate-500">{channel.percent.toFixed(1)}%</p>
                                             </div>
-                                            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                                            <p className="mt-1 text-sm text-slate-500">{channel.total.toLocaleString()} actions</p>
+                                            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
                                                 <div className="h-full rounded-full bg-[linear-gradient(90deg,#14b8a6_0%,#0f766e_100%)] transition-all duration-500" style={{ width: `${Math.max(channel.percent, channel.total > 0 ? 6 : 0)}%` }} />
                                             </div>
                                         </div>
-                                    ))
-                                ) : (
-                                    <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
-                                        Contact preference data has not been captured yet for this market.
-                                    </p>
-                                )}
-                            </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                                    Contact preference data has not been captured yet for this market.
+                                </p>
+                            )}
                         </div>
-                    ) : (
-                        <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                            {engagement.message || 'Profile engagement analytics are currently unavailable for this market.'}
-                        </div>
-                    )}
-                </div>
+                    </div>
+                ) : (
+                    <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                        {engagement.message || 'Profile engagement analytics are currently unavailable for this market.'}
+                    </div>
+                )}
             </div>
         </div>
     );
