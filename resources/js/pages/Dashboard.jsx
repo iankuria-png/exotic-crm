@@ -65,6 +65,20 @@ function buildRelativeDaysWindow(days) {
     };
 }
 
+function resolveCountryRangeMode(fromDate, toDate) {
+    const weekWindow = buildRelativeDaysWindow(7);
+    if (fromDate === weekWindow.from && toDate === weekWindow.to) {
+        return 'week';
+    }
+
+    const monthWindow = buildRelativeDaysWindow(30);
+    if (fromDate === monthWindow.from && toDate === monthWindow.to) {
+        return 'month';
+    }
+
+    return 'custom';
+}
+
 function formatRelativeTime(value) {
     if (!value) return '--';
     const timestamp = new Date(value).getTime();
@@ -367,18 +381,16 @@ function OperationsDashboard() {
     });
     const [fromDate, setFromDate] = useState(() => buildRelativeDaysWindow(30).from);
     const [toDate, setToDate] = useState(() => buildRelativeDaysWindow(30).to);
-    const [countryPeriod, setCountryPeriod] = useState('week');
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data, error, isError, isLoading, refetch } = useQuery({
-        queryKey: ['dashboard', platformFilter, fromDate, toDate, countryPeriod, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['dashboard', platformFilter, fromDate, toDate, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/dashboard', {
                 params: {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     ...(fromDate ? { from: fromDate } : {}),
                     ...(toDate ? { to: toDate } : {}),
-                    country_period: countryPeriod,
                     ...reportingCurrency.queryParams,
                 },
             }).then((response) => response.data),
@@ -387,14 +399,13 @@ function OperationsDashboard() {
     });
 
     const countryRevenueQuery = useQuery({
-        queryKey: ['dashboard-country-revenue', platformFilter, fromDate, toDate, countryPeriod, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['dashboard-country-revenue', platformFilter, fromDate, toDate, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/dashboard/country-revenue', {
                 params: {
                     ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
                     from: fromDate,
                     to: toDate,
-                    country_period: countryPeriod,
                     ...reportingCurrency.queryParams,
                 },
             }).then((response) => response.data),
@@ -642,6 +653,7 @@ function OperationsDashboard() {
     const appliedRangeTo = data?.window?.applied_to || data?.filters?.to || toDate || '';
     const last30DayWindow = buildRelativeDaysWindow(30);
     const isThirtyDayRange = fromDate === last30DayWindow.from && toDate === last30DayWindow.to;
+    const countryRangeMode = resolveCountryRangeMode(fromDate, toDate);
     const isAllTimeRange = Boolean(
         allTimeWindowFrom
         && allTimeWindowTo
@@ -742,14 +754,14 @@ function OperationsDashboard() {
                                 onClick={() => applyRelativeDaysWindow(30)}
                                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                             >
-                                30d
+                                Month
                             </button>
                             <button
                                 type="button"
                                 onClick={() => applyRelativeDaysWindow(7)}
                                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                             >
-                                7d
+                                Week
                             </button>
                             {(platformFilter || !isThirtyDayRange) ? (
                                 <button
@@ -805,8 +817,11 @@ function OperationsDashboard() {
                     {widgetConfig.country_revenue ? (
                         <CountryRevenueWidget
                             data={countryRevenue}
-                            period={countryPeriod}
-                            onPeriodChange={setCountryPeriod}
+                            fromDate={fromDate}
+                            toDate={toDate}
+                            rangeMode={countryRangeMode}
+                            onSetWeek={() => applyRelativeDaysWindow(7)}
+                            onSetMonth={() => applyRelativeDaysWindow(30)}
                             isLoading={countryRevenueQuery.isLoading}
                             errorMessage={countryRevenueErrorMessage}
                             currencyMode={reportingCurrency.displayMode}
