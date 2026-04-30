@@ -662,21 +662,37 @@ class WalletSettingsService
         if (!$this->shadowReadEnabled()
             || $this->isMarketKilled((int) $platform->id)
             || $this->isSurfaceKilled('wallet_funding')) {
-            return $legacy;
+            return $this->normalizeRuntimeWalletSettings($platform, $legacy);
         }
 
-        return $this->legacyBillingConfigProjector->projectWalletSettings($platform, $legacy);
+        return $this->normalizeRuntimeWalletSettings(
+            $platform,
+            $this->legacyBillingConfigProjector->projectWalletSettings($platform, $legacy)
+        );
     }
 
     private function defaultPlatformSettings(Platform $platform): array
     {
+        $primaryCurrency = strtoupper((string) ($platform->currency_code ?: 'KES'));
+
         return [
             'enabled' => false,
             'mode_override' => null,
-            'currency_code' => strtoupper((string) ($platform->currency_code ?: 'KES')),
+            'currency_code' => $primaryCurrency,
+            'supported_currencies' => [$primaryCurrency],
+            'multi_currency_wallet_enabled' => (bool) $platform->multi_currency_wallet_enabled,
             'max_single_topup' => '50000.00',
             'max_wallet_balance' => '200000.00',
             'topup_presets' => ['500.00', '1000.00', '2000.00', '5000.00'],
+            'topup_presets_by_currency' => [
+                $primaryCurrency => ['500.00', '1000.00', '2000.00', '5000.00'],
+            ],
+            'limits_by_currency' => [
+                $primaryCurrency => [
+                    'max_single_topup' => '50000.00',
+                    'max_wallet_balance' => '200000.00',
+                ],
+            ],
             'allow_combined_topup_subscribe' => true,
             'show_refresh_button' => true,
             'recent_transactions_limit' => 10,
@@ -698,6 +714,73 @@ class WalletSettingsService
                 ],
             ],
         ];
+    }
+
+    private function normalizeRuntimeWalletSettings(Platform $platform, array $settings): array
+    {
+        $primaryCurrency = strtoupper((string) ($settings['currency_code'] ?? $platform->primaryCurrency()));
+        $effectiveCurrencies = $platform->effectiveCurrencies();
+        $configuredSupported = is_array($settings['supported_currencies'] ?? null)
+            ? array_values(array_filter(array_map(
+                static fn ($value) => strtoupper(trim((string) $value)),
+                $settings['supported_currencies']
+            )))
+            : [];
+        $supportedCurrencies = $configuredSupported !== []
+            ? array_values(array_intersect($effectiveCurrencies, $configuredSupported))
+            : $effectiveCurrencies;
+
+        if ($supportedCurrencies === []) {
+            $supportedCurrencies = $effectiveCurrencies !== [] ? $effectiveCurrencies : [$primaryCurrency];
+        }
+
+        $topupByCurrency = [];
+        $configuredTopupByCurrency = is_array($settings['topup_presets_by_currency'] ?? null)
+            ? $settings['topup_presets_by_currency']
+            : [];
+
+        foreach ($supportedCurrencies as $currency) {
+            $presets = collect($configuredTopupByCurrency[$currency] ?? ($currency === $primaryCurrency ? ($settings['topup_presets'] ?? []) : []))
+                ->map(fn ($value) => $this->formatMoneyString($value, null))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            $topupByCurrency[$currency] = $presets;
+        }
+
+        $limitsByCurrency = [];
+        $configuredLimitsByCurrency = is_array($settings['limits_by_currency'] ?? null)
+            ? $settings['limits_by_currency']
+            : [];
+
+        foreach ($supportedCurrencies as $currency) {
+            $limitSource = is_array($configuredLimitsByCurrency[$currency] ?? null)
+                ? $configuredLimitsByCurrency[$currency]
+                : [];
+            $limitsByCurrency[$currency] = [
+                'max_single_topup' => $this->formatMoneyString(
+                    $limitSource['max_single_topup'] ?? ($currency === $primaryCurrency ? ($settings['max_single_topup'] ?? null) : null),
+                    '50000.00'
+                ),
+                'max_wallet_balance' => $this->formatMoneyString(
+                    $limitSource['max_wallet_balance'] ?? ($currency === $primaryCurrency ? ($settings['max_wallet_balance'] ?? null) : null),
+                    '200000.00'
+                ),
+            ];
+        }
+
+        $settings['currency_code'] = $primaryCurrency;
+        $settings['supported_currencies'] = $supportedCurrencies;
+        $settings['multi_currency_wallet_enabled'] = $platform->isMultiCurrencyWalletEnabled();
+        $settings['topup_presets_by_currency'] = $topupByCurrency;
+        $settings['limits_by_currency'] = $limitsByCurrency;
+        $settings['topup_presets'] = $topupByCurrency[$primaryCurrency] ?? ($settings['topup_presets'] ?? []);
+        $settings['max_single_topup'] = $limitsByCurrency[$primaryCurrency]['max_single_topup'] ?? ($settings['max_single_topup'] ?? '50000.00');
+        $settings['max_wallet_balance'] = $limitsByCurrency[$primaryCurrency]['max_wallet_balance'] ?? ($settings['max_wallet_balance'] ?? '200000.00');
+
+        return $settings;
     }
 
     private function resolvePlatformCredentials(Platform $platform): array
@@ -926,6 +1009,23 @@ class WalletSettingsService
             $merged['currency_code'] = strtoupper(trim((string) $incoming['currency_code']));
         }
 
+        if (array_key_exists('supported_currencies', $incoming) && is_array($incoming['supported_currencies'])) {
+            $supportedCurrencies = collect($incoming['supported_currencies'])
+                ->map(fn ($value) => strtoupper(trim((string) $value)))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($supportedCurrencies !== []) {
+                $merged['supported_currencies'] = $supportedCurrencies;
+            }
+        }
+
+        if (array_key_exists('multi_currency_wallet_enabled', $incoming)) {
+            $merged['multi_currency_wallet_enabled'] = (bool) $incoming['multi_currency_wallet_enabled'];
+        }
+
         foreach (['max_single_topup', 'max_wallet_balance'] as $key) {
             if (array_key_exists($key, $incoming)) {
                 $merged[$key] = $this->formatMoneyString($incoming[$key], $merged[$key]);
@@ -942,6 +1042,56 @@ class WalletSettingsService
 
             if (!empty($presets)) {
                 $merged['topup_presets'] = $presets;
+            }
+        }
+
+        if (array_key_exists('topup_presets_by_currency', $incoming) && is_array($incoming['topup_presets_by_currency'])) {
+            $presetsByCurrency = collect($incoming['topup_presets_by_currency'])
+                ->mapWithKeys(function ($values, $currency) {
+                    if (!is_array($values)) {
+                        return [];
+                    }
+
+                    $normalized = collect($values)
+                        ->map(fn ($value) => $this->formatMoneyString($value, null))
+                        ->filter()
+                        ->unique()
+                        ->values()
+                        ->all();
+
+                    return $normalized === []
+                        ? []
+                        : [strtoupper(trim((string) $currency)) => $normalized];
+                })
+                ->all();
+
+            if ($presetsByCurrency !== []) {
+                $merged['topup_presets_by_currency'] = $presetsByCurrency;
+            }
+        }
+
+        if (array_key_exists('limits_by_currency', $incoming) && is_array($incoming['limits_by_currency'])) {
+            $limitsByCurrency = collect($incoming['limits_by_currency'])
+                ->mapWithKeys(function ($values, $currency) {
+                    if (!is_array($values)) {
+                        return [];
+                    }
+
+                    $normalized = [];
+                    foreach (['max_single_topup', 'max_wallet_balance'] as $key) {
+                        if (array_key_exists($key, $values)) {
+                            $normalized[$key] = $this->formatMoneyString($values[$key], null);
+                        }
+                    }
+
+                    return $normalized === []
+                        ? []
+                        : [strtoupper(trim((string) $currency)) => $normalized];
+                })
+                ->all();
+
+            if ($limitsByCurrency !== []) {
+                $merged['limits_by_currency'] = $limitsByCurrency;
             }
         }
 
@@ -973,6 +1123,26 @@ class WalletSettingsService
 
         if ($merged['currency_code'] === '') {
             $merged['currency_code'] = strtoupper((string) ($platform->currency_code ?: 'KES'));
+        }
+
+        $primaryCurrency = strtoupper((string) $merged['currency_code']);
+        if ($primaryCurrency !== '') {
+            if (is_array($merged['topup_presets'] ?? null) && $merged['topup_presets'] !== []) {
+                $merged['topup_presets_by_currency'] = array_merge(
+                    is_array($merged['topup_presets_by_currency'] ?? null) ? $merged['topup_presets_by_currency'] : [],
+                    [$primaryCurrency => $merged['topup_presets']]
+                );
+            }
+
+            $merged['limits_by_currency'] = array_merge(
+                is_array($merged['limits_by_currency'] ?? null) ? $merged['limits_by_currency'] : [],
+                [
+                    $primaryCurrency => array_filter([
+                        'max_single_topup' => $merged['max_single_topup'] ?? null,
+                        'max_wallet_balance' => $merged['max_wallet_balance'] ?? null,
+                    ], static fn ($value) => $value !== null && $value !== ''),
+                ]
+            );
         }
 
         return $merged;

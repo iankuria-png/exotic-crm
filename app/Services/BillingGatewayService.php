@@ -64,15 +64,25 @@ class BillingGatewayService
         $context = $this->billingModeService->providerContext($platform, $provider);
         $providerConfig = $context['provider_config'];
         $environment = $context['environment'];
+        $currency = $this->resolveRequestedWalletCurrency($platform, $context, $options['currency'] ?? null);
+        $currencyLimits = is_array(data_get($context, "wallet.limits_by_currency.{$currency}"))
+            ? data_get($context, "wallet.limits_by_currency.{$currency}")
+            : [];
 
-        $this->assertAmountWithinBounds($client, $amount, $context);
+        $this->assertAmountWithinBounds($client, $amount, $context, $currency);
 
         $idempotencyKey = trim((string) ($options['idempotency_key'] ?? ''));
         if ($idempotencyKey === '') {
             throw new InvalidArgumentException('Top-up idempotency key is required.');
         }
 
-        $referenceNumber = $this->topupReference((int) $platform->id, (int) $client->id, (string) $provider, $idempotencyKey);
+        $referenceNumber = $this->topupReference(
+            (int) $platform->id,
+            (int) $client->id,
+            (string) $provider,
+            $currency,
+            $idempotencyKey
+        );
         $existing = Payment::query()
             ->where('purpose', 'wallet_topup')
             ->where('reference_number', $referenceNumber)
@@ -87,7 +97,12 @@ class BillingGatewayService
             ];
         }
 
-        $autoSubscribe = $this->normalizeAutoSubscribe($platform, $context['wallet'], $options['auto_subscribe'] ?? null);
+        $autoSubscribe = $this->normalizeAutoSubscribe(
+            $platform,
+            $context['wallet'],
+            $currency,
+            $options['auto_subscribe'] ?? null
+        );
         $payment = Payment::query()->create([
             'user_id' => $client->wp_user_id,
             'escort_post_id' => $client->wp_post_id,
@@ -95,7 +110,7 @@ class BillingGatewayService
             'client_id' => (int) $client->id,
             'phone' => $options['phone'] ?? $client->phone_normalized,
             'amount' => number_format($amount, 2, '.', ''),
-            'currency' => strtoupper((string) ($context['wallet']['currency_code'] ?? $platform->currency_code ?: 'KES')),
+            'currency' => $currency,
             'transaction_uuid' => (string) Str::uuid(),
             'transaction_reference' => $referenceNumber,
             'reference_number' => $referenceNumber,
@@ -117,7 +132,7 @@ class BillingGatewayService
                 'topup_limits' => [
                     'provider_min' => $providerConfig['min_amount'] ?? null,
                     'provider_max' => $providerConfig['max_amount'] ?? null,
-                    'market_max_balance' => $context['wallet']['max_wallet_balance'] ?? null,
+                    'market_max_balance' => $currencyLimits['max_wallet_balance'] ?? ($context['wallet']['max_wallet_balance'] ?? null),
                 ],
             ],
         ]);
@@ -1041,7 +1056,7 @@ class BillingGatewayService
         }
     }
 
-    private function normalizeAutoSubscribe(Platform $platform, array $walletConfig, mixed $payload): ?array
+    private function normalizeAutoSubscribe(Platform $platform, array $walletConfig, string $topupCurrency, mixed $payload): ?array
     {
         if (!is_array($payload) || empty($payload['enabled'])) {
             return null;
@@ -1058,29 +1073,55 @@ class BillingGatewayService
             throw new InvalidArgumentException('Auto-subscribe requires both product_id and duration.');
         }
 
+        $subscribeCurrency = strtoupper(trim((string) ($payload['currency'] ?? '')));
+        if ($subscribeCurrency === '') {
+            $effectiveCurrencies = $platform->effectiveCurrencies();
+            if (count($effectiveCurrencies) > 1) {
+                throw new InvalidArgumentException('Auto-subscribe currency is required for multi-currency markets.');
+            }
+
+            $subscribeCurrency = strtoupper((string) ($effectiveCurrencies[0] ?? $platform->primaryCurrency()));
+        }
+
+        if ($subscribeCurrency !== strtoupper($topupCurrency)) {
+            throw new InvalidArgumentException('Top-up and auto-subscribe currency must match.');
+        }
+
         $product = \App\Models\Product::query()
             ->where('platform_id', (int) $platform->id)
             ->where('is_active', true)
             ->where('is_archived', false)
             ->findOrFail($productId);
 
-        $this->walletCheckoutService->resolveSubscriptionPricing($product, $duration);
+        $this->walletCheckoutService->resolveSubscriptionPricing($product, $duration, $subscribeCurrency);
 
         return [
             'enabled' => true,
             'product_id' => $productId,
             'duration' => $duration,
+            'currency' => $subscribeCurrency,
         ];
     }
 
-    private function assertAmountWithinBounds(Client $client, float $amount, array $context): void
+    private function assertAmountWithinBounds(Client $client, float $amount, array $context, string $currency): void
     {
         $providerConfig = $context['provider_config'];
         $wallet = $context['wallet'];
         $minAmount = round((float) ($providerConfig['min_amount'] ?? 0), 2);
         $maxAmount = round((float) ($providerConfig['max_amount'] ?? 0), 2);
-        $maxWalletBalance = round((float) ($wallet['max_wallet_balance'] ?? 0), 2);
-        $currentBalance = round((float) ($client->wallet_balance ?? 0), 2);
+        $limitsByCurrency = is_array($wallet['limits_by_currency'] ?? null) ? $wallet['limits_by_currency'] : [];
+        $currencyLimits = is_array($limitsByCurrency[$currency] ?? null) ? $limitsByCurrency[$currency] : [];
+        $effectiveCurrencies = $client->platform?->effectiveCurrencies() ?? [];
+        $singleCurrencyFallback = count($effectiveCurrencies) === 1;
+        $maxSingleTopup = round((float) (
+            $currencyLimits['max_single_topup']
+            ?? ($singleCurrencyFallback ? ($wallet['max_single_topup'] ?? 0) : 0)
+        ), 2);
+        $maxWalletBalance = round((float) (
+            $currencyLimits['max_wallet_balance']
+            ?? ($singleCurrencyFallback ? ($wallet['max_wallet_balance'] ?? 0) : 0)
+        ), 2);
+        $currentBalance = round((float) $this->walletService->balanceFor($client, $currency), 2);
 
         if ($minAmount > 0 && $amount < $minAmount) {
             throw new InvalidArgumentException('Top-up amount is below the provider minimum.');
@@ -1088,6 +1129,10 @@ class BillingGatewayService
 
         if ($maxAmount > 0 && $amount > $maxAmount) {
             throw new InvalidArgumentException('Top-up amount exceeds the provider maximum.');
+        }
+
+        if ($maxSingleTopup > 0 && $amount > $maxSingleTopup) {
+            throw new InvalidArgumentException('Top-up amount exceeds the market single top-up limit.');
         }
 
         if ($maxWalletBalance > 0 && ($currentBalance + $amount) > $maxWalletBalance) {
@@ -1664,10 +1709,51 @@ class BillingGatewayService
         return '';
     }
 
-    private function topupReference(int $platformId, int $clientId, string $provider, string $idempotencyKey): string
+    private function topupReference(
+        int $platformId,
+        int $clientId,
+        string $provider,
+        string $currency,
+        string $idempotencyKey
+    ): string
     {
-        $hash = strtoupper(substr(hash('sha256', implode('|', [$platformId, $clientId, $provider, $idempotencyKey])), 0, 18));
+        $hash = strtoupper(substr(hash('sha256', implode('|', [
+            $platformId,
+            $clientId,
+            $provider,
+            strtoupper($currency),
+            $idempotencyKey,
+        ])), 0, 18));
 
-        return 'WTU-' . $hash;
+        return 'WTOP-' . $hash . '-' . strtoupper($currency);
+    }
+
+    private function resolveRequestedWalletCurrency(Platform $platform, array $context, mixed $requestedCurrency): string
+    {
+        $effectiveCurrencies = $platform->effectiveCurrencies();
+        $walletSupportedCurrencies = is_array($context['wallet']['supported_currencies'] ?? null)
+            ? array_values(array_filter(array_map(
+                static fn ($value) => strtoupper(trim((string) $value)),
+                $context['wallet']['supported_currencies']
+            )))
+            : [];
+        $allowedCurrencies = $walletSupportedCurrencies !== []
+            ? array_values(array_intersect($effectiveCurrencies, $walletSupportedCurrencies))
+            : $effectiveCurrencies;
+        $currency = strtoupper(trim((string) ($requestedCurrency ?? '')));
+
+        if ($currency === '') {
+            if (count($allowedCurrencies) > 1) {
+                throw new InvalidArgumentException('currency required for multi-currency market');
+            }
+
+            $currency = strtoupper((string) ($allowedCurrencies[0] ?? $platform->primaryCurrency()));
+        }
+
+        if (!in_array($currency, $allowedCurrencies, true)) {
+            throw new InvalidArgumentException(sprintf('%s is not supported for wallet funding in this market.', $currency));
+        }
+
+        return $currency;
     }
 }

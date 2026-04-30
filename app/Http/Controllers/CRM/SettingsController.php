@@ -1390,7 +1390,14 @@ class SettingsController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
-        $market = Platform::query()->select(['id', 'name', 'country', 'currency_code'])->findOrFail($marketId);
+        $market = Platform::query()->select([
+            'id',
+            'name',
+            'country',
+            'currency_code',
+            'supported_currencies',
+            'multi_currency_wallet_enabled',
+        ])->findOrFail($marketId);
         $rule = BillingWalletRule::query()
             ->with(["market:id,name,country"])
             ->where("market_id", $marketId)
@@ -1402,8 +1409,11 @@ class SettingsController extends Controller
                 "market_id" => $marketId,
                 "enabled" => false,
                 "currency_code" => null,
+                "supported_currencies_json" => null,
                 "topup_preset_json" => null,
+                "topup_preset_by_currency_json" => null,
                 "limit_json" => null,
+                "limit_by_currency_json" => null,
                 "auto_renew_json" => null,
                 "ui_json" => null,
                 "fx_override_json" => null,
@@ -1432,11 +1442,15 @@ class SettingsController extends Controller
         $validated = $request->validate([
             'enabled' => ['required', 'boolean'],
             'currency_code' => ['nullable', 'string', 'max:8'],
+            'supported_currencies_json' => ['nullable', 'array'],
+            'supported_currencies_json.*' => ['nullable', 'string', 'size:3'],
             'topup_preset_json' => ['nullable', 'array'],
             'topup_preset_json.*' => ['nullable'],
+            'topup_preset_by_currency_json' => ['nullable', 'array'],
             'limit_json' => ['nullable', 'array'],
             'limit_json.max_single_topup' => ['nullable'],
             'limit_json.max_wallet_balance' => ['nullable'],
+            'limit_by_currency_json' => ['nullable', 'array'],
             'auto_renew_json' => ['nullable', 'array'],
             'auto_renew_json.enabled' => ['nullable', 'boolean'],
             'ui_json' => ['nullable', 'array'],
@@ -1456,11 +1470,56 @@ class SettingsController extends Controller
             ->values()
             ->all();
 
+        $supportedCurrencies = collect($validated['supported_currencies_json'] ?? [])
+            ->map(fn ($value) => strtoupper(trim((string) $value)))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $presetsByCurrency = collect($validated['topup_preset_by_currency_json'] ?? [])
+            ->mapWithKeys(function ($values, $currency) {
+                if (!is_array($values)) {
+                    return [];
+                }
+
+                $normalized = collect($values)
+                    ->map(fn ($value) => trim((string) $value))
+                    ->filter()
+                    ->values()
+                    ->all();
+
+                return $normalized === []
+                    ? []
+                    : [strtoupper(trim((string) $currency)) => $normalized];
+            })
+            ->all();
+
         $limitJson = collect($validated['limit_json'] ?? [])
             ->mapWithKeys(function ($value, $key) {
                 $normalized = trim((string) $value);
 
                 return $normalized === '' ? [] : [$key => $normalized];
+            })
+            ->all();
+
+        $limitByCurrency = collect($validated['limit_by_currency_json'] ?? [])
+            ->mapWithKeys(function ($values, $currency) {
+                if (!is_array($values)) {
+                    return [];
+                }
+
+                $normalized = collect($values)
+                    ->mapWithKeys(function ($value, $key) {
+                        $trimmed = trim((string) $value);
+
+                        return $trimmed === '' ? [] : [$key => $trimmed];
+                    })
+                    ->all();
+
+                return $normalized === []
+                    ? []
+                    : [strtoupper(trim((string) $currency)) => $normalized];
             })
             ->all();
 
@@ -1499,8 +1558,11 @@ class SettingsController extends Controller
             [
                 'enabled' => (bool) $validated['enabled'],
                 'currency_code' => strtoupper(trim((string) ($validated['currency_code'] ?? $market->currency_code ?? ''))),
+                'supported_currencies_json' => $supportedCurrencies,
                 'topup_preset_json' => $presets,
+                'topup_preset_by_currency_json' => $presetsByCurrency,
                 'limit_json' => $limitJson,
+                'limit_by_currency_json' => $limitByCurrency,
                 'auto_renew_json' => $autoRenewJson,
                 'ui_json' => $uiJson,
                 'fx_override_json' => $fxOverrideJson,
@@ -2190,10 +2252,20 @@ class SettingsController extends Controller
             'enabled' => 'required|boolean',
             'mode_override' => ['nullable', Rule::in(['inherit', 'sandbox', 'production'])],
             'currency_code' => 'required|string|size:3',
+            'supported_currencies' => 'nullable|array|min:1|max:10',
+            'supported_currencies.*' => 'nullable|string|size:3',
+            'multi_currency_wallet_enabled' => 'required|boolean',
             'max_single_topup' => 'required|numeric|min:0',
             'max_wallet_balance' => 'required|numeric|min:0',
             'topup_presets' => 'required|array|min:1|max:10',
             'topup_presets.*' => 'numeric|min:0',
+            'topup_presets_by_currency' => 'nullable|array',
+            'topup_presets_by_currency.*' => 'nullable|array|max:10',
+            'topup_presets_by_currency.*.*' => 'numeric|min:0',
+            'limits_by_currency' => 'nullable|array',
+            'limits_by_currency.*' => 'nullable|array',
+            'limits_by_currency.*.max_single_topup' => 'nullable|numeric|min:0',
+            'limits_by_currency.*.max_wallet_balance' => 'nullable|numeric|min:0',
             'allow_combined_topup_subscribe' => 'required|boolean',
             'show_refresh_button' => 'required|boolean',
             'recent_transactions_limit' => 'required|integer|min:1|max:50',
@@ -2210,9 +2282,68 @@ class SettingsController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
+        $primaryCurrency = strtoupper(trim((string) $validated['currency_code']));
+        $supportedCurrencies = collect($validated['supported_currencies'] ?? [])
+            ->prepend($primaryCurrency)
+            ->map(fn ($value) => strtoupper(trim((string) $value)))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $topupPresetsByCurrency = collect($validated['topup_presets_by_currency'] ?? [])
+            ->mapWithKeys(function ($values, $currency) use ($supportedCurrencies) {
+                $normalizedCurrency = strtoupper(trim((string) $currency));
+                if (!is_array($values) || !in_array($normalizedCurrency, $supportedCurrencies, true)) {
+                    return [];
+                }
+
+                $normalizedValues = collect($values)
+                    ->map(fn ($value) => trim((string) $value))
+                    ->filter()
+                    ->values()
+                    ->all();
+
+                return $normalizedValues === []
+                    ? []
+                    : [$normalizedCurrency => $normalizedValues];
+            })
+            ->all();
+
+        $limitsByCurrency = collect($validated['limits_by_currency'] ?? [])
+            ->mapWithKeys(function ($values, $currency) use ($supportedCurrencies) {
+                $normalizedCurrency = strtoupper(trim((string) $currency));
+                if (!is_array($values) || !in_array($normalizedCurrency, $supportedCurrencies, true)) {
+                    return [];
+                }
+
+                $normalizedValues = collect($values)
+                    ->mapWithKeys(function ($value, $key) {
+                        $trimmed = trim((string) $value);
+
+                        return $trimmed === '' ? [] : [$key => $trimmed];
+                    })
+                    ->all();
+
+                return $normalizedValues === []
+                    ? []
+                    : [$normalizedCurrency => $normalizedValues];
+            })
+            ->all();
+
         $beforeState = $this->platformAuditState($platform);
-        $platformWallet = $this->walletSettingsService->savePlatformConfig($platform, $validated);
-        $platform->refresh();
+        $platform->forceFill([
+            'currency_code' => $primaryCurrency,
+            'supported_currencies' => $supportedCurrencies,
+            'multi_currency_wallet_enabled' => (bool) $validated['multi_currency_wallet_enabled'],
+        ])->save();
+        $platformWallet = $this->walletSettingsService->savePlatformConfig($platform, array_merge($validated, [
+            'currency_code' => $primaryCurrency,
+            'supported_currencies' => $supportedCurrencies,
+            'topup_presets_by_currency' => $topupPresetsByCurrency,
+            'limits_by_currency' => $limitsByCurrency,
+        ]));
+        $platform = $platform->fresh();
         $syncResult = $this->walletSyncService->syncPlatformState($platform, null, (int) $request->user()->id);
 
         $this->auditService->fromRequest(
@@ -2731,6 +2862,7 @@ class SettingsController extends Controller
             'packages.*.prices.*.duration_label' => 'required_with:packages.*.prices|string|max:120',
             'packages.*.prices.*.duration_days' => 'nullable|integer|min:1|max:365',
             'packages.*.prices.*.price' => 'required_with:packages.*.prices|numeric|min:0',
+            'packages.*.prices.*.currency' => 'nullable|string|size:3',
             'packages.*.prices.*.is_active' => 'required_with:packages.*.prices|boolean',
             'packages.*.prices.*.sort_order' => 'nullable|integer|min:0|max:10000',
             'reason' => 'nullable|string|max:500',
@@ -2780,7 +2912,7 @@ class SettingsController extends Controller
                 }
                 $seenSlugs[$slug] = true;
 
-                $priceRows = $this->normalizeSubmittedPriceRows($row, $currency, $isActive);
+                $priceRows = $this->normalizeSubmittedPriceRows($row, $platform, $isActive);
                 $activePricedDurations = collect($priceRows)
                     ->filter(fn(array $price) => (bool) $price['is_active'] && (float) $price['price'] > 0);
 
@@ -2824,8 +2956,8 @@ class SettingsController extends Controller
                 $product->monthly_price = $product->monthly_price ?? 0;
                 $product->save();
 
-                $this->syncProductPriceRows($product, $priceRows, $currency);
-                $this->syncLegacyPriceColumnsForProduct($product, $priceRows);
+                $this->syncProductPriceRows($product, $priceRows);
+                $this->syncLegacyPriceColumnsForProduct($product, $priceRows, $currency);
 
                 $touchedProductIds[] = (int) $product->id;
                 $seen[$name] = true;
@@ -4291,8 +4423,11 @@ class SettingsController extends Controller
      *
      * @return array<int, array{duration_key: string, duration_label: string, duration_days: int, price: float, currency: string, is_active: bool, sort_order: int, id: int|null}>
      */
-    private function normalizeSubmittedPriceRows(array $row, string $currency, bool $isActive): array
+    private function normalizeSubmittedPriceRows(array $row, Platform $platform, bool $isActive): array
     {
+        $primaryCurrency = strtoupper((string) ($platform->currency_code ?: 'KES'));
+        $supportedCurrencies = $platform->supportedCurrencies();
+
         if (!empty($row['prices']) && is_array($row['prices'])) {
             $normalized = [];
             foreach ($row['prices'] as $priceRow) {
@@ -4301,13 +4436,20 @@ class SettingsController extends Controller
                     continue;
                 }
 
+                $rowCurrency = strtoupper(trim((string) ($priceRow['currency'] ?? $primaryCurrency)));
+                if (!in_array($rowCurrency, $supportedCurrencies, true)) {
+                    throw ValidationException::withMessages([
+                        'packages' => "{$rowCurrency} is not enabled for this market.",
+                    ]);
+                }
+
                 $normalized[] = [
                     'id' => isset($priceRow['id']) ? (int) $priceRow['id'] : null,
                     'duration_key' => $durationKey,
                     'duration_label' => trim((string) ($priceRow['duration_label'] ?? ucwords(str_replace('_', ' ', $durationKey)))),
                     'duration_days' => isset($priceRow['duration_days']) ? (int) $priceRow['duration_days'] : $this->inferDurationDays($durationKey),
                     'price' => (float) ($priceRow['price'] ?? 0),
-                    'currency' => $currency,
+                    'currency' => $rowCurrency,
                     'is_active' => (bool) ($priceRow['is_active'] ?? $isActive),
                     'sort_order' => (int) ($priceRow['sort_order'] ?? 0),
                 ];
@@ -4332,7 +4474,7 @@ class SettingsController extends Controller
                 'duration_label' => $entry['label'],
                 'duration_days' => $entry['days'],
                 'price' => $price,
-                'currency' => $currency,
+                'currency' => $primaryCurrency,
                 'is_active' => $price > 0 && $isActive,
                 'sort_order' => $entry['sort'],
             ];
@@ -4357,17 +4499,18 @@ class SettingsController extends Controller
         return $map[$durationKey] ?? 30;
     }
 
-    private function syncProductPriceRows(Product $product, array $priceRows, string $currency): void
+    private function syncProductPriceRows(Product $product, array $priceRows): void
     {
         $touchedIds = [];
         $existingByKey = ProductPrice::query()
             ->where('product_id', (int) $product->id)
             ->get()
-            ->keyBy('duration_key');
+            ->keyBy(fn (ProductPrice $price) => $price->duration_key . ':' . strtoupper((string) $price->currency));
 
         foreach ($priceRows as $priceRow) {
             $durationKey = (string) $priceRow['duration_key'];
-            $existing = $existingByKey->get($durationKey);
+            $currency = strtoupper((string) ($priceRow['currency'] ?? ''));
+            $existing = $existingByKey->get($durationKey . ':' . $currency);
 
             if ($existing) {
                 $existing->update([
@@ -4406,7 +4549,7 @@ class SettingsController extends Controller
     /**
      * Mirror active price rows back to legacy weekly/biweekly/monthly columns for backward compatibility.
      */
-    private function syncLegacyPriceColumnsForProduct(Product $product, array $priceRows): void
+    private function syncLegacyPriceColumnsForProduct(Product $product, array $priceRows, string $primaryCurrency): void
     {
         $legacyMap = [
             '1_week' => 'weekly_price',
@@ -4422,7 +4565,11 @@ class SettingsController extends Controller
 
         foreach ($priceRows as $priceRow) {
             $key = $priceRow['duration_key'] ?? '';
-            if (isset($legacyMap[$key]) && (bool) ($priceRow['is_active'] ?? false)) {
+            if (
+                isset($legacyMap[$key])
+                && strtoupper((string) ($priceRow['currency'] ?? '')) === strtoupper($primaryCurrency)
+                && (bool) ($priceRow['is_active'] ?? false)
+            ) {
                 $updates[$legacyMap[$key]] = (float) ($priceRow['price'] ?? 0);
             }
         }
@@ -4467,6 +4614,10 @@ class SettingsController extends Controller
 
     private function syncPackageCurrenciesForPlatform(Platform $platform): void
     {
+        if (count($platform->effectiveCurrencies()) > 1) {
+            return;
+        }
+
         $currency = strtoupper((string) ($platform->currency_code ?: 'KES'));
         Product::query()
             ->where('platform_id', (int) $platform->id)
@@ -4608,6 +4759,9 @@ class SettingsController extends Controller
             'country' => $platform->country,
             'is_active' => (bool) $platform->is_active,
             'currency' => $platform->currency_code ?: 'KES',
+            'supported_currencies' => $platform->supportedCurrencies(),
+            'effective_currencies' => $platform->effectiveCurrencies(),
+            'multi_currency_wallet_enabled' => (bool) $platform->multi_currency_wallet_enabled,
             'timezone' => MarketTimezone::resolve($platform->timezone, config('app.timezone', 'UTC')),
             'phone_prefix' => $platform->phone_prefix ?: '254',
             'support_chat_url' => $platform->support_chat_url,

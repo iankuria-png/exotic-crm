@@ -13,8 +13,11 @@ class BillingWalletRule extends Model
         'market_id',
         'enabled',
         'currency_code',
+        'supported_currencies_json',
         'topup_preset_json',
+        'topup_preset_by_currency_json',
         'limit_json',
+        'limit_by_currency_json',
         'auto_renew_json',
         'ui_json',
         'fx_override_json',
@@ -22,8 +25,11 @@ class BillingWalletRule extends Model
 
     protected $casts = [
         'enabled' => 'boolean',
+        'supported_currencies_json' => 'array',
         'topup_preset_json' => 'array',
+        'topup_preset_by_currency_json' => 'array',
         'limit_json' => 'array',
+        'limit_by_currency_json' => 'array',
         'auto_renew_json' => 'array',
         'ui_json' => 'array',
         'fx_override_json' => 'array',

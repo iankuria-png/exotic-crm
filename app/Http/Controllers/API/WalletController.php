@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Product;
+use App\Models\ProductPrice;
 use App\Models\Platform;
 use App\Services\WalletCheckoutService;
 use App\Services\WalletPayloadService;
@@ -37,6 +38,7 @@ class WalletController extends Controller
             ],
             'balance' => $summary['balance'],
             'currency' => $summary['currency'],
+            'balances' => $summary['balances'],
             'mode' => $context['mode'],
             'refreshed_at' => $summary['refreshed_at'],
             'wallet_last_synced_at' => $summary['wallet_last_synced_at'],
@@ -68,25 +70,54 @@ class WalletController extends Controller
     {
         [$client, $platform, $context] = $this->resolveWalletClient($request);
         $validated = $request->validate([
-            'product_id' => 'required|integer',
-            'duration' => 'required|string|max:30',
+            'product_id' => 'nullable|integer',
+            'product_price_id' => 'nullable|integer|exists:product_prices,id',
+            'duration' => 'nullable|string|max:30',
+            'currency' => 'nullable|string|size:3',
         ]);
 
+        $priceRow = null;
+        if (!empty($validated['product_price_id'])) {
+            $priceRow = ProductPrice::query()
+                ->with('product.platform')
+                ->where('id', (int) $validated['product_price_id'])
+                ->where('is_active', true)
+                ->firstOrFail();
+        }
+
+        $productId = (int) ($validated['product_id'] ?? ($priceRow?->product_id ?? 0));
         $product = Product::query()
             ->where('platform_id', (int) $platform->id)
             ->where('is_active', true)
             ->where('is_archived', false)
-            ->findOrFail((int) $validated['product_id']);
+            ->findOrFail($productId);
+
+        if ($priceRow && (int) $priceRow->product_id !== (int) $product->id) {
+            return response()->json([
+                'message' => 'The selected pricing option does not belong to this package.',
+                'error_code' => 'wallet_subscribe_failed',
+            ], 422);
+        }
+
+        $currency = strtoupper(trim((string) ($validated['currency'] ?? ($priceRow?->currency ?? ''))));
+        $duration = (string) ($validated['duration'] ?? ($priceRow?->duration_key ?? ''));
+        if ($duration === '') {
+            return response()->json([
+                'message' => 'A package duration or pricing option is required.',
+                'error_code' => 'wallet_subscribe_failed',
+            ], 422);
+        }
 
         try {
             $checkout = $this->walletCheckoutService->payForSubscriptionFromWallet(
                 $client,
                 $product,
-                $validated['duration'],
+                $duration,
                 (string) $request->attributes->get('wallet_idempotency_key'),
                 [
                     'environment' => $request->attributes->get('wallet_environment'),
                     'origin' => 'wp_wallet_subscribe',
+                    'currency' => $currency !== '' ? $currency : null,
                 ]
             );
         } catch (RuntimeException|InvalidArgumentException $exception) {
@@ -121,6 +152,7 @@ class WalletController extends Controller
             'wallet' => [
                 'balance' => $summary['balance'],
                 'currency' => $summary['currency'],
+                'balances' => $summary['balances'],
                 'transaction' => $this->walletService->serializeTransaction($checkout['transaction']),
             ],
         ]);

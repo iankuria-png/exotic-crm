@@ -11,7 +11,7 @@ class RenewalRun extends Model
     protected $fillable = [
         'campaign_id', 'run_at', 'total_targeted',
         'sent_count', 'failed_count', 'skipped_count',
-        'run_by', 'status',
+        'run_by', 'status', 'currency',
     ];
 
     protected $casts = [

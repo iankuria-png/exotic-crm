@@ -141,6 +141,11 @@ class Client extends Model
         return $this->hasMany(WalletTransaction::class);
     }
 
+    public function walletBalances()
+    {
+        return $this->hasMany(ClientWalletBalance::class);
+    }
+
     public function credentialDispatches()
     {
         return $this->hasMany(ClientCredentialDispatch::class);

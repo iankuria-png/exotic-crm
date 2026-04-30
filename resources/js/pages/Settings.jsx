@@ -198,6 +198,9 @@ function defaultPlatformForm() {
 
 function buildPackageEditor(platform) {
     const currency = platform?.currency || 'KES';
+    const supportedCurrencies = Array.isArray(platform?.supported_currencies) && platform.supported_currencies.length > 0
+        ? platform.supported_currencies.map((value) => String(value).toUpperCase())
+        : [currency];
     const serverRows = Array.isArray(platform?.packages) ? platform.packages : [];
 
     const rows = serverRows.map((row) => ({
@@ -215,6 +218,7 @@ function buildPackageEditor(platform) {
                 duration_label: p.duration_label,
                 duration_days: p.duration_days,
                 price: Number(p.price || 0),
+                currency: String(p.currency || row.currency || currency).toUpperCase(),
                 is_active: Boolean(p.is_active),
                 sort_order: Number(p.sort_order || 0),
             }))
@@ -225,10 +229,13 @@ function buildPackageEditor(platform) {
         reason: 'Updated market package catalog from settings workspace',
         rows,
         currency,
+        supported_currencies: supportedCurrencies,
+        effective_currencies: Array.isArray(platform?.effective_currencies) ? platform.effective_currencies : [currency],
+        multi_currency_wallet_enabled: Boolean(platform?.multi_currency_wallet_enabled),
     };
 }
 
-function newPackageRow(sortOrder = 0) {
+function newPackageRow(sortOrder = 0, currency = 'KES') {
     return {
         id: null,
         name: '',
@@ -237,12 +244,12 @@ function newPackageRow(sortOrder = 0) {
         sort_order: sortOrder,
         is_active: true,
         is_archived: false,
-        prices: [{ id: null, duration_key: '1_month', duration_label: '1 Month', duration_days: 30, price: 0, is_active: true, sort_order: 10 }],
+        prices: [{ id: null, duration_key: '1_month', duration_label: '1 Month', duration_days: 30, price: 0, currency, is_active: true, sort_order: 10 }],
     };
 }
 
-function newPriceRow(sortOrder = 0) {
-    return { id: null, duration_key: '', duration_label: '', duration_days: 30, price: 0, is_active: true, sort_order: sortOrder };
+function newPriceRow(sortOrder = 0, currency = '') {
+    return { id: null, duration_key: '', duration_label: '', duration_days: 30, price: 0, currency, is_active: true, sort_order: sortOrder };
 }
 
 function smsProviderLabel(providerId) {
@@ -836,13 +843,26 @@ function defaultDiscountPinForm() {
 }
 
 function defaultWalletPlatformForm(currency = 'KES') {
+    const presets = ['500.00', '1000.00', '2000.00', '5000.00'];
     return {
         enabled: false,
         mode_override: 'inherit',
         currency_code: currency,
+        supported_currencies: [currency],
+        effective_currencies: [currency],
+        multi_currency_wallet_enabled: false,
         max_single_topup: '50000.00',
         max_wallet_balance: '200000.00',
-        topup_presets: ['500.00', '1000.00', '2000.00', '5000.00'],
+        topup_presets: presets,
+        topup_presets_by_currency: {
+            [currency]: presets,
+        },
+        limits_by_currency: {
+            [currency]: {
+                max_single_topup: '50000.00',
+                max_wallet_balance: '200000.00',
+            },
+        },
         allow_combined_topup_subscribe: true,
         show_refresh_button: true,
         recent_transactions_limit: 10,
@@ -862,16 +882,48 @@ function buildWalletPlatformForm(platform) {
         return fallback;
     }
 
+    const primaryCurrency = wallet.currency_code || fallback.currency_code;
+    const supportedCurrencies = Array.isArray(platform?.supported_currencies) && platform.supported_currencies.length > 0
+        ? platform.supported_currencies.map((value) => String(value).toUpperCase())
+        : (Array.isArray(wallet.supported_currencies) && wallet.supported_currencies.length > 0
+            ? wallet.supported_currencies.map((value) => String(value).toUpperCase())
+            : [primaryCurrency]);
+    const topupPresetsByCurrency = supportedCurrencies.reduce((carry, currency) => {
+        const values = Array.isArray(wallet.topup_presets_by_currency?.[currency]) && wallet.topup_presets_by_currency[currency].length > 0
+            ? wallet.topup_presets_by_currency[currency].map((value) => String(value))
+            : (currency === primaryCurrency ? fallback.topup_presets : []);
+        carry[currency] = values;
+        return carry;
+    }, {});
+    const limitsByCurrency = supportedCurrencies.reduce((carry, currency) => {
+        carry[currency] = {
+            max_single_topup: wallet.limits_by_currency?.[currency]?.max_single_topup
+                || (currency === primaryCurrency ? wallet.max_single_topup : '')
+                || fallback.max_single_topup,
+            max_wallet_balance: wallet.limits_by_currency?.[currency]?.max_wallet_balance
+                || (currency === primaryCurrency ? wallet.max_wallet_balance : '')
+                || fallback.max_wallet_balance,
+        };
+        return carry;
+    }, {});
+
     return {
         ...fallback,
         enabled: Boolean(wallet.enabled),
         mode_override: wallet.mode_override || 'inherit',
-        currency_code: wallet.currency_code || fallback.currency_code,
+        currency_code: primaryCurrency,
+        supported_currencies: supportedCurrencies,
+        effective_currencies: Array.isArray(platform?.effective_currencies) && platform.effective_currencies.length > 0
+            ? platform.effective_currencies.map((value) => String(value).toUpperCase())
+            : [primaryCurrency],
+        multi_currency_wallet_enabled: Boolean(platform?.multi_currency_wallet_enabled),
         max_single_topup: wallet.max_single_topup || fallback.max_single_topup,
         max_wallet_balance: wallet.max_wallet_balance || fallback.max_wallet_balance,
         topup_presets: Array.isArray(wallet.topup_presets) && wallet.topup_presets.length > 0
             ? wallet.topup_presets.map((value) => String(value))
             : fallback.topup_presets,
+        topup_presets_by_currency: topupPresetsByCurrency,
+        limits_by_currency: limitsByCurrency,
         allow_combined_topup_subscribe: Boolean(wallet.allow_combined_topup_subscribe),
         show_refresh_button: Boolean(wallet.show_refresh_button),
         recent_transactions_limit: Number(wallet.recent_transactions_limit || fallback.recent_transactions_limit),
@@ -1989,6 +2041,50 @@ function IntegrationsWorkspace({
         }));
     };
 
+    const updateWalletSupportedCurrencies = (value) => {
+        setWalletPlatformForm((current) => {
+            const parsed = value
+                .split(',')
+                .map((entry) => entry.trim().toUpperCase())
+                .filter(Boolean);
+            const supportedCurrencies = Array.from(new Set([current.currency_code, ...parsed]));
+            const topupPresetsByCurrency = { ...(current.topup_presets_by_currency || {}) };
+            const limitsByCurrency = { ...(current.limits_by_currency || {}) };
+
+            supportedCurrencies.forEach((currency) => {
+                if (!Array.isArray(topupPresetsByCurrency[currency])) {
+                    topupPresetsByCurrency[currency] = currency === current.currency_code
+                        ? [...(current.topup_presets || [])]
+                        : [];
+                }
+                if (!limitsByCurrency[currency]) {
+                    limitsByCurrency[currency] = {
+                        max_single_topup: currency === current.currency_code ? current.max_single_topup : '',
+                        max_wallet_balance: currency === current.currency_code ? current.max_wallet_balance : '',
+                    };
+                }
+            });
+
+            Object.keys(topupPresetsByCurrency).forEach((currency) => {
+                if (!supportedCurrencies.includes(currency)) {
+                    delete topupPresetsByCurrency[currency];
+                }
+            });
+            Object.keys(limitsByCurrency).forEach((currency) => {
+                if (!supportedCurrencies.includes(currency)) {
+                    delete limitsByCurrency[currency];
+                }
+            });
+
+            return {
+                ...current,
+                supported_currencies: supportedCurrencies,
+                topup_presets_by_currency: topupPresetsByCurrency,
+                limits_by_currency: limitsByCurrency,
+            };
+        });
+    };
+
     const updateWalletPlatformProviderField = (provider, field, value) => {
         setWalletPlatformForm((current) => ({
             ...current,
@@ -2002,6 +2098,22 @@ function IntegrationsWorkspace({
         }));
     };
 
+    const updateWalletLimitByCurrency = (currency, field, value) => {
+        setWalletPlatformForm((current) => ({
+            ...current,
+            limits_by_currency: {
+                ...(current.limits_by_currency || {}),
+                [currency]: {
+                    ...((current.limits_by_currency || {})[currency] || {}),
+                    [field]: value,
+                },
+            },
+            ...(currency === current.currency_code
+                ? (field === 'max_single_topup' ? { max_single_topup: value } : { max_wallet_balance: value })
+                : {}),
+        }));
+    };
+
     const updateWalletTopupPreset = (index, value) => {
         setWalletPlatformForm((current) => ({
             ...current,
@@ -2011,11 +2123,47 @@ function IntegrationsWorkspace({
         }));
     };
 
+    const updateWalletTopupPresetByCurrency = (currency, index, value) => {
+        setWalletPlatformForm((current) => {
+            const existing = Array.isArray(current.topup_presets_by_currency?.[currency])
+                ? current.topup_presets_by_currency[currency]
+                : [];
+            const updated = existing.map((preset, presetIndex) => (presetIndex === index ? value : preset));
+
+            return {
+                ...current,
+                topup_presets_by_currency: {
+                    ...(current.topup_presets_by_currency || {}),
+                    [currency]: updated,
+                },
+                ...(currency === current.currency_code ? { topup_presets: updated } : {}),
+            };
+        });
+    };
+
     const addWalletTopupPreset = () => {
         setWalletPlatformForm((current) => ({
             ...current,
             topup_presets: [...current.topup_presets, ''],
         }));
+    };
+
+    const addWalletTopupPresetByCurrency = (currency) => {
+        setWalletPlatformForm((current) => {
+            const existing = Array.isArray(current.topup_presets_by_currency?.[currency])
+                ? current.topup_presets_by_currency[currency]
+                : [];
+            const updated = [...existing, ''];
+
+            return {
+                ...current,
+                topup_presets_by_currency: {
+                    ...(current.topup_presets_by_currency || {}),
+                    [currency]: updated,
+                },
+                ...(currency === current.currency_code ? { topup_presets: updated } : {}),
+            };
+        });
     };
 
     const removeWalletTopupPreset = (index) => {
@@ -2025,18 +2173,57 @@ function IntegrationsWorkspace({
         }));
     };
 
+    const removeWalletTopupPresetByCurrency = (currency, index) => {
+        setWalletPlatformForm((current) => {
+            const existing = Array.isArray(current.topup_presets_by_currency?.[currency])
+                ? current.topup_presets_by_currency[currency]
+                : [];
+            const updated = existing.filter((_, presetIndex) => presetIndex !== index);
+
+            return {
+                ...current,
+                topup_presets_by_currency: {
+                    ...(current.topup_presets_by_currency || {}),
+                    [currency]: updated,
+                },
+                ...(currency === current.currency_code ? { topup_presets: updated } : {}),
+            };
+        });
+    };
+
     const saveWalletPlatformConfig = () => {
         if (!selectedPlatform) {
             return;
         }
 
-        const topupPresets = walletPlatformForm.topup_presets
-            .map((value) => value.trim())
-            .filter(Boolean);
+        const primaryCurrency = walletPlatformForm.currency_code.trim().toUpperCase();
+        const supportedCurrencies = Array.from(new Set([primaryCurrency, ...(walletPlatformForm.supported_currencies || [])]));
+        const topupPresetsByCurrency = {};
+        const limitsByCurrency = {};
 
-        if (topupPresets.length === 0) {
-            toast.error('Add at least one wallet top-up preset before saving.');
-            return;
+        for (const currency of supportedCurrencies) {
+            const presets = (walletPlatformForm.topup_presets_by_currency?.[currency] || [])
+                .map((value) => String(value).trim())
+                .filter(Boolean);
+
+            if (presets.length === 0) {
+                toast.error(`${currency} needs at least one wallet top-up preset before saving.`);
+                return;
+            }
+
+            const maxSingleTopup = String(walletPlatformForm.limits_by_currency?.[currency]?.max_single_topup || '').trim();
+            const maxWalletBalance = String(walletPlatformForm.limits_by_currency?.[currency]?.max_wallet_balance || '').trim();
+
+            if (!maxSingleTopup || !maxWalletBalance) {
+                toast.error(`${currency} needs both max single top-up and max wallet balance.`);
+                return;
+            }
+
+            topupPresetsByCurrency[currency] = presets;
+            limitsByCurrency[currency] = {
+                max_single_topup: maxSingleTopup,
+                max_wallet_balance: maxWalletBalance,
+            };
         }
 
         const invalidProviderRange = Object.entries(walletPlatformForm.providers || {}).find(([, providerConfig]) => (
@@ -2053,10 +2240,14 @@ function IntegrationsWorkspace({
             payload: {
                 enabled: Boolean(walletPlatformForm.enabled),
                 mode_override: walletPlatformForm.mode_override || 'inherit',
-                currency_code: walletPlatformForm.currency_code.trim().toUpperCase(),
-                max_single_topup: walletPlatformForm.max_single_topup.trim(),
-                max_wallet_balance: walletPlatformForm.max_wallet_balance.trim(),
-                topup_presets: topupPresets,
+                currency_code: primaryCurrency,
+                supported_currencies: supportedCurrencies,
+                multi_currency_wallet_enabled: Boolean(walletPlatformForm.multi_currency_wallet_enabled),
+                max_single_topup: limitsByCurrency[primaryCurrency]?.max_single_topup || walletPlatformForm.max_single_topup.trim(),
+                max_wallet_balance: limitsByCurrency[primaryCurrency]?.max_wallet_balance || walletPlatformForm.max_wallet_balance.trim(),
+                topup_presets: topupPresetsByCurrency[primaryCurrency] || [],
+                topup_presets_by_currency: topupPresetsByCurrency,
+                limits_by_currency: limitsByCurrency,
                 allow_combined_topup_subscribe: Boolean(walletPlatformForm.allow_combined_topup_subscribe),
                 show_refresh_button: Boolean(walletPlatformForm.show_refresh_button),
                 recent_transactions_limit: Number(walletPlatformForm.recent_transactions_limit || 10),
@@ -2585,7 +2776,10 @@ function IntegrationsWorkspace({
         setPackageEditor((current) => {
             if (!current) return current;
             const maxSort = current.rows.reduce((max, r) => Math.max(max, r.sort_order || 0), 0);
-            return { ...current, rows: [...current.rows, newPackageRow(maxSort + 10)] };
+            return {
+                ...current,
+                rows: [...current.rows, newPackageRow(maxSort + 10, current.supported_currencies?.[0] || current.currency || 'KES')],
+            };
         });
     };
 
@@ -2604,7 +2798,10 @@ function IntegrationsWorkspace({
                 rows: current.rows.map((row, i) => {
                     if (i !== rowIndex) return row;
                     const maxSort = row.prices.reduce((max, p) => Math.max(max, p.sort_order || 0), 0);
-                    return { ...row, prices: [...row.prices, newPriceRow(maxSort + 10)] };
+                    return {
+                        ...row,
+                        prices: [...row.prices, newPriceRow(maxSort + 10, current.supported_currencies?.[0] || current.currency || 'KES')],
+                    };
                 }),
             };
         });
@@ -2667,6 +2864,7 @@ function IntegrationsWorkspace({
                         duration_label: p.duration_label || p.duration_key.replace(/_/g, ' '),
                         duration_days: p.duration_days || 30,
                         price: Number(p.price || 0),
+                        currency: String(p.currency || packageEditor.currency || 'KES').toUpperCase(),
                         is_active: Boolean(p.is_active),
                         sort_order: p.sort_order,
                     })),
@@ -3684,7 +3882,7 @@ function IntegrationsWorkspace({
                                                 </div>
 
                                                 <div>
-                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Currency</label>
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Primary currency</label>
                                                     <input
                                                         value={walletPlatformForm.currency_code}
                                                         onChange={(event) => updateWalletPlatformField('currency_code', event.target.value.toUpperCase())}
@@ -3693,18 +3891,32 @@ function IntegrationsWorkspace({
                                                     />
                                                 </div>
 
-                                                <input
-                                                    value={walletPlatformForm.max_single_topup}
-                                                    onChange={(event) => updateWalletPlatformField('max_single_topup', event.target.value)}
-                                                    className="crm-input"
-                                                    placeholder="Max single top-up"
-                                                />
-                                                <input
-                                                    value={walletPlatformForm.max_wallet_balance}
-                                                    onChange={(event) => updateWalletPlatformField('max_wallet_balance', event.target.value)}
-                                                    className="crm-input"
-                                                    placeholder="Max wallet balance"
-                                                />
+                                                <div>
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Supported currencies</label>
+                                                    <input
+                                                        value={(walletPlatformForm.supported_currencies || []).join(', ')}
+                                                        onChange={(event) => updateWalletSupportedCurrencies(event.target.value)}
+                                                        className="crm-input"
+                                                        placeholder="CDF, USD"
+                                                    />
+                                                    <p className="mt-1 text-xs text-slate-500">
+                                                        Admin config may stage extra currencies here. Runtime surfaces still use effective currencies only.
+                                                    </p>
+                                                </div>
+
+                                                <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={Boolean(walletPlatformForm.multi_currency_wallet_enabled)}
+                                                        onChange={(event) => updateWalletPlatformField('multi_currency_wallet_enabled', event.target.checked)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                    />
+                                                    Enable multi-currency wallet runtime for this market
+                                                </label>
+
+                                                <div className="md:col-span-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                                    Effective checkout/wallet currencies: {(walletPlatformForm.effective_currencies || [walletPlatformForm.currency_code]).join(', ')}
+                                                </div>
 
                                                 <label className="flex items-center gap-2 text-sm text-slate-700">
                                                     <input
@@ -3738,34 +3950,61 @@ function IntegrationsWorkspace({
                                                 </div>
 
                                                 <div className="md:col-span-2">
-                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Top-up presets</label>
-                                                    <div className="space-y-2">
-                                                        {walletPlatformForm.topup_presets.map((preset, index) => (
-                                                            <div key={`wallet-preset-${index}`} className="flex gap-2">
-                                                                <input
-                                                                    value={preset}
-                                                                    onChange={(event) => updateWalletTopupPreset(index, event.target.value)}
-                                                                    className="crm-input flex-1"
-                                                                    placeholder="Preset amount"
-                                                                />
+                                                    <label className="mb-1 block text-sm font-medium text-slate-700">Per-currency limits and top-up presets</label>
+                                                    <div className="space-y-3">
+                                                        {(walletPlatformForm.supported_currencies || [walletPlatformForm.currency_code]).map((currency) => (
+                                                            <div key={`wallet-currency-${currency}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                                                <div className="grid gap-3 md:grid-cols-2">
+                                                                    <div>
+                                                                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{currency} max single top-up</label>
+                                                                        <input
+                                                                            value={walletPlatformForm.limits_by_currency?.[currency]?.max_single_topup || ''}
+                                                                            onChange={(event) => updateWalletLimitByCurrency(currency, 'max_single_topup', event.target.value)}
+                                                                            className="crm-input"
+                                                                            placeholder="Max single top-up"
+                                                                        />
+                                                                    </div>
+                                                                    <div>
+                                                                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{currency} max wallet balance</label>
+                                                                        <input
+                                                                            value={walletPlatformForm.limits_by_currency?.[currency]?.max_wallet_balance || ''}
+                                                                            onChange={(event) => updateWalletLimitByCurrency(currency, 'max_wallet_balance', event.target.value)}
+                                                                            className="crm-input"
+                                                                            placeholder="Max wallet balance"
+                                                                        />
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="mt-3 space-y-2">
+                                                                    {(walletPlatformForm.topup_presets_by_currency?.[currency] || []).map((preset, index) => (
+                                                                        <div key={`wallet-preset-${currency}-${index}`} className="flex gap-2">
+                                                                            <input
+                                                                                value={preset}
+                                                                                onChange={(event) => updateWalletTopupPresetByCurrency(currency, index, event.target.value)}
+                                                                                className="crm-input flex-1"
+                                                                                placeholder={`${currency} preset amount`}
+                                                                            />
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => removeWalletTopupPresetByCurrency(currency, index)}
+                                                                                disabled={(walletPlatformForm.topup_presets_by_currency?.[currency] || []).length <= 1}
+                                                                                className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                            >
+                                                                                Remove
+                                                                            </button>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => removeWalletTopupPreset(index)}
-                                                                    disabled={walletPlatformForm.topup_presets.length <= 1}
-                                                                    className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    onClick={() => addWalletTopupPresetByCurrency(currency)}
+                                                                    className="mt-2 text-xs font-semibold text-teal-700 hover:text-teal-900"
                                                                 >
-                                                                    Remove
+                                                                    + Add {currency} preset
                                                                 </button>
                                                             </div>
                                                         ))}
                                                     </div>
-                                                    <button
-                                                        type="button"
-                                                        onClick={addWalletTopupPreset}
-                                                        className="mt-2 text-xs font-semibold text-teal-700 hover:text-teal-900"
-                                                    >
-                                                        + Add preset
-                                                    </button>
                                                 </div>
 
                                                 <div className="md:col-span-2">
@@ -4287,7 +4526,9 @@ function IntegrationsWorkspace({
                                         <p><span className="font-semibold text-slate-800">Market:</span> {selectedPlatform.platform_name}</p>
                                         <p><span className="font-semibold text-slate-800">Country:</span> {selectedPlatform.country || '—'}</p>
                                         <p><span className="font-semibold text-slate-800">Effective mode:</span> {selectedWalletEffectiveMode.replaceAll('_', ' ')}</p>
-                                        <p><span className="font-semibold text-slate-800">Currency:</span> {walletPlatformForm.currency_code || selectedPlatform.currency || 'KES'}</p>
+                                        <p><span className="font-semibold text-slate-800">Primary currency:</span> {walletPlatformForm.currency_code || selectedPlatform.currency || 'KES'}</p>
+                                        <p><span className="font-semibold text-slate-800">Supported currencies:</span> {(walletPlatformForm.supported_currencies || [walletPlatformForm.currency_code || selectedPlatform.currency || 'KES']).join(', ')}</p>
+                                        <p><span className="font-semibold text-slate-800">Effective currencies:</span> {(walletPlatformForm.effective_currencies || [walletPlatformForm.currency_code || selectedPlatform.currency || 'KES']).join(', ')}</p>
                                         <p><span className="font-semibold text-slate-800">Refresh button:</span> {walletPlatformForm.show_refresh_button ? 'shown' : 'hidden'}</p>
                                     </div>
                                 </section>
@@ -4614,9 +4855,11 @@ function IntegrationsWorkspace({
                                         <div>
                                             <h4 className="text-sm font-semibold text-slate-900">Market Packages</h4>
                                             <p className="text-xs text-slate-500">
-                                                Configure packages and duration pricing for this market. Currency:
+                                                Configure packages and duration pricing for this market. Supported currencies:
                                                 {' '}
-                                                <span className="font-semibold text-slate-700">{selectedPackageSetup?.currency || selectedPlatform.currency || 'KES'}</span>.
+                                                <span className="font-semibold text-slate-700">
+                                                    {(packageEditor?.supported_currencies || [selectedPackageSetup?.currency || selectedPlatform.currency || 'KES']).join(', ')}
+                                                </span>.
                                             </p>
                                         </div>
                                         <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
@@ -4687,8 +4930,9 @@ function IntegrationsWorkspace({
                                                         <thead>
                                                             <tr className="text-left text-slate-400 uppercase tracking-wider">
                                                                 <th className="px-1 py-1 font-medium">Duration</th>
+                                                                <th className="px-1 py-1 font-medium">Currency</th>
                                                                 <th className="px-1 py-1 font-medium">Days</th>
-                                                                <th className="px-1 py-1 font-medium">Price ({selectedPackageSetup?.currency || 'KES'})</th>
+                                                                <th className="px-1 py-1 font-medium">Price</th>
                                                                 <th className="px-1 py-1 font-medium">On</th>
                                                                 <th className="px-1 py-1 font-medium"></th>
                                                             </tr>
@@ -4705,6 +4949,17 @@ function IntegrationsWorkspace({
                                                                             <option value="">Select...</option>
                                                                             {defaultDurationOptions.map((d) => (
                                                                                 <option key={d.key} value={d.key}>{d.label}</option>
+                                                                            ))}
+                                                                        </select>
+                                                                    </td>
+                                                                    <td className="px-1 py-1">
+                                                                        <select
+                                                                            value={price.currency || packageEditor?.currency || 'KES'}
+                                                                            onChange={(e) => updatePriceRow(rowIndex, priceIndex, 'currency', e.target.value.toUpperCase())}
+                                                                            className="crm-select w-full text-xs"
+                                                                        >
+                                                                            {(packageEditor?.supported_currencies || [packageEditor?.currency || 'KES']).map((currency) => (
+                                                                                <option key={`${rowIndex}-${priceIndex}-${currency}`} value={currency}>{currency}</option>
                                                                             ))}
                                                                         </select>
                                                                     </td>

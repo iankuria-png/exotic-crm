@@ -93,7 +93,8 @@ class ManualPaymentSubmissionService
                     (int) $client->id,
                     (int) $platform->id,
                     (int) $product->id,
-                    (string) ($pricing['duration_key'] ?? 'monthly')
+                    (string) ($pricing['duration_key'] ?? 'monthly'),
+                    (string) ($pricing['currency'] ?? $platform->currency_code ?? 'KES')
                 );
 
                 if ($duplicate) {
@@ -440,7 +441,8 @@ class ManualPaymentSubmissionService
         int $clientId,
         int $platformId,
         int $productId,
-        string $durationKey
+        string $durationKey,
+        string $currency
     ): ?PaymentManualSubmission {
         return PaymentManualSubmission::query()
             ->where('client_id', $clientId)
@@ -450,8 +452,9 @@ class ManualPaymentSubmissionService
             ->lockForUpdate()
             ->with(['payment.deal', 'client', 'platform'])
             ->get()
-            ->first(function (PaymentManualSubmission $submission) {
-                return (string) ($submission->payment?->reconciliation_state) === 'manual_review';
+            ->first(function (PaymentManualSubmission $submission) use ($currency) {
+                return (string) ($submission->payment?->reconciliation_state) === 'manual_review'
+                    && strtoupper((string) ($submission->payment?->currency ?? '')) === strtoupper($currency);
             });
     }
 

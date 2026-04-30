@@ -298,7 +298,10 @@ class PlatformController extends Controller
     private function decoratePlatform(Platform $platform): array
     {
         $payload = $platform->toArray();
+        unset($payload['supported_currencies']);
         $payload['billing_method_policy'] = $this->marketBillingMethodPolicy->contract($platform);
+        $payload['effective_currencies'] = $platform->effectiveCurrencies();
+        $payload['multi_currency_wallet_enabled'] = $platform->isMultiCurrencyWalletEnabled();
 
         return $payload;
     }

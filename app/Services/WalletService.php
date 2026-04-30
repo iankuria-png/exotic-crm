@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Models\Client;
+use App\Models\ClientWalletBalance;
 use App\Models\Payment;
 use App\Models\WalletTransaction;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Database\QueryException;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -22,11 +24,14 @@ class WalletService
         $freshClient = $client->fresh(['platform']) ?? $client->loadMissing('platform');
         $transactions = $this->recentTransactions($freshClient, $limit);
         $lastTopup = $this->lastTopup($freshClient);
-        $currencyCode = $this->resolveWalletCurrency($freshClient);
+        $currencyCode = $this->resolvePrimaryWalletCurrency($freshClient);
+        $balances = $this->summarizeBalances($freshClient);
+        $primaryBalance = collect($balances)->firstWhere('currency', $currencyCode)['balance'] ?? '0.00';
 
         return [
-            'balance' => number_format((float) ($freshClient->wallet_balance ?? 0), 2, '.', ''),
+            'balance' => $primaryBalance,
             'currency' => $currencyCode,
+            'balances' => $balances,
             'last_topup' => $lastTopup ? $this->serializeTransaction($lastTopup) : null,
             'transactions' => $transactions->map(fn (WalletTransaction $transaction) => $this->serializeTransaction($transaction))->values()->all(),
             'refreshed_at' => now()->toIso8601String(),
@@ -59,14 +64,40 @@ class WalletService
             ->first();
     }
 
-    public function credit(Client $client, float $amount, array $options = []): array
+    /**
+     * Read the balance row for a client/currency under a transaction lock.
+     * If concurrent requests race to create the first row, the unique
+     * (client_id, currency) constraint is relied on and duplicate-key errors
+     * are retried against a subsequent lockForUpdate() reload.
+     */
+    public function balanceFor(Client $client, string $currency): float
     {
-        return $this->mutateBalance($client, 'credit', $amount, $options);
+        $currencyCode = $this->normalizeCurrency($currency);
+
+        return DB::transaction(function () use ($client, $currencyCode) {
+            $lockedClient = Client::query()
+                ->with('platform')
+                ->lockForUpdate()
+                ->findOrFail((int) $client->id);
+
+            $balanceRow = $this->lockBalanceRow($lockedClient, $currencyCode);
+
+            return round((float) $balanceRow->balance, 2);
+        }, 3);
     }
 
-    public function debit(Client $client, float $amount, array $options = []): array
+    public function credit(Client $client, string|float|int $currency, float|array $amount = 0, array $options = []): array
     {
-        return $this->mutateBalance($client, 'debit', $amount, $options);
+        [$currencyCode, $normalizedAmount, $normalizedOptions] = $this->normalizeMutationArguments($client, $currency, $amount, $options);
+
+        return $this->mutateBalance($client, 'credit', $currencyCode, $normalizedAmount, $normalizedOptions);
+    }
+
+    public function debit(Client $client, string|float|int $currency, float|array $amount = 0, array $options = []): array
+    {
+        [$currencyCode, $normalizedAmount, $normalizedOptions] = $this->normalizeMutationArguments($client, $currency, $amount, $options);
+
+        return $this->mutateBalance($client, 'debit', $currencyCode, $normalizedAmount, $normalizedOptions);
     }
 
     public function serializeTransaction(WalletTransaction $transaction): array
@@ -87,9 +118,10 @@ class WalletService
         ];
     }
 
-    private function mutateBalance(Client $client, string $type, float $amount, array $options = []): array
+    private function mutateBalance(Client $client, string $type, string $currency, float $amount, array $options = []): array
     {
         $normalizedAmount = round($amount, 2);
+        $currencyCode = $this->normalizeCurrency($currency);
         if (!in_array($type, ['credit', 'debit'], true)) {
             throw new InvalidArgumentException('Unsupported wallet transaction type.');
         }
@@ -98,11 +130,12 @@ class WalletService
             throw new InvalidArgumentException('Wallet amount must be greater than zero.');
         }
 
-        return DB::transaction(function () use ($client, $type, $normalizedAmount, $options) {
+        return DB::transaction(function () use ($client, $type, $currencyCode, $normalizedAmount, $options) {
             $idempotencyKey = isset($options['idempotency_key']) ? trim((string) $options['idempotency_key']) : '';
             if ($idempotencyKey !== '') {
                 $existing = WalletTransaction::query()
                     ->where('client_id', (int) $client->id)
+                    ->where('currency_code', $currencyCode)
                     ->where('idempotency_key', $idempotencyKey)
                     ->first();
 
@@ -124,24 +157,29 @@ class WalletService
                 ->lockForUpdate()
                 ->findOrFail((int) $client->id);
 
-            $currentBalance = round((float) ($lockedClient->wallet_balance ?? 0), 2);
+            $balanceRow = $this->lockBalanceRow($lockedClient, $currencyCode);
+            $currentBalance = round((float) $balanceRow->balance, 2);
             if ($type === 'debit' && $currentBalance < $normalizedAmount) {
-                throw new RuntimeException('Insufficient wallet balance.');
+                $deficit = $normalizedAmount - $currentBalance;
+
+                throw new RuntimeException(sprintf(
+                    'Top up your %s wallet (need %s %s more).',
+                    $currencyCode,
+                    $currencyCode,
+                    number_format($deficit, 2, '.', '')
+                ));
             }
 
             $nextBalance = $type === 'debit'
                 ? $currentBalance - $normalizedAmount
                 : $currentBalance + $normalizedAmount;
 
-            $currencyCode = $this->resolveWalletCurrency(
-                $lockedClient,
-                isset($options['currency_code']) ? (string) $options['currency_code'] : null
-            );
-
-            $lockedClient->forceFill([
-                'wallet_balance' => number_format($nextBalance, 2, '.', ''),
-                'wallet_currency' => $currencyCode,
+            $balanceRow->forceFill([
+                'balance' => number_format($nextBalance, 2, '.', ''),
+                'last_synced_at' => $lockedClient->wallet_last_synced_at,
             ])->save();
+
+            $this->syncPrimaryMirror($lockedClient);
 
             $payment = $options['payment'] ?? null;
             if ($payment !== null && !$payment instanceof Payment) {
@@ -183,16 +221,92 @@ class WalletService
         }, 3);
     }
 
-    private function resolveWalletCurrency(Client $client, ?string $override = null): string
+    private function summarizeBalances(Client $client): array
     {
-        $overrideCurrency = strtoupper(trim((string) $override));
-        if ($overrideCurrency !== '') {
-            return $overrideCurrency;
+        $primaryCurrency = $this->resolvePrimaryWalletCurrency($client);
+        $effectiveCurrencies = $client->platform?->effectiveCurrencies() ?? [$primaryCurrency];
+        $existing = $client->walletBalances()
+            ->orderBy('currency')
+            ->get(['currency', 'balance'])
+            ->mapWithKeys(fn (ClientWalletBalance $balance) => [
+                strtoupper((string) $balance->currency) => number_format((float) $balance->balance, 2, '.', ''),
+            ])
+            ->all();
+
+        if (!array_key_exists($primaryCurrency, $existing)) {
+            $legacyCurrency = strtoupper(trim((string) ($client->wallet_currency ?? '')));
+            if ($legacyCurrency === '' || $legacyCurrency === $primaryCurrency) {
+                $legacyBalance = round((float) ($client->wallet_balance ?? 0), 2);
+                if ($legacyBalance !== 0.0) {
+                    $existing[$primaryCurrency] = number_format($legacyBalance, 2, '.', '');
+                }
+            }
         }
 
+        $orderedCurrencies = array_values(array_unique(array_filter(array_merge(
+            [$primaryCurrency],
+            $effectiveCurrencies
+        ))));
+
+        return collect($orderedCurrencies)
+            ->map(fn (string $currency) => [
+                'currency' => $currency,
+                'balance' => $existing[$currency] ?? '0.00',
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function lockBalanceRow(Client $client, string $currency): ClientWalletBalance
+    {
+        $currencyCode = $this->normalizeCurrency($currency);
+
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            try {
+                ClientWalletBalance::query()->firstOrCreate(
+                    [
+                        'client_id' => (int) $client->id,
+                        'currency' => $currencyCode,
+                    ],
+                    [
+                        'balance' => $this->legacyPrimaryBalanceSeed($client, $currencyCode),
+                    ]
+                );
+
+                return ClientWalletBalance::query()
+                    ->where('client_id', (int) $client->id)
+                    ->where('currency', $currencyCode)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+            } catch (QueryException $exception) {
+                if (!$this->isDuplicateKeyException($exception) || $attempt === 2) {
+                    throw $exception;
+                }
+            }
+        }
+
+        throw new RuntimeException('Unable to lock wallet balance row.');
+    }
+
+    private function syncPrimaryMirror(Client $client): void
+    {
+        $primaryCurrency = $this->resolvePrimaryWalletCurrency($client);
+        $primaryRow = ClientWalletBalance::query()
+            ->where('client_id', (int) $client->id)
+            ->where('currency', $primaryCurrency)
+            ->first();
+
+        $client->forceFill([
+            'wallet_balance' => number_format((float) ($primaryRow?->balance ?? 0), 2, '.', ''),
+            'wallet_currency' => $primaryCurrency,
+        ])->save();
+    }
+
+    private function resolvePrimaryWalletCurrency(Client $client): string
+    {
         $walletConfigCurrency = $this->walletSettingsService->runtimeWalletCurrencyCode($client->platform, '');
         if ($walletConfigCurrency !== '') {
-            return $walletConfigCurrency;
+            return strtoupper($walletConfigCurrency);
         }
 
         $clientCurrency = strtoupper(trim((string) ($client->wallet_currency ?? '')));
@@ -206,5 +320,64 @@ class WalletService
         }
 
         return 'KES';
+    }
+
+    private function legacyPrimaryBalanceSeed(Client $client, string $currency): string
+    {
+        $primaryCurrency = $this->resolvePrimaryWalletCurrency($client);
+        $legacyCurrency = strtoupper(trim((string) ($client->wallet_currency ?? '')));
+
+        if ($currency !== $primaryCurrency) {
+            return '0.00';
+        }
+
+        if ($legacyCurrency !== '' && $legacyCurrency !== $primaryCurrency) {
+            return '0.00';
+        }
+
+        return number_format((float) ($client->wallet_balance ?? 0), 2, '.', '');
+    }
+
+    private function normalizeCurrency(string $currency): string
+    {
+        $normalized = strtoupper(trim($currency));
+        if ($normalized === '' || strlen($normalized) !== 3) {
+            throw new InvalidArgumentException('Wallet currency must be a 3-letter code.');
+        }
+
+        return $normalized;
+    }
+
+    private function isDuplicateKeyException(QueryException $exception): bool
+    {
+        $errorInfo = $exception->errorInfo;
+        $sqlState = (string) ($errorInfo[0] ?? '');
+        $driverCode = (string) ($errorInfo[1] ?? '');
+
+        return $sqlState === '23000' || $sqlState === '23505' || $driverCode === '19';
+    }
+
+    private function normalizeMutationArguments(
+        Client $client,
+        string|float|int $currency,
+        float|array $amount,
+        array $options
+    ): array {
+        if (is_string($currency) && !is_numeric($currency)) {
+            return [
+                $this->normalizeCurrency($currency),
+                (float) $amount,
+                $options,
+            ];
+        }
+
+        $legacyOptions = is_array($amount) ? $amount : $options;
+        $legacyCurrency = (string) ($legacyOptions['currency_code'] ?? $this->resolvePrimaryWalletCurrency($client));
+
+        return [
+            $this->normalizeCurrency($legacyCurrency),
+            (float) $currency,
+            $legacyOptions,
+        ];
     }
 }

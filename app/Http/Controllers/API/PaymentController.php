@@ -11,6 +11,7 @@ use App\Models\Client;
 use App\Models\Product;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Models\ProductPrice;
 use App\Models\Deal;
 use App\Models\Activation;
 use App\Models\SmsLog;
@@ -2314,13 +2315,15 @@ class PaymentController extends Controller
         $attemptResponseMeta = [];
         $validated = $request->validate([
             'product_id' => 'required|integer|exists:products,id',
+            'product_price_id' => 'nullable|integer|exists:product_prices,id',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'user_id' => 'required|integer',
             'email' => 'nullable|email|max:255',
             'first_name' => 'required|string|max:100',
             'last_name' => 'required|string|max:100',
             'phone' => 'required|string|max:30',
-            'duration' => 'required|string|max:50',
+            'duration' => 'nullable|string|max:50',
+            'currency' => 'nullable|string|size:3',
         ]);
 
         try {
@@ -2343,7 +2346,18 @@ class PaymentController extends Controller
                 throw new \InvalidArgumentException('The selected package does not belong to this platform.');
             }
 
-            $pricing = $this->walletCheckoutService->resolveSubscriptionPricing($product, (string) $validated['duration']);
+            $priceRow = !empty($validated['product_price_id'])
+                ? ProductPrice::query()->where('id', (int) $validated['product_price_id'])->where('is_active', true)->firstOrFail()
+                : null;
+            if ($priceRow && (int) $priceRow->product_id !== (int) $product->id) {
+                throw new \InvalidArgumentException('The selected pricing option does not belong to this package.');
+            }
+
+            $pricing = $this->walletCheckoutService->resolveSubscriptionPricing(
+                $product,
+                (string) ($priceRow?->duration_key ?: $validated['duration']),
+                (string) ($validated['currency'] ?? ($priceRow?->currency ?? ''))
+            );
             $resolvedProvider = $this->paymentLinkService->resolveProviderConfig($platform);
 
             if (!is_array($resolvedProvider)) {
@@ -2369,7 +2383,7 @@ class PaymentController extends Controller
                 $pricing['discount_percent'] = $incentive['percent'];
             }
 
-            $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider);
+            $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider, $platform);
             $attemptProvider = $providerKey !== '' ? $providerKey : $providerConfigKey;
 
             if ($providerMode !== PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT) {
@@ -2656,13 +2670,15 @@ class PaymentController extends Controller
     {
         $validated = $request->validate([
             'product_id' => 'required|integer|exists:products,id',
+            'product_price_id' => 'nullable|integer|exists:product_prices,id',
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'user_id' => 'required|integer',
             'email' => 'nullable|email|max:255',
             'first_name' => 'required|string|max:100',
             'last_name' => 'required|string|max:100',
             'phone' => 'required|string|max:30',
-            'duration' => 'required|string|max:50',
+            'duration' => 'nullable|string|max:50',
+            'currency' => 'nullable|string|size:3',
             'manual_method_key' => 'required|string|max:40',
             'sender_name' => 'required|string|max:160',
             'transaction_reference' => 'required|string|max:255',
@@ -2694,7 +2710,18 @@ class PaymentController extends Controller
                 throw new \InvalidArgumentException('Manual payment is not enabled for this market.');
             }
 
-            $pricing = $this->walletCheckoutService->resolveSubscriptionPricing($product, (string) $validated['duration']);
+            $priceRow = !empty($validated['product_price_id'])
+                ? ProductPrice::query()->where('id', (int) $validated['product_price_id'])->where('is_active', true)->firstOrFail()
+                : null;
+            if ($priceRow && (int) $priceRow->product_id !== (int) $product->id) {
+                throw new \InvalidArgumentException('The selected pricing option does not belong to this package.');
+            }
+
+            $pricing = $this->walletCheckoutService->resolveSubscriptionPricing(
+                $product,
+                (string) ($priceRow?->duration_key ?: $validated['duration']),
+                (string) ($validated['currency'] ?? ($priceRow?->currency ?? ''))
+            );
             $incentivePercent = $this->selfServiceIncentiveService->resolveForPlatform((int) $platform->id, 'manual_submission');
             $incentive = $this->selfServiceIncentiveService->applyToAmount((float) $pricing['amount'], $incentivePercent);
             if ($incentive) {
@@ -2785,7 +2812,7 @@ class PaymentController extends Controller
         }
     }
 
-    private function applySelfCheckoutFxOverride(array $pricing, array $resolvedProvider): array
+    private function applySelfCheckoutFxOverride(array $pricing, array $resolvedProvider, Platform $platform): array
     {
         $quotedAmount = round((float) ($pricing['amount'] ?? 0), 2);
         $quotedCurrency = strtoupper((string) ($pricing['currency'] ?? ''));
@@ -2803,6 +2830,7 @@ class PaymentController extends Controller
             $fxEnabled
             && $quotedAmount > 0
             && $quotedCurrency !== ''
+            && !in_array($quotedCurrency, $platform->effectiveCurrencies(), true)
             && $targetCurrency !== ''
             && $targetCurrency !== $quotedCurrency
             && $fxRate !== null

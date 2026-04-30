@@ -115,12 +115,20 @@ class DealController extends Controller
             if ($priceRow) {
                 $validated['amount'] = (float) $priceRow->price;
                 $validated['duration'] = $this->dealPaymentService->mapDurationKeyToLegacy($priceRow->duration_key);
+                $validated['currency'] = strtoupper((string) $priceRow->currency);
             } else {
+                $effectiveCurrencies = $product->platform?->effectiveCurrencies()
+                    ?? [strtoupper((string) ($product->currency ?: $deal->platform?->currency_code ?: 'KES'))];
+                if (count($effectiveCurrencies) > 1) {
+                    throw ValidationException::withMessages([
+                        'product_price_id' => 'Select an explicit pricing option for multi-currency deals.',
+                    ]);
+                }
+
                 $duration = $validated['duration'] ?? $deal->duration;
                 $validated['amount'] = $this->dealPaymentService->resolveAmountForDuration($product, (string) $duration);
+                $validated['currency'] = $product->currency ?: ($deal->platform?->currency_code ?: $deal->currency ?: 'KES');
             }
-
-            $validated['currency'] = $product->currency ?: ($deal->platform?->currency_code ?: $deal->currency ?: 'KES');
             unset($validated['product_price_id']);
         }
 

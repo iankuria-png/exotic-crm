@@ -30,12 +30,14 @@ class BillingController extends Controller
         $validated = $request->validate([
             'provider' => 'required|string|max:30',
             'amount' => 'required|numeric|min:0.01',
+            'currency' => 'nullable|string|size:3',
             'phone' => 'nullable|string|max:30',
             'return_url' => 'nullable|url|max:2000',
             'auto_subscribe' => 'nullable|array',
             'auto_subscribe.enabled' => 'nullable|boolean',
             'auto_subscribe.product_id' => 'nullable|integer',
             'auto_subscribe.duration' => 'nullable|string|max:30',
+            'auto_subscribe.currency' => 'nullable|string|size:3',
         ]);
 
         $provider = strtolower(trim((string) $validated['provider']));
@@ -49,6 +51,7 @@ class BillingController extends Controller
         try {
             $result = $this->billingGatewayService->initiateTopup($client, $provider, (float) $validated['amount'], [
                 'idempotency_key' => (string) $request->attributes->get('wallet_idempotency_key'),
+                'currency' => isset($validated['currency']) ? strtoupper((string) $validated['currency']) : null,
                 'phone' => $validated['phone'] ?? null,
                 'return_url' => $validated['return_url'] ?? null,
                 'auto_subscribe' => $validated['auto_subscribe'] ?? null,

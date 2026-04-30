@@ -151,22 +151,22 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('https://checkout.paystack.test/redirect', data_get($payment->payment_data, 'checkout_url'));
         $this->assertSame('1260.00', data_get($payment->payment_data, 'quoted_pricing.amount'));
         $this->assertSame('GHS', data_get($payment->payment_data, 'quoted_pricing.currency'));
-        $this->assertSame('14175.00', data_get($payment->payment_data, 'charge_pricing.amount'));
-        $this->assertSame('KES', data_get($payment->payment_data, 'charge_pricing.currency'));
+        $this->assertSame('1260.00', data_get($payment->payment_data, 'charge_pricing.amount'));
+        $this->assertSame('GHS', data_get($payment->payment_data, 'charge_pricing.currency'));
         $this->assertSame(1400.0, (float) data_get($payment->payment_data, 'self_service_incentive.original_amount'));
         $this->assertSame(10.0, (float) data_get($payment->payment_data, 'self_service_incentive.percent'));
         $this->assertTrue((bool) data_get($payment->payment_data, 'fx_override.enabled'));
-        $this->assertTrue((bool) data_get($payment->payment_data, 'fx_override.applied'));
+        $this->assertFalse((bool) data_get($payment->payment_data, 'fx_override.applied'));
         $this->assertSame(11.25, data_get($payment->payment_data, 'fx_override.rate'));
         $this->assertSame('KES', data_get($payment->payment_data, 'fx_override.target_currency'));
-        $this->assertSame(14175.0, (float) $payment->amount);
-        $this->assertSame('KES', $payment->currency);
+        $this->assertSame(1260.0, (float) $payment->amount);
+        $this->assertSame('GHS', $payment->currency);
         $this->assertNotNull($decision);
         $this->assertSame('self_checkout', $decision->billing_surface);
         $this->assertSame('paystack', $decision->provider_type_key);
         $this->assertSame('proxy', $decision->execution_mode);
         $this->assertSame('hosted_redirect', data_get($decision->snapshot_json, 'execution_family'));
-        $this->assertSame('fixed_override', data_get($decision->snapshot_json, 'fx_quote.mode'));
+        $this->assertSame('same_currency', data_get($decision->snapshot_json, 'fx_quote.mode'));
         $this->assertSame('primary', data_get($decision->snapshot_json, 'provider_config_key'));
 
         $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->firstOrFail();
@@ -187,8 +187,8 @@ class SelfCheckoutApiTest extends TestCase
 
         Http::assertSent(function ($request) use ($payment) {
             return $request->url() === 'https://api.paystack.co/transaction/initialize'
-                && $request['currency'] === 'KES'
-                && $request['amount'] === 1417500
+                && $request['currency'] === 'GHS'
+                && $request['amount'] === 126000
                 && $request['reference'] === $payment->reference_number;
         });
     }

@@ -11,7 +11,8 @@ class WalletAutoRenewPolicy
 
     public function __construct(
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
-        private readonly WalletCheckoutService $walletCheckoutService
+        private readonly WalletCheckoutService $walletCheckoutService,
+        private readonly \App\Services\WalletService $walletService
     ) {
     }
 
@@ -69,7 +70,7 @@ class WalletAutoRenewPolicy
             );
         }
 
-        $balance = round((float) ($client->wallet_balance ?? 0), 2);
+        $balance = round((float) $this->walletService->balanceFor($client, (string) ($pricing['currency'] ?? '')), 2);
         $requiredAmount = round((float) ($pricing['amount'] ?? 0), 2);
 
         if ($requiredAmount <= 0) {

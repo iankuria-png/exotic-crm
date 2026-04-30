@@ -10,6 +10,7 @@ use App\Services\WalletSettingsService;
 use App\Services\WalletService;
 use App\Support\CrmAuditAction;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -61,6 +62,7 @@ class ClientWalletController extends Controller
         $this->authorizeWalletOperator($request, $client);
         $validated = $request->validate([
             'amount' => 'required|numeric|min:0.01',
+            'currency' => 'nullable|string|size:3',
             'reason' => 'required|string|max:500',
             'pin' => ['required', 'regex:/^\d{4,6}$/'],
         ]);
@@ -69,8 +71,9 @@ class ClientWalletController extends Controller
             return $pinError;
         }
 
+        $currency = $this->resolveRequestedCurrency($client, $validated['currency'] ?? null);
         $before = $this->walletService->summary($client, 5);
-        $result = $this->walletService->credit($client, (float) $validated['amount'], [
+        $result = $this->walletService->credit($client, $currency, (float) $validated['amount'], [
             'reference_type' => 'admin_topup',
             'reference_id' => (int) $client->id,
             'performed_by' => (int) $request->user()->id,
@@ -105,6 +108,7 @@ class ClientWalletController extends Controller
         $validated = $request->validate([
             'type' => 'required|in:credit,debit',
             'amount' => 'required|numeric|min:0.01',
+            'currency' => 'nullable|string|size:3',
             'reason' => 'required|string|max:500',
             'pin' => ['required', 'regex:/^\d{4,6}$/'],
         ]);
@@ -113,11 +117,12 @@ class ClientWalletController extends Controller
             return $pinError;
         }
 
+        $currency = $this->resolveRequestedCurrency($client, $validated['currency'] ?? null);
         $before = $this->walletService->summary($client, 5);
 
         try {
             $result = $validated['type'] === 'debit'
-                ? $this->walletService->debit($client, (float) $validated['amount'], [
+                ? $this->walletService->debit($client, $currency, (float) $validated['amount'], [
                     'reference_type' => 'admin_adjustment',
                     'reference_id' => (int) $client->id,
                     'performed_by' => (int) $request->user()->id,
@@ -127,7 +132,7 @@ class ClientWalletController extends Controller
                         'performed_by_role' => (string) $request->user()->role,
                     ],
                 ])
-                : $this->walletService->credit($client, (float) $validated['amount'], [
+                : $this->walletService->credit($client, $currency, (float) $validated['amount'], [
                     'reference_type' => 'admin_adjustment',
                     'reference_id' => (int) $client->id,
                     'performed_by' => (int) $request->user()->id,
@@ -199,5 +204,30 @@ class ClientWalletController extends Controller
         }
 
         return null;
+    }
+
+    private function resolveRequestedCurrency(Client $client, ?string $currency): string
+    {
+        $client->loadMissing('platform');
+        $effectiveCurrencies = $client->platform?->effectiveCurrencies() ?? [];
+        $requested = strtoupper(trim((string) ($currency ?? '')));
+
+        if ($requested === '') {
+            if (count($effectiveCurrencies) > 1) {
+                throw ValidationException::withMessages([
+                    'currency' => 'Currency is required for multi-currency wallets.',
+                ]);
+            }
+
+            return strtoupper((string) ($effectiveCurrencies[0] ?? $client->platform?->primaryCurrency() ?? 'KES'));
+        }
+
+        if (!in_array($requested, $effectiveCurrencies, true)) {
+            throw ValidationException::withMessages([
+                'currency' => 'The selected currency is not enabled for this market.',
+            ]);
+        }
+
+        return $requested;
     }
 }

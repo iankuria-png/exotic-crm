@@ -306,6 +306,7 @@ class SubscriptionProvisioningService
             $catalogDays = ProductPrice::query()
                 ->where('product_id', (int) $deal->product_id)
                 ->where('duration_key', $durationKey)
+                ->where('currency', strtoupper((string) ($deal->currency ?: '')))
                 ->where('is_active', true)
                 ->value('duration_days');
 

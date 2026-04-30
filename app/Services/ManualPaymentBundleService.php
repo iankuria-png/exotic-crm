@@ -818,7 +818,17 @@ class ManualPaymentBundleService
             }
 
             if (!$productPrice) {
-                $productPrice = $product->activePrices->firstWhere('duration_key', $duration);
+                $productPrice = $product->activePrices->first(function ($activePrice) use ($duration, $configuredCurrency) {
+                    if ((string) $activePrice->duration_key !== $duration) {
+                        return false;
+                    }
+
+                    if ($configuredCurrency === '') {
+                        return true;
+                    }
+
+                    return strtoupper((string) $activePrice->currency) === $configuredCurrency;
+                });
             }
 
             if ($productPrice) {
@@ -856,7 +866,9 @@ class ManualPaymentBundleService
             $planType = $this->dealPaymentService->derivePlanTypeFromProduct($product);
 
             if ($resolvedCurrency === null) {
-                $resolvedCurrency = $product->currency ?: ($client->platform?->currency_code ?? 'KES');
+                $resolvedCurrency = $productPrice
+                    ? strtoupper((string) $productPrice->currency)
+                    : ($product->currency ?: ($client->platform?->currency_code ?? 'KES'));
             }
 
             $previewItems[] = [

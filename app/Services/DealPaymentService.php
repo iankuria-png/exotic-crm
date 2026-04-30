@@ -50,15 +50,26 @@ class DealPaymentService
         $product = $this->resolveScopedProduct($productId, (int) $client->platform_id);
         $planType = $this->derivePlanTypeFromProduct($product);
         $priceRow = $productPriceId ? $this->resolveScopedProductPrice($productPriceId, $product) : null;
+        $effectiveCurrencies = $client->platform?->effectiveCurrencies()
+            ?? $product->platform?->effectiveCurrencies()
+            ?? [strtoupper((string) ($product->currency ?: $client->platform?->currency_code ?: 'KES'))];
 
         if ($priceRow) {
             $amount = (float) $priceRow->price;
             $resolvedDuration = $this->mapDurationKeyToLegacy($priceRow->duration_key);
             $durationDays = $priceRow->duration_days;
+            $currency = strtoupper((string) $priceRow->currency);
         } else {
+            if (count($effectiveCurrencies) > 1) {
+                throw ValidationException::withMessages([
+                    'product_price_id' => 'Select an explicit pricing option for multi-currency deals.',
+                ]);
+            }
+
             $resolvedDuration = $duration ?: 'monthly';
             $amount = $this->resolveAmountForDuration($product, $resolvedDuration);
             $durationDays = null;
+            $currency = $product->currency ?: ($client->platform->currency_code ?? 'KES');
         }
 
         $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
@@ -73,7 +84,7 @@ class DealPaymentService
             'product_id' => $product->id,
             'plan_type' => $planType,
             'amount' => $amount,
-            'currency' => $product->currency ?: ($client->platform->currency_code ?? 'KES'),
+            'currency' => $currency,
             'duration' => $resolvedDuration,
             'status' => 'pending',
             'assigned_to' => $actorId,
@@ -627,6 +638,7 @@ class DealPaymentService
             $catalogDays = ProductPrice::query()
                 ->where('product_id', (int) $deal->product_id)
                 ->where('duration_key', $durationKey)
+                ->where('currency', strtoupper((string) ($deal->currency ?: '')))
                 ->where('is_active', true)
                 ->value('duration_days');
 

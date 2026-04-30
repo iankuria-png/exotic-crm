@@ -107,7 +107,7 @@ class PaymentCompletionService
         $resolvedProvider = $this->resolveProviderType($payment);
         $resolvedEnvironment = $this->resolveExecutionEnvironment($payment);
 
-        $credit = $this->walletService->credit($payment->client, (float) $payment->amount, [
+        $credit = $this->walletService->credit($payment->client, (string) $payment->currency, (float) $payment->amount, [
             'payment' => $payment,
             'reference_type' => 'wallet_topup',
             'reference_id' => (int) $payment->id,
@@ -155,6 +155,7 @@ class PaymentCompletionService
                         'environment' => $resolvedEnvironment,
                         'origin' => 'wallet_auto_subscribe',
                         'topup_payment_id' => (int) $payment->id,
+                        'currency' => (string) ($autoSubscribe['currency'] ?? $payment->currency),
                     ]
                 );
 

@@ -35,6 +35,8 @@ class PlatformFactory extends Factory
             'phone_prefix' => '254',
             'timezone' => 'Africa/Nairobi',
             'currency_code' => 'KES',
+            'supported_currencies' => ['KES'],
+            'multi_currency_wallet_enabled' => false,
             'sync_last_checked_at' => null,
             'sync_last_synced_at' => null,
             'sync_last_scope' => null,

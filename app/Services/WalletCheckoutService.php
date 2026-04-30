@@ -24,38 +24,63 @@ class WalletCheckoutService
     ) {
     }
 
-    public function resolveSubscriptionPricing(Product $product, string $duration): array
+    public function resolveSubscriptionPricing(Product $product, string $duration, ?string $currency = null): array
     {
         $product->loadMissing(['activePrices', 'platform']);
 
         $normalized = $this->normalizeDuration($duration);
         $durationKey = $normalized['duration_key'];
         $legacyDuration = $normalized['legacy_duration'];
+        $effectiveCurrencies = $product->platform?->effectiveCurrencies()
+            ?? [strtoupper((string) ($product->platform?->currency_code ?: $product->currency ?: 'KES'))];
+        $requestedCurrency = strtoupper(trim((string) ($currency ?? '')));
+
+        if ($requestedCurrency === '') {
+            if (count($effectiveCurrencies) > 1) {
+                throw new InvalidArgumentException('currency required for multi-currency market');
+            }
+
+            $requestedCurrency = strtoupper((string) ($product->platform?->primaryCurrency() ?: $product->currency ?: 'KES'));
+        }
+
+        if (!in_array($requestedCurrency, $effectiveCurrencies, true)) {
+            throw new InvalidArgumentException(sprintf('%s is not supported for this market.', $requestedCurrency));
+        }
 
         $priceRow = $product->activePrices
-            ->firstWhere('duration_key', $durationKey);
+            ->first(fn (ProductPrice $row) => $row->duration_key === $durationKey
+                && strtoupper((string) $row->currency) === $requestedCurrency);
 
         $amount = null;
-        $currency = null;
         $durationDays = null;
         $durationLabel = $normalized['duration_label'];
 
         if ($priceRow instanceof ProductPrice) {
             $amount = round((float) $priceRow->price, 2);
-            $currency = $priceRow->currency;
             $durationDays = (int) ($priceRow->duration_days ?: $normalized['duration_days']);
             $durationLabel = $priceRow->duration_label ?: $durationLabel;
-        } else {
+        } elseif (count($effectiveCurrencies) === 1) {
             $amount = match ($legacyDuration) {
                 'weekly' => (float) $product->weekly_price,
                 'biweekly' => (float) $product->biweekly_price,
                 default => (float) $product->monthly_price,
             };
-            $currency = $product->currency ?: ($product->platform?->currency_code ?: 'KES');
             $durationDays = $normalized['duration_days'];
+        } else {
+            throw new InvalidArgumentException(sprintf(
+                '%s price not configured for this plan/duration',
+                $requestedCurrency
+            ));
         }
 
         if ($amount === null || $amount <= 0) {
+            if (count($effectiveCurrencies) > 1) {
+                throw new InvalidArgumentException(sprintf(
+                    '%s price not configured for this plan/duration',
+                    $requestedCurrency
+                ));
+            }
+
             throw new InvalidArgumentException('The selected package duration is not currently purchasable.');
         }
 
@@ -66,7 +91,7 @@ class WalletCheckoutService
             'duration_days' => $durationDays,
             'duration_label' => $durationLabel,
             'amount' => number_format($amount, 2, '.', ''),
-            'currency' => strtoupper((string) $currency),
+            'currency' => $requestedCurrency,
         ];
     }
 
@@ -82,7 +107,7 @@ class WalletCheckoutService
             throw new InvalidArgumentException('Wallet checkout idempotency key is required.');
         }
 
-        $pricing = $this->resolveSubscriptionPricing($product, $duration);
+        $pricing = $this->resolveSubscriptionPricing($product, $duration, $options['currency'] ?? null);
         $incentivePercent = $this->selfServiceIncentiveService->resolveForPlatform((int) $product->platform_id, 'wallet');
         $incentive = $this->selfServiceIncentiveService->applyToAmount((float) $pricing['amount'], $incentivePercent);
         if ($incentive) {
@@ -100,6 +125,7 @@ class WalletCheckoutService
 
         $result = DB::transaction(function () use ($client, $product, $pricing, $idempotencyKey, $options, $referenceNumber) {
             $existingTransaction = $client->walletTransactions()
+                ->where('currency_code', $pricing['currency'])
                 ->where('idempotency_key', $idempotencyKey)
                 ->first();
 
@@ -118,12 +144,6 @@ class WalletCheckoutService
             }
 
             $lockedClient = Client::query()->with('platform')->lockForUpdate()->findOrFail((int) $client->id);
-            $currentBalance = round((float) ($lockedClient->wallet_balance ?? 0), 2);
-            $amount = round((float) $pricing['amount'], 2);
-
-            if ($currentBalance < $amount) {
-                throw new RuntimeException('Insufficient wallet balance.');
-            }
 
             $payment = Payment::query()->create([
                 'user_id' => $lockedClient->wp_user_id,
@@ -170,7 +190,7 @@ class WalletCheckoutService
                 'idempotency_key' => $idempotencyKey,
             ]);
 
-            $debit = $this->walletService->debit($lockedClient, $amount, [
+            $debit = $this->walletService->debit($lockedClient, $pricing['currency'], (float) $pricing['amount'], [
                 'payment' => $payment,
                 'reference_type' => 'wallet_subscription',
                 'reference_id' => (int) $payment->id,
@@ -231,15 +251,29 @@ class WalletCheckoutService
 
     public function resolveDealRenewalPricing(Deal $deal): array
     {
-        $deal->loadMissing('product');
+        $deal->loadMissing(['product.platform', 'platform']);
 
         if (!$deal->product) {
             throw new InvalidArgumentException('The active subscription has no linked product for wallet renewal.');
         }
 
+        $effectiveCurrencies = $deal->product->platform?->effectiveCurrencies()
+            ?? $deal->platform?->effectiveCurrencies()
+            ?? [strtoupper((string) ($deal->product->currency ?: $deal->platform?->currency_code ?: 'KES'))];
+        $dealCurrency = strtoupper(trim((string) ($deal->currency ?? '')));
+
+        if ($dealCurrency === '') {
+            if (count($effectiveCurrencies) > 1) {
+                throw new InvalidArgumentException('Deal currency is required for multi-currency renewal.');
+            }
+
+            $dealCurrency = strtoupper((string) ($deal->product->platform?->primaryCurrency() ?: $deal->product->currency ?: $deal->platform?->currency_code ?: 'KES'));
+        }
+
         return $this->resolveSubscriptionPricing(
             $deal->product,
-            (string) ($deal->duration ?: 'monthly')
+            (string) ($deal->duration ?: 'monthly'),
+            $dealCurrency
         );
     }
 
@@ -283,6 +317,7 @@ class WalletCheckoutService
             }
 
             $existingTransaction = $lockedClient->walletTransactions()
+                ->where('currency_code', $pricing['currency'])
                 ->where('idempotency_key', $idempotencyKey)
                 ->first();
 
@@ -298,13 +333,6 @@ class WalletCheckoutService
                     'previous_expires_at' => optional($lockedDeal->expires_at)->toDateTimeString(),
                     'replayed' => true,
                 ];
-            }
-
-            $currentBalance = round((float) ($lockedClient->wallet_balance ?? 0), 2);
-            $amount = round((float) $pricing['amount'], 2);
-
-            if ($currentBalance < $amount) {
-                throw new RuntimeException('Insufficient wallet balance.');
             }
 
             $payment = Payment::query()->create([
@@ -350,7 +378,7 @@ class WalletCheckoutService
                 'topup_payment_id' => $options['topup_payment_id'] ?? null,
             ]);
 
-            $debit = $this->walletService->debit($lockedClient, $amount, [
+            $debit = $this->walletService->debit($lockedClient, $pricing['currency'], (float) $pricing['amount'], [
                 'payment' => $payment,
                 'deal_id' => (int) $lockedDeal->id,
                 'reference_type' => 'wallet_auto_renew',
@@ -443,7 +471,7 @@ class WalletCheckoutService
             $reason = mb_substr($exception->getMessage(), 0, 190);
             $creditIdempotencyKey = 'wallet-compensation:' . (int) $payment->id;
 
-            $credit = $this->walletService->credit($client, (float) $payment->amount, [
+            $credit = $this->walletService->credit($client, (string) $payment->currency, (float) $payment->amount, [
                 'reference_type' => 'wallet_compensation',
                 'reference_id' => (int) $payment->id,
                 'idempotency_key' => $creditIdempotencyKey,

@@ -29,15 +29,40 @@ class LegacyBillingConfigProjector
         $walletRule = $this->configurationRepository->walletRuleForMarket((int) $platform->id);
 
         if ($walletRule !== null) {
+            $primaryCurrency = strtoupper(trim((string) ($walletRule->currency_code ?: $platform->primaryCurrency())));
             $projected['enabled'] = (bool) $walletRule->enabled;
 
             if (trim((string) $walletRule->currency_code) !== '') {
-                $projected['currency_code'] = strtoupper(trim((string) $walletRule->currency_code));
+                $projected['currency_code'] = $primaryCurrency;
+            }
+
+            $supportedCurrencies = collect($walletRule->supported_currencies_json ?? $platform->supportedCurrencies())
+                ->map(fn ($value) => strtoupper(trim((string) $value)))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+            if ($supportedCurrencies !== []) {
+                $projected['supported_currencies'] = $supportedCurrencies;
             }
 
             $presets = $this->normalizeMoneyValues($walletRule->topup_preset_json ?? []);
             if ($presets !== []) {
                 $projected['topup_presets'] = $presets;
+                $projected['topup_presets_by_currency'] = array_merge(
+                    is_array($projected['topup_presets_by_currency'] ?? null) ? $projected['topup_presets_by_currency'] : [],
+                    [$primaryCurrency => $presets]
+                );
+            }
+
+            $presetsByCurrency = collect($walletRule->topup_preset_by_currency_json ?? [])
+                ->mapWithKeys(fn ($values, $currency) => is_array($values)
+                    ? [strtoupper(trim((string) $currency)) => $this->normalizeMoneyValues($values)]
+                    : [])
+                ->filter(fn ($values) => $values !== [])
+                ->all();
+            if ($presetsByCurrency !== []) {
+                $projected['topup_presets_by_currency'] = $presetsByCurrency;
             }
 
             $maxSingleTopup = data_get($walletRule->limit_json, 'max_single_topup');
@@ -48,6 +73,43 @@ class LegacyBillingConfigProjector
             $maxWalletBalance = data_get($walletRule->limit_json, 'max_wallet_balance');
             if ($this->filled($maxWalletBalance)) {
                 $projected['max_wallet_balance'] = $this->formatMoneyString($maxWalletBalance, $projected['max_wallet_balance'] ?? '200000.00');
+            }
+
+            if (isset($projected['max_single_topup']) || isset($projected['max_wallet_balance'])) {
+                $projected['limits_by_currency'] = array_merge(
+                    is_array($projected['limits_by_currency'] ?? null) ? $projected['limits_by_currency'] : [],
+                    [
+                        $primaryCurrency => array_filter([
+                            'max_single_topup' => $projected['max_single_topup'] ?? null,
+                            'max_wallet_balance' => $projected['max_wallet_balance'] ?? null,
+                        ], static fn ($value) => $value !== null && $value !== ''),
+                    ]
+                );
+            }
+
+            $limitsByCurrency = collect($walletRule->limit_by_currency_json ?? [])
+                ->mapWithKeys(function ($values, $currency) use ($projected) {
+                    if (!is_array($values)) {
+                        return [];
+                    }
+
+                    $normalized = [];
+                    foreach (['max_single_topup', 'max_wallet_balance'] as $key) {
+                        if ($this->filled($values[$key] ?? null)) {
+                            $normalized[$key] = $this->formatMoneyString(
+                                $values[$key],
+                                $projected[$key] ?? ($key === 'max_single_topup' ? '50000.00' : '200000.00')
+                            );
+                        }
+                    }
+
+                    return $normalized === []
+                        ? []
+                        : [strtoupper(trim((string) $currency)) => $normalized];
+                })
+                ->all();
+            if ($limitsByCurrency !== []) {
+                $projected['limits_by_currency'] = $limitsByCurrency;
             }
 
             $allowCombined = data_get($walletRule->ui_json, 'allow_combined_topup_subscribe');

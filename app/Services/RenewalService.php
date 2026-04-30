@@ -1078,6 +1078,10 @@ class RenewalService
         }
 
         $runnerId = $this->resolveActorId($actorId);
+        $runCurrencies = $deals->map(function ($deal) {
+            $currency = strtoupper(trim((string) ($deal->currency ?? $deal->deal_currency ?? '')));
+            return $currency !== '' ? $currency : null;
+        })->filter()->unique()->values();
 
         $run = RenewalRun::create([
             'campaign_id' => $campaign->id,
@@ -1088,6 +1092,7 @@ class RenewalService
             'skipped_count' => 0,
             'run_by' => $runnerId,
             'status' => 'completed',
+            'currency' => $runCurrencies->count() === 1 ? $runCurrencies->first() : null,
             'created_at' => now(),
         ]);
 
