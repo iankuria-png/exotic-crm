@@ -17,6 +17,8 @@ import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
 
+const mediaProxyAvailabilityCache = new Map();
+
 function formatCurrency(value, currency = 'KES') {
     return `${currency} ${Number(value || 0).toLocaleString()}`;
 }
@@ -1072,11 +1074,11 @@ export default function ClientDetail() {
             const formData = new FormData();
             if (files.length === 1) {
                 formData.append('file', files[0]);
+            } else {
+                files.forEach((file) => {
+                    formData.append('files[]', file);
+                });
             }
-
-            files.forEach((file) => {
-                formData.append('files[]', file);
-            });
             formData.append('set_main', setMain ? '1' : '0');
             formData.append('reason', 'Uploaded media from client detail');
             return api.post(`/crm/clients/${id}/media`, formData, {
@@ -4305,8 +4307,21 @@ function ClientMediaCard({
     const mediaKind = resolveMediaKind(media);
     const proxiedUrl = proxyImageUrl(media?.url || '');
     const hasAssetUrl = proxiedUrl.trim() !== '';
-    const [assetState, setAssetState] = useState(hasAssetUrl ? 'checking' : 'unavailable');
-    const [assetStatus, setAssetStatus] = useState(hasAssetUrl ? null : 404);
+    const cachedAvailability = hasAssetUrl ? mediaProxyAvailabilityCache.get(proxiedUrl) : null;
+    const [assetState, setAssetState] = useState(() => {
+        if (!hasAssetUrl) {
+            return 'unavailable';
+        }
+
+        return cachedAvailability?.state || 'checking';
+    });
+    const [assetStatus, setAssetStatus] = useState(() => {
+        if (!hasAssetUrl) {
+            return 404;
+        }
+
+        return cachedAvailability?.status ?? null;
+    });
 
     useEffect(() => {
         let cancelled = false;
@@ -4314,6 +4329,16 @@ function ClientMediaCard({
         if (!hasAssetUrl) {
             setAssetState('unavailable');
             setAssetStatus(404);
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        const cachedResult = mediaProxyAvailabilityCache.get(proxiedUrl);
+        if (cachedResult) {
+            setAssetState(cachedResult.state);
+            setAssetStatus(cachedResult.status ?? null);
+
             return () => {
                 cancelled = true;
             };
@@ -4333,11 +4358,19 @@ function ClientMediaCard({
                 }
 
                 if (response.ok) {
+                    mediaProxyAvailabilityCache.set(proxiedUrl, {
+                        state: 'ready',
+                        status: response.status,
+                    });
                     setAssetState('ready');
                     setAssetStatus(response.status);
                     return;
                 }
 
+                mediaProxyAvailabilityCache.set(proxiedUrl, {
+                    state: 'unavailable',
+                    status: response.status,
+                });
                 setAssetState('unavailable');
                 setAssetStatus(response.status);
             })
@@ -4346,6 +4379,10 @@ function ClientMediaCard({
                     return;
                 }
 
+                mediaProxyAvailabilityCache.set(proxiedUrl, {
+                    state: 'unavailable',
+                    status: null,
+                });
                 setAssetState('unavailable');
                 setAssetStatus(null);
             });
@@ -4373,6 +4410,10 @@ function ClientMediaCard({
                             preload="metadata"
                             className="h-full w-full bg-slate-950 object-contain"
                             onError={() => {
+                                mediaProxyAvailabilityCache.set(proxiedUrl, {
+                                    state: 'unavailable',
+                                    status: null,
+                                });
                                 setAssetState('unavailable');
                                 setAssetStatus(null);
                             }}
@@ -4384,6 +4425,10 @@ function ClientMediaCard({
                             className="h-full w-full object-cover"
                             loading="lazy"
                             onError={() => {
+                                mediaProxyAvailabilityCache.set(proxiedUrl, {
+                                    state: 'unavailable',
+                                    status: null,
+                                });
                                 setAssetState('unavailable');
                                 setAssetStatus(null);
                             }}

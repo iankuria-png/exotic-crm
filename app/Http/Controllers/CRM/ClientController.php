@@ -1803,10 +1803,18 @@ class ClientController extends Controller
                 );
             }
 
-            $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
-            (new \App\Services\ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
-            $client->refresh();
-            $this->refreshClientDisplayImageCache($client, verifyReachable: false);
+            try {
+                $refreshedMedia = $wpSync->getClientMedia((int) $client->wp_post_id);
+                $this->refreshClientDisplayImageCache($client, verifyReachable: false, mediaPayload: $refreshedMedia);
+                $client->refresh();
+            } catch (\Throwable $refreshException) {
+                Log::warning('Failed to refresh client media cache after upload.', [
+                    'client_id' => $client->id,
+                    'platform_id' => $client->platform_id,
+                    'wp_post_id' => $client->wp_post_id,
+                    'error' => $refreshException->getMessage(),
+                ]);
+            }
 
             $uploadedAttachments = collect($results)
                 ->map(fn (array $result): array => (array) ($result['attachment'] ?? []))
@@ -1950,10 +1958,10 @@ class ClientController extends Controller
         }
     }
 
-    private function refreshClientDisplayImageCache(Client $client, bool $verifyReachable): void
+    private function refreshClientDisplayImageCache(Client $client, bool $verifyReachable, ?array $mediaPayload = null): void
     {
         try {
-            $this->clientProfileImageService->refreshClient($client, verifyReachable: $verifyReachable);
+            $this->clientProfileImageService->refreshClient($client, $mediaPayload, verifyReachable: $verifyReachable);
         } catch (\Throwable $exception) {
             Log::warning('Failed to refresh client display image cache.', [
                 'client_id' => $client->id,
@@ -3473,19 +3481,13 @@ class ClientController extends Controller
             ->filter(fn ($file): bool => $file instanceof UploadedFile)
             ->values();
 
-        $singleFile = $request->file('file');
-        if ($singleFile instanceof UploadedFile) {
-            $resolved->prepend($singleFile);
+        if ($resolved->isNotEmpty()) {
+            return $resolved->all();
         }
 
-        return $resolved
-            ->unique(fn (UploadedFile $file): string => sha1(implode('|', [
-                $file->getRealPath() ?: '',
-                $file->getClientOriginalName(),
-                (string) ($file->getSize() ?? 0),
-            ])))
-            ->values()
-            ->all();
+        $singleFile = $request->file('file');
+
+        return $singleFile instanceof UploadedFile ? [$singleFile] : [];
     }
 
     /**
