@@ -203,11 +203,14 @@
         @endif
 
         <div class="actions">
-            @if($crm_payments_url)
-                <a class="button secondary" href="{{ $crm_payments_url }}">Back to CRM Payments</a>
+            @if($retry_url)
+                <a class="button secondary" href="{{ $retry_url }}">Retry payment</a>
             @endif
-            @if($payment && $provider_status_url)
-                <a class="button secondary" href="{{ $provider_status_url }}">Check Provider Status</a>
+            @if($home_url)
+                <a class="button secondary" href="{{ $home_url }}">Back home</a>
+            @endif
+            @if($contact_url)
+                <a class="button secondary" href="{{ $contact_url }}">Contact admin</a>
             @endif
             @if($redirect_url)
                 <a class="button" href="{{ $redirect_url }}">{{ $mode === 'sandbox' ? 'Open profile anyway' : 'Return to profile' }}</a>

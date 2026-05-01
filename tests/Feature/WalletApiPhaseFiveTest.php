@@ -2131,8 +2131,11 @@ class WalletApiPhaseFiveTest extends TestCase
 
         $response->assertOk()
             ->assertSee('Sandbox payment result')
-            ->assertSee('Back to CRM Payments')
-            ->assertSee('Check Provider Status')
+            ->assertSee('Retry payment')
+            ->assertSee('Back home')
+            ->assertSee('Contact admin')
+            ->assertDontSee('Back to CRM Payments')
+            ->assertDontSee('Check Provider Status')
             ->assertSee('Open profile anyway')
             ->assertSee('No live activation or wallet credit was performed.')
             ->assertSee('Sandbox Billing')

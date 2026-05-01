@@ -243,9 +243,10 @@ class BillingController extends Controller
         $redirectDelay = 3;
         $mode = 'sandbox';
         $statusLabel = 'processing';
-        $crmPaymentsUrl = rtrim((string) config('app.url', url('/')), '/') . '/payments';
-        $providerStatusUrl = $crmPaymentsUrl;
         $testMode = false;
+        $homeUrl = null;
+        $retryUrl = null;
+        $contactUrl = null;
 
         if ($payment) {
             $payment->loadMissing(['client.platform', 'platform', 'routingDecisions']);
@@ -263,7 +264,13 @@ class BillingController extends Controller
             $manualProfileUrl = $returnUrlIsPublic ? $redirectUrl : null;
             $autoRedirectUrl = $mode !== 'sandbox' && $returnUrlIsPublic ? $redirectUrl : null;
             $returnUrlSuppressed = $redirectUrl !== null && !$returnUrlIsPublic;
-            $providerStatusUrl = $crmPaymentsUrl . '?payment=' . (int) $payment->id . '&intent=provider-status';
+
+            $homeUrl = $this->marketplaceHomeUrl($payment->platform);
+            $retryUrl = $this->retryReturnUrl($payment, $homeUrl);
+            $supportChatUrl = trim((string) ($payment->platform?->support_chat_url ?? ''));
+            $contactUrl = $supportChatUrl !== ''
+                ? $supportChatUrl
+                : ($homeUrl ? rtrim($homeUrl, '/') . '/chat' : null);
         }
 
         return response()->view('payments.complete', [
@@ -273,8 +280,9 @@ class BillingController extends Controller
             'redirect_delay_seconds' => $redirectDelay,
             'mode' => $mode,
             'status_label' => $statusLabel,
-            'crm_payments_url' => $crmPaymentsUrl,
-            'provider_status_url' => $providerStatusUrl,
+            'home_url' => $homeUrl,
+            'retry_url' => $retryUrl,
+            'contact_url' => $contactUrl,
             'return_url_suppressed' => $returnUrlSuppressed,
             'test_mode' => $testMode,
         ])->withHeaders([
@@ -355,6 +363,10 @@ class BillingController extends Controller
         $storedReturnUrl = (string) data_get($payment->payment_data, 'wp_return_url', '');
         $profileUrl = $storedReturnUrl !== '' ? $storedReturnUrl : $payment->client?->wp_profile_url;
 
+        if (!$this->clientProfileIsPublic($payment)) {
+            $profileUrl = $this->marketplaceHomeUrl($payment->platform);
+        }
+
         if (!$profileUrl) {
             return null;
         }
@@ -363,13 +375,150 @@ class BillingController extends Controller
             return $profileUrl;
         }
 
-        $separator = str_contains($profileUrl, '?') ? '&' : '?';
-
-        return $profileUrl . $separator . http_build_query([
+        return $this->urlWithQueryParams($profileUrl, [
             'wallet_refresh' => 1,
             'wallet_payment_status' => $payment->status,
             'wallet_payment_id' => $payment->id,
         ]);
+    }
+
+    private function retryReturnUrl(Payment $payment, ?string $homeUrl): ?string
+    {
+        if (!$this->clientProfileIsPublic($payment)) {
+            return $homeUrl;
+        }
+
+        $storedReturnUrl = trim((string) data_get($payment->payment_data, 'wp_return_url', ''));
+        $retryUrl = $storedReturnUrl !== '' ? $storedReturnUrl : $payment->client?->wp_profile_url;
+
+        return $retryUrl ? $this->urlWithoutQueryParams($retryUrl, [
+            'wallet_refresh',
+            'wallet_payment_status',
+            'wallet_payment_id',
+        ]) : $homeUrl;
+    }
+
+    private function clientProfileIsPublic(Payment $payment): bool
+    {
+        return strtolower(trim((string) ($payment->client?->profile_status ?? ''))) === 'publish';
+    }
+
+    private function marketplaceHomeUrl(?Platform $platform): ?string
+    {
+        if (!$platform) {
+            return null;
+        }
+
+        $wpApiOrigin = $this->urlOrigin((string) ($platform->wp_api_url ?? ''));
+        if ($wpApiOrigin) {
+            return $wpApiOrigin . '/';
+        }
+
+        $domain = trim((string) ($platform->domain ?? ''));
+        if ($domain === '') {
+            return null;
+        }
+
+        if (!preg_match('#^https?://#i', $domain)) {
+            $domain = 'https://' . $domain;
+        }
+
+        $domainOrigin = $this->urlOrigin($domain);
+
+        return $domainOrigin ? $domainOrigin . '/' : null;
+    }
+
+    private function urlOrigin(string $url): ?string
+    {
+        $parts = parse_url(trim($url));
+        if (!is_array($parts)) {
+            return null;
+        }
+
+        $scheme = strtolower(trim((string) ($parts['scheme'] ?? '')));
+        $host = trim((string) ($parts['host'] ?? ''));
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return null;
+        }
+
+        $origin = $scheme . '://' . $host;
+        if (isset($parts['port'])) {
+            $origin .= ':' . (int) $parts['port'];
+        }
+
+        return rtrim($origin, '/');
+    }
+
+    private function urlWithQueryParams(string $url, array $queryParams): string
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts)) {
+            $separator = str_contains($url, '?') ? '&' : '?';
+
+            return $url . $separator . http_build_query($queryParams);
+        }
+
+        $existingQuery = [];
+        parse_str((string) ($parts['query'] ?? ''), $existingQuery);
+        $parts['query'] = http_build_query(array_merge($existingQuery, $queryParams));
+
+        return $this->buildUrlFromParts($parts);
+    }
+
+    private function urlWithoutQueryParams(string $url, array $queryParamNames): string
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts)) {
+            return $url;
+        }
+
+        $query = [];
+        parse_str((string) ($parts['query'] ?? ''), $query);
+        foreach ($queryParamNames as $queryParamName) {
+            unset($query[$queryParamName]);
+        }
+
+        if ($query === []) {
+            unset($parts['query']);
+        } else {
+            $parts['query'] = http_build_query($query);
+        }
+
+        return $this->buildUrlFromParts($parts);
+    }
+
+    private function buildUrlFromParts(array $parts): string
+    {
+        $url = '';
+        if (isset($parts['scheme'])) {
+            $url .= $parts['scheme'] . '://';
+        }
+
+        if (isset($parts['user'])) {
+            $url .= $parts['user'];
+            if (isset($parts['pass'])) {
+                $url .= ':' . $parts['pass'];
+            }
+            $url .= '@';
+        }
+
+        $url .= $parts['host'] ?? '';
+
+        if (isset($parts['port'])) {
+            $url .= ':' . (int) $parts['port'];
+        }
+
+        $url .= $parts['path'] ?? '';
+
+        if (isset($parts['query']) && $parts['query'] !== '') {
+            $url .= '?' . $parts['query'];
+        }
+
+        if (isset($parts['fragment']) && $parts['fragment'] !== '') {
+            $url .= '#' . $parts['fragment'];
+        }
+
+        return $url;
     }
 
     private function isPublicReturnUrl(?string $url): bool
