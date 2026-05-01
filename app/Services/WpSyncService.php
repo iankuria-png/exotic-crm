@@ -12,11 +12,13 @@ class WpSyncService
 {
     private string $baseUrl;
     private string $authHeader;
+    private int $platformId;
     private int $defaultTimeout;
     private int $mediaUploadTimeout;
 
     public function __construct(Platform $platform)
     {
+        $this->platformId = (int) $platform->id;
         $this->baseUrl = rtrim($platform->wp_api_url, '/');
         $this->authHeader = 'Basic ' . base64_encode(
             $platform->wp_api_user . ':' . $platform->wp_api_password
@@ -238,9 +240,8 @@ class WpSyncService
         }
 
         try {
-            $response = Http::withHeaders([
-                'Authorization' => $this->authHeader,
-            ])->timeout($this->mediaUploadTimeout)
+            $response = Http::withHeaders($this->headers())
+                ->timeout($this->mediaUploadTimeout)
                 ->attach('file', $handle, $file->getClientOriginalName(), [
                     'Content-Type' => $file->getMimeType() ?: 'application/octet-stream',
                 ])
@@ -272,9 +273,9 @@ class WpSyncService
 
     private function get(string $path, array $params = []): array
     {
-        $response = Http::withHeaders([
-            'Authorization' => $this->authHeader,
-        ])->timeout($this->defaultTimeout)->get($this->baseUrl . $path, $params);
+        $response = Http::withHeaders($this->headers())
+            ->timeout($this->defaultTimeout)
+            ->get($this->baseUrl . $path, $params);
 
         return $this->decodeResponse($response, 'GET', $path);
     }
@@ -283,9 +284,9 @@ class WpSyncService
     {
         $this->assertRemoteWriteAllowed($path);
 
-        $response = Http::withHeaders([
-            'Authorization' => $this->authHeader,
-        ])->timeout($this->defaultTimeout)->post($this->baseUrl . $path, $body);
+        $response = Http::withHeaders($this->headers())
+            ->timeout($this->defaultTimeout)
+            ->post($this->baseUrl . $path, $body);
 
         return $this->decodeResponse($response, 'POST', $path);
     }
@@ -294,9 +295,9 @@ class WpSyncService
     {
         $this->assertRemoteWriteAllowed($path);
 
-        $response = Http::withHeaders([
-            'Authorization' => $this->authHeader,
-        ])->timeout($this->defaultTimeout)->patch($this->baseUrl . $path, $body);
+        $response = Http::withHeaders($this->headers())
+            ->timeout($this->defaultTimeout)
+            ->patch($this->baseUrl . $path, $body);
 
         return $this->decodeResponse($response, 'PATCH', $path);
     }
@@ -305,11 +306,55 @@ class WpSyncService
     {
         $this->assertRemoteWriteAllowed($path);
 
-        $response = Http::withHeaders([
-            'Authorization' => $this->authHeader,
-        ])->timeout($this->defaultTimeout)->delete($this->baseUrl . $path);
+        $response = Http::withHeaders($this->headers())
+            ->timeout($this->defaultTimeout)
+            ->delete($this->baseUrl . $path);
 
         return $this->decodeResponse($response, 'DELETE', $path);
+    }
+
+    private function headers(): array
+    {
+        $headers = [
+            'Authorization' => $this->authHeader,
+        ];
+
+        $sharedKey = $this->sharedKeyForPlatform();
+        if ($sharedKey !== null) {
+            $headers['X-Exotic-CRM-Sync-Key'] = $sharedKey;
+        }
+
+        return $headers;
+    }
+
+    private function sharedKeyForPlatform(): ?string
+    {
+        $sharedKey = trim((string) config('services.exotic_crm_sync.shared_key', ''));
+        if ($sharedKey === '' || $this->platformId <= 0) {
+            return null;
+        }
+
+        $platformIds = $this->configuredSharedKeyPlatformIds();
+        if (!in_array($this->platformId, $platformIds, true)) {
+            return null;
+        }
+
+        return $sharedKey;
+    }
+
+    private function configuredSharedKeyPlatformIds(): array
+    {
+        $configured = config('services.exotic_crm_sync.shared_key_platform_ids', '');
+        if (is_array($configured)) {
+            $values = $configured;
+        } else {
+            $values = preg_split('/[\s,]+/', (string) $configured) ?: [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn ($value) => (int) $value,
+            $values
+        ), static fn (int $value) => $value > 0)));
     }
 
     private function isRemoteEndpoint(string $url): bool

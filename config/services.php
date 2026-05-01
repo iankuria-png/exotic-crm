@@ -77,6 +77,11 @@ return [
         ],
     ],
 
+    'exotic_crm_sync' => [
+        'shared_key' => env('EXOTIC_CRM_SYNC_SHARED_KEY'),
+        'shared_key_platform_ids' => env('EXOTIC_CRM_SYNC_SHARED_KEY_PLATFORM_IDS', ''),
+    ],
+
     'africastalking' => [
         'endpoint' => env('AFRICASTALKING_ENDPOINT', 'https://api.africastalking.com/version1/messaging'),
         'username' => env('AFRICASTALKING_USERNAME'),
