@@ -86,27 +86,28 @@ return new class extends Migration
 
         if (Schema::hasTable('clients') && Schema::hasTable('client_wallet_balances')) {
             $now = now();
-            $rows = DB::table('clients')
+            DB::table('clients')
                 ->select('id', 'wallet_balance', 'wallet_currency', 'wallet_last_synced_at')
-                ->orderBy('id')
-                ->get()
-                ->map(function ($client) use ($now): array {
-                    $currency = strtoupper(trim((string) ($client->wallet_currency ?? '')));
+                ->chunkById(500, function ($clients) use ($now): void {
+                    $rows = $clients
+                        ->map(function ($client) use ($now): array {
+                            $currency = strtoupper(trim((string) ($client->wallet_currency ?? '')));
 
-                    return [
-                        'client_id' => (int) $client->id,
-                        'currency' => $currency !== '' ? $currency : 'KES',
-                        'balance' => number_format((float) ($client->wallet_balance ?? 0), 2, '.', ''),
-                        'last_synced_at' => $client->wallet_last_synced_at,
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ];
-                })
-                ->all();
+                            return [
+                                'client_id' => (int) $client->id,
+                                'currency' => $currency !== '' ? $currency : 'KES',
+                                'balance' => number_format((float) ($client->wallet_balance ?? 0), 2, '.', ''),
+                                'last_synced_at' => $client->wallet_last_synced_at,
+                                'created_at' => $now,
+                                'updated_at' => $now,
+                            ];
+                        })
+                        ->all();
 
-            if ($rows !== []) {
-                DB::table('client_wallet_balances')->insertOrIgnore($rows);
-            }
+                    if ($rows !== []) {
+                        DB::table('client_wallet_balances')->insertOrIgnore($rows);
+                    }
+                }, 'id');
         }
 
         if (Schema::hasTable('wallet_transactions')) {
