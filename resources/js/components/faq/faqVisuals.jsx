@@ -150,6 +150,8 @@ export function resolveFaqCategoryVisual(category) {
         case 'payments-subscriptions':
         case 'payments':
             return { tone: 'emerald', icon: 'credit-card', label: 'Payments and activation' };
+        case 'team':
+            return { tone: 'indigo', icon: 'users', label: 'Coaching and goals' };
         default:
             return { tone: 'slate', icon: 'compass', label: 'Workflow guide' };
     }
@@ -160,9 +162,14 @@ export function resolveFaqArticleVisual(article) {
 
     if (title.includes('adding a client')) return { tone: 'teal', icon: 'user-plus', label: 'Create client' };
     if (title.includes('editing a client')) return { tone: 'sky', icon: 'clipboard', label: 'Edit safely' };
+    if (title.includes('market sync') || title.includes('sync')) return { tone: 'sky', icon: 'layout', label: 'Sync and visibility' };
     if (title.includes('client access')) return { tone: 'amber', icon: 'key', label: 'Access tools' };
     if (title.includes('payment link')) return { tone: 'indigo', icon: 'link', label: 'Send payment link' };
+    if (title.includes('payment diagnostics')) return { tone: 'indigo', icon: 'receipt', label: 'Diagnostics' };
     if (title.includes('activating a subscription')) return { tone: 'emerald', icon: 'credit-card', label: 'Activate subscription' };
+    if (title.includes('analytics')) return { tone: 'sky', icon: 'layout', label: 'Analytics' };
+    if (title.includes('profile health')) return { tone: 'amber', icon: 'shield-check', label: 'Duplicate review' };
+    if (title.includes('leaderboard') || title.includes('goal')) return { tone: 'indigo', icon: 'users', label: 'Team coaching' };
     if (title.includes('subscription')) return { tone: 'emerald', icon: 'credit-card', label: 'Subscription workflow' };
     if (title.includes('verified')) return { tone: 'emerald', icon: 'shield-check', label: 'Verification' };
     if (title.includes('new badge')) return { tone: 'rose', icon: 'sparkles', label: 'Badge behavior' };

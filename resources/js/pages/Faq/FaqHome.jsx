@@ -12,13 +12,14 @@ import { useToast } from '../../components/ToastProvider';
 
 const FEATURED_ARTICLE_SLUGS = [
     'adding-a-client-crm-only-vs-wordpress-provision',
+    'search-visibility-and-market-sync',
     'client-access-setup-links-passwords-and-login-as-client',
     'sending-a-payment-link-from-client-detail',
     'activating-a-subscription-after-payment-review',
-    'when-to-create-a-lead-instead-of-a-client',
-    'converting-a-lead-to-a-client',
-    'customer-service-center-anatomy',
-    'search-modes-exact-exact-missing-and-fallback',
+    'payment-diagnostics-failed-transactions-provider-status-and-next-actions',
+    'profile-health-and-what-it-surfaces',
+    'client-analytics-discovery-engagement-and-contact-intent',
+    'client-filters-online-chat-verified-risk-and-behavior',
 ];
 
 export default function FaqHome() {

@@ -13,6 +13,7 @@ import CtaManagerDialog from '../../components/faq/CtaManagerDialog';
 import MediaManagerDialog from '../../components/faq/MediaManagerDialog';
 import WalkthroughRecorder from '../../components/faq/WalkthroughRecorder';
 import StatusChip from '../../components/faq/StatusChip';
+import FaqMediaLightbox from '../../components/faq/FaqMediaLightbox';
 import { FaqWorkflowPill, resolveFaqArticleVisual, resolveFaqCategoryVisual } from '../../components/faq/faqVisuals';
 import useFaqAdmin from '../../hooks/useFaqAdmin';
 import { useToast } from '../../components/ToastProvider';
@@ -25,6 +26,9 @@ export default function FaqArticle() {
     const [ctaOpen, setCtaOpen] = useState(false);
     const [mediaOpen, setMediaOpen] = useState(false);
     const [walkthroughOpen, setWalkthroughOpen] = useState(false);
+    const [lightboxIndex, setLightboxIndex] = useState(0);
+    const [lightboxItems, setLightboxItems] = useState([]);
+    const [lightboxOpen, setLightboxOpen] = useState(false);
     const admin = useFaqAdmin();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -42,6 +46,23 @@ export default function FaqArticle() {
 
     const article = articleQuery.data?.article;
     const articleSlug = article?.slug || slug;
+    const articleMediaItems = (article?.media || []).map((media) => ({
+        kind: media.kind,
+        url: media.url,
+        caption: media.caption,
+        mime: media.mime,
+    }));
+
+    const openLightbox = (items, startIndex = 0) => {
+        const usableItems = (items || []).filter((item) => item?.url);
+        if (!usableItems.length) {
+            return;
+        }
+
+        setLightboxItems(usableItems);
+        setLightboxIndex(startIndex);
+        setLightboxOpen(true);
+    };
 
     const updateMutation = useMutation({
         mutationFn: (payload) => faqApi.updateArticle(articleSlug, payload),
@@ -193,10 +214,30 @@ export default function FaqArticle() {
                 <article className="crm-surface space-y-6 px-6 py-6 lg:px-8">
                     {article?.media?.length ? (
                         <div className="grid gap-3 md:grid-cols-2">
-                            {article.media.map((media) => (
+                            {article.media.map((media, mediaIndex) => (
                                 media.kind === 'video'
-                                    ? <video key={media.id} src={media.url} controls className="w-full rounded-2xl border border-slate-200" />
-                                    : <img key={media.id} src={media.url} alt={media.caption || ''} className="w-full rounded-2xl border border-slate-200 object-cover" />
+                                    ? (
+                                        <div key={media.id} className="space-y-2">
+                                            <video src={media.url} controls className="w-full rounded-2xl border border-slate-200 bg-black" />
+                                            <button
+                                                type="button"
+                                                onClick={() => openLightbox(articleMediaItems, mediaIndex)}
+                                                className="inline-flex items-center gap-2 text-sm font-medium text-teal-700 transition hover:text-teal-800"
+                                            >
+                                                Open larger preview
+                                            </button>
+                                        </div>
+                                    )
+                                    : (
+                                        <button
+                                            key={media.id}
+                                            type="button"
+                                            onClick={() => openLightbox(articleMediaItems, mediaIndex)}
+                                            className="block cursor-zoom-in text-left"
+                                        >
+                                            <img src={media.url} alt={media.caption || ''} className="w-full rounded-2xl border border-slate-200 object-cover transition hover:shadow-md" />
+                                        </button>
+                                    )
                             ))}
                         </div>
                     ) : null}
@@ -205,7 +246,7 @@ export default function FaqArticle() {
                             Operator Guide
                         </p>
                     </div>
-                    <MarkdownRenderer>{article?.body}</MarkdownRenderer>
+                    <MarkdownRenderer onMediaOpen={openLightbox}>{article?.body}</MarkdownRenderer>
                 </article>
 
                 <aside className="space-y-4">
@@ -252,6 +293,13 @@ export default function FaqArticle() {
                 articleTitle={article?.title}
                 onClose={() => setWalkthroughOpen(false)}
                 onSave={(payload) => createWalkthroughMutation.mutate(payload)}
+            />
+            <FaqMediaLightbox
+                open={lightboxOpen}
+                items={lightboxItems}
+                index={lightboxIndex}
+                onChangeIndex={setLightboxIndex}
+                onClose={() => setLightboxOpen(false)}
             />
         </div>
     );

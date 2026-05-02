@@ -92,9 +92,11 @@ class FaqSeeder extends Seeder
                 'articles' => [
                     'Adding a client: CRM only vs WordPress provision',
                     'Editing a client safely',
+                    'Search visibility and Market Sync',
                     'Search modes: exact, exact_missing, and fallback',
                     'Combining filters to build cohorts',
                     'Every client filter explained',
+                    'Client filters: online, chat, verified, risk, and behavior',
                     'The metric-card-as-segment pattern',
                     'Client status taxonomy',
                     'Resolving WP State Conflict',
@@ -123,6 +125,7 @@ class FaqSeeder extends Seeder
                     'Client access: setup links, passwords, and login as client',
                     'Sending a payment link from client detail',
                     'Activating a subscription after payment review',
+                    'Client analytics: discovery, engagement, and contact intent',
                     'Sync from WordPress: when it works and when it does not',
                     'Generating a payment link',
                     'Adding a tour',
@@ -142,6 +145,7 @@ class FaqSeeder extends Seeder
                 'articles' => [
                     'Flat vs Native and the FX banner',
                     'The five payment metric cards',
+                    'Payment diagnostics: failed transactions, provider status, and next actions',
                     'Customer revenue mix segments',
                     'Auto-match queue triage',
                     'Reconciling untracked payments',
@@ -150,6 +154,15 @@ class FaqSeeder extends Seeder
                     'Recording a shared manual payment',
                     'Deactivation reason codes',
                     'Renewal pipeline vs Recently Expired vs Untracked Active',
+                ],
+            ],
+            [
+                'slug' => 'team',
+                'name' => 'Team',
+                'description' => 'Read the leaderboard, goal completion, and coaching signals across support and sales.',
+                'crm_page' => 'team',
+                'articles' => [
+                    'Team leaderboard and goal settings',
                 ],
             ],
         ];
@@ -161,6 +174,7 @@ class FaqSeeder extends Seeder
             'leads' => '/leads',
             'client_detail' => '/clients?highlight=profile-actions',
             'payments' => '/payments?tab=queue',
+            'team' => '/team',
         ];
 
         $walkthroughMap = [
@@ -242,9 +256,11 @@ class FaqSeeder extends Seeder
             'Recovery queue and renewal workload' => 'How to separate urgent recovery work from normal renewal follow-up.',
             'Adding a client: CRM only vs WordPress provision' => 'Choose the right onboarding path when creating a profile so support, access, and subscription work start cleanly.',
             'Editing a client safely' => 'How to change profile data without creating WordPress conflicts or losing accountability.',
+            'Search visibility and Market Sync' => 'What to do when a profile exists but is missing from CRM search or filtered lists.',
             'Search modes: exact, exact_missing, and fallback' => 'Choose the right search mode so you do not miss or misidentify a client.',
             'Combining filters to build cohorts' => 'Build useful client lists by stacking filters in a deliberate order.',
             'Every client filter explained' => 'A working reference for the most important filters on the Clients page.',
+            'Client filters: online, chat, verified, risk, and behavior' => 'How the most-used client filters narrow the queue and when each one is useful.',
             'The metric-card-as-segment pattern' => 'Metric cards are not decoration; they are shortcuts into specific work queues.',
             'Client status taxonomy' => 'What each profile status usually means operationally and what action normally follows.',
             'Resolving WP State Conflict' => 'How to review a conflict before you change anything in CRM or WordPress.',
@@ -257,6 +273,7 @@ class FaqSeeder extends Seeder
             'Client access: setup links, passwords, and login as client' => 'How to help a client get into their account without weakening security or losing traceability.',
             'Sending a payment link from client detail' => 'Prepare and send the right payment link so the next subscription step is backed by a real payment trail.',
             'Activating a subscription after payment review' => 'What should be true before you activate a subscription and expose a profile publicly.',
+            'Client analytics: discovery, engagement, and contact intent' => 'How to read the 7d, 30d, and 90d profile analytics without losing the business context.',
             'Sync from WordPress: when it works and when it does not' => 'What a sync can fix, what it cannot fix, and when to stop retrying.',
             'Generating a payment link' => 'How to create the right payment link and what to verify before you send it.',
             'Adding a tour' => 'How to log a tour or visit correctly so other agents inherit clean context.',
@@ -268,6 +285,7 @@ class FaqSeeder extends Seeder
             'Profile Health and what it surfaces' => 'Use Profile Health to spot mismatches, missing data, and operational risk early.',
             'Flat vs Native and the FX banner' => 'When to compare markets in normalized reporting and when to trust native currency values.',
             'The five payment metric cards' => 'What each payment card represents and which ones demand action first.',
+            'Payment diagnostics: failed transactions, provider status, and next actions' => 'Use diagnostics to decide whether to retry STK, send a payment link, or escalate a payment issue.',
             'Customer revenue mix segments' => 'Read the mix segments as workload and revenue shape, not just as pretty percentages.',
             'Auto-match queue triage' => 'A safe way to review suggested matches before you create downstream mistakes.',
             'Reconciling untracked payments' => 'How to work orphaned payments without inventing history.',
@@ -276,6 +294,7 @@ class FaqSeeder extends Seeder
             'Recording a shared manual payment' => 'How to split one manual payment across multiple targets without breaking references.',
             'Deactivation reason codes' => 'What each reason code communicates to reporting and future triage.',
             'Renewal pipeline vs Recently Expired vs Untracked Active' => 'How to tell these three queues apart so you work the right one.',
+            'Team leaderboard and goal settings' => 'How to use the leaderboard, role filters, and goals tabs for coaching rather than vanity ranking.',
             default => 'A practical guide for the ' . strtolower($categoryName) . ' workflow in Exotic CRM.',
         };
     }
@@ -648,6 +667,45 @@ Check:
 - the client has an ambiguous payment trail
 - the edit would change public visibility without enough evidence
 MD,
+            'Search visibility and Market Sync' => <<<'MD'
+# Search visibility and Market Sync
+
+## Use this when a profile is "missing"
+This article is for profiles that:
+
+- exist in WordPress but are not visible in CRM yet
+- were created outside the CRM flow
+- seem impossible to find through the current search or filter combination
+
+## First decide what kind of missing it is
+- **Search issue:** the record exists in CRM, but lookup is unreliable
+- **Sync issue:** WordPress has fresher data and CRM has not pulled it yet
+
+## Safe check order
+1. Confirm the market filter.
+2. Search by exact phone, email, or profile URL.
+3. Broaden to fallback search only after strict search fails.
+4. If the profile was created from WordPress admin, use the CRM sync action for that market.
+
+## What Market Sync helps with
+Market Sync is the right next action when you need CRM to pull in fresh WordPress-side profile data.
+
+Use it for:
+
+- newly created WordPress profiles
+- fresh state changes not reflected in CRM
+- stale linkage details
+
+## What to send R&D when it still fails
+For deep search or sync reliability issues, send:
+
+- affected user name
+- phone number
+- profile link
+- market
+
+Specific examples are what make "Not Found" issues debuggable.
+MD,
             'Search modes: exact, exact_missing, and fallback' => <<<'MD'
 # Search modes: exact, exact_missing, and fallback
 
@@ -706,26 +764,71 @@ MD,
             'Every client filter explained' => <<<'MD'
 # Every client filter explained
 
-## Read filters as workload definitions
-Filters are not cosmetic. They define **which clients you are about to act on**.
+## Read filters as queue controls
+Filters are how you define what work you are about to touch.
 
-## The filters to understand first
-- **Market:** controls which operational universe you are in.
-- **Status:** narrows by current profile or workflow state.
-- **Owner / assigned agent:** shows whose queue the work belongs to.
-- **Risk / behavior / retention:** helps prioritize attention.
-- **Date filters:** useful for trend windows, not just raw counts.
+## Core filters on the Clients page
+- **Search:** name, phone, email, or profile URL
+- **Market:** the first filter you should trust-check every time
+- **City / location:** narrows by where the profile operates
+- **Status:** active, inactive, draft, pending, or other state buckets
+- **Plan:** useful when the queue depends on tier
+- **New users:** isolates recently created profiles
+- **Sort:** changes reading order, not business truth
+- **Verified / Risk / Chat / Online:** fast operational narrowing
+- **Source / Retention band / Behavior tag:** prioritization tools for larger queues
 
-## When a result set looks wrong
-Check in this order:
-1. market
-2. status
-3. date range
-4. search term
-5. hidden advanced filters
+## What Reset all is really for
+Use `Reset all` when the page feels wrong and you no longer trust the current combination.
+
+That is often faster and safer than guessing which filter is distorting the table.
 
 ## Good rule
 If you cannot explain why a client is in the result set, do not act yet. Re-read the active filters first.
+MD,
+            'Client filters: online, chat, verified, risk, and behavior' => <<<'MD'
+# Client filters: online, chat, verified, risk, and behavior
+
+## Why these filters matter
+These are the filters agents use most when turning a large table into an action queue.
+
+## Online
+Use `Online` when recency matters.
+
+Helpful for:
+
+- time-sensitive follow-up
+- currently active profiles
+- separating fresh activity from stale rows
+
+## Chat
+Use `Chat` to isolate profiles with or without messaging history.
+
+Helpful for:
+
+- finding clients with existing communication context
+- splitting untouched records from active support cases
+
+## Verified
+Use `Verified` when trust, profile readiness, or premium quality control matters.
+
+## Risk
+Use `Risk` when you want the most fragile or problematic profiles first.
+
+Helpful for support triage and retention review.
+
+## Retention band and behavior tag
+Use these when you are prioritizing, not just looking someone up.
+
+Example:
+
+- weak retention + bad behavior signal = manual review candidate
+
+## Practical routine
+1. Set market first.
+2. Add one hard filter like status or verified.
+3. Add online, chat, or risk depending on the job.
+4. Use retention and behavior once you are prioritizing the queue, not before.
 MD,
             'The metric-card-as-segment pattern' => <<<'MD'
 # The metric-card-as-segment pattern
@@ -1060,6 +1163,50 @@ Do one of these instead:
 - reconcile the payment first
 - escalate for review
 MD,
+            'Client analytics: discovery, engagement, and contact intent' => <<<'MD'
+# Client analytics: discovery, engagement, and contact intent
+
+## What this tab answers
+Analytics tells you whether the profile is being discovered, explored, and contacted.
+
+## Use the time windows deliberately
+- **7d:** recent pulse after a change, campaign, or support intervention
+- **30d:** normal default for steady review
+- **90d:** useful when volume is low and you need more signal
+
+## Read the engagement funnel in order
+1. **Seen:** card impressions
+2. **Viewed:** profile views
+3. **Engaged:** content actions such as gallery, video, service, or rate interaction
+4. **Contacted:** phone, WhatsApp, Viber, and similar contact actions
+
+This tells you where the friction lives:
+
+- seen but not viewed = weak listing card
+- viewed but not engaged = profile content is not pulling people deeper
+- engaged but not contacted = pricing, trust, or contact CTA problem
+
+## Contact breakdown
+Use this to see:
+
+- which contact channel is winning
+- where the click happened
+
+That helps sales and support explain whether the profile is converting from the listing card or only after deeper reading.
+
+## Content engagement
+This shows what visitors touched before contact:
+
+- gallery clicks
+- video plays
+- service clicks
+- rate views
+
+Use it to coach profile improvements with evidence instead of guesswork.
+
+## Sales insight
+Treat the generated sales insight as a coaching prompt, not a final verdict.
+MD,
             'Sync from WordPress: when it works and when it does not' => <<<'MD'
 # Sync from WordPress: when it works and when it does not
 
@@ -1071,6 +1218,7 @@ Typical wins:
 - refreshed profile fields
 - updated linkage details
 - corrected missing or stale metadata
+- newly created WordPress-side profiles that have not appeared cleanly in CRM yet
 
 ## What sync is not
 Sync is not a magic repair button for every mismatch.
@@ -1089,6 +1237,10 @@ Check whether the issue is really:
 - a business-state problem
 
 If it is the third one, more sync attempts usually waste time.
+
+## Practical rule
+If the profile was created in WordPress admin and is missing from CRM, sync is a strong next action.
+If the record is already in CRM but commercially confusing, sync is usually not the real fix.
 MD,
             'Generating a payment link' => <<<'MD'
 # Generating a payment link
@@ -1194,10 +1346,21 @@ Using "new subscription" for the wrong case distorts reporting and confuses the 
 1. confirm client and market
 2. review recent deal and payment history
 3. choose the right lifecycle
-4. create the pending path cleanly
+4. choose the payment method intentionally
+5. create the pending path cleanly
 
 ## Watch-out
 If you had to tell yourself "this is basically a renewal," it probably should not be created as new without a clear reason.
+
+## The modal needs real decisions
+The activation/create flow may ask for:
+
+- payment method
+- transaction reference
+- discount amount or percentage
+- discount PIN
+
+Those fields affect auditability. Do not treat them like filler.
 MD,
             'Deactivating a subscription with the right reason' => <<<'MD'
 # Deactivating a subscription with the right reason
@@ -1249,22 +1412,35 @@ MD,
 # Profile Health and what it surfaces
 
 ## What Profile Health is for
-Profile Health is an early warning area. It helps you spot:
+Profile Health helps you manually track duplicates and near-duplicates before they become bigger support problems.
 
-- missing or weak profile data
-- inconsistencies across systems
-- operational follow-up items that should not stay hidden
+It is especially useful for spotting:
+
+- shared phone numbers
+- shared email addresses
+- same-name collisions
+- lead matches that may need reconciliation
+
+## How to read it
+For each flagged group, compare:
+
+- CRM ID and WordPress reference
+- current status
+- active deals
+- last payment clues
+
+## Resolution action
+Use the resolution action only after you understand which record should remain primary.
+
+## Safe workflow
+1. inspect the suspected duplicate
+2. compare payment and subscription history
+3. choose the correct primary record
+4. write a clear resolution note
+5. apply the action
 
 ## Best use
-Use it as a review aid, not as an automatic truth engine.
-
-## What to do when something is flagged
-1. read the flag
-2. inspect the underlying record or linked area
-3. resolve the actual issue, not just the symptom
-
-## Why this matters
-Healthy profiles are easier to sell, support, and renew. A health flag is usually a sign that some future queue pain can be prevented now.
+Profile Health streamlines manual tracking, but it does not remove the need for judgment. Shared details are signals, not automatic permission to merge blindly.
 MD,
             'Flat vs Native and the FX banner' => <<<'MD'
 # Flat vs Native and the FX banner
@@ -1308,6 +1484,40 @@ These cards summarize the shape of the payment workspace so you can enter the ri
 
 ## Best habit
 After clicking a card, re-check the filters and row state before confirming, matching, or creating subscriptions.
+MD,
+            'Payment diagnostics: failed transactions, provider status, and next actions' => <<<'MD'
+# Payment diagnostics: failed transactions, provider status, and next actions
+
+## What diagnostics is for
+Payment Diagnostics is the single-payment review drawer for failures, contradictions, or long-running pending rows.
+
+## Read it in this order
+1. current status
+2. provider verification summary
+3. amount and attempts
+4. live provider status
+5. routing and history
+
+## What the tabs do
+- **Overview:** the fastest summary of what happened and what to do next
+- **Telemetry:** lower-level provider and request detail
+- **History:** previous checks and diagnostic events
+
+## Main actions
+- **Retry STK:** use when the push flow is still the right payment path
+- **Send payment link:** use when retrying the push is less realistic than switching the user to a link flow
+- **Check Provider Status:** use when you need a fresh read before deciding
+
+## Safe decision pattern
+Do not retry just because the button exists.
+Ask:
+
+- is this still recoverable?
+- is the phone/channel still correct?
+- would a payment link reduce friction faster?
+
+## Escalate with specifics
+If diagnostics still does not explain the problem, capture payment ID, provider reference, market, amount, and current status before escalating.
 MD,
             'Customer revenue mix segments' => <<<'MD'
 # Customer revenue mix segments
@@ -1478,6 +1688,38 @@ These rows look operationally active but do not have a clean tracked subscriptio
 - **untracked active:** investigate before acting
 
 Confusing these three queues leads to the wrong messaging and the wrong data fixes.
+MD,
+            'Team leaderboard and goal settings' => <<<'MD'
+# Team leaderboard and goal settings
+
+## What the Team page is for
+The Team page is for live presence, performance reading, and coaching signals across the visible team.
+
+## The four working tabs
+- **Presence:** who is online or recently active
+- **Leaderboard:** ranked output for the selected period and role
+- **My Stats:** one-person performance detail
+- **Goals:** shared defaults and role-based targets
+
+## How to use the leaderboard correctly
+1. choose the period first
+2. confirm the market scope
+3. choose the role filter
+4. compare like with like
+
+The board is most useful when it supports coaching, not vanity ranking.
+
+## What goal completion means
+Goal completion tells you how many defined targets are being met in the current scope.
+
+Use it to ask:
+
+- who is active but missing targets?
+- who is high-volume but low-quality?
+- do the goals match the role, or are they forcing the wrong behavior?
+
+## Best habit
+Use the page to guide follow-up, coaching, and accountability. The goal is better team discipline, not louder scorekeeping.
 MD,
             default => <<<MD
 # {$title}
