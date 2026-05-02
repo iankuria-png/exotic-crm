@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import faqApi from '../../services/faqApi';
+import { FaqIconBubble, FaqWorkflowPill, resolveFaqArticleVisual, resolveFaqCategoryVisual } from './faqVisuals';
 
 function resolveCrmPage(pathname) {
     if (pathname.startsWith('/clients/') && pathname !== '/clients') return 'client_detail';
@@ -54,8 +55,14 @@ export default function HelpButton() {
                                     onClick={() => setOpen(false)}
                                     className="block rounded-2xl border border-slate-200 px-4 py-4 transition hover:border-teal-200 hover:bg-teal-50/50"
                                 >
-                                    <p className="text-sm font-semibold text-slate-900">{article.title}</p>
-                                    <p className="mt-1 text-sm text-slate-500">{article.summary}</p>
+                                    <div className="flex items-start gap-3">
+                                        <FaqIconBubble visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} className="mt-0.5 h-10 w-10 rounded-xl" />
+                                        <div>
+                                            <FaqWorkflowPill visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} />
+                                            <p className="mt-2 text-sm font-semibold text-slate-900">{article.title}</p>
+                                            <p className="mt-1 text-sm leading-6 text-slate-500">{article.summary}</p>
+                                        </div>
+                                    </div>
                                 </Link>
                             ))}
                         </div>

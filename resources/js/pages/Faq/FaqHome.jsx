@@ -7,7 +7,19 @@ import useFaqAdmin from '../../hooks/useFaqAdmin';
 import InlineCategoryManager from '../../components/faq/InlineCategoryManager';
 import NewArticleSlideOver from '../../components/faq/NewArticleSlideOver';
 import StatusChip from '../../components/faq/StatusChip';
+import { FaqIconBubble, FaqWorkflowPill, resolveFaqArticleVisual, resolveFaqCategoryVisual } from '../../components/faq/faqVisuals';
 import { useToast } from '../../components/ToastProvider';
+
+const FEATURED_ARTICLE_SLUGS = [
+    'adding-a-client-crm-only-vs-wordpress-provision',
+    'client-access-setup-links-passwords-and-login-as-client',
+    'sending-a-payment-link-from-client-detail',
+    'activating-a-subscription-after-payment-review',
+    'when-to-create-a-lead-instead-of-a-client',
+    'converting-a-lead-to-a-client',
+    'customer-service-center-anatomy',
+    'search-modes-exact-exact-missing-and-fallback',
+];
 
 export default function FaqHome() {
     const [searchParams, setSearchParams] = useSearchParams();
@@ -31,7 +43,27 @@ export default function FaqHome() {
 
     const categories = categoriesQuery.data?.categories || [];
     const articles = articlesQuery.data?.articles || [];
-    const highlightedArticles = useMemo(() => articles.slice(0, 8), [articles]);
+    const highlightedArticles = useMemo(() => {
+        const list = [...articles];
+        const search = searchParams.get('search') || '';
+
+        if (!search && !crmPage) {
+            list.sort((left, right) => {
+                const leftIndex = FEATURED_ARTICLE_SLUGS.indexOf(left.slug);
+                const rightIndex = FEATURED_ARTICLE_SLUGS.indexOf(right.slug);
+                const safeLeft = leftIndex === -1 ? FEATURED_ARTICLE_SLUGS.length + 1 : leftIndex;
+                const safeRight = rightIndex === -1 ? FEATURED_ARTICLE_SLUGS.length + 1 : rightIndex;
+
+                if (safeLeft !== safeRight) {
+                    return safeLeft - safeRight;
+                }
+
+                return String(left.title || '').localeCompare(String(right.title || ''));
+            });
+        }
+
+        return list.slice(0, 8);
+    }, [articles, crmPage, searchParams]);
 
     const createCategoryMutation = useMutation({
         mutationFn: faqApi.createCategory,
@@ -69,7 +101,7 @@ export default function FaqHome() {
         <div className="space-y-4">
             <PageHeader
                 title="Knowledge Center"
-                subtitle="Working guides for clients, payments, subscriptions, and day-to-day CRM edge cases."
+                subtitle="Operational guides for profile onboarding, access, subscriptions, payments, and market discipline."
                 actions={(
                     <>
                         <form
@@ -100,16 +132,20 @@ export default function FaqHome() {
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
                                 <p className="text-sm font-semibold text-slate-900">Browse by workflow area</p>
-                                <p className="text-sm text-slate-500">Use this when you know which CRM screen or queue you are working in.</p>
+                                <p className="text-sm text-slate-500">Start with the screen or queue you are already working in.</p>
                             </div>
                         </div>
                         <div className="space-y-3">
                             {categories.map((category) => (
                                 <Link key={category.id} to={`/faq/c/${category.slug}`} className="block rounded-2xl border border-slate-200 px-4 py-4 transition hover:border-teal-200 hover:bg-teal-50/50">
                                     <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p className="text-sm font-semibold text-slate-900">{category.name}</p>
-                                            <p className="mt-1 text-sm text-slate-500">{category.description}</p>
+                                        <div className="flex items-start gap-3">
+                                            <FaqIconBubble visual={resolveFaqCategoryVisual(category)} className="mt-0.5 h-12 w-12" />
+                                            <div>
+                                                <p className="text-sm font-semibold text-slate-900">{category.name}</p>
+                                                <FaqWorkflowPill visual={resolveFaqCategoryVisual(category)} />
+                                                <p className="mt-2 text-sm text-slate-500">{category.description}</p>
+                                            </div>
                                         </div>
                                         <div className="text-right text-xs text-slate-500">
                                             <p>{category.published_articles_count} published</p>
@@ -133,8 +169,8 @@ export default function FaqHome() {
                     <section className="crm-surface px-5 py-5">
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
-                                <p className="text-sm font-semibold text-slate-900">{searchParams.get('search') ? 'Search results' : 'Start here'}</p>
-                                <p className="text-sm text-slate-500">{searchParams.get('search') ? `Articles matching "${searchParams.get('search')}"` : 'Common operator guides for live CRM work.'}</p>
+                                <p className="text-sm font-semibold text-slate-900">{searchParams.get('search') ? 'Search results' : 'Priority workflows'}</p>
+                                <p className="text-sm text-slate-500">{searchParams.get('search') ? `Articles matching "${searchParams.get('search')}"` : 'Start with the workflows agents touch most often in production.'}</p>
                             </div>
                             {crmPage ? <StatusChip status={crmPage} /> : null}
                         </div>
@@ -142,9 +178,13 @@ export default function FaqHome() {
                             {highlightedArticles.map((article) => (
                                 <Link key={article.id} to={`/faq/a/${article.slug}${articlesQuery.data?.search_log_id ? `?search_log_id=${articlesQuery.data.search_log_id}` : ''}`} className="block rounded-2xl border border-slate-200 px-4 py-4 transition hover:border-teal-200 hover:bg-teal-50/50">
                                     <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p className="text-sm font-semibold text-slate-900">{article.title}</p>
-                                            <p className="mt-1 text-sm text-slate-500">{article.summary}</p>
+                                        <div className="flex items-start gap-3">
+                                            <FaqIconBubble visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} className="mt-0.5 h-10 w-10 rounded-xl" />
+                                            <div>
+                                                <FaqWorkflowPill visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} />
+                                                <p className="mt-2 text-sm font-semibold text-slate-900">{article.title}</p>
+                                                <p className="mt-1 text-sm leading-6 text-slate-500">{article.summary}</p>
+                                            </div>
                                         </div>
                                         {admin.isAdmin ? <StatusChip status={article.status} /> : null}
                                     </div>

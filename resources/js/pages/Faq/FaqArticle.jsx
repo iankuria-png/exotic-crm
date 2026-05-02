@@ -13,6 +13,7 @@ import CtaManagerDialog from '../../components/faq/CtaManagerDialog';
 import MediaManagerDialog from '../../components/faq/MediaManagerDialog';
 import WalkthroughRecorder from '../../components/faq/WalkthroughRecorder';
 import StatusChip from '../../components/faq/StatusChip';
+import { FaqWorkflowPill, resolveFaqArticleVisual, resolveFaqCategoryVisual } from '../../components/faq/faqVisuals';
 import useFaqAdmin from '../../hooks/useFaqAdmin';
 import { useToast } from '../../components/ToastProvider';
 
@@ -155,6 +156,13 @@ export default function FaqArticle() {
                 subtitle={article?.summary || 'Knowledge base article'}
                 actions={article?.category ? <StatusChip status={article.category.crm_page || article.status} /> : null}
             />
+
+            {article?.category ? (
+                <div className="flex flex-wrap items-center gap-2">
+                    <FaqWorkflowPill visual={resolveFaqCategoryVisual(article.category)} />
+                    <FaqWorkflowPill visual={resolveFaqArticleVisual(article)} />
+                </div>
+            ) : null}
 
             {admin.canEdit && article ? (
                 <AdminEditBar

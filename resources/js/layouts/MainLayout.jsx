@@ -58,7 +58,7 @@ export default function MainLayout() {
                             <Link to="/leads" className="crm-btn-secondary px-3 py-1.5 text-xs">
                                 New lead
                             </Link>
-                            <Link to="/clients" className="crm-btn-primary px-3 py-1.5 text-xs">
+                            <Link to="/clients" data-tour="nav-new-client" className="crm-btn-primary px-3 py-1.5 text-xs">
                                 New client
                             </Link>
                             </div>

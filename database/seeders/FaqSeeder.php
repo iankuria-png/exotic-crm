@@ -17,7 +17,11 @@ class FaqSeeder extends Seeder
             ?? User::query()->orderBy('id')->value('id');
 
         $walkthroughDefinitions = [
+            'create-client-from-navigation' => ['Create a client record', '[data-tour="nav-new-client"]'],
             'smart-delete-safely' => ['Smart delete safely', '[data-tour="clients-smart-delete"]'],
+            'client-access-tools' => ['Use client access tools', '[data-tour="client-detail-client-access"]'],
+            'client-detail-payment-link' => ['Send a payment link from client detail', '[data-tour="client-detail-payment-link"]'],
+            'activate-subscription-review' => ['Start a new subscription from client detail', '[data-tour="client-detail-new-subscription"]'],
             'untracked-payment-reconciliation' => ['Reconcile an untracked payment', '[data-tour="payments-untracked-queue"]'],
             'record-shared-manual-payment' => ['Record a shared manual payment', '[data-tour="deals-shared-manual-payment"]'],
             'deactivate-subscription-reason-code' => ['Deactivate a subscription with the right reason', '[data-tour="client-detail-subscription-actions"]'],
@@ -86,6 +90,8 @@ class FaqSeeder extends Seeder
                 'description' => 'Find the right profiles, read statuses correctly, and avoid risky cleanup actions.',
                 'crm_page' => 'clients',
                 'articles' => [
+                    'Adding a client: CRM only vs WordPress provision',
+                    'Editing a client safely',
                     'Search modes: exact, exact_missing, and fallback',
                     'Combining filters to build cohorts',
                     'Every client filter explained',
@@ -97,12 +103,26 @@ class FaqSeeder extends Seeder
                 ],
             ],
             [
+                'slug' => 'leads',
+                'name' => 'Leads',
+                'description' => 'Work inbound prospects, assign ownership, and convert cleanly into client records.',
+                'crm_page' => 'leads',
+                'articles' => [
+                    'When to create a lead instead of a client',
+                    'Converting a lead to a client',
+                    'Assigning and archiving leads with discipline',
+                ],
+            ],
+            [
                 'slug' => 'client-detail',
                 'name' => 'Client Detail',
                 'description' => 'Work one profile safely across tabs, subscriptions, notes, and verification actions.',
                 'crm_page' => 'client_detail',
                 'articles' => [
                     'Tour of the client tabs',
+                    'Client access: setup links, passwords, and login as client',
+                    'Sending a payment link from client detail',
+                    'Activating a subscription after payment review',
                     'Sync from WordPress: when it works and when it does not',
                     'Generating a payment link',
                     'Adding a tour',
@@ -138,11 +158,13 @@ class FaqSeeder extends Seeder
             'dashboard' => '/?view=dashboard',
             'cross_cutting' => '/?help=overview',
             'clients' => '/clients?status=manual_review',
+            'leads' => '/leads',
             'client_detail' => '/clients?highlight=profile-actions',
             'payments' => '/payments?tab=queue',
         ];
 
         $walkthroughMap = [
+            'Adding a client: CRM only vs WordPress provision' => 'create-client-from-navigation',
             'How to read the dashboard banner' => 'dashboard-impersonation-banner',
             'Combining filters to build cohorts' => 'clients-filter-cohorts',
             'Smart delete rules of thumb' => 'smart-delete-safely',
@@ -218,6 +240,8 @@ class FaqSeeder extends Seeder
             'Market scope and time window' => 'How scope selectors affect what you are seeing and why bad scope creates bad decisions.',
             'Reading the metric cards' => 'What the dashboard cards are signaling and how to click into them productively.',
             'Recovery queue and renewal workload' => 'How to separate urgent recovery work from normal renewal follow-up.',
+            'Adding a client: CRM only vs WordPress provision' => 'Choose the right onboarding path when creating a profile so support, access, and subscription work start cleanly.',
+            'Editing a client safely' => 'How to change profile data without creating WordPress conflicts or losing accountability.',
             'Search modes: exact, exact_missing, and fallback' => 'Choose the right search mode so you do not miss or misidentify a client.',
             'Combining filters to build cohorts' => 'Build useful client lists by stacking filters in a deliberate order.',
             'Every client filter explained' => 'A working reference for the most important filters on the Clients page.',
@@ -226,7 +250,13 @@ class FaqSeeder extends Seeder
             'Resolving WP State Conflict' => 'How to review a conflict before you change anything in CRM or WordPress.',
             'Retention bands and behavior tags' => 'How to combine retention and behavior signals when prioritizing outreach.',
             'Smart delete rules of thumb' => 'When Smart Delete is appropriate and when it is too risky.',
+            'When to create a lead instead of a client' => 'Use the right record type so outreach, follow-up, and onboarding stay disciplined from the start.',
+            'Converting a lead to a client' => 'Move a real prospect into the client workflow without duplicating records or losing sales context.',
+            'Assigning and archiving leads with discipline' => 'Keep the pipeline trustworthy by using owner assignment and archive reasons consistently.',
             'Tour of the client tabs' => 'What each client tab is for so you stop hunting for the same data in the wrong place.',
+            'Client access: setup links, passwords, and login as client' => 'How to help a client get into their account without weakening security or losing traceability.',
+            'Sending a payment link from client detail' => 'Prepare and send the right payment link so the next subscription step is backed by a real payment trail.',
+            'Activating a subscription after payment review' => 'What should be true before you activate a subscription and expose a profile publicly.',
             'Sync from WordPress: when it works and when it does not' => 'What a sync can fix, what it cannot fix, and when to stop retrying.',
             'Generating a payment link' => 'How to create the right payment link and what to verify before you send it.',
             'Adding a tour' => 'How to log a tour or visit correctly so other agents inherit clean context.',
@@ -257,13 +287,15 @@ class FaqSeeder extends Seeder
 # Welcome to Exotic CRM
 
 ## What this workspace is actually for
-Exotic CRM is where the team turns noisy operational signals into safe next actions.
+Exotic CRM is where sales, support, and operations turn messy profile, subscription, and payment activity into safe next actions.
 
 Use it to:
 
 - find work that needs attention
-- decide what is safe to change
-- leave the next agent enough context to continue
+- keep visibility on provider/client records across markets
+- create or activate subscriptions from real payment evidence
+- help users regain access, complete onboarding, and move forward without guesswork
+- leave the next agent enough context to continue cleanly
 
 If you rush to "fix" a record before you understand the current state, you usually create a second problem for the next agent.
 
@@ -273,7 +305,12 @@ Before you click update, send a message, or change subscription state:
 1. Check the market scope and date window.
 2. Read any warning banner, badge, or conflict label.
 3. Open the record behind the metric instead of guessing from the summary card.
-4. Decide whether you are looking at a sales follow-up, a service issue, or a data-repair case.
+4. Decide whether you are looking at a sales follow-up, a support issue, a subscription task, or a data-repair case.
+
+## What good CRM discipline looks like
+- Keep profile visibility, payment status, and subscription status aligned.
+- Treat market scope as part of the truth, not as a cosmetic filter.
+- Use notes, access tools, and follow-up actions so the next department does not restart the same case from zero.
 
 ## Three habits that prevent expensive mistakes
 - Treat WordPress state and CRM state as related, but not automatically identical.
@@ -536,6 +573,81 @@ Use this for predictable subscription follow-up:
 ## What to avoid
 Do not work recovery items with a campaign mindset. Recovery usually needs proof, not optimism.
 MD,
+            'Adding a client: CRM only vs WordPress provision' => <<<'MD'
+# Adding a client: CRM only vs WordPress provision
+
+## Start with the right onboarding mode
+The Add Client modal supports two different jobs:
+
+- **CRM only:** create a record for outreach, notes, deals, and tracking without provisioning WordPress access yet
+- **Provision in WordPress:** create the CRM record and the live WordPress account together
+
+Choosing the wrong mode creates cleanup work later.
+
+## Use CRM only when
+- the profile is still being qualified
+- sales or support needs a record before account setup is ready
+- you need to track communication, notes, or a pending payment first
+- the user is not ready to receive live account access
+
+## Use WordPress provision when
+- the account should be usable now
+- the client needs setup/login access immediately
+- you have at least one valid contact path such as email or phone
+
+## Required thinking before you save
+1. Pick the correct market first.
+2. Decide whether the profile should start as inactive, active, draft, or pending.
+3. Add the owner if the case already belongs to a real agent.
+4. Check whether a lead or client record already exists before creating another one.
+
+## Safe sequence
+1. Open `Clients` and click `Add Client`.
+2. Select the market.
+3. Choose `CRM only` or `Provision in WordPress`.
+4. Enter name, phone, email, city, and the starting status.
+5. Save the record.
+6. Open the client detail immediately and decide the next operational step: access, payment link, note, or subscription.
+
+## Do not do this
+- Do not provision WordPress access with no reachable email or phone.
+- Do not mark a profile active just because the record exists.
+- Do not create a new client if the case should still live as a lead.
+MD,
+            'Editing a client safely' => <<<'MD'
+# Editing a client safely
+
+## Why this needs discipline
+Editing a client is not just changing text on a screen. Some fields affect:
+
+- WordPress profile state
+- sales ownership
+- support follow-up
+- subscription interpretation
+
+## Edit in the right place
+- Use the client detail page for record-specific changes.
+- Use the correct tab instead of forcing everything through one screen.
+- Use `Sync from WP` only when the problem is stale WordPress data, not when the underlying business state is unclear.
+
+## Before you change anything important
+Check:
+
+1. market
+2. current profile status
+3. recent payment or subscription activity
+4. whether another agent already left context in notes or timeline
+
+## Safe habits
+- Make the smallest correct change.
+- Re-check the overview and relevant tab after saving.
+- Leave a note if the reason for the edit would not be obvious to the next person.
+
+## Escalate instead of editing blindly when
+- WordPress and CRM disagree on active state
+- the client has an ambiguous payment trail
+- the edit would change public visibility without enough evidence
+MD,
             'Search modes: exact, exact_missing, and fallback' => <<<'MD'
 # Search modes: exact, exact_missing, and fallback
 
@@ -730,6 +842,94 @@ This action is for cleaning truly stale or low-value records, not for hiding con
 ## Rule
 If the record is annoying but still operationally relevant, **do not delete it**. Clean data is good. Missing evidence is worse.
 MD,
+            'When to create a lead instead of a client' => <<<'MD'
+# When to create a lead instead of a client
+
+## Lead and client are not interchangeable
+Use the right record type from day one.
+
+- **Lead:** a prospect still being qualified, followed up, or reconciled
+- **Client:** an operational profile/account you intend to manage in the live CRM flow
+
+## Create a lead when
+- sales is still qualifying intent
+- the person came in through conversation or outbound follow-up
+- you are not ready to provision a live profile/account
+- the next action is ownership, follow-up, or conversion, not profile management
+
+## Create a client when
+- support or sales is managing a real provider profile
+- onboarding has started
+- you need subscriptions, access tools, or profile-state workflows
+- the case belongs in live operational support, not prospect tracking
+
+## Why this matters
+If you create a client too early:
+
+- the clients workspace becomes noisy
+- duplicate records become more likely
+- support inherits a record that is not really operational yet
+
+## Quick rule
+If the next action is mostly qualification, keep it as a lead.
+If the next action is mostly account/profile management, create or convert to client.
+MD,
+            'Converting a lead to a client' => <<<'MD'
+# Converting a lead to a client
+
+## Convert when the case becomes operational
+Conversion is the point where a prospect stops being just pipeline and starts being an active onboarding or support case.
+
+## Before converting
+Check:
+
+1. market is correct
+2. phone and email are usable
+3. there is not already a matching client record
+4. the assigned owner and latest notes tell the same story
+
+## What a good conversion preserves
+- sales context
+- ownership
+- contact details
+- auditability of why the move happened
+
+## After converting
+Open the new client record and decide the next concrete action:
+
+- send access
+- create a payment link
+- start a subscription path
+- leave an onboarding note
+
+## Do not convert just to tidy the pipeline
+Convert because the workflow genuinely changed, not because the lead list feels messy.
+MD,
+            'Assigning and archiving leads with discipline' => <<<'MD'
+# Assigning and archiving leads with discipline
+
+## Assignment is a promise
+When you assign a lead, you are saying who owns the next action.
+
+That means:
+
+- the owner should be real, not placeholder
+- the reason should make sense
+- reassignment should happen for operational need, not convenience
+
+## Archive when the lead is no longer active pipeline work
+Archive is appropriate when:
+
+- the lead is no longer actionable
+- follow-up is complete and there is no live opportunity
+- the record is being closed out with a clear reason
+
+## Do not archive to hide weak follow-up
+If the lead still needs a call, message, or decision, it should usually stay active with an owner.
+
+## Best habit
+Whenever you assign or archive, write the reason as if another agent will read it tomorrow and ask, "Would I understand what happened here?"
+MD,
             'Tour of the client tabs' => <<<'MD'
 # Tour of the client tabs
 
@@ -752,6 +952,113 @@ Do not stay in one tab too long. Good client review usually means moving between
 4. notes or timeline
 
 That is how you avoid acting on half the picture.
+MD,
+            'Client access: setup links, passwords, and login as client' => <<<'MD'
+# Client access: setup links, passwords, and login as client
+
+## What Client access is for
+This drawer exists to help a user get into their account without leaving a weak security trail behind.
+
+## The recommended default
+Use:
+
+- **Setup link**
+- **Email + SMS**
+- **Send now**
+
+That is the safest normal onboarding path.
+
+## What each quick action is for
+- **Open profile:** confirm what public page the user should reach
+- **Log in as client:** reproduce an account-side issue without asking the client to screen-record everything
+- **Reset & copy credentials:** controlled fallback when setup-link flow is not enough
+
+## Safe workflow
+1. Confirm you are on the correct client record.
+2. Open `Client access`.
+3. Check the WordPress username, login URL, and setup link availability.
+4. Send setup access first unless there is a strong reason to use a temporary password.
+5. Log the reason clearly.
+
+## Use temporary passwords carefully
+Temporary passwords are a fallback, not the first choice.
+
+If you use one:
+
+- share it through the intended channel
+- tell the user to reset it after first login
+- do not leave the password sitting in chat notes or loose screenshots
+
+## Use "log in as client" for diagnosis, not browsing
+Open a client session when you need to reproduce:
+
+- edit-profile issues
+- access complaints
+- account-state confusion
+
+Do not make silent changes in the client session without noting why.
+MD,
+            'Sending a payment link from client detail' => <<<'MD'
+# Sending a payment link from client detail
+
+## What this action is for
+Use the `Payment link` button when the next safe step is to collect money through a controlled payment flow.
+
+## Confirm these four things first
+1. correct client
+2. correct market
+3. whether this is a new sale, renewal, or recovery case
+4. what should happen after payment succeeds
+
+## Why this matters
+The payment link is not just a message. It creates expectation for:
+
+- the client
+- support
+- sales follow-up
+- the subscription path that should happen next
+
+## Safe sequence
+1. Open the client detail page.
+2. Click `Payment link`.
+3. Review the intended amount and context.
+4. Send or prepare the link.
+5. Leave enough context so another agent knows why it was sent.
+
+## Important rule
+A sent payment link is **not** the same as a confirmed payment.
+Do not activate a subscription or declare the case complete until the payment evidence is real.
+MD,
+            'Activating a subscription after payment review' => <<<'MD'
+# Activating a subscription after payment review
+
+## Activation should follow evidence
+New subscriptions remain pending until someone verifies that the payment and subscription story match.
+
+## Before you activate
+Check:
+
+1. the payment belongs to this client
+2. the market and plan make sense
+3. there is no duplicate or competing subscription path
+4. the activation will not create a WordPress/CRM state conflict
+
+## What good activation looks like
+- the payment record is real
+- the subscription dates and plan are intentional
+- the next agent can understand why activation happened
+- public profile state will not surprise support five minutes later
+
+## Common mistake
+Do not activate because the payment "probably" belongs here.
+Activation is where uncertainty becomes live state. Treat it carefully.
+
+## If the payment picture is weak
+Do one of these instead:
+
+- hold the subscription in pending
+- reconcile the payment first
+- escalate for review
 MD,
             'Sync from WordPress: when it works and when it does not' => <<<'MD'
 # Sync from WordPress: when it works and when it does not

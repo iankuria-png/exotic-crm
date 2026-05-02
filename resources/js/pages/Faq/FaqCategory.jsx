@@ -6,6 +6,7 @@ import faqApi from '../../services/faqApi';
 import useFaqAdmin from '../../hooks/useFaqAdmin';
 import NewArticleSlideOver from '../../components/faq/NewArticleSlideOver';
 import StatusChip from '../../components/faq/StatusChip';
+import { FaqIconBubble, FaqWorkflowPill, resolveFaqArticleVisual, resolveFaqCategoryVisual } from '../../components/faq/faqVisuals';
 import { useToast } from '../../components/ToastProvider';
 
 export default function FaqCategory() {
@@ -59,13 +60,26 @@ export default function FaqCategory() {
             />
 
             <section className="crm-surface px-5 py-5">
+                {category ? (
+                    <div className="mb-5 flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-4">
+                        <FaqIconBubble visual={resolveFaqCategoryVisual(category)} className="h-12 w-12" />
+                        <div>
+                            <FaqWorkflowPill visual={resolveFaqCategoryVisual(category)} />
+                            <p className="mt-2 text-sm leading-6 text-slate-600">{category.description}</p>
+                        </div>
+                    </div>
+                ) : null}
                 <div className="space-y-3">
                     {articles.map((article) => (
                         <Link key={article.id} to={`/faq/a/${article.slug}`} className="block rounded-2xl border border-slate-200 px-4 py-4 transition hover:border-teal-200 hover:bg-teal-50/50">
                             <div className="flex items-start justify-between gap-3">
-                                <div>
-                                    <p className="text-sm font-semibold text-slate-900">{article.title}</p>
-                                    <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">{article.summary}</p>
+                                <div className="flex items-start gap-3">
+                                    <FaqIconBubble visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(category)} className="mt-0.5 h-10 w-10 rounded-xl" />
+                                    <div>
+                                        <FaqWorkflowPill visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(category)} />
+                                        <p className="mt-2 text-sm font-semibold text-slate-900">{article.title}</p>
+                                        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">{article.summary}</p>
+                                    </div>
                                 </div>
                                 {admin.isAdmin ? <StatusChip status={article.status} /> : null}
                             </div>
