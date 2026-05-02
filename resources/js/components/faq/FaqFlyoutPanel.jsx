@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export default function FaqFlyoutPanel({
     open,
@@ -28,7 +29,7 @@ export default function FaqFlyoutPanel({
         return null;
     }
 
-    return (
+    return createPortal(
         <div className="fixed inset-0 z-[110] bg-slate-950/30 backdrop-blur-[2px] sm:p-4" onClick={onClose}>
             <div className="flex h-full w-full items-start justify-end pt-14 sm:pt-16">
                 <section
@@ -61,6 +62,7 @@ export default function FaqFlyoutPanel({
                     {footer ? <div className="shrink-0 border-t border-slate-100 px-5 py-4">{footer}</div> : null}
                 </section>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
