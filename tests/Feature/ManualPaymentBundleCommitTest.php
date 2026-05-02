@@ -141,6 +141,74 @@ class ManualPaymentBundleCommitTest extends TestCase
         ])->assertForbidden();
     }
 
+    public function test_commit_rolls_back_created_rows_when_later_child_activation_fails_and_compensation_succeeds(): void
+    {
+        [$platform, $admin] = $this->createAuthContext('admin');
+        $bundleItems = $this->createBundleItems($platform);
+
+        Http::fake(function ($request) {
+            $url = (string) $request->url();
+
+            if (str_contains($url, '/clients/93000/activate')) {
+                return Http::response(['ok' => true], 200);
+            }
+
+            if (str_contains($url, '/clients/93001/activate')) {
+                return Http::response(['message' => 'WordPress activation failed.'], 500);
+            }
+
+            if (str_contains($url, '/clients/93000/deactivate')) {
+                return Http::response(['ok' => true], 200);
+            }
+
+            return Http::response(['ok' => true], 200);
+        });
+
+        app(WalletSettingsService::class)->updateDiscountConfig([
+            'max_percentage_by_platform' => [
+                (string) $platform->id => 20,
+            ],
+        ], $admin->id);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->postJson('/api/crm/manual-payment-bundles/commit', [
+            'platform_id' => $platform->id,
+            'reference_root' => 'FAILROLL1',
+            'total_amount' => 5000,
+            'idempotency_key' => (string) Str::uuid(),
+            'items' => [
+                [
+                    'client_id' => $bundleItems[0]['client']->id,
+                    'product_id' => $bundleItems[0]['product']->id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
+                [
+                    'client_id' => $bundleItems[1]['client']->id,
+                    'product_id' => $bundleItems[1]['product']->id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
+            ],
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors('bundle');
+
+        $this->assertDatabaseMissing('manual_payment_bundles', [
+            'reference_root' => 'FAILROLL1',
+        ]);
+
+        $this->assertDatabaseMissing('payments', [
+            'transaction_reference' => 'FAILROLL1-1',
+        ]);
+
+        $this->assertDatabaseMissing('deals', [
+            'payment_reference' => 'FAILROLL1-1',
+        ]);
+    }
+
     /**
      * @return array{0: Platform, 1: User}
      */

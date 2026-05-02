@@ -83,9 +83,15 @@ class SubscriptionProvisioningService
             'expires_at' => $expiresAt,
         ]));
 
-        $syncService = new ClientSyncService($platform);
-        $syncedClient = $syncService->syncOne($wpPostId);
-        $deal->setRelation('client', $syncedClient);
+        if (($options['sync_client'] ?? true) !== false) {
+            $syncService = new ClientSyncService($platform);
+            $syncedClient = $syncService->syncOne($wpPostId);
+            $deal->setRelation('client', $syncedClient);
+        }
+
+        $timelineContext = is_array($options['timeline_context'] ?? null)
+            ? $options['timeline_context']
+            : [];
 
         if (($options['emit_payment_received_timeline'] ?? false) && $payment) {
             TimelineEvent::create([
@@ -94,13 +100,13 @@ class SubscriptionProvisioningService
                 'entity_id' => (int) $client->id,
                 'event_type' => 'payment_received',
                 'actor_id' => $actorId,
-                'content' => [
+                'content' => array_merge([
                     'payment_id' => (int) $payment->id,
                     'deal_id' => (int) $deal->id,
                     'amount' => (float) $payment->amount,
                     'currency' => $payment->currency ?: ($platform->currency_code ?: 'KES'),
                     'transaction_reference' => $payment->transaction_reference,
-                ],
+                ], $timelineContext),
                 'created_at' => now(),
             ]);
         }
@@ -112,13 +118,13 @@ class SubscriptionProvisioningService
                 'entity_id' => (int) $client->id,
                 'event_type' => 'profile_activated',
                 'actor_id' => $actorId,
-                'content' => [
+                'content' => array_merge([
                     'deal_id' => (int) $deal->id,
                     'plan_type' => (string) $deal->plan_type,
                     'duration_days' => $durationDays,
                     'expires_at' => $expiresAt->toDateTimeString(),
                     'payment_method' => $paymentMethod,
-                ],
+                ], $timelineContext),
                 'created_at' => now(),
             ]);
         }
@@ -130,13 +136,13 @@ class SubscriptionProvisioningService
                 'entity_id' => (int) $deal->id,
                 'event_type' => 'deal_activated',
                 'actor_id' => $actorId,
-                'content' => [
+                'content' => array_merge([
                     'payment_id' => $payment?->id,
                     'duration_days' => $durationDays,
                     'activated_at' => $activatedAt->toDateTimeString(),
                     'expires_at' => $expiresAt->toDateTimeString(),
                     'payment_method' => $paymentMethod,
-                ],
+                ], $timelineContext),
                 'created_at' => now(),
             ]);
         }
@@ -230,6 +236,7 @@ class SubscriptionProvisioningService
         }
 
         $payment->forceFill(array_filter([
+            'status' => $options['payment_status'] ?? null,
             'client_id' => (int) $client->id,
             'deal_id' => (int) $deal->id,
             'start_date' => $options['activated_at'] ?? $deal->activated_at,

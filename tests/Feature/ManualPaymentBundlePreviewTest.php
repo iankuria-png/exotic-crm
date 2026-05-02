@@ -6,6 +6,7 @@ use App\Models\Client;
 use App\Models\Deal;
 use App\Models\ManualPaymentBundle;
 use App\Models\Platform;
+use App\Models\Product;
 use App\Models\User;
 use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,8 +30,18 @@ class ManualPaymentBundlePreviewTest extends TestCase
             'reference_root' => '  smoke001  ',
             'total_amount' => 5000,
             'items' => [
-                ['deal_id' => $pendingDeal->id, 'allocated_amount' => 2500],
-                ['deal_id' => $expiredDeal->id, 'allocated_amount' => 2500],
+                [
+                    'client_id' => $pendingDeal->client_id,
+                    'product_id' => $pendingDeal->product_id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
+                [
+                    'client_id' => $expiredDeal->client_id,
+                    'product_id' => $expiredDeal->product_id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
             ],
         ]);
 
@@ -39,9 +50,7 @@ class ManualPaymentBundlePreviewTest extends TestCase
             ->assertJsonPath('allocated_total', 5000)
             ->assertJsonPath('shortfall_amount', 0)
             ->assertJsonPath('unallocated_amount', 0)
-            ->assertJsonPath('items.0.action', 'activate')
             ->assertJsonPath('items.0.child_reference', 'SMOKE001-1')
-            ->assertJsonPath('items.1.action', 'renew')
             ->assertJsonPath('items.1.child_reference', 'SMOKE001-2');
     }
 
@@ -69,8 +78,18 @@ class ManualPaymentBundlePreviewTest extends TestCase
             'reference_root' => 'MIXED001',
             'total_amount' => 5000,
             'items' => [
-                ['deal_id' => $pendingDeal->id, 'allocated_amount' => 2500],
-                ['deal_id' => $otherDeal->id, 'allocated_amount' => 2500],
+                [
+                    'client_id' => $pendingDeal->client_id,
+                    'product_id' => $pendingDeal->product_id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
+                [
+                    'client_id' => $otherDeal->client_id,
+                    'product_id' => $otherDeal->product_id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
             ],
         ]);
 
@@ -95,7 +114,12 @@ class ManualPaymentBundlePreviewTest extends TestCase
             'reference_root' => 'EXISTING001',
             'total_amount' => 2500,
             'items' => [
-                ['deal_id' => $pendingDeal->id, 'allocated_amount' => 2500],
+                [
+                    'client_id' => $pendingDeal->client_id,
+                    'product_id' => $pendingDeal->product_id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 2500,
+                ],
             ],
         ]);
 
@@ -121,7 +145,12 @@ class ManualPaymentBundlePreviewTest extends TestCase
             'reference_root' => 'DISC001',
             'total_amount' => 1500,
             'items' => [
-                ['deal_id' => $pendingDeal->id, 'allocated_amount' => 1500],
+                [
+                    'client_id' => $pendingDeal->client_id,
+                    'product_id' => $pendingDeal->product_id,
+                    'duration' => 'monthly',
+                    'allocated_amount' => 1500,
+                ],
             ],
         ]);
 
@@ -166,9 +195,22 @@ class ManualPaymentBundlePreviewTest extends TestCase
             'phone_normalized' => '254700000222',
         ]);
 
+        $productA = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'monthly_price' => 2500,
+            'currency' => 'KES',
+        ]);
+
+        $productB = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'monthly_price' => 2500,
+            'currency' => 'KES',
+        ]);
+
         $pendingDeal = Deal::factory()->create([
             'platform_id' => $platform->id,
             'client_id' => $clientA->id,
+            'product_id' => $productA->id,
             'status' => 'pending',
             'amount' => 2500,
             'currency' => 'KES',
@@ -178,6 +220,7 @@ class ManualPaymentBundlePreviewTest extends TestCase
         $expiredDeal = Deal::factory()->create([
             'platform_id' => $platform->id,
             'client_id' => $clientB->id,
+            'product_id' => $productB->id,
             'status' => 'expired',
             'amount' => 2500,
             'currency' => 'KES',

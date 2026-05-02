@@ -27,7 +27,8 @@ class ManualPaymentBundleService
         private readonly DealPaymentService $dealPaymentService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly AuditService $auditService,
-        private readonly SubscriptionDeactivationService $subscriptionDeactivationService
+        private readonly SubscriptionDeactivationService $subscriptionDeactivationService,
+        private readonly SubscriptionProvisioningService $subscriptionProvisioningService
     ) {
     }
 
@@ -128,6 +129,7 @@ class ManualPaymentBundleService
                 $targetDeal->forceFill([
                     'origin' => 'manual_payment_bundle',
                     'payment_reference' => (string) $item['child_reference'],
+                    'amount' => (float) $item['allocated_amount'],
                     'discount_percentage' => (float) $item['discount_percentage'] > 0 ? (float) $item['discount_percentage'] : null,
                     'original_amount' => (float) $item['discount_percentage'] > 0 ? (float) $item['base_amount'] : null,
                     'discount_approved_by' => (float) $item['discount_percentage'] > 0 ? $actorId : null,
@@ -189,17 +191,32 @@ class ManualPaymentBundleService
         $preview = $draft['preview'];
         $activationFailures = [];
         $successfulActivations = [];
-        $wpSync = WpSyncService::forPlatform((int) $bundle->platform_id);
-
         foreach ($draftItems as $item) {
             try {
                 $deal = Deal::query()->findOrFail((int) $item['target_deal_id']);
-                $wpSync->activateClient(
-                    (int) $item['client_wp_post_id'],
-                    (string) $deal->plan_type,
-                    (int) $item['duration_days'],
-                    (int) $deal->id
-                );
+                $payment = Payment::query()->findOrFail((int) $item['payment_id']);
+
+                $this->subscriptionProvisioningService->activateDeal($deal, [
+                    'payment' => $payment,
+                    'payment_method' => 'manual',
+                    'duration_days' => (int) $item['duration_days'],
+                    'payment_reference' => (string) $item['child_reference'],
+                    'is_free_trial' => false,
+                    'actor_id' => $actorId,
+                    'payment_status' => 'completed',
+                    'match_confidence' => 'manual',
+                    'confirmed_by' => $actorId,
+                    'confirmed_at' => now(),
+                    'reconciliation_state' => 'manual_review',
+                    'sync_client' => false,
+                    'emit_profile_activated_timeline' => false,
+                    'emit_deal_activated_timeline' => false,
+                    'timeline_context' => [
+                        'manual_payment_bundle_id' => (int) $bundle->id,
+                        'reference_root' => (string) $bundle->reference_root,
+                    ],
+                ]);
+
                 $successfulActivations[] = $item;
             } catch (\Throwable $exception) {
                 $activationFailures[] = [
@@ -1075,12 +1092,12 @@ class ManualPaymentBundleService
                     ->pluck('target_deal_id')
                     ->all();
 
-                if ($paymentIds !== []) {
-                    Payment::query()->whereIn('id', $paymentIds)->delete();
-                }
-
                 if ($newDealIds !== []) {
                     Deal::query()->whereIn('id', $newDealIds)->delete();
+                }
+
+                if ($paymentIds !== []) {
+                    Payment::query()->whereIn('id', $paymentIds)->delete();
                 }
 
                 $bundle->delete();
