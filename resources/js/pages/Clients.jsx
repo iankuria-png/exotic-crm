@@ -1261,7 +1261,7 @@ export default function Clients() {
     const owners = ownersData?.owners || [];
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-4" data-tour="clients-root">
             <PageHeader
                 title="Clients"
                 subtitle={stats.total
@@ -1274,6 +1274,7 @@ export default function Clients() {
                                 type="button"
                                 onClick={openSmartDeleteDialog}
                                 className="crm-btn-danger"
+                                data-tour="clients-smart-delete"
                             >
                                 Smart delete
                             </button>
@@ -1333,7 +1334,7 @@ export default function Clients() {
 
             <p className="px-1 text-xs text-slate-500">Click a metric card to segment the table. Click the same card again to clear.</p>
 
-            <section className="crm-filter-row space-y-4">
+            <section className="crm-filter-row space-y-4" data-tour="clients-filters">
                 <div className="grid gap-3 xl:grid-cols-6">
                     <form onSubmit={handleSearch} className="min-w-0 xl:col-span-2">
                         <div className="flex flex-col gap-1">

@@ -3,6 +3,9 @@ import { Link, Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import { useAuth } from '../hooks/useAuth';
 import { useHeartbeat } from '../hooks/useHeartbeat';
+import HelpButton from '../components/faq/HelpButton';
+import FeedbackButton from '../components/faq/FeedbackButton';
+import Walkthrough from '../components/faq/Walkthrough';
 
 export default function MainLayout() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -45,20 +48,26 @@ export default function MainLayout() {
 
                     <p className="hidden text-sm font-medium text-slate-500 lg:block">Customer service workspace</p>
 
-                    {!isMarketing ? (
+                    <div className="flex items-center gap-2">
                         <div className="hidden items-center gap-2 sm:flex">
+                            <HelpButton />
+                            <FeedbackButton />
+                        </div>
+                        {!isMarketing ? (
+                            <div className="hidden items-center gap-2 sm:flex">
                             <Link to="/leads" className="crm-btn-secondary px-3 py-1.5 text-xs">
                                 New lead
                             </Link>
                             <Link to="/clients" className="crm-btn-primary px-3 py-1.5 text-xs">
                                 New client
                             </Link>
-                        </div>
-                    ) : null}
+                            </div>
+                        ) : null}
+                    </div>
                 </header>
 
                 {impersonation ? (
-                    <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 lg:px-6">
+                    <div data-tour="dashboard-impersonation-banner" className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 lg:px-6">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                             <p className="text-sm text-amber-900">
                                 Viewing CRM as <span className="font-semibold">{user?.name}</span> ({String(user?.role || '').replace('_', ' ')}) from {impersonation.impersonator?.name}.
@@ -78,6 +87,7 @@ export default function MainLayout() {
                 <main className="flex-1 overflow-y-auto p-4 lg:p-6">
                     <Outlet />
                 </main>
+                <Walkthrough />
             </div>
         </div>
     );

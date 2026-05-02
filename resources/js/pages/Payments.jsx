@@ -2141,7 +2141,7 @@ export default function Payments() {
     ];
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-4" data-tour="payments-untracked-queue">
             <PageHeader
                 title="Payments"
                 subtitle={data?.total ? `${data.total.toLocaleString()} payment records` : 'Incoming payments and match queue'}
@@ -2159,6 +2159,7 @@ export default function Payments() {
                             type="button"
                             onClick={() => setImportDrawerOpen(true)}
                             className="crm-btn-secondary px-3 py-2"
+                            data-tour="payments-import-panel"
                         >
                             Upload payments
                         </button>
@@ -2166,6 +2167,7 @@ export default function Payments() {
                             onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue', preview: null, step: 'reason' })}
                             disabled={batchMatchMutation.isPending}
                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            data-tour="payments-auto-match-queue"
                         >
                             {batchMatchMutation.isPending ? 'Matching...' : 'Auto-match queue'}
                         </button>

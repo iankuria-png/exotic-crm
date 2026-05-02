@@ -18,6 +18,7 @@ class DatabaseSeeder extends Seeder
             PaymentTemplateSeeder::class,
             FollowUpTemplateSeeder::class,
             WelcomeTemplateSeeder::class,
+            FaqSeeder::class,
         ]);
     }
 }

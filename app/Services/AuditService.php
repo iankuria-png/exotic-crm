@@ -44,6 +44,40 @@ class AuditService
         }
     }
 
+    public function recordSystem(array $payload): ?AuditLog
+    {
+        try {
+            $entityId = (int) ($payload['entity_id'] ?? 0);
+            $entityType = (string) ($payload['entity_type'] ?? '');
+            $action = $this->normalizeAction((string) ($payload['action'] ?? ''));
+
+            if ($entityId <= 0 || $entityType === '' || $action === '' || !preg_match('/^faq_/', $entityType)) {
+                Log::warning('AuditService skipped invalid system payload', ['payload' => $payload]);
+                return null;
+            }
+
+            return AuditLog::create([
+                'platform_id' => null,
+                'actor_id' => $this->resolveActorId($payload['actor_id'] ?? null),
+                'action' => $action,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'before_state' => $this->normalizeState($payload['before_state'] ?? null),
+                'after_state' => $this->normalizeState($payload['after_state'] ?? null),
+                'reason' => $this->normalizeReason($payload['reason'] ?? null),
+                'ip_address' => $payload['ip_address'] ?? null,
+                'created_at' => $payload['created_at'] ?? now(),
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('AuditService failed to write system audit log', [
+                'error' => $exception->getMessage(),
+                'payload' => $payload,
+            ]);
+
+            return null;
+        }
+    }
+
     private function normalizeAction(string $action): string
     {
         $action = strtolower(trim($action));
@@ -90,6 +124,27 @@ class AuditService
     ): ?AuditLog {
         return $this->record([
             'platform_id' => $platformId,
+            'actor_id' => optional($request->user())->id,
+            'action' => $action,
+            'entity_type' => $entityType,
+            'entity_id' => $entityId,
+            'before_state' => $beforeState,
+            'after_state' => $afterState,
+            'reason' => $reason,
+            'ip_address' => $request->ip(),
+        ]);
+    }
+
+    public function fromSystemRequest(
+        Request $request,
+        string $action,
+        string $entityType,
+        int $entityId,
+        ?array $beforeState = null,
+        ?array $afterState = null,
+        ?string $reason = null
+    ): ?AuditLog {
+        return $this->recordSystem([
             'actor_id' => optional($request->user())->id,
             'action' => $action,
             'entity_type' => $entityType,

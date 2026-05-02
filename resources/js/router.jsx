@@ -15,6 +15,12 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
 import Team from './pages/Team';
+import FaqHome from './pages/Faq/FaqHome';
+import FaqCategory from './pages/Faq/FaqCategory';
+import FaqArticle from './pages/Faq/FaqArticle';
+import FeedbackHub from './pages/Faq/FeedbackHub';
+import FeedbackNew from './pages/Faq/FeedbackNew';
+import FeedbackDetail from './pages/Faq/FeedbackDetail';
 import { useAuth } from './hooks/useAuth';
 
 function ProtectedRoute({ children }) {
@@ -35,7 +41,11 @@ function ProtectedRoute({ children }) {
 
     if (user.role === 'marketing') {
         const path = location.pathname || '/';
-        const allowed = path === '/' || path.startsWith('/clients') || path.startsWith('/push-campaigns') || path.startsWith('/team');
+        const allowed = path === '/'
+            || path.startsWith('/clients')
+            || path.startsWith('/push-campaigns')
+            || path.startsWith('/team')
+            || path.startsWith('/faq');
 
         if (!allowed) {
             return <Navigate to="/push-campaigns" replace />;
@@ -78,6 +88,12 @@ export default function AppRouter() {
                 <Route path="campaigns" element={<Campaigns />} />
                 <Route path="push-campaigns" element={<PushCampaigns />} />
                 <Route path="team" element={<Team />} />
+                <Route path="faq" element={<FaqHome />} />
+                <Route path="faq/c/:slug" element={<FaqCategory />} />
+                <Route path="faq/a/:slug" element={<FaqArticle />} />
+                <Route path="faq/feedback" element={<FeedbackHub />} />
+                <Route path="faq/feedback/new" element={<FeedbackNew />} />
+                <Route path="faq/feedback/:id" element={<FeedbackDetail />} />
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />

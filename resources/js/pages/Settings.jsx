@@ -20,6 +20,7 @@ import ScraperCreateModal from '../components/settings/ScraperCreateModal';
 import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
+import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
 import { useAuth } from '../hooks/useAuth';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import { useToast } from '../components/ToastProvider';
@@ -27,6 +28,7 @@ import { useToast } from '../components/ToastProvider';
 const baseTabs = [
     { id: 'integrations', label: 'Integrations' },
     { id: 'billing', label: 'Billing' },
+    { id: 'faq', label: 'FAQ & Feedback' },
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
@@ -7582,6 +7584,7 @@ export default function Settings() {
             ) : null}
 
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
+            {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}

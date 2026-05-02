@@ -2080,7 +2080,7 @@ export default function ClientDetail() {
     const isSynced = canSyncFromWp && Boolean(client.last_synced_at);
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-4" data-tour="client-detail-root">
             <button
                 onClick={() => navigate('/clients')}
                 className="inline-flex items-center gap-1 text-sm font-medium text-teal-700 transition hover:text-teal-800"
@@ -2264,6 +2264,7 @@ export default function ClientDetail() {
                                         type="button"
                                         onClick={openClientDeactivationDialog}
                                         className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
+                                        data-tour="client-detail-subscription-actions"
                                     >
                                         <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -2276,6 +2277,7 @@ export default function ClientDetail() {
                                         type="button"
                                         onClick={() => setShowDealModal(true)}
                                         className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800"
+                                        data-tour="client-detail-new-subscription"
                                     >
                                         <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />

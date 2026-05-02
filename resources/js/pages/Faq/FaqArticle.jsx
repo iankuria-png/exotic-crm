@@ -1,0 +1,231 @@
+import React, { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import PageHeader from '../../components/PageHeader';
+import faqApi from '../../services/faqApi';
+import MarkdownRenderer from '../../components/faq/MarkdownRenderer';
+import HelpfulWidget from '../../components/faq/HelpfulWidget';
+import ArticleCtaButton from '../../components/faq/ArticleCtaButton';
+import FeedbackDialog from '../../components/faq/FeedbackDialog';
+import AdminEditBar from '../../components/faq/AdminEditBar';
+import InlineTiptapEditor from '../../components/faq/InlineTiptapEditor';
+import CtaManagerDialog from '../../components/faq/CtaManagerDialog';
+import MediaManagerDialog from '../../components/faq/MediaManagerDialog';
+import WalkthroughRecorder from '../../components/faq/WalkthroughRecorder';
+import StatusChip from '../../components/faq/StatusChip';
+import useFaqAdmin from '../../hooks/useFaqAdmin';
+import { useToast } from '../../components/ToastProvider';
+
+export default function FaqArticle() {
+    const { slug } = useParams();
+    const [searchParams] = useSearchParams();
+    const [feedbackOpen, setFeedbackOpen] = useState(false);
+    const [editorOpen, setEditorOpen] = useState(false);
+    const [ctaOpen, setCtaOpen] = useState(false);
+    const [mediaOpen, setMediaOpen] = useState(false);
+    const [walkthroughOpen, setWalkthroughOpen] = useState(false);
+    const admin = useFaqAdmin();
+    const queryClient = useQueryClient();
+    const toast = useToast();
+    const navigate = useNavigate();
+
+    const articleQuery = useQuery({
+        queryKey: ['faq-article', slug, searchParams.get('search_log_id') || ''],
+        queryFn: () => faqApi.getArticle(slug, { search_log_id: searchParams.get('search_log_id') || undefined }),
+    });
+    const walkthroughsQuery = useQuery({
+        queryKey: ['faq-walkthroughs'],
+        queryFn: () => faqApi.listWalkthroughs(),
+        enabled: admin.isAdmin,
+    });
+
+    const article = articleQuery.data?.article;
+    const articleSlug = article?.slug || slug;
+
+    const updateMutation = useMutation({
+        mutationFn: (payload) => faqApi.updateArticle(articleSlug, payload),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['faq-article', slug] });
+            queryClient.invalidateQueries({ queryKey: ['faq-articles'] });
+            toast.success('Article updated.');
+        },
+        onError: () => toast.error('Unable to update article.'),
+    });
+    const draftMutation = useMutation({
+        mutationFn: (payload) => faqApi.saveDraft(articleSlug, payload),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['faq-article', slug] });
+            queryClient.invalidateQueries({ queryKey: ['faq-articles'] });
+            toast.success('Draft saved.');
+        },
+        onError: () => toast.error('Unable to save draft.'),
+    });
+    const publishMutation = useMutation({
+        mutationFn: async (payload) => {
+            if (payload) {
+                await faqApi.saveDraft(articleSlug, payload);
+            }
+            return faqApi.publishArticle(articleSlug);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['faq-article', slug] });
+            queryClient.invalidateQueries({ queryKey: ['faq-articles'] });
+            setEditorOpen(false);
+            toast.success('Article published.');
+        },
+        onError: () => toast.error('Unable to publish article.'),
+    });
+    const deleteMutation = useMutation({
+        mutationFn: () => faqApi.deleteArticle(articleSlug),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['faq-articles'] });
+            toast.success('Article deleted.');
+            navigate('/faq');
+        },
+        onError: () => toast.error('Unable to delete article.'),
+    });
+    const duplicateMutation = useMutation({
+        mutationFn: () => faqApi.duplicateArticle(articleSlug),
+        onSuccess: ({ article: copy }) => {
+            toast.success('Article duplicated.');
+            navigate(`/faq/a/${copy.slug}`);
+        },
+        onError: () => toast.error('Unable to duplicate article.'),
+    });
+    const uploadMediaMutation = useMutation({
+        mutationFn: ({ file, caption }) => {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (caption) formData.append('caption', caption);
+            return faqApi.uploadMedia(articleSlug, formData);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['faq-article', slug] });
+            toast.success('Media uploaded.');
+        },
+        onError: () => toast.error('Unable to upload media.'),
+    });
+    const deleteMediaMutation = useMutation({
+        mutationFn: (mediaId) => faqApi.deleteMedia(articleSlug, mediaId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['faq-article', slug] });
+            toast.success('Media deleted.');
+        },
+        onError: () => toast.error('Unable to delete media.'),
+    });
+    const createWalkthroughMutation = useMutation({
+        mutationFn: faqApi.createWalkthrough,
+        onSuccess: async ({ walkthrough }) => {
+            const nextCtas = [
+                ...(article?.ctas || []),
+                {
+                    kind: 'walkthrough',
+                    label: 'Start walkthrough',
+                    target_path: article?.ctas?.[0]?.target_path || '/faq',
+                    walkthrough_id: walkthrough.slug,
+                },
+            ];
+            await faqApi.updateArticle(articleSlug, { ctas: nextCtas });
+            queryClient.invalidateQueries({ queryKey: ['faq-article', slug] });
+            queryClient.invalidateQueries({ queryKey: ['faq-walkthroughs'] });
+            setWalkthroughOpen(false);
+            toast.success('Walkthrough created and attached.');
+        },
+        onError: () => toast.error('Unable to create walkthrough.'),
+    });
+
+    return (
+        <div className="space-y-4">
+            <PageHeader
+                title={article?.title || 'Article'}
+                subtitle={article?.summary || 'Knowledge base article'}
+                actions={article?.category ? <StatusChip status={article.category.crm_page || article.status} /> : null}
+            />
+
+            {admin.canEdit && article ? (
+                <AdminEditBar
+                    article={article}
+                    onEdit={() => setEditorOpen(true)}
+                    onOpenCtas={() => setCtaOpen(true)}
+                    onOpenMedia={() => setMediaOpen(true)}
+                    onOpenWalkthroughs={() => setWalkthroughOpen(true)}
+                    onPublish={() => publishMutation.mutate()}
+                    onDuplicate={() => duplicateMutation.mutate()}
+                    onDelete={() => {
+                        if (window.confirm('Delete this FAQ article?')) {
+                            deleteMutation.mutate();
+                        }
+                    }}
+                />
+            ) : null}
+
+            <InlineTiptapEditor
+                article={article}
+                open={editorOpen}
+                onCancel={() => setEditorOpen(false)}
+                onSaveDraft={(payload) => draftMutation.mutate(payload)}
+                onPublish={(payload) => publishMutation.mutate(payload)}
+            />
+
+            <section className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+                <article className="crm-surface space-y-5 px-5 py-5">
+                    {article?.media?.length ? (
+                        <div className="grid gap-3 md:grid-cols-2">
+                            {article.media.map((media) => (
+                                media.kind === 'video'
+                                    ? <video key={media.id} src={media.url} controls className="w-full rounded-2xl border border-slate-200" />
+                                    : <img key={media.id} src={media.url} alt={media.caption || ''} className="w-full rounded-2xl border border-slate-200 object-cover" />
+                            ))}
+                        </div>
+                    ) : null}
+                    <MarkdownRenderer>{article?.body}</MarkdownRenderer>
+                </article>
+
+                <aside className="space-y-4">
+                    <section className="crm-surface space-y-4 px-5 py-5">
+                        <div>
+                            <p className="text-sm font-semibold text-slate-900">Next steps</p>
+                            <p className="text-sm text-slate-500">Deep links, prefilled actions, and walkthroughs for this topic.</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {(article?.ctas || []).map((cta) => <ArticleCtaButton key={cta.id} cta={cta} />)}
+                        </div>
+                    </section>
+                    <HelpfulWidget article={article} />
+                    <section className="crm-surface space-y-3 px-5 py-5">
+                        <div>
+                            <p className="text-sm font-semibold text-slate-900">Report a gap</p>
+                            <p className="text-sm text-slate-500">Tell admins what is missing while the context is still fresh.</p>
+                        </div>
+                        <button type="button" onClick={() => setFeedbackOpen(true)} className="crm-btn-secondary px-3 py-2 text-sm">Suggest edit or report bug</button>
+                    </section>
+                </aside>
+            </section>
+
+            <FeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} article={article} />
+            <CtaManagerDialog
+                open={ctaOpen}
+                article={article}
+                walkthroughs={walkthroughsQuery.data?.walkthroughs || []}
+                onClose={() => setCtaOpen(false)}
+                onSave={(ctas) => {
+                    updateMutation.mutate({ ctas });
+                    setCtaOpen(false);
+                }}
+            />
+            <MediaManagerDialog
+                open={mediaOpen}
+                article={article}
+                onClose={() => setMediaOpen(false)}
+                onUpload={(file, caption) => uploadMediaMutation.mutate({ file, caption })}
+                onDelete={(mediaId) => deleteMediaMutation.mutate(mediaId)}
+            />
+            <WalkthroughRecorder
+                open={walkthroughOpen}
+                articleTitle={article?.title}
+                onClose={() => setWalkthroughOpen(false)}
+                onSave={(payload) => createWalkthroughMutation.mutate(payload)}
+            />
+        </div>
+    );
+}

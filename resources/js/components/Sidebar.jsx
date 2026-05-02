@@ -1,6 +1,8 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
+import faqApi from '../services/faqApi';
 
 const brandLogo = '/Exotic%20Online%20Adv%20Logo-01-ChOpI09X.png';
 
@@ -38,9 +40,27 @@ const pushCampaignNavItem = {
     icon: 'M4.5 6.75h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-3l-3 2.25v-2.25h-9A1.5 1.5 0 0 1 3 15.75v-7.5a1.5 1.5 0 0 1 1.5-1.5Z',
 };
 
+const resourcesGroup = {
+    title: 'Resources',
+    items: [
+        { to: '/faq', label: 'FAQ', icon: 'M11.25 4.5c-3.071 0-5.625 2.112-5.625 4.875 0 1.62.866 2.86 2.138 3.744.437.304.862.76.862 1.31v.321a.75.75 0 0 0 1.5 0v-.321c0-1.276-.673-2.269-1.506-2.847-1.036-.72-1.494-1.476-1.494-2.207 0-1.73 1.642-3.375 4.125-3.375 2.263 0 3.75 1.272 3.75 3 0 1.363-.787 2.29-2.25 3.218-.85.54-1.5 1.513-1.5 2.532v.75a.75.75 0 0 0 1.5 0v-.75c0-.424.283-.968.804-1.3 1.73-1.097 2.946-2.497 2.946-4.45 0-2.682-2.26-4.5-5.25-4.5ZM12 18.75a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25Z' },
+        { to: '/faq/feedback', label: 'Feedback', icon: 'M3.75 6.75h16.5v8.25H9.75l-3.75 3v-3h-2.25V6.75Z' },
+    ],
+};
+
 export default function Sidebar({ onClose }) {
     const { user, logout, impersonation } = useAuth();
     const role = user?.role || '';
+    const feedbackMetaQuery = useQuery({
+        queryKey: ['sidebar-faq-feedback-meta', role],
+        queryFn: () => faqApi.listFeedback({ per_page: 1, tab: role === 'admin' || role === 'sub_admin' ? undefined : 'mine' }),
+        enabled: Boolean(user),
+        staleTime: 30_000,
+    });
+    const feedbackMeta = feedbackMetaQuery.data?.meta || {};
+    const showFeedbackDot = role === 'admin' || role === 'sub_admin'
+        ? Number(feedbackMeta.admin_new_count || 0) > 0
+        : Number(feedbackMeta.submitter_update_count || 0) > 0;
 
     const filteredNavGroups = role === 'marketing'
         ? [
@@ -56,6 +76,7 @@ export default function Sidebar({ onClose }) {
                 title: 'Campaigns',
                 items: [pushCampaignNavItem],
             },
+            resourcesGroup,
         ]
         : role === 'admin' || role === 'sub_admin'
             ? navGroups.map((group) => {
@@ -71,10 +92,10 @@ export default function Sidebar({ onClose }) {
                     ...group,
                     items: [...group.items, pushCampaignNavItem],
                 };
-            })
+            }).concat([resourcesGroup])
             : role === 'sales'
-                ? navGroups.filter((group) => group.title !== 'Admin')
-            : navGroups;
+                ? navGroups.filter((group) => group.title !== 'Admin').concat([resourcesGroup])
+                : navGroups.concat([resourcesGroup]);
 
     return (
         <div className="flex h-full flex-col border-r border-white/10 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-900 text-slate-100">
@@ -129,6 +150,9 @@ export default function Sidebar({ onClose }) {
                                                 </svg>
                                             </span>
                                             <span className="truncate">{item.label}</span>
+                                            {item.to === '/faq/feedback' && showFeedbackDot ? (
+                                                <span className="ml-auto inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" aria-label="Unread feedback updates" />
+                                            ) : null}
                                         </>
                                     )}
                                 </NavLink>

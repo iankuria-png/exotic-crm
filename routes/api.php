@@ -32,6 +32,13 @@ use App\Http\Controllers\CRM\SupportBoardController;
 use App\Http\Controllers\CRM\TeamController;
 use App\Http\Controllers\CRM\SystemHealthUpdateController;
 use App\Http\Controllers\CRM\AgentTodoController;
+use App\Http\Controllers\CRM\Faq\CategoryController as FaqCategoryController;
+use App\Http\Controllers\CRM\Faq\ArticleController as FaqArticleController;
+use App\Http\Controllers\CRM\Faq\MediaController as FaqMediaController;
+use App\Http\Controllers\CRM\Faq\WalkthroughController as FaqWalkthroughController;
+use App\Http\Controllers\CRM\Faq\FeedbackController as FaqFeedbackController;
+use App\Http\Controllers\CRM\Faq\FeedbackVoteController as FaqFeedbackVoteController;
+use App\Http\Controllers\CRM\Faq\FeedbackCommentController as FaqFeedbackCommentController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -276,6 +283,47 @@ Route::middleware(['auth:sanctum', 'crm.impersonation'])->prefix('crm')->group(f
         Route::post('/manual-payment-bundles/commit', [ManualPaymentBundleController::class, 'commit']);
         Route::get('/manual-payment-bundles/{bundle}', [ManualPaymentBundleController::class, 'show']);
         Route::post('/manual-payment-bundles/{bundle}/void', [ManualPaymentBundleController::class, 'void'])->middleware('role:admin');
+    });
+
+    Route::prefix('faq')->group(function () {
+        Route::get('/categories', [FaqCategoryController::class, 'index']);
+        Route::get('/articles', [FaqArticleController::class, 'index']);
+        Route::get('/articles/{article}', [FaqArticleController::class, 'show']);
+        Route::get('/walkthroughs', [FaqWalkthroughController::class, 'index']);
+
+        Route::get('/feedback', [FaqFeedbackController::class, 'index']);
+        Route::get('/feedback/{feedback}', [FaqFeedbackController::class, 'show']);
+        Route::post('/feedback', [FaqFeedbackController::class, 'store'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::post('/feedback/{feedback}/votes/toggle', [FaqFeedbackVoteController::class, 'toggle'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::get('/feedback/{feedback}/comments', [FaqFeedbackCommentController::class, 'index']);
+        Route::post('/feedback/{feedback}/comments', [FaqFeedbackCommentController::class, 'store'])->middleware('role:admin,sub_admin,sales,marketing');
+
+        Route::middleware('role:admin,sub_admin')->group(function () {
+            Route::post('/categories', [FaqCategoryController::class, 'store']);
+            Route::patch('/categories/{category}', [FaqCategoryController::class, 'update']);
+            Route::post('/categories/reorder', [FaqCategoryController::class, 'reorder']);
+            Route::delete('/categories/{category}', [FaqCategoryController::class, 'destroy']);
+
+            Route::post('/articles', [FaqArticleController::class, 'store']);
+            Route::patch('/articles/{article}', [FaqArticleController::class, 'update']);
+            Route::patch('/articles/{article}/draft', [FaqArticleController::class, 'saveDraft']);
+            Route::post('/articles/{article}/publish', [FaqArticleController::class, 'publish']);
+            Route::post('/articles/{article}/duplicate', [FaqArticleController::class, 'duplicate']);
+            Route::post('/articles/reorder', [FaqArticleController::class, 'reorder']);
+            Route::delete('/articles/{article}', [FaqArticleController::class, 'destroy']);
+
+            Route::post('/articles/{article}/media', [FaqMediaController::class, 'store']);
+            Route::delete('/articles/{article}/media/{media}', [FaqMediaController::class, 'destroy']);
+
+            Route::post('/walkthroughs', [FaqWalkthroughController::class, 'store']);
+            Route::get('/walkthroughs/{walkthrough}', [FaqWalkthroughController::class, 'show']);
+            Route::patch('/walkthroughs/{walkthrough}', [FaqWalkthroughController::class, 'update']);
+            Route::delete('/walkthroughs/{walkthrough}', [FaqWalkthroughController::class, 'destroy']);
+
+            Route::patch('/feedback/{feedback}', [FaqFeedbackController::class, 'update']);
+            Route::delete('/feedback/{feedback}', [FaqFeedbackController::class, 'destroy']);
+            Route::delete('/feedback/{feedback}/comments/{comment}', [FaqFeedbackCommentController::class, 'destroy']);
+        });
     });
 
     // Settings

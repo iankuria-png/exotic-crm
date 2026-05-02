@@ -684,7 +684,7 @@ function OperationsDashboard() {
     };
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-4" data-tour="dashboard-overview">
             <section className="rounded-lg border border-slate-200 bg-white px-5 py-5 shadow-sm">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                     <div>
