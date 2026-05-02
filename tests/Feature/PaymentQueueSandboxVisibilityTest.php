@@ -558,6 +558,122 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             ->assertJsonPath('data.0.reference_number', 'FULL-PRICE-001');
     }
 
+    public function test_customer_mix_stats_reconcile_confirmed_revenue_and_filter_segments(): void
+    {
+        $platform = $this->createPlatform();
+        $salesUser = $this->createUser($platform, 'sales');
+
+        $newActiveClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-05-03 09:00:00',
+            'updated_at' => '2026-05-03 09:00:00',
+        ]);
+        $existingActiveClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'publish',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-04-15 09:00:00',
+            'updated_at' => '2026-04-15 09:00:00',
+        ]);
+        $inactiveClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'profile_status' => 'private',
+            'needs_payment' => false,
+            'notactive' => false,
+            'created_at' => '2026-05-04 09:00:00',
+            'updated_at' => '2026-05-04 09:00:00',
+        ]);
+
+        $this->createPayment($platform, [
+            'client_id' => $newActiveClient->id,
+            'transaction_reference' => 'MIX-NEW-ACTIVE-001',
+            'reference_number' => 'MIX-NEW-ACTIVE-001',
+            'amount' => 1000,
+            'status' => 'completed',
+            'created_at' => '2026-05-05 10:00:00',
+            'completed_at' => '2026-05-05 10:10:00',
+        ]);
+        $this->createPayment($platform, [
+            'client_id' => $existingActiveClient->id,
+            'transaction_reference' => 'MIX-EXISTING-ACTIVE-001',
+            'reference_number' => 'MIX-EXISTING-ACTIVE-001',
+            'amount' => 2000,
+            'status' => 'expired',
+            'created_at' => '2026-05-05 11:00:00',
+            'completed_at' => '2026-05-05 11:10:00',
+        ]);
+        $this->createPayment($platform, [
+            'client_id' => $inactiveClient->id,
+            'transaction_reference' => 'MIX-OTHER-MATCHED-001',
+            'reference_number' => 'MIX-OTHER-MATCHED-001',
+            'amount' => 3000,
+            'status' => 'completed',
+            'created_at' => '2026-05-05 12:00:00',
+            'completed_at' => '2026-05-05 12:10:00',
+        ]);
+        $this->createPayment($platform, [
+            'transaction_reference' => 'MIX-UNATTRIBUTED-001',
+            'reference_number' => 'MIX-UNATTRIBUTED-001',
+            'amount' => 4000,
+            'status' => 'completed',
+            'created_at' => '2026-05-05 13:00:00',
+            'completed_at' => '2026-05-05 13:10:00',
+        ]);
+        $this->createPayment($platform, [
+            'client_id' => $newActiveClient->id,
+            'transaction_reference' => 'MIX-REVERSED-001',
+            'reference_number' => 'MIX-REVERSED-001',
+            'amount' => 5000,
+            'status' => 'completed',
+            'resolution_code' => Payment::RESOLUTION_REVERSED,
+            'created_at' => '2026-05-05 14:00:00',
+        ]);
+        $this->createPayment($platform, [
+            'client_id' => $newActiveClient->id,
+            'transaction_reference' => 'MIX-MANUAL-REVIEW-001',
+            'reference_number' => 'MIX-MANUAL-REVIEW-001',
+            'amount' => 6000,
+            'status' => 'completed',
+            'reconciliation_state' => 'manual_review',
+            'created_at' => '2026-05-05 15:00:00',
+        ]);
+
+        Sanctum::actingAs($salesUser);
+
+        $response = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&from=2026-05-01&to=2026-05-07');
+
+        $response->assertOk()
+            ->assertJsonPath('stats.confirmed', 4)
+            ->assertJsonPath('stats.confirmed_amount', 10000)
+            ->assertJsonPath('stats.customer_mix.period.from', '2026-05-01')
+            ->assertJsonPath('stats.customer_mix.period.to', '2026-05-07')
+            ->assertJsonPath('stats.customer_mix.reconciliation.reconciles_to_confirmed', true)
+            ->assertJsonPath('stats.customer_mix.reconciliation.payments_count_delta', 0)
+            ->assertJsonPath('stats.customer_mix.buckets.new_active.payments_count', 1)
+            ->assertJsonPath('stats.customer_mix.buckets.new_active.clients_count', 1)
+            ->assertJsonPath('stats.customer_mix.buckets.new_active.amount', 1000)
+            ->assertJsonPath('stats.customer_mix.buckets.existing_active.payments_count', 1)
+            ->assertJsonPath('stats.customer_mix.buckets.existing_active.amount', 2000)
+            ->assertJsonPath('stats.customer_mix.buckets.other_matched.payments_count', 1)
+            ->assertJsonPath('stats.customer_mix.buckets.other_matched.amount', 3000)
+            ->assertJsonPath('stats.customer_mix.buckets.unattributed.payments_count', 1)
+            ->assertJsonPath('stats.customer_mix.buckets.unattributed.amount', 4000);
+
+        $newSegment = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&from=2026-05-01&to=2026-05-07&customer_mix_segment=new_active');
+        $newSegment->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'MIX-NEW-ACTIVE-001');
+
+        $otherSegment = $this->getJson('/api/crm/payments?platform_id=' . $platform->id . '&from=2026-05-01&to=2026-05-07&customer_mix_segment=other_matched');
+        $otherSegment->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.reference_number', 'MIX-OTHER-MATCHED-001');
+    }
+
     private function createPlatform(string $country = 'Kenya', string $currencyCode = 'KES'): Platform
     {
         return Platform::query()->create([

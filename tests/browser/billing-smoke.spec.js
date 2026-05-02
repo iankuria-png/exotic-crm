@@ -97,6 +97,65 @@ test.describe('billing browser smoke coverage', () => {
                         failed: 0,
                         failed_amount: 0,
                         failed_amount_breakdown: {},
+                        customer_mix: {
+                            period: {
+                                from: '2026-04-01',
+                                to: '2026-04-18',
+                                payment_date_field: 'payments.created_at',
+                                client_date_field: 'clients.created_at',
+                            },
+                            share_basis: 'amount',
+                            confirmed_payments_count: 1,
+                            confirmed_amount_breakdown: { KES: 500 },
+                            confirmed_normalized_amount: null,
+                            buckets: {
+                                new_active: {
+                                    payments_count: 1,
+                                    clients_count: 1,
+                                    amount: 500,
+                                    amount_breakdown: { KES: 500 },
+                                    currency_count: 1,
+                                    normalized_amount: null,
+                                    normalization_meta: null,
+                                    share_percent: 100,
+                                },
+                                existing_active: {
+                                    payments_count: 0,
+                                    clients_count: 0,
+                                    amount: 0,
+                                    amount_breakdown: {},
+                                    currency_count: 0,
+                                    normalized_amount: null,
+                                    normalization_meta: null,
+                                    share_percent: 0,
+                                },
+                                unattributed: {
+                                    payments_count: 0,
+                                    clients_count: 0,
+                                    amount: 0,
+                                    amount_breakdown: {},
+                                    currency_count: 0,
+                                    normalized_amount: null,
+                                    normalization_meta: null,
+                                    share_percent: 0,
+                                },
+                                other_matched: {
+                                    payments_count: 0,
+                                    clients_count: 0,
+                                    amount: 0,
+                                    amount_breakdown: {},
+                                    currency_count: 0,
+                                    normalized_amount: null,
+                                    normalization_meta: null,
+                                    share_percent: 0,
+                                },
+                            },
+                            reconciliation: {
+                                reconciles_to_confirmed: true,
+                                payments_count_delta: 0,
+                                amount_breakdown_delta: {},
+                            },
+                        },
                     },
                     baseline_cutoff: '2026-04-01',
                 },
@@ -106,6 +165,8 @@ test.describe('billing browser smoke coverage', () => {
         await page.goto('/payments', { waitUntil: 'domcontentloaded' });
 
         await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Customer revenue mix' })).toBeVisible();
+        await expect(page.getByRole('button', { name: /New active users/i })).toBeVisible();
 
         const headers = page.locator('thead th');
         await expect(headers.nth(1)).toHaveText('Phone');

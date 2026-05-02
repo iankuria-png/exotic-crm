@@ -92,6 +92,7 @@ class PaymentQueueController extends Controller
             'test_visibility' => 'nullable|in:hide,include,only',
             'has_discount' => 'nullable|in:0,1',
             'resolution_code' => 'nullable|in:reversed,invalid_reference',
+            'customer_mix_segment' => 'nullable|in:new_active,existing_active,unattributed,other_matched',
             'currency_mode' => 'nullable|in:native,flat',
             'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
@@ -269,6 +270,12 @@ class PaymentQueueController extends Controller
                 $builder->whereNull('reconciliation_state')
                     ->orWhere('reconciliation_state', '!=', 'manual_review');
             });
+
+        $customerMixSegment = trim((string) ($validated['customer_mix_segment'] ?? ''));
+        if ($customerMixSegment !== '') {
+            $this->applyCustomerMixSegmentFilter($query, $customerMixSegment, $from, $to, $successfulStatuses);
+        }
+
         $reversedStatsQuery = (clone $statsQuery)
             ->where(function (Builder $builder) use ($successfulStatuses) {
                 $builder->where('status', 'reversed')
@@ -298,6 +305,14 @@ class PaymentQueueController extends Controller
         $reversedNormalized  = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
         $failedNormalized    = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->where('status', 'failed'), $targetCurrency);
         $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'), $targetCurrency);
+        $customerMix = $this->buildCustomerMixStats(
+            clone $confirmedStatsQuery,
+            $from,
+            $to,
+            $targetCurrency,
+            $confirmedBreakdown,
+            $confirmedNormalized
+        );
 
         // Aging-bucket breakdowns
         $lt1hBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses)->where('created_at', '>=', $oneHourAgo));
@@ -344,6 +359,7 @@ class PaymentQueueController extends Controller
             'unmatched_review_currency_count' => $unmatchedBreakdown['currency_count'],
             'unmatched_review_normalized_amount' => $unmatchedNormalized['normalized_total'],
             'unmatched_review_normalization_meta' => $unmatchedNormalized['normalization_meta'],
+            'customer_mix' => $customerMix,
             'normalized_currency' => $targetCurrency,
             'currency_mode' => $currencyMode,
             'awaiting_aging' => [
@@ -2807,6 +2823,164 @@ class PaymentQueueController extends Controller
         }
 
         return $query;
+    }
+
+    private function applyCustomerMixSegmentFilter(Builder $query, string $segment, ?Carbon $from, Carbon $to, array $successfulStatuses): Builder
+    {
+        $query
+            ->whereIn('payments.status', $successfulStatuses)
+            ->whereNull('payments.resolution_code')
+            ->where(function (Builder $builder) {
+                $builder->whereNull('payments.reconciliation_state')
+                    ->orWhere('payments.reconciliation_state', '!=', 'manual_review');
+            });
+
+        return $this->applyCustomerMixBucketScope($query, $segment, $from, $to);
+    }
+
+    private function buildCustomerMixStats(Builder $confirmedStatsQuery, ?Carbon $from, Carbon $to, string $targetCurrency, array $confirmedBreakdown, array $confirmedNormalized): array
+    {
+        $bucketKeys = ['new_active', 'existing_active', 'unattributed', 'other_matched'];
+        $buckets = [];
+
+        foreach ($bucketKeys as $bucketKey) {
+            $bucketQuery = $this->applyCustomerMixBucketScope(clone $confirmedStatsQuery, $bucketKey, $from, $to);
+            $buckets[$bucketKey] = $this->summarizeCustomerMixBucket($bucketQuery, $targetCurrency);
+        }
+
+        $confirmedPayments = (int) (clone $confirmedStatsQuery)->count();
+        $bucketPayments = array_sum(array_map(
+            static fn (array $bucket) => (int) ($bucket['payments_count'] ?? 0),
+            $buckets
+        ));
+
+        $confirmedAmountBreakdown = $confirmedBreakdown['breakdown'] ?? [];
+        $bucketAmountBreakdown = [];
+        foreach ($buckets as $bucket) {
+            foreach (($bucket['amount_breakdown'] ?? []) as $currency => $amount) {
+                $bucketAmountBreakdown[$currency] = ($bucketAmountBreakdown[$currency] ?? 0.0) + (float) $amount;
+            }
+        }
+        ksort($bucketAmountBreakdown);
+
+        $amountDelta = $this->currencyBreakdownDelta($confirmedAmountBreakdown, $bucketAmountBreakdown);
+        $reconciles = $bucketPayments === $confirmedPayments
+            && collect($amountDelta)->every(static fn (float $value) => abs($value) < 0.01);
+
+        $shareBasis = 'payments_count';
+        $shareTotal = $confirmedPayments;
+        if (($confirmedNormalized['normalized_total'] ?? null) !== null) {
+            $shareBasis = 'normalized_amount';
+            $shareTotal = (float) $confirmedNormalized['normalized_total'];
+        } elseif (($confirmedBreakdown['scalar_amount'] ?? null) !== null) {
+            $shareBasis = 'amount';
+            $shareTotal = (float) $confirmedBreakdown['scalar_amount'];
+        }
+
+        foreach ($buckets as $bucketKey => $bucket) {
+            $shareValue = match ($shareBasis) {
+                'normalized_amount' => $bucket['normalized_amount'],
+                'amount' => $bucket['amount'],
+                default => $bucket['payments_count'],
+            };
+
+            $buckets[$bucketKey]['share_percent'] = $shareTotal > 0
+                ? round((((float) ($shareValue ?? 0)) / $shareTotal) * 100, 1)
+                : 0.0;
+        }
+
+        return [
+            'period' => [
+                'from' => $from?->toDateString(),
+                'to' => $to->toDateString(),
+                'payment_date_field' => 'payments.created_at',
+                'client_date_field' => 'clients.created_at',
+            ],
+            'share_basis' => $shareBasis,
+            'confirmed_payments_count' => $confirmedPayments,
+            'confirmed_amount_breakdown' => $confirmedAmountBreakdown,
+            'confirmed_normalized_amount' => $confirmedNormalized['normalized_total'] ?? null,
+            'buckets' => $buckets,
+            'reconciliation' => [
+                'reconciles_to_confirmed' => $reconciles,
+                'payments_count_delta' => $confirmedPayments - $bucketPayments,
+                'amount_breakdown_delta' => $amountDelta,
+            ],
+        ];
+    }
+
+    private function summarizeCustomerMixBucket(Builder $query, string $targetCurrency): array
+    {
+        $breakdown = CurrencyBreakdown::fromPaymentQuery(clone $query);
+        $normalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $query, $targetCurrency);
+
+        return [
+            'payments_count' => (int) (clone $query)->count(),
+            'clients_count' => (int) (clone $query)
+                ->whereNotNull('payments.client_id')
+                ->distinct('payments.client_id')
+                ->count('payments.client_id'),
+            'amount' => $breakdown['scalar_amount'],
+            'amount_breakdown' => $breakdown['breakdown'],
+            'currency_count' => $breakdown['currency_count'],
+            'normalized_amount' => $normalized['normalized_total'],
+            'normalization_meta' => $normalized['normalization_meta'],
+            'share_percent' => 0.0,
+        ];
+    }
+
+    private function applyCustomerMixBucketScope(Builder $query, string $bucketKey, ?Carbon $from, Carbon $to): Builder
+    {
+        return match ($bucketKey) {
+            'new_active' => $query->whereHas('client', function (Builder $clientQuery) use ($from, $to) {
+                $clientQuery->active();
+
+                if ($from) {
+                    $clientQuery->where('created_at', '>=', $from);
+                }
+
+                $clientQuery->where('created_at', '<=', $to);
+            }),
+            'existing_active' => $from
+                ? $query->whereHas('client', function (Builder $clientQuery) use ($from) {
+                    $clientQuery->active()
+                        ->where('created_at', '<', $from);
+                })
+                : $query->whereRaw('1 = 0'),
+            'unattributed' => $query->whereNull('payments.client_id'),
+            'other_matched' => $query
+                ->whereNotNull('payments.client_id')
+                ->where(function (Builder $builder) use ($to) {
+                    $builder->whereDoesntHave('client')
+                        ->orWhereHas('client', function (Builder $clientQuery) use ($to) {
+                            $clientQuery->where(function (Builder $nonActiveOrOutOfPeriod) use ($to) {
+                                $nonActiveOrOutOfPeriod
+                                    ->whereNull('profile_status')
+                                    ->orWhere('profile_status', '!=', 'publish')
+                                    ->orWhere('needs_payment', true)
+                                    ->orWhere('notactive', true)
+                                    ->orWhere('created_at', '>', $to);
+                            });
+                        });
+                }),
+            default => $query,
+        };
+    }
+
+    private function currencyBreakdownDelta(array $expected, array $actual): array
+    {
+        $currencies = array_values(array_unique(array_merge(array_keys($expected), array_keys($actual))));
+        sort($currencies);
+
+        $delta = [];
+        foreach ($currencies as $currency) {
+            $difference = round(((float) ($expected[$currency] ?? 0)) - ((float) ($actual[$currency] ?? 0)), 2);
+            if (abs($difference) >= 0.01) {
+                $delta[$currency] = $difference;
+            }
+        }
+
+        return $delta;
     }
 
     private function resolveStatsScope(string $testVisibility, string $environmentFilter): string

@@ -31,6 +31,56 @@ function normalizePlatformFilter(value) {
     return /^\d+$/.test(raw) ? raw : '';
 }
 
+function formatDateInputValue(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
+
+function resolvePresetDateRange(preset) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const endDate = formatDateInputValue(today);
+    const startDate = new Date(today);
+
+    if (preset === 'today') {
+        return { from: endDate, to: endDate };
+    }
+
+    if (preset === '7d') {
+        startDate.setDate(startDate.getDate() - 6);
+        return { from: formatDateInputValue(startDate), to: endDate };
+    }
+
+    if (preset === '30d') {
+        startDate.setDate(startDate.getDate() - 29);
+        return { from: formatDateInputValue(startDate), to: endDate };
+    }
+
+    return { from: '', to: '' };
+}
+
+function detectPresetDateRange(fromDate, toDate) {
+    if (!fromDate || !toDate) {
+        return '';
+    }
+
+    for (const preset of ['today', '7d', '30d']) {
+        const range = resolvePresetDateRange(preset);
+        if (range.from === fromDate && range.to === toDate) {
+            return preset;
+        }
+    }
+
+    return 'custom';
+}
+
 function toAmount(value) {
     const amount = Number(value || 0);
     return Number.isFinite(amount) ? amount : 0;
@@ -210,6 +260,48 @@ function sandboxStatusLabel(payment) {
     }
 
     return `Sandbox ${titleize(status)}`;
+}
+
+function customerMixBucketMeta(bucketKey) {
+    switch (bucketKey) {
+        case 'new_active':
+            return {
+                label: 'New active users',
+                helper: 'Active clients created in this period',
+                dotClassName: 'bg-teal-500',
+                activeClassName: 'border-teal-300 bg-teal-50/70',
+                idleClassName: 'border-slate-200 bg-white hover:border-teal-200 hover:bg-teal-50/40',
+                barClassName: 'bg-teal-500',
+            };
+        case 'existing_active':
+            return {
+                label: 'Existing active users',
+                helper: 'Active clients created before this period',
+                dotClassName: 'bg-indigo-500',
+                activeClassName: 'border-indigo-300 bg-indigo-50/70',
+                idleClassName: 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40',
+                barClassName: 'bg-indigo-500',
+            };
+        case 'unattributed':
+            return {
+                label: 'Unattributed',
+                helper: 'Confirmed payments without a matched client',
+                dotClassName: 'bg-sky-500',
+                activeClassName: 'border-sky-300 bg-sky-50/70',
+                idleClassName: 'border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/40',
+                barClassName: 'bg-sky-500',
+            };
+        case 'other_matched':
+        default:
+            return {
+                label: 'Other matched',
+                helper: 'Matched payments outside active-client scope',
+                dotClassName: 'bg-slate-400',
+                activeClassName: 'border-slate-300 bg-slate-100',
+                idleClassName: 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50',
+                barClassName: 'bg-slate-400',
+            };
+    }
 }
 
 function renderPaymentStatusBadges(payment) {
@@ -592,6 +684,7 @@ export default function Payments() {
     const allowedReviewStateFilters = new Set(['open', 'manual_review', 'resolved']);
     const allowedResolutionFilters = new Set(['reversed', 'invalid_reference']);
     const allowedTestVisibilityFilters = new Set(['hide', 'include', 'only']);
+    const allowedCustomerMixSegments = new Set(['new_active', 'existing_active', 'unattributed', 'other_matched']);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -641,6 +734,10 @@ export default function Payments() {
     const [resolutionFilter, setResolutionFilter] = useState(() => {
         const requested = (searchParams.get('resolution_code') || '').trim();
         return allowedResolutionFilters.has(requested) ? requested : '';
+    });
+    const [customerMixSegment, setCustomerMixSegment] = useState(() => {
+        const requested = (searchParams.get('customer_mix_segment') || '').trim();
+        return allowedCustomerMixSegments.has(requested) ? requested : '';
     });
     const [platformFilter, setPlatformFilter] = useState(() => {
         const requested = normalizePlatformFilter(searchParams.get('platform_id'));
@@ -749,7 +846,7 @@ export default function Payments() {
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
 
     const { data, isLoading } = useQuery({
-        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
+        queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
         queryFn: () =>
             api.get('/crm/payments', {
                 params: {
@@ -766,6 +863,7 @@ export default function Payments() {
                     ...(confidenceFilter && { match_confidence: confidenceFilter }),
                     ...(reviewStateFilter && { review_state: reviewStateFilter }),
                     ...(resolutionFilter && { resolution_code: resolutionFilter }),
+                    ...(customerMixSegment && { customer_mix_segment: customerMixSegment }),
                     ...(fromDate && { from: fromDate }),
                     ...(toDate && { to: toDate }),
                     ...reportingCurrency.queryParams,
@@ -1464,8 +1562,17 @@ export default function Payments() {
             <CurrencyAmount breakdown={breakdown} scalarAmount={scalarAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1.5 text-sm font-semibold text-slate-700" stackClassName="leading-snug" />
         );
     };
+    const customerMix = data?.stats?.customer_mix || null;
+    const customerMixBuckets = customerMix?.buckets || {};
+    const customerMixPreset = detectPresetDateRange(fromDate, toDate);
+    const customerMixCards = ['new_active', 'existing_active', 'unattributed', 'other_matched'].map((bucketKey) => ({
+        key: bucketKey,
+        meta: customerMixBucketMeta(bucketKey),
+        bucket: customerMixBuckets[bucketKey] || {},
+    }));
 
     const activeMetric = useMemo(() => {
+        if (customerMixSegment) return '';
         if (statusFilter === 'awaiting_payment') return 'awaiting';
         if (statusFilter === 'completed' && hasDiscountFilter === '1') return 'discounted';
         if (statusFilter === 'completed' && matchFilter === '') return 'confirmed';
@@ -1473,9 +1580,10 @@ export default function Payments() {
         if (statusFilter === 'completed' && matchFilter === 'unmatched') return 'unmatched';
         if (statusFilter === 'failed') return 'failed';
         return '';
-    }, [statusFilter, matchFilter, hasDiscountFilter]);
+    }, [customerMixSegment, statusFilter, matchFilter, hasDiscountFilter]);
 
     const applyMetricFilter = (metricKey) => {
+        setCustomerMixSegment('');
         if (metricKey === 'awaiting') {
             setStatusFilter('awaiting_payment');
             setMatchFilter('');
@@ -1501,6 +1609,27 @@ export default function Payments() {
             setMatchFilter('');
             setHasDiscountFilter('');
         }
+        setPage(1);
+    };
+
+    const applyCustomerMixPreset = (preset) => {
+        const range = resolvePresetDateRange(preset);
+        if (!range.from || !range.to) {
+            return;
+        }
+
+        setFromDate(range.from);
+        setToDate(range.to);
+        setHasInitializedFrom(true);
+        setPage(1);
+    };
+
+    const applyCustomerMixSegment = (segmentKey) => {
+        const nextSegment = customerMixSegment === segmentKey ? '' : segmentKey;
+        setCustomerMixSegment(nextSegment);
+        setStatusFilter('completed');
+        setMatchFilter(nextSegment ? (segmentKey === 'unattributed' ? 'unmatched' : 'matched') : '');
+        setHasDiscountFilter('');
         setPage(1);
     };
 
@@ -2167,6 +2296,126 @@ export default function Payments() {
                 </button>
             </section>
 
+            <section className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="text-sm font-semibold text-slate-900">Customer revenue mix</h2>
+                            {customerMix?.reconciliation?.reconciles_to_confirmed === false ? (
+                                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                    Review totals
+                                </span>
+                            ) : null}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                            Confirmed revenue in this payment period, grouped by matched client creation date.
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                        {[
+                            ['today', 'Today'],
+                            ['7d', '7 days'],
+                            ['30d', '30 days'],
+                        ].map(([preset, label]) => (
+                            <button
+                                key={preset}
+                                type="button"
+                                onClick={() => applyCustomerMixPreset(preset)}
+                                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                    customerMixPreset === preset
+                                        ? 'bg-white text-teal-700 shadow-sm ring-1 ring-slate-200'
+                                        : 'text-slate-500 hover:bg-white hover:text-slate-700'
+                                }`}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                        <span className={`rounded-md px-2.5 py-1.5 text-xs font-semibold ${
+                            customerMixPreset === 'custom'
+                                ? 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200'
+                                : 'text-slate-400'
+                        }`}>
+                            Custom
+                        </span>
+                    </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 xl:grid-cols-4 md:grid-cols-2">
+                    {customerMixCards.map(({ key, meta, bucket }) => {
+                        const isActive = customerMixSegment === key;
+                        const paymentCount = Number(bucket.payments_count || 0);
+                        const clientCount = Number(bucket.clients_count || 0);
+                        const sharePercent = Number(bucket.share_percent || 0);
+
+                        return (
+                            <button
+                                key={key}
+                                type="button"
+                                onClick={() => applyCustomerMixSegment(key)}
+                                aria-pressed={isActive}
+                                className={`min-h-[9rem] rounded-lg border px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                    isActive ? meta.activeClassName : meta.idleClassName
+                                }`}
+                            >
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${meta.dotClassName}`} />
+                                        <p className="truncate text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{meta.label}</p>
+                                    </div>
+                                    <span className="text-xs font-semibold text-slate-500">{sharePercent.toFixed(1)}%</span>
+                                </div>
+                                <div className="mt-2">
+                                    {renderSummaryAmount(
+                                        bucket.amount_breakdown || {},
+                                        bucket.amount,
+                                        bucket.normalized_amount,
+                                        bucket.normalization_meta,
+                                    )}
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-medium text-slate-500">
+                                    <span>{paymentCount.toLocaleString()} payments</span>
+                                    {key !== 'unattributed' ? <span>{clientCount.toLocaleString()} clients</span> : null}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-500">{meta.helper}</p>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className="flex h-full w-full">
+                        {customerMixCards.map(({ key, meta, bucket }) => {
+                            const width = Math.max(0, Number(bucket.share_percent || 0));
+                            return width > 0 ? (
+                                <div
+                                    key={key}
+                                    className={`${meta.barClassName} transition-all`}
+                                    style={{ width: `${width}%` }}
+                                    title={`${meta.label}: ${width.toFixed(1)}%`}
+                                />
+                            ) : null;
+                        })}
+                    </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <span>
+                        Scope: {customerMix?.period?.from || 'Start'} to {customerMix?.period?.to || 'today'} by payment date; user status uses active client rules.
+                    </span>
+                    {customerMixSegment ? (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setCustomerMixSegment('');
+                                setPage(1);
+                            }}
+                            className="font-semibold text-teal-700 transition hover:text-teal-900"
+                        >
+                            Clear customer mix filter
+                        </button>
+                    ) : null}
+                </div>
+            </section>
+
             <section className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
                 {visibilityMode === 'only'
                     ? 'Tests-only mode active: both the table and summary cards are showing non-business payment rows for admin review.'
@@ -2209,7 +2458,7 @@ export default function Payments() {
                     <FilterSelect
                         label="Status"
                         value={statusFilter}
-                        onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
+                        onChange={(event) => { setStatusFilter(event.target.value); setCustomerMixSegment(''); setPage(1); }}
                         options={[
                             { value: '', label: 'All statuses' },
                             { value: 'awaiting_payment', label: 'Awaiting payment' },
@@ -2225,7 +2474,7 @@ export default function Payments() {
                     <FilterSelect
                         label="Match"
                         value={matchFilter}
-                        onChange={(event) => { setMatchFilter(event.target.value); setPage(1); }}
+                        onChange={(event) => { setMatchFilter(event.target.value); setCustomerMixSegment(''); setPage(1); }}
                         options={[
                             { value: '', label: 'All' },
                             { value: 'matched', label: 'Matched' },
@@ -2355,7 +2604,7 @@ export default function Payments() {
                         </button>
                     )}
 
-                    {(search || statusFilter || matchFilter || hasDiscountFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter) ? (
+                    {(search || statusFilter || matchFilter || hasDiscountFilter || platformFilter || sourceFilter || (canViewTests && environmentFilter) || (canViewTests && testVisibility !== 'hide') || confidenceFilter || reviewStateFilter || resolutionFilter || customerMixSegment || fromDate || toDate) ? (
                         <button
                             type="button"
                             onClick={() => {
@@ -2371,6 +2620,7 @@ export default function Payments() {
                                 setConfidenceFilter('');
                                 setReviewStateFilter('');
                                 setResolutionFilter('');
+                                setCustomerMixSegment('');
                                 setFromDate('');
                                 setToDate('');
                                 setHasInitializedFrom(false);
