@@ -79,6 +79,7 @@ function DiscountPricingEditor({
     discountedTotal,
     savingsAmount,
     onPayableChange,
+    onPayableBlur,
     onPercentageChange,
     onPinChange,
 }) {
@@ -86,6 +87,8 @@ function DiscountPricingEditor({
     const baseLabel = formatCurrency(baseAmount, currency);
     const payableLabel = formatCurrency(discountedTotal, currency);
     const savingsLabel = formatCurrency(Math.max(0, savingsAmount), currency);
+    const minimumPayableAmount = roundMoney(Number(baseAmount || 0) * 0.01);
+    const discountOutOfRange = discountValue > 99;
     const payableInputId = `${idPrefix}-discount-payable`;
     const percentageInputId = `${idPrefix}-discount-percentage`;
     const pinInputId = `${idPrefix}-discount-pin`;
@@ -115,9 +118,15 @@ function DiscountPricingEditor({
                                 step="0.01"
                                 value={payableAmount}
                                 onChange={(event) => onPayableChange(event.target.value)}
+                                onBlur={onPayableBlur}
                                 className="crm-input"
                                 placeholder={`e.g. ${formatNumericInput(discountedAmount(baseAmount, 10)) || '2500'}`}
                             />
+                            {discountOutOfRange ? (
+                                <p className="mt-1 text-xs text-rose-600">
+                                    Minimum payable is {formatCurrency(minimumPayableAmount, currency)} for the 99% discount limit.
+                                </p>
+                            ) : null}
                         </div>
                         <div>
                             <label htmlFor={percentageInputId} className="mb-1 block text-sm font-medium text-slate-700">Discount %</label>
@@ -1667,9 +1676,15 @@ export default function ClientDetail() {
 
         const nextPercent = discountPercentageFromPayable(activationBaseAmount, nextPayable);
         setActivationDiscountPercentage(nextPercent > 0 ? formatPercentInput(nextPercent) : '');
-        setActivationDiscountPayableAmount(nextPercent > 0
-            ? formatNumericInput(discountedAmount(activationBaseAmount, nextPercent))
-            : raw);
+        setActivationDiscountPayableAmount(raw);
+    };
+
+    const normalizeActivationPayableOnBlur = () => {
+        if (!activationDiscountValid) {
+            return;
+        }
+
+        setActivationDiscountPayableAmount(formatNumericInput(activationDiscountedTotal));
     };
 
     const syncDealDiscountFromPercentage = (value) => {
@@ -1704,9 +1719,15 @@ export default function ClientDetail() {
 
         const nextPercent = discountPercentageFromPayable(selectedDealBaseAmount, nextPayable);
         setDealDiscountPercentage(nextPercent > 0 ? formatPercentInput(nextPercent) : '');
-        setDealDiscountPayableAmount(nextPercent > 0
-            ? formatNumericInput(discountedAmount(selectedDealBaseAmount, nextPercent))
-            : raw);
+        setDealDiscountPayableAmount(raw);
+    };
+
+    const normalizeDealPayableOnBlur = () => {
+        if (!selectedDealDiscountValid) {
+            return;
+        }
+
+        setDealDiscountPayableAmount(formatNumericInput(selectedDealDiscountedTotal));
     };
 
     const openPaymentLinkModal = () => {
@@ -2736,6 +2757,7 @@ export default function ClientDetail() {
                                             discountedTotal={selectedDealDiscountedTotal}
                                             savingsAmount={selectedDealSavingsAmount}
                                             onPayableChange={syncDealDiscountFromPayable}
+                                            onPayableBlur={normalizeDealPayableOnBlur}
                                             onPercentageChange={syncDealDiscountFromPercentage}
                                             onPinChange={setDealDiscountPin}
                                         />
@@ -4083,6 +4105,7 @@ export default function ClientDetail() {
                                         discountedTotal={activationDiscountedTotal}
                                         savingsAmount={activationSavingsAmount}
                                         onPayableChange={syncActivationDiscountFromPayable}
+                                        onPayableBlur={normalizeActivationPayableOnBlur}
                                         onPercentageChange={syncActivationDiscountFromPercentage}
                                         onPinChange={setActivationDiscountPin}
                                     />

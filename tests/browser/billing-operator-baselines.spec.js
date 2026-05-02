@@ -73,7 +73,9 @@ test.describe('billing operator workflow baselines', () => {
         const payableFromPercentage = Number(await payableInput.inputValue());
         expect(payableFromPercentage, 'Percentage entry should calculate an effective payable amount.').toBeGreaterThan(0);
 
-        await payableInput.fill(String(Math.max(1, Math.round(payableFromPercentage * 0.9))));
+        const typedPayable = String(Math.max(1, Math.round(payableFromPercentage * 0.9)));
+        await payableInput.fill(typedPayable);
+        await expect(payableInput, 'Payable input should preserve the operator typed value while editing.').toHaveValue(typedPayable);
         await expect(percentageInput).not.toHaveValue('');
         const percentageFromPayable = Number(await percentageInput.inputValue());
         expect(percentageFromPayable, 'Payable entry should calculate a discount percentage.').toBeGreaterThan(0);
