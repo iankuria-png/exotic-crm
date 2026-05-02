@@ -228,6 +228,7 @@ class DealController extends Controller
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
             'discount_percentage' => 'nullable|numeric|min:1|max:99',
+            'discount_payable_amount' => 'nullable|numeric|min:0.01',
             'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
             'duration_days' => 'nullable|integer|min:1|max:365',
@@ -255,7 +256,16 @@ class DealController extends Controller
         if ($referenceGuard = $this->referenceRootGuardResponse((int) $client->platform_id, $paymentMethod, $validated['payment_reference'] ?? null)) {
             return $referenceGuard;
         }
-        $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
+        $discountBaseAmount = $this->discountBaseAmount($deal);
+        $discountPayableAmount = $this->normalizedDiscountPayableAmount($validated['discount_payable_amount'] ?? null);
+        $discountPercentage = $this->discountPercentageForRequest(
+            $validated['discount_percentage'] ?? null,
+            $discountPayableAmount,
+            $discountBaseAmount
+        );
+        if ($discountPayableGuard = $this->discountPayableAmountResponse($discountPayableAmount, $discountBaseAmount)) {
+            return $discountPayableGuard;
+        }
         if ($discountGuard = $this->discountPermissionResponse(
             $request,
             $discountPercentage,
@@ -315,7 +325,8 @@ class DealController extends Controller
                 $discountAudit = $this->syncDealDiscount(
                     $deal,
                     $discountPercentage,
-                    (int) $request->user()->id
+                    (int) $request->user()->id,
+                    $discountPayableAmount
                 );
             }
 
@@ -670,6 +681,7 @@ class DealController extends Controller
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
             'discount_percentage' => 'nullable|numeric|min:1|max:99',
+            'discount_payable_amount' => 'nullable|numeric|min:0.01',
             'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
             'subscription_lifecycle' => 'nullable|in:new,renewal',
@@ -692,7 +704,16 @@ class DealController extends Controller
         if ($referenceGuard = $this->referenceRootGuardResponse((int) $client->platform_id, $paymentMethod, $validated['payment_reference'] ?? null)) {
             return $referenceGuard;
         }
-        $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
+        $discountBaseAmount = $this->discountBaseAmount($deal);
+        $discountPayableAmount = $this->normalizedDiscountPayableAmount($validated['discount_payable_amount'] ?? null);
+        $discountPercentage = $this->discountPercentageForRequest(
+            $validated['discount_percentage'] ?? null,
+            $discountPayableAmount,
+            $discountBaseAmount
+        );
+        if ($discountPayableGuard = $this->discountPayableAmountResponse($discountPayableAmount, $discountBaseAmount)) {
+            return $discountPayableGuard;
+        }
         if ($discountGuard = $this->discountPermissionResponse(
             $request,
             $discountPercentage,
@@ -738,7 +759,8 @@ class DealController extends Controller
                 $discountAudit = $this->syncDealDiscount(
                     $deal,
                     $discountPercentage,
-                    (int) $request->user()->id
+                    (int) $request->user()->id,
+                    $discountPayableAmount
                 );
             }
 
@@ -876,6 +898,7 @@ class DealController extends Controller
             'payment_link_provider' => 'nullable|string|max:120',
             'free_trial_pin' => ['required_if:payment_method,free_trial', 'nullable', 'regex:/^\d{4,6}$/'],
             'discount_percentage' => 'nullable|numeric|min:1|max:99',
+            'discount_payable_amount' => 'nullable|numeric|min:0.01',
             'discount_pin' => ['nullable', 'regex:/^\d{4,6}$/'],
             'approved_by' => 'nullable|string|max:255',
             'subscription_lifecycle' => 'nullable|in:new,renewal',
@@ -904,7 +927,18 @@ class DealController extends Controller
         if ($referenceGuard = $this->referenceRootGuardResponse((int) $client->platform_id, $paymentMethod, $validated['payment_reference'] ?? null)) {
             return $referenceGuard;
         }
-        $discountPercentage = $this->normalizedDiscountPercentage($validated['discount_percentage'] ?? null);
+        $baseAmount = $deal->original_amount !== null
+            ? (float) $deal->original_amount
+            : (float) $deal->amount;
+        $discountPayableAmount = $this->normalizedDiscountPayableAmount($validated['discount_payable_amount'] ?? null);
+        $discountPercentage = $this->discountPercentageForRequest(
+            $validated['discount_percentage'] ?? null,
+            $discountPayableAmount,
+            $baseAmount
+        );
+        if ($discountPayableGuard = $this->discountPayableAmountResponse($discountPayableAmount, $baseAmount)) {
+            return $discountPayableGuard;
+        }
         if ($discountGuard = $this->discountPermissionResponse(
             $request,
             $discountPercentage,
@@ -937,9 +971,6 @@ class DealController extends Controller
             $platform = $client->platform ?? Platform::findOrFail($client->platform_id);
             $additionalDays = (int) $validated['additional_days'];
             $activatesImmediately = in_array($paymentMethod, ['manual', 'free_trial'], true);
-            $baseAmount = $deal->original_amount !== null
-                ? (float) $deal->original_amount
-                : (float) $deal->amount;
             $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
                 $client,
                 (int) $client->platform_id,
@@ -974,7 +1005,8 @@ class DealController extends Controller
                 $discountAudit = $this->syncDealDiscount(
                     $newDeal,
                     $discountPercentage,
-                    (int) $request->user()->id
+                    (int) $request->user()->id,
+                    $discountPayableAmount
                 );
             }
 
@@ -1400,7 +1432,66 @@ class DealController extends Controller
         return $percentage > 0 ? $percentage : null;
     }
 
-    private function syncDealDiscount(Deal $deal, ?float $discountPercentage, int $actorId): array
+    private function normalizedDiscountPayableAmount(mixed $value): ?float
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $amount = round((float) $value, 2);
+
+        return $amount > 0 ? $amount : null;
+    }
+
+    private function discountBaseAmount(Deal $deal): float
+    {
+        return $deal->original_amount !== null
+            ? (float) $deal->original_amount
+            : (float) $deal->amount;
+    }
+
+    private function discountPercentageForRequest(mixed $discountPercentage, ?float $discountPayableAmount, float $baseAmount): ?float
+    {
+        if ($discountPayableAmount !== null && $baseAmount > 0) {
+            return round((($baseAmount - $discountPayableAmount) / $baseAmount) * 100, 6);
+        }
+
+        return $this->normalizedDiscountPercentage($discountPercentage);
+    }
+
+    private function discountPayableAmountResponse(?float $discountPayableAmount, float $baseAmount): ?\Illuminate\Http\JsonResponse
+    {
+        if ($discountPayableAmount === null) {
+            return null;
+        }
+
+        if ($baseAmount <= 0) {
+            return response()->json([
+                'message' => 'A valid base amount is required before applying a final payable discount.',
+            ], 422);
+        }
+
+        $minimumPayableAmount = round($baseAmount * 0.01, 2);
+        $maximumPayableAmount = round($baseAmount * 0.99, 2);
+
+        if ($discountPayableAmount < $minimumPayableAmount) {
+            return response()->json([
+                'message' => 'Final payable amount is below the 99% discount limit.',
+                'minimum_payable_amount' => $minimumPayableAmount,
+            ], 422);
+        }
+
+        if ($discountPayableAmount > $maximumPayableAmount) {
+            return response()->json([
+                'message' => 'Final payable amount must apply at least a 1% discount.',
+                'maximum_payable_amount' => $maximumPayableAmount,
+            ], 422);
+        }
+
+        return null;
+    }
+
+    private function syncDealDiscount(Deal $deal, ?float $discountPercentage, int $actorId, ?float $discountPayableAmount = null): array
     {
         $before = [
             'amount' => (float) $deal->amount,
@@ -1410,9 +1501,7 @@ class DealController extends Controller
             'discount_source' => $deal->discount_source,
         ];
 
-        $baseAmount = $deal->original_amount !== null
-            ? (float) $deal->original_amount
-            : (float) $deal->amount;
+        $baseAmount = $this->discountBaseAmount($deal);
 
         if ($discountPercentage === null || $discountPercentage <= 0) {
             $deal->update([
@@ -1436,12 +1525,14 @@ class DealController extends Controller
             ];
         }
 
-        $discountedAmount = round($baseAmount * (1 - ($discountPercentage / 100)), 2);
+        $discountedAmount = $discountPayableAmount !== null
+            ? round($discountPayableAmount, 2)
+            : round($baseAmount * (1 - ($discountPercentage / 100)), 2);
 
         $deal->update([
             'amount' => $discountedAmount,
             'original_amount' => round($baseAmount, 2),
-            'discount_percentage' => $discountPercentage,
+            'discount_percentage' => $this->normalizedDiscountPercentage($discountPercentage),
             'discount_approved_by' => $actorId,
             'discount_source' => 'agent_manual',
         ]);

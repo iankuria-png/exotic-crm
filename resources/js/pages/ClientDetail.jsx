@@ -48,11 +48,31 @@ function discountedAmount(baseAmount, discountPercentage) {
     return roundMoney(safeBase * (1 - safeDiscount / 100));
 }
 
+function normalizePayableAmount(value) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') return null;
+
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+
+    return roundMoney(parsed);
+}
+
 function discountPercentageFromPayable(baseAmount, payableAmount) {
     const safeBase = Number(baseAmount || 0);
     const safePayable = Number(payableAmount || 0);
     if (!Number.isFinite(safeBase) || !Number.isFinite(safePayable) || safeBase <= 0) return 0;
     return roundPercent(((safeBase - safePayable) / safeBase) * 100);
+}
+
+function effectiveDiscountedAmount(baseAmount, discountPercentage, payableAmount) {
+    const payable = normalizePayableAmount(payableAmount);
+    const payableDiscount = payable !== null ? discountPercentageFromPayable(baseAmount, payable) : 0;
+    if (payable !== null && payableDiscount >= 1 && payableDiscount <= 99) {
+        return payable;
+    }
+
+    return discountedAmount(baseAmount, discountPercentage);
 }
 
 function formatNumericInput(value) {
@@ -175,7 +195,7 @@ function DiscountPricingEditor({
                                 <p className="mt-1 text-sm font-semibold text-slate-900">{savingsLabel}</p>
                             </div>
                         </div>
-                        <p className="mt-2 text-xs text-slate-500">Price is calculated from the rounded percentage. Market limits are checked when saving.</p>
+                        <p className="mt-2 text-xs text-slate-500">Final payable is saved exactly when entered. Percentage is used for approvals and audit display.</p>
                     </div>
                 </>
             ) : null}
@@ -950,7 +970,7 @@ export default function ClientDetail() {
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPin, subscriptionLifecycle, subscriptionLifecycleReason }) =>
+        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPayableAmount, discountPin, subscriptionLifecycle, subscriptionLifecycleReason }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason,
                 payment_method: paymentMethod,
@@ -960,7 +980,11 @@ export default function ClientDetail() {
                 ...(paymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPin } : {}),
                 ...(paymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProvider ? { payment_link_provider: paymentLinkProvider } : {}),
                 ...(paymentMethod !== 'free_trial' && discountPercentage > 0
-                    ? { discount_percentage: discountPercentage, discount_pin: discountPin }
+                    ? {
+                        discount_percentage: discountPercentage,
+                        ...(discountPayableAmount !== null ? { discount_payable_amount: discountPayableAmount } : {}),
+                        discount_pin: discountPin,
+                    }
                     : {}),
             }).then((r) => r.data),
         onSuccess: (payload) => {
@@ -1106,7 +1130,7 @@ export default function ClientDetail() {
     });
 
     const extendDealMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPinValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
+        mutationFn: ({ dealId, additionalDays, extensionReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPayableAmountValue, discountPinValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
             api.post(`/crm/deals/${dealId}/extend`, {
                 additional_days: additionalDays,
                 reason: extensionReason,
@@ -1117,7 +1141,11 @@ export default function ClientDetail() {
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
                 ...(selectedPaymentMethod !== 'free_trial' && discountPercentageValue > 0
-                    ? { discount_percentage: discountPercentageValue, discount_pin: discountPinValue }
+                    ? {
+                        discount_percentage: discountPercentageValue,
+                        ...(discountPayableAmountValue !== null ? { discount_payable_amount: discountPayableAmountValue } : {}),
+                        discount_pin: discountPinValue,
+                    }
                     : {}),
             }).then((r) => r.data),
         onSuccess: () => {
@@ -1144,7 +1172,7 @@ export default function ClientDetail() {
     });
 
     const renewDealMutation = useMutation({
-        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPinValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
+        mutationFn: ({ dealId, additionalDays, renewalReason, selectedPaymentMethod, referenceValue, freeTrialPinValue, paymentLinkProviderValue, discountPercentageValue, discountPayableAmountValue, discountPinValue, subscriptionLifecycleValue, subscriptionLifecycleReasonValue }) =>
             api.post(`/crm/deals/${dealId}/renew`, {
                 additional_days: additionalDays,
                 reason: renewalReason,
@@ -1155,7 +1183,11 @@ export default function ClientDetail() {
                 ...(selectedPaymentMethod === 'free_trial' ? { free_trial_pin: freeTrialPinValue } : {}),
                 ...(selectedPaymentMethod === 'link' && canOverridePaymentLinkProvider && paymentLinkProviderValue ? { payment_link_provider: paymentLinkProviderValue } : {}),
                 ...(selectedPaymentMethod !== 'free_trial' && discountPercentageValue > 0
-                    ? { discount_percentage: discountPercentageValue, discount_pin: discountPinValue }
+                    ? {
+                        discount_percentage: discountPercentageValue,
+                        ...(discountPayableAmountValue !== null ? { discount_payable_amount: discountPayableAmountValue } : {}),
+                        discount_pin: discountPinValue,
+                    }
                     : {}),
             }).then((r) => r.data),
         onSuccess: () => {
@@ -1586,12 +1618,14 @@ export default function ClientDetail() {
     const dealDiscountAllowed = dealPaymentMethod !== 'free_trial';
     const activationBaseAmount = Number(activationDeal?.original_amount ?? activationDeal?.amount ?? 0);
     const activationDiscountValue = activationApplyDiscount ? normalizeDiscountPercentage(activationDiscountPercentage) : 0;
-    const activationDiscountedTotal = discountedAmount(activationBaseAmount, activationDiscountValue);
+    const activationDiscountPayableValue = activationApplyDiscount ? normalizePayableAmount(activationDiscountPayableAmount) : null;
+    const activationDiscountedTotal = effectiveDiscountedAmount(activationBaseAmount, activationDiscountValue, activationDiscountPayableAmount);
     const activationSavingsAmount = roundMoney(Math.max(0, activationBaseAmount - activationDiscountedTotal));
     const activationDiscountValid = activationDiscountValue >= 1 && activationDiscountValue <= 99;
     const selectedDealBaseAmount = Number(dealActionDialog.deal?.original_amount ?? dealActionDialog.deal?.amount ?? 0);
     const selectedDealDiscountValue = dealApplyDiscount ? normalizeDiscountPercentage(dealDiscountPercentage) : 0;
-    const selectedDealDiscountedTotal = discountedAmount(selectedDealBaseAmount, selectedDealDiscountValue);
+    const selectedDealDiscountPayableValue = dealApplyDiscount ? normalizePayableAmount(dealDiscountPayableAmount) : null;
+    const selectedDealDiscountedTotal = effectiveDiscountedAmount(selectedDealBaseAmount, selectedDealDiscountValue, dealDiscountPayableAmount);
     const selectedDealSavingsAmount = roundMoney(Math.max(0, selectedDealBaseAmount - selectedDealDiscountedTotal));
     const selectedDealDiscountValid = selectedDealDiscountValue >= 1 && selectedDealDiscountValue <= 99;
     const paymentLinkEligibleDeals = (client.deals || []).filter((deal) => ['pending', 'awaiting_payment'].includes(deal.status));
@@ -1902,6 +1936,7 @@ export default function ClientDetail() {
             freeTrialPin: activationFreeTrialPin.trim(),
             paymentLinkProvider: activationPaymentLinkProvider || undefined,
             discountPercentage: activationApplyDiscount ? activationDiscountValue : 0,
+            discountPayableAmount: activationApplyDiscount ? activationDiscountPayableValue : null,
             discountPin: activationDiscountPin.trim(),
         });
     };
@@ -2912,6 +2947,7 @@ export default function ClientDetail() {
                                         freeTrialPinValue: dealFreeTrialPin,
                                         paymentLinkProviderValue: dealPaymentLinkProvider,
                                         discountPercentageValue: dealApplyDiscount ? selectedDealDiscountValue : 0,
+                                        discountPayableAmountValue: dealApplyDiscount ? selectedDealDiscountPayableValue : null,
                                         discountPinValue: dealDiscountPin,
                                     })}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -2945,6 +2981,7 @@ export default function ClientDetail() {
                                         freeTrialPinValue: dealFreeTrialPin,
                                         paymentLinkProviderValue: dealPaymentLinkProvider,
                                         discountPercentageValue: dealApplyDiscount ? selectedDealDiscountValue : 0,
+                                        discountPayableAmountValue: dealApplyDiscount ? selectedDealDiscountPayableValue : null,
                                         discountPinValue: dealDiscountPin,
                                     })}
                                     className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"

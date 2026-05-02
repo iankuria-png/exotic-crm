@@ -432,6 +432,49 @@ class DealControllerTest extends TestCase
         ]);
     }
 
+    public function test_deal_manual_activation_preserves_exact_discount_payable_amount(): void
+    {
+        $platform = $this->createProvisioningPlatform();
+        $product = $this->createProductForPlatform($platform, 'vip', 12000);
+        $client = $this->createClientForPlatform($platform, 9313);
+        $user = $this->createAuthorizedUser('admin');
+        $deal = $this->createPendingDeal($platform, $product, $client, $user, [
+            'plan_type' => 'vip',
+            'amount' => 12000,
+        ]);
+
+        app(WalletSettingsService::class)->updateDiscountPin('4821', $user->id);
+        app(WalletSettingsService::class)->updateDiscountConfig([
+            'max_percentage_by_platform' => [
+                (string) $platform->id => 25,
+            ],
+        ], $user->id);
+        $this->fakeProvisioningApis($platform, $client);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'reason' => 'Activate with exact payable discount',
+            'payment_method' => 'manual',
+            'payment_reference' => 'MPESA-9313',
+            'discount_percentage' => 1.67,
+            'discount_payable_amount' => 11800,
+            'discount_pin' => '4821',
+            'duration_days' => 30,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'active');
+
+        $deal->refresh();
+        $payment = $deal->payment()->firstOrFail();
+
+        $this->assertSame(11800.0, (float) $deal->amount);
+        $this->assertSame(12000.0, (float) $deal->original_amount);
+        $this->assertSame(1.67, (float) $deal->discount_percentage);
+        $this->assertSame(11800.0, (float) $payment->amount);
+    }
+
     public function test_deal_activation_rejects_discount_above_market_max(): void
     {
         $platform = $this->createProvisioningPlatform();
