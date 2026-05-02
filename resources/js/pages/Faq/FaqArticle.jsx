@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import PageHeader from '../../components/PageHeader';
 import faqApi from '../../services/faqApi';
 import MarkdownRenderer from '../../components/faq/MarkdownRenderer';
@@ -136,6 +136,20 @@ export default function FaqArticle() {
 
     return (
         <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+                <Link to="/faq" className="inline-flex items-center gap-2 font-medium text-teal-700 transition hover:text-teal-800">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Back to Knowledge Center
+                </Link>
+                {article?.category?.slug ? (
+                    <Link to={`/faq/c/${article.category.slug}`} className="inline-flex items-center gap-2 font-medium text-slate-500 transition hover:text-slate-700">
+                        <span className="text-slate-300">/</span>
+                        Back to {article.category.name}
+                    </Link>
+                ) : null}
+            </div>
             <PageHeader
                 title={article?.title || 'Article'}
                 subtitle={article?.summary || 'Knowledge base article'}
@@ -168,7 +182,7 @@ export default function FaqArticle() {
             />
 
             <section className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-                <article className="crm-surface space-y-5 px-5 py-5">
+                <article className="crm-surface space-y-6 px-6 py-6 lg:px-8">
                     {article?.media?.length ? (
                         <div className="grid gap-3 md:grid-cols-2">
                             {article.media.map((media) => (
@@ -178,6 +192,11 @@ export default function FaqArticle() {
                             ))}
                         </div>
                     ) : null}
+                    <div className="border-b border-slate-100 pb-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            Operator Guide
+                        </p>
+                    </div>
                     <MarkdownRenderer>{article?.body}</MarkdownRenderer>
                 </article>
 
@@ -185,7 +204,7 @@ export default function FaqArticle() {
                     <section className="crm-surface space-y-4 px-5 py-5">
                         <div>
                             <p className="text-sm font-semibold text-slate-900">Next steps</p>
-                            <p className="text-sm text-slate-500">Deep links, prefilled actions, and walkthroughs for this topic.</p>
+                            <p className="text-sm text-slate-500">Jump to the exact CRM screen or guided flow tied to this article.</p>
                         </div>
                         <div className="flex flex-wrap gap-2">
                             {(article?.ctas || []).map((cta) => <ArticleCtaButton key={cta.id} cta={cta} />)}
@@ -195,7 +214,7 @@ export default function FaqArticle() {
                     <section className="crm-surface space-y-3 px-5 py-5">
                         <div>
                             <p className="text-sm font-semibold text-slate-900">Report a gap</p>
-                            <p className="text-sm text-slate-500">Tell admins what is missing while the context is still fresh.</p>
+                            <p className="text-sm text-slate-500">If this missed a real production scenario, flag it before the context disappears.</p>
                         </div>
                         <button type="button" onClick={() => setFeedbackOpen(true)} className="crm-btn-secondary px-3 py-2 text-sm">Suggest edit or report bug</button>
                     </section>

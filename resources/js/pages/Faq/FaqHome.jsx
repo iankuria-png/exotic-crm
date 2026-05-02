@@ -69,7 +69,7 @@ export default function FaqHome() {
         <div className="space-y-4">
             <PageHeader
                 title="Knowledge Center"
-                subtitle="Search CRM workflows, filters, and operational reference material."
+                subtitle="Working guides for clients, payments, subscriptions, and day-to-day CRM edge cases."
                 actions={(
                     <>
                         <form
@@ -99,8 +99,8 @@ export default function FaqHome() {
                     <section className="crm-surface px-5 py-5">
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
-                                <p className="text-sm font-semibold text-slate-900">Category tree</p>
-                                <p className="text-sm text-slate-500">Mirrors the CRM surface area and deep-link entry points.</p>
+                                <p className="text-sm font-semibold text-slate-900">Browse by workflow area</p>
+                                <p className="text-sm text-slate-500">Use this when you know which CRM screen or queue you are working in.</p>
                             </div>
                         </div>
                         <div className="space-y-3">
@@ -133,8 +133,8 @@ export default function FaqHome() {
                     <section className="crm-surface px-5 py-5">
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
-                                <p className="text-sm font-semibold text-slate-900">Most relevant articles</p>
-                                <p className="text-sm text-slate-500">{searchParams.get('search') ? `Search results for "${searchParams.get('search')}"` : 'Pinned by recent search or page context.'}</p>
+                                <p className="text-sm font-semibold text-slate-900">{searchParams.get('search') ? 'Search results' : 'Start here'}</p>
+                                <p className="text-sm text-slate-500">{searchParams.get('search') ? `Articles matching "${searchParams.get('search')}"` : 'Common operator guides for live CRM work.'}</p>
                             </div>
                             {crmPage ? <StatusChip status={crmPage} /> : null}
                         </div>

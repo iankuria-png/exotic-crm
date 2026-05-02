@@ -42,6 +42,14 @@ export default function FaqCategory() {
 
     return (
         <div className="space-y-4">
+            <div>
+                <Link to="/faq" className="inline-flex items-center gap-2 text-sm font-medium text-teal-700 transition hover:text-teal-800">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Back to Knowledge Center
+                </Link>
+            </div>
             <PageHeader
                 title={category?.name || 'Category'}
                 subtitle={category?.description || 'Browse published knowledge base articles for this workflow area.'}
@@ -57,7 +65,7 @@ export default function FaqCategory() {
                             <div className="flex items-start justify-between gap-3">
                                 <div>
                                     <p className="text-sm font-semibold text-slate-900">{article.title}</p>
-                                    <p className="mt-1 text-sm text-slate-500">{article.summary}</p>
+                                    <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">{article.summary}</p>
                                 </div>
                                 {admin.isAdmin ? <StatusChip status={article.status} /> : null}
                             </div>

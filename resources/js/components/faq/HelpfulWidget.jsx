@@ -37,8 +37,8 @@ export default function HelpfulWidget({ article }) {
         <section className="crm-surface space-y-3 px-5 py-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <p className="text-sm font-semibold text-slate-900">Was this article helpful?</p>
-                    <p className="text-sm text-slate-500">Capture quick quality signals without leaving the page.</p>
+                    <p className="text-sm font-semibold text-slate-900">Did this help on the case you are working?</p>
+                    <p className="text-sm text-slate-500">Flag gaps while the client, payment, or queue context is still fresh.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" onClick={() => submit('helpful')} disabled={mutation.isPending} className="crm-btn-secondary px-3 py-2 text-sm">
@@ -54,7 +54,7 @@ export default function HelpfulWidget({ article }) {
                 onChange={(event) => setComment(event.target.value)}
                 rows={3}
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm outline-none ring-0 transition focus:border-teal-400"
-                placeholder={activeKind === 'unhelpful' ? 'What was missing or unclear?' : 'Optional comment'}
+                placeholder={activeKind === 'unhelpful' ? 'What was missing, misleading, or too vague?' : 'Optional note from the case you just worked'}
             />
         </section>
     );
