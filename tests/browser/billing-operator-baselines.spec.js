@@ -61,6 +61,24 @@ test.describe('billing operator workflow baselines', () => {
         await expect(page.getByRole('button', { name: 'Payment Link' })).toBeVisible();
         await expect(page.getByRole('button', { name: 'Free Trial' })).toBeVisible();
 
+        await page.getByRole('button', { name: 'Manual Payment' }).click();
+        await page.getByLabel('Apply Discount').check();
+        const payableInput = page.getByLabel('Final payable amount');
+        const percentageInput = page.getByLabel('Discount %');
+        await expect(payableInput).toBeVisible();
+        await expect(percentageInput).toBeVisible();
+
+        await percentageInput.fill('10');
+        await expect(payableInput).not.toHaveValue('');
+        const payableFromPercentage = Number(await payableInput.inputValue());
+        expect(payableFromPercentage, 'Percentage entry should calculate an effective payable amount.').toBeGreaterThan(0);
+
+        await payableInput.fill(String(Math.max(1, Math.round(payableFromPercentage * 0.9))));
+        await expect(percentageInput).not.toHaveValue('');
+        const percentageFromPayable = Number(await percentageInput.inputValue());
+        expect(percentageFromPayable, 'Payable entry should calculate a discount percentage.').toBeGreaterThan(0);
+        expect(Number(await payableInput.inputValue()), 'Payable preview should remain the backend-effective amount.').toBeGreaterThan(0);
+
         await page.getByRole('button', { name: 'Payment Link' }).click();
         await expect(page.getByLabel('Link provider')).toBeVisible();
 
@@ -70,5 +88,26 @@ test.describe('billing operator workflow baselines', () => {
 
         await page.getByRole('button', { name: 'Manual Payment' }).click();
         await expect(page.getByLabel('MPESA / Transaction Reference')).toBeVisible();
+    });
+
+    test('admin sees linked discount editor on renewal or extension actions', async ({ page, request }) => {
+        test.skip(!roleCredentialsAvailable('admin'), missingRoleMessage('admin'));
+
+        const clientId = getOptionalFixture('PLAYWRIGHT_CLIENT_ID_FOR_DEAL_ACTIONS');
+        test.skip(!clientId, 'Set PLAYWRIGHT_CLIENT_ID_FOR_DEAL_ACTIONS to run renewal/extension discount coverage.');
+
+        await loginAndOpen(page, request, 'admin', `/clients/${clientId}?tab=deals`);
+
+        const actionButton = page.getByRole('button', { name: /^(Renew|Extend)$/ }).first();
+        await expect(actionButton).toBeVisible();
+        await actionButton.click();
+
+        await expect(page.getByRole('heading', { name: /(Renew|Extend) Subscription/ })).toBeVisible();
+        await page.getByLabel('Apply Discount').check();
+        await expect(page.getByLabel('Final payable amount')).toBeVisible();
+        await expect(page.getByLabel('Discount %')).toBeVisible();
+
+        await page.getByLabel('Discount %').fill('10');
+        await expect(page.getByLabel('Final payable amount')).not.toHaveValue('');
     });
 });

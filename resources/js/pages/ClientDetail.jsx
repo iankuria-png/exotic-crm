@@ -26,14 +26,152 @@ function formatCurrency(value, currency = 'KES') {
 function normalizeDiscountPercentage(value) {
     const parsed = Number.parseFloat(String(value ?? '').trim());
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-    return parsed;
+    return roundPercent(parsed);
+}
+
+function roundMoney(value) {
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.round(parsed * 100) / 100;
+}
+
+function roundPercent(value) {
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.round(parsed * 100) / 100;
 }
 
 function discountedAmount(baseAmount, discountPercentage) {
     const safeBase = Number(baseAmount || 0);
     const safeDiscount = normalizeDiscountPercentage(discountPercentage);
     if (safeDiscount <= 0) return safeBase;
-    return Math.round((safeBase * (1 - safeDiscount / 100)) * 100) / 100;
+    return roundMoney(safeBase * (1 - safeDiscount / 100));
+}
+
+function discountPercentageFromPayable(baseAmount, payableAmount) {
+    const safeBase = Number(baseAmount || 0);
+    const safePayable = Number(payableAmount || 0);
+    if (!Number.isFinite(safeBase) || !Number.isFinite(safePayable) || safeBase <= 0) return 0;
+    return roundPercent(((safeBase - safePayable) / safeBase) * 100);
+}
+
+function formatNumericInput(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return '';
+    return String(roundMoney(parsed));
+}
+
+function formatPercentInput(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return '';
+    return String(roundPercent(parsed));
+}
+
+function DiscountPricingEditor({
+    idPrefix,
+    applyDiscount,
+    onToggle,
+    baseAmount,
+    currency,
+    payableAmount,
+    discountPercentage,
+    discountPin,
+    discountedTotal,
+    savingsAmount,
+    onPayableChange,
+    onPercentageChange,
+    onPinChange,
+}) {
+    const discountValue = normalizeDiscountPercentage(discountPercentage);
+    const baseLabel = formatCurrency(baseAmount, currency);
+    const payableLabel = formatCurrency(discountedTotal, currency);
+    const savingsLabel = formatCurrency(Math.max(0, savingsAmount), currency);
+    const payableInputId = `${idPrefix}-discount-payable`;
+    const percentageInputId = `${idPrefix}-discount-percentage`;
+    const pinInputId = `${idPrefix}-discount-pin`;
+
+    return (
+        <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50/60 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                    type="checkbox"
+                    checked={applyDiscount}
+                    onChange={(event) => onToggle(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-200"
+                />
+                Apply Discount
+            </label>
+
+            {applyDiscount ? (
+                <>
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)]">
+                        <div>
+                            <label htmlFor={payableInputId} className="mb-1 block text-sm font-medium text-slate-700">Final payable amount</label>
+                            <input
+                                id={payableInputId}
+                                type="number"
+                                min="0"
+                                max={baseAmount || undefined}
+                                step="0.01"
+                                value={payableAmount}
+                                onChange={(event) => onPayableChange(event.target.value)}
+                                className="crm-input"
+                                placeholder={`e.g. ${formatNumericInput(discountedAmount(baseAmount, 10)) || '2500'}`}
+                            />
+                        </div>
+                        <div>
+                            <label htmlFor={percentageInputId} className="mb-1 block text-sm font-medium text-slate-700">Discount %</label>
+                            <input
+                                id={percentageInputId}
+                                type="number"
+                                min="1"
+                                max="99"
+                                step="0.01"
+                                value={discountPercentage}
+                                onChange={(event) => onPercentageChange(event.target.value)}
+                                className="crm-input"
+                                placeholder="e.g. 20"
+                            />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label htmlFor={pinInputId} className="mb-1 block text-sm font-medium text-slate-700">Discount PIN</label>
+                        <input
+                            id={pinInputId}
+                            type="password"
+                            inputMode="numeric"
+                            maxLength={6}
+                            value={discountPin}
+                            onChange={(event) => onPinChange(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                            className="crm-input"
+                            placeholder="Enter discount PIN"
+                        />
+                    </div>
+
+                    <div className="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <p className="font-medium text-slate-900">Price preview</p>
+                                <p className="mt-1 flex flex-wrap items-center gap-2">
+                                    <span className="line-through text-slate-500">{baseLabel}</span>
+                                    <span className="text-base font-semibold text-slate-900">{payableLabel}</span>
+                                    {discountValue > 0 ? (
+                                        <span className="text-xs font-semibold uppercase tracking-wide text-amber-700">{discountValue}% off</span>
+                                    ) : null}
+                                </p>
+                            </div>
+                            <div className="text-right">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Savings</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-900">{savingsLabel}</p>
+                            </div>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">Price is calculated from the rounded percentage. Market limits are checked when saving.</p>
+                    </div>
+                </>
+            ) : null}
+        </div>
+    );
 }
 
 function formatDateTime(value) {
@@ -507,6 +645,7 @@ export default function ClientDetail() {
     const [activationPaymentLinkProvider, setActivationPaymentLinkProvider] = useState('');
     const [activationApplyDiscount, setActivationApplyDiscount] = useState(false);
     const [activationDiscountPercentage, setActivationDiscountPercentage] = useState('');
+    const [activationDiscountPayableAmount, setActivationDiscountPayableAmount] = useState('');
     const [activationDiscountPin, setActivationDiscountPin] = useState('');
     const [showSyncConfirm, setShowSyncConfirm] = useState(false);
     const [profileSection, setProfileSection] = useState('personal');
@@ -544,6 +683,7 @@ export default function ClientDetail() {
     const [dealPaymentLinkProvider, setDealPaymentLinkProvider] = useState('');
     const [dealApplyDiscount, setDealApplyDiscount] = useState(false);
     const [dealDiscountPercentage, setDealDiscountPercentage] = useState('');
+    const [dealDiscountPayableAmount, setDealDiscountPayableAmount] = useState('');
     const [dealDiscountPin, setDealDiscountPin] = useState('');
     const [notifyClient, setNotifyClient] = useState(false);
     const [showVerifiedDialog, setShowVerifiedDialog] = useState(false);
@@ -827,6 +967,7 @@ export default function ClientDetail() {
             setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
             setActivationApplyDiscount(false);
             setActivationDiscountPercentage('');
+            setActivationDiscountPayableAmount('');
             setActivationDiscountPin('');
             toast.success(payload?.message || 'Subscription activation request submitted.');
         },
@@ -984,6 +1125,7 @@ export default function ClientDetail() {
             setDealPaymentLinkProvider(defaultPaymentLinkProvider);
             setDealApplyDiscount(false);
             setDealDiscountPercentage('');
+            setDealDiscountPayableAmount('');
             setDealDiscountPin('');
             toast.success('Subscription extension saved.');
         },
@@ -1021,6 +1163,7 @@ export default function ClientDetail() {
             setDealPaymentLinkProvider(defaultPaymentLinkProvider);
             setDealApplyDiscount(false);
             setDealDiscountPercentage('');
+            setDealDiscountPayableAmount('');
             setDealDiscountPin('');
             toast.success('Subscription renewed successfully.');
         },
@@ -1435,9 +1578,13 @@ export default function ClientDetail() {
     const activationBaseAmount = Number(activationDeal?.original_amount ?? activationDeal?.amount ?? 0);
     const activationDiscountValue = activationApplyDiscount ? normalizeDiscountPercentage(activationDiscountPercentage) : 0;
     const activationDiscountedTotal = discountedAmount(activationBaseAmount, activationDiscountValue);
+    const activationSavingsAmount = roundMoney(Math.max(0, activationBaseAmount - activationDiscountedTotal));
+    const activationDiscountValid = activationDiscountValue >= 1 && activationDiscountValue <= 99;
     const selectedDealBaseAmount = Number(dealActionDialog.deal?.original_amount ?? dealActionDialog.deal?.amount ?? 0);
     const selectedDealDiscountValue = dealApplyDiscount ? normalizeDiscountPercentage(dealDiscountPercentage) : 0;
     const selectedDealDiscountedTotal = discountedAmount(selectedDealBaseAmount, selectedDealDiscountValue);
+    const selectedDealSavingsAmount = roundMoney(Math.max(0, selectedDealBaseAmount - selectedDealDiscountedTotal));
+    const selectedDealDiscountValid = selectedDealDiscountValue >= 1 && selectedDealDiscountValue <= 99;
     const paymentLinkEligibleDeals = (client.deals || []).filter((deal) => ['pending', 'awaiting_payment'].includes(deal.status));
     const renderDealAmount = (deal) => {
         const hasDiscount = normalizeDiscountPercentage(deal?.discount_percentage) > 0 && deal?.original_amount !== null;
@@ -1484,7 +1631,82 @@ export default function ClientDetail() {
         setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
         setActivationApplyDiscount(false);
         setActivationDiscountPercentage('');
+        setActivationDiscountPayableAmount('');
         setActivationDiscountPin('');
+    };
+
+    const syncActivationDiscountFromPercentage = (value) => {
+        const raw = String(value ?? '').trim();
+        if (raw === '') {
+            setActivationDiscountPercentage('');
+            setActivationDiscountPayableAmount('');
+            return;
+        }
+
+        const nextPercent = normalizeDiscountPercentage(raw);
+        setActivationDiscountPercentage(value);
+        setActivationDiscountPayableAmount(nextPercent > 0
+            ? formatNumericInput(discountedAmount(activationBaseAmount, nextPercent))
+            : '');
+    };
+
+    const syncActivationDiscountFromPayable = (value) => {
+        const raw = String(value ?? '').trim();
+        if (raw === '') {
+            setActivationDiscountPercentage('');
+            setActivationDiscountPayableAmount('');
+            return;
+        }
+
+        const nextPayable = Number.parseFloat(raw);
+        if (!Number.isFinite(nextPayable)) {
+            setActivationDiscountPercentage('');
+            setActivationDiscountPayableAmount(value);
+            return;
+        }
+
+        const nextPercent = discountPercentageFromPayable(activationBaseAmount, nextPayable);
+        setActivationDiscountPercentage(nextPercent > 0 ? formatPercentInput(nextPercent) : '');
+        setActivationDiscountPayableAmount(nextPercent > 0
+            ? formatNumericInput(discountedAmount(activationBaseAmount, nextPercent))
+            : raw);
+    };
+
+    const syncDealDiscountFromPercentage = (value) => {
+        const raw = String(value ?? '').trim();
+        if (raw === '') {
+            setDealDiscountPercentage('');
+            setDealDiscountPayableAmount('');
+            return;
+        }
+
+        const nextPercent = normalizeDiscountPercentage(raw);
+        setDealDiscountPercentage(value);
+        setDealDiscountPayableAmount(nextPercent > 0
+            ? formatNumericInput(discountedAmount(selectedDealBaseAmount, nextPercent))
+            : '');
+    };
+
+    const syncDealDiscountFromPayable = (value) => {
+        const raw = String(value ?? '').trim();
+        if (raw === '') {
+            setDealDiscountPercentage('');
+            setDealDiscountPayableAmount('');
+            return;
+        }
+
+        const nextPayable = Number.parseFloat(raw);
+        if (!Number.isFinite(nextPayable)) {
+            setDealDiscountPercentage('');
+            setDealDiscountPayableAmount(value);
+            return;
+        }
+
+        const nextPercent = discountPercentageFromPayable(selectedDealBaseAmount, nextPayable);
+        setDealDiscountPercentage(nextPercent > 0 ? formatPercentInput(nextPercent) : '');
+        setDealDiscountPayableAmount(nextPercent > 0
+            ? formatNumericInput(discountedAmount(selectedDealBaseAmount, nextPercent))
+            : raw);
     };
 
     const openPaymentLinkModal = () => {
@@ -1571,6 +1793,7 @@ export default function ClientDetail() {
         setActivationPaymentLinkProvider(defaultPaymentLinkProvider);
         setActivationApplyDiscount(false);
         setActivationDiscountPercentage('');
+        setActivationDiscountPayableAmount('');
         setActivationDiscountPin('');
     };
 
@@ -1583,6 +1806,7 @@ export default function ClientDetail() {
         setDealPaymentLinkProvider(defaultPaymentLinkProvider);
         setDealApplyDiscount(false);
         setDealDiscountPercentage('');
+        setDealDiscountPayableAmount('');
         setDealDiscountPin('');
         if (type === 'deactivate') {
             setDeactivationReasonCode('other');
@@ -1627,8 +1851,8 @@ export default function ClientDetail() {
             return;
         }
 
-        if (activationApplyDiscount && activationDiscountValue <= 0) {
-            toast.error('Enter a discount percentage greater than 0.');
+        if (activationApplyDiscount && !activationDiscountValid) {
+            toast.error('Enter a discount percentage between 1 and 99.');
             return;
         }
 
@@ -1666,7 +1890,7 @@ export default function ClientDetail() {
         || (activationRequiresReference && !activationPaymentReference.trim())
         || (activationRequiresFreeTrialPin && activationFreeTrialPin.trim().length < 4)
         || (activationRequiresProvider && !activationPaymentLinkProvider)
-        || (activationApplyDiscount && activationDiscountValue <= 0)
+        || (activationApplyDiscount && !activationDiscountValid)
         || (activationApplyDiscount && activationDiscountPin.trim().length < 4)
         || (
             activationSubscriptionLifecycle !== resolveDialogPredictedLifecycle('activate', activationDeal)
@@ -2416,6 +2640,7 @@ export default function ClientDetail() {
                                                     if (method === 'free_trial') {
                                                         setDealApplyDiscount(false);
                                                         setDealDiscountPercentage('');
+                                                        setDealDiscountPayableAmount('');
                                                         setDealDiscountPin('');
                                                     }
                                                 }}
@@ -2492,67 +2717,28 @@ export default function ClientDetail() {
                                         </div>
                                     ) : null}
                                     {dealDiscountAllowed ? (
-                                        <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50/60 p-3">
-                                            <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={dealApplyDiscount}
-                                                    onChange={(event) => {
-                                                        const checked = event.target.checked;
-                                                        setDealApplyDiscount(checked);
-                                                        if (!checked) {
-                                                            setDealDiscountPercentage('');
-                                                            setDealDiscountPin('');
-                                                        }
-                                                    }}
-                                                    className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-200"
-                                                />
-                                                Apply Discount
-                                            </label>
-
-                                            {dealApplyDiscount ? (
-                                                <>
-                                                    <div className="grid gap-3 sm:grid-cols-2">
-                                                        <div>
-                                                            <label className="mb-1 block text-sm font-medium text-slate-700">Discount %</label>
-                                                            <input
-                                                                type="number"
-                                                                min="1"
-                                                                max="99"
-                                                                step="0.01"
-                                                                value={dealDiscountPercentage}
-                                                                onChange={(event) => setDealDiscountPercentage(event.target.value)}
-                                                                className="crm-input"
-                                                                placeholder="e.g. 15"
-                                                            />
-                                                        </div>
-                                                        <div>
-                                                            <label className="mb-1 block text-sm font-medium text-slate-700">Discount PIN</label>
-                                                            <input
-                                                                type="password"
-                                                                inputMode="numeric"
-                                                                maxLength={6}
-                                                                value={dealDiscountPin}
-                                                                onChange={(event) => setDealDiscountPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                                                                className="crm-input"
-                                                                placeholder="Enter discount PIN"
-                                                            />
-                                                        </div>
-                                                    </div>
-                                                    <div className="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700">
-                                                        <p className="font-medium text-slate-900">Live price preview</p>
-                                                        <p className="mt-1 flex flex-wrap items-center gap-2">
-                                                            <span className="line-through text-slate-500">{formatCurrency(selectedDealBaseAmount, dealActionDialog.deal.currency || 'KES')}</span>
-                                                            <span className="text-base font-semibold text-slate-900">{formatCurrency(selectedDealDiscountedTotal, dealActionDialog.deal.currency || 'KES')}</span>
-                                                            {selectedDealDiscountValue > 0 ? (
-                                                                <span className="text-xs font-semibold uppercase tracking-wide text-amber-700">{selectedDealDiscountValue}% off</span>
-                                                            ) : null}
-                                                        </p>
-                                                        <p className="mt-1 text-xs text-slate-500">Discounts are capped by the market limit in Settings.</p>
-                                                    </div>
-                                                </>
-                                            ) : null}
-                                        </div>
+                                        <DiscountPricingEditor
+                                            idPrefix="client-deal-action"
+                                            applyDiscount={dealApplyDiscount}
+                                            onToggle={(checked) => {
+                                                setDealApplyDiscount(checked);
+                                                if (!checked) {
+                                                    setDealDiscountPercentage('');
+                                                    setDealDiscountPayableAmount('');
+                                                    setDealDiscountPin('');
+                                                }
+                                            }}
+                                            baseAmount={selectedDealBaseAmount}
+                                            currency={dealActionDialog.deal.currency || 'KES'}
+                                            payableAmount={dealDiscountPayableAmount}
+                                            discountPercentage={dealDiscountPercentage}
+                                            discountPin={dealDiscountPin}
+                                            discountedTotal={selectedDealDiscountedTotal}
+                                            savingsAmount={selectedDealSavingsAmount}
+                                            onPayableChange={syncDealDiscountFromPayable}
+                                            onPercentageChange={syncDealDiscountFromPercentage}
+                                            onPinChange={setDealDiscountPin}
+                                        />
                                     ) : null}
 
                                     <div className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
@@ -2687,7 +2873,7 @@ export default function ClientDetail() {
                                         || (dealPaymentRequiresReference && !dealPaymentReference.trim())
                                         || (dealPaymentRequiresFreeTrialPin && dealFreeTrialPin.trim().length < 4)
                                         || (dealPaymentRequiresProvider && !dealPaymentLinkProvider)
-                                        || (dealApplyDiscount && selectedDealDiscountValue <= 0)
+                                        || (dealApplyDiscount && !selectedDealDiscountValid)
                                         || (dealApplyDiscount && dealDiscountPin.trim().length < 4)
                                         || (dealSubscriptionLifecycle !== resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal) && !dealSubscriptionLifecycleReason.trim())
                                     }
@@ -2720,7 +2906,7 @@ export default function ClientDetail() {
                                         || (dealPaymentRequiresReference && !dealPaymentReference.trim())
                                         || (dealPaymentRequiresFreeTrialPin && dealFreeTrialPin.trim().length < 4)
                                         || (dealPaymentRequiresProvider && !dealPaymentLinkProvider)
-                                        || (dealApplyDiscount && selectedDealDiscountValue <= 0)
+                                        || (dealApplyDiscount && !selectedDealDiscountValid)
                                         || (dealApplyDiscount && dealDiscountPin.trim().length < 4)
                                         || (dealSubscriptionLifecycle !== resolveDialogPredictedLifecycle(dealActionDialog.type, dealActionDialog.deal) && !dealSubscriptionLifecycleReason.trim())
                                     }
@@ -3763,6 +3949,7 @@ export default function ClientDetail() {
                                                 if (method === 'free_trial') {
                                                     setActivationApplyDiscount(false);
                                                     setActivationDiscountPercentage('');
+                                                    setActivationDiscountPayableAmount('');
                                                     setActivationDiscountPin('');
                                                 }
                                             }}
@@ -3877,67 +4064,28 @@ export default function ClientDetail() {
                                     </div>
                                 ) : null}
                                 {activationDiscountAllowed ? (
-                                    <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50/60 p-3">
-                                        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                                            <input
-                                                type="checkbox"
-                                                checked={activationApplyDiscount}
-                                                onChange={(event) => {
-                                                    const checked = event.target.checked;
-                                                    setActivationApplyDiscount(checked);
-                                                    if (!checked) {
-                                                        setActivationDiscountPercentage('');
-                                                        setActivationDiscountPin('');
-                                                    }
-                                                }}
-                                                className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-200"
-                                            />
-                                            Apply Discount
-                                        </label>
-
-                                        {activationApplyDiscount ? (
-                                            <>
-                                                <div className="grid gap-3 sm:grid-cols-2">
-                                                    <div>
-                                                        <label className="mb-1 block text-sm font-medium text-slate-700">Discount %</label>
-                                                        <input
-                                                            type="number"
-                                                            min="1"
-                                                            max="99"
-                                                            step="0.01"
-                                                            value={activationDiscountPercentage}
-                                                            onChange={(event) => setActivationDiscountPercentage(event.target.value)}
-                                                            className="crm-input"
-                                                            placeholder="e.g. 20"
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <label className="mb-1 block text-sm font-medium text-slate-700">Discount PIN</label>
-                                                        <input
-                                                            type="password"
-                                                            inputMode="numeric"
-                                                            maxLength={6}
-                                                            value={activationDiscountPin}
-                                                            onChange={(event) => setActivationDiscountPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                                                            className="crm-input"
-                                                            placeholder="Enter discount PIN"
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <div className="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700">
-                                                    <p className="font-medium text-slate-900">Live price preview</p>
-                                                    <p className="mt-1 flex flex-wrap items-center gap-2">
-                                                        <span className="line-through text-slate-500">{formatCurrency(activationBaseAmount, activationDeal?.currency || 'KES')}</span>
-                                                        <span className="text-base font-semibold text-slate-900">{formatCurrency(activationDiscountedTotal, activationDeal?.currency || 'KES')}</span>
-                                                        {activationDiscountValue > 0 ? (
-                                                            <span className="text-xs font-semibold uppercase tracking-wide text-amber-700">{activationDiscountValue}% off</span>
-                                                        ) : null}
-                                                    </p>
-                                                    <p className="mt-1 text-xs text-slate-500">Discounts are capped by the market limit in Settings.</p>
-                                                </div>
-                                            </>
-                                        ) : null}
-                                    </div>
+                                    <DiscountPricingEditor
+                                        idPrefix="client-detail-activation"
+                                        applyDiscount={activationApplyDiscount}
+                                        onToggle={(checked) => {
+                                            setActivationApplyDiscount(checked);
+                                            if (!checked) {
+                                                setActivationDiscountPercentage('');
+                                                setActivationDiscountPayableAmount('');
+                                                setActivationDiscountPin('');
+                                            }
+                                        }}
+                                        baseAmount={activationBaseAmount}
+                                        currency={activationDeal?.currency || 'KES'}
+                                        payableAmount={activationDiscountPayableAmount}
+                                        discountPercentage={activationDiscountPercentage}
+                                        discountPin={activationDiscountPin}
+                                        discountedTotal={activationDiscountedTotal}
+                                        savingsAmount={activationSavingsAmount}
+                                        onPayableChange={syncActivationDiscountFromPayable}
+                                        onPercentageChange={syncActivationDiscountFromPercentage}
+                                        onPinChange={setActivationDiscountPin}
+                                    />
                                 ) : null}
 
                                 <div className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
