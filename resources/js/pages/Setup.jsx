@@ -184,11 +184,67 @@ export default function Setup() {
     const selectedPlatformId = marketState.result?.platform?.platform_id || null;
     const progressWidth = `${((currentStep + 1) / steps.length) * 100}%`;
 
+    useEffect(() => {
+        const shouldPoll = Boolean(
+            selectedPlatformId
+            && (marketState.syncing || marketState.syncResult?.run?.in_progress)
+        );
+
+        if (!shouldPoll) {
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        const poll = async () => {
+            try {
+                const { data } = await api.get(`/crm/settings/integrations/platforms/${selectedPlatformId}/sync/latest`);
+                if (cancelled) {
+                    return;
+                }
+
+                setMarketState((current) => ({
+                    ...current,
+                    syncing: Boolean(data?.run?.in_progress),
+                    syncResult: data ? {
+                        status: data?.run?.status || data?.platform?.sync?.last_status || 'pending',
+                        run: data?.run || null,
+                        platform: data?.platform || current.result?.platform || null,
+                        result: data?.platform?.sync?.last_result || null,
+                    } : current.syncResult,
+                    result: current.result ? {
+                        ...current.result,
+                        platform: data?.platform || current.result.platform,
+                    } : current.result,
+                }));
+            } catch (error) {
+                if (!cancelled) {
+                    setMarketState((current) => ({
+                        ...current,
+                        syncing: false,
+                        error: error?.response?.data?.message || 'Unable to refresh sync status.',
+                    }));
+                }
+            }
+        };
+
+        poll();
+        const interval = window.setInterval(poll, 4000);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(interval);
+        };
+    }, [marketState.syncResult?.run?.in_progress, marketState.syncing, selectedPlatformId]);
+
     const stepPassed = useMemo(() => ({
         environment: Boolean(envState.result?.ok),
         database: Boolean(databaseState.result?.connected) && Number(databaseState.result?.pending_migrations ?? 1) === 0,
         admin: Boolean(adminState.result?.token),
-        market: Boolean(marketState.result?.platform?.platform_id) && marketState.testResult?.status === 'healthy',
+        market: Boolean(marketState.result?.platform?.platform_id)
+            && marketState.testResult?.status === 'healthy'
+            && Boolean(marketState.result?.platform?.sync?.last_synced_at)
+            && !marketState.syncing,
         diagnostics: Boolean(diagnosticsState.result)
             && !['error'].includes(diagnosticsState.result?.platform?.status || 'skipped')
             && !['error'].includes(diagnosticsState.result?.payment_proxy?.status || 'pending'),
@@ -385,14 +441,14 @@ export default function Setup() {
             });
             setMarketState((current) => ({
                 ...current,
-                syncing: false,
+                syncing: true,
                 syncResult: data,
                 result: {
                     ...current.result,
                     platform: data.platform,
                 },
             }));
-            toast.success('Initial market sync completed.');
+            toast.success(data?.message || 'Initial market sync has been queued.');
         } catch (error) {
             setMarketState((current) => ({
                 ...current,
@@ -806,7 +862,10 @@ export default function Setup() {
                                                 {(marketState.syncResult?.status || marketState.result.platform.sync?.last_status || 'pending').replaceAll('_', ' ')}
                                             </span>
                                         </div>
-                                        <p className="mt-2 text-xs text-slate-500">{marketState.syncResult?.result?.clients?.total ?? 0} client records touched</p>
+                                        <p className="mt-2 text-xs text-slate-500">{marketState.result.platform.sync?.last_result?.clients?.total ?? marketState.syncResult?.result?.clients?.total ?? 0} client records touched</p>
+                                        {marketState.syncResult?.run?.in_progress ? (
+                                            <p className="mt-1 text-xs text-amber-700">Background sync is running. You can continue with setup while it completes.</p>
+                                        ) : null}
                                     </div>
                                 </div>
                             ) : null}

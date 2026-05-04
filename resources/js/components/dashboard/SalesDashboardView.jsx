@@ -192,6 +192,9 @@ function syncStatusTone(status) {
     if (status === 'success') {
         return 'border-emerald-200 bg-emerald-50 text-emerald-700';
     }
+    if (status === 'queued' || status === 'running') {
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
     if (status === 'error') {
         return 'border-rose-200 bg-rose-50 text-rose-700';
     }
@@ -943,7 +946,9 @@ function MarketSyncPanel({ markets, onSync, isPending, syncingMarketId }) {
                     {markets.map((market) => {
                         const syncResult = market.sync_last_result?.clients || {};
                         const lastDelta = market.last_delta || syncResult || {};
-                        const isSyncing = isPending && syncingMarketId === market.id;
+                        const latestRun = market.client_sync?.latest_run || null;
+                        const isSyncing = latestRun?.in_progress || (isPending && syncingMarketId === market.id);
+                        const statusLabel = latestRun?.status || market.sync_last_status || 'unknown';
                         return (
                             <div key={market.id} className="rounded-[22px] border border-slate-200 bg-white/90 p-4 shadow-sm">
                                 <div className="flex items-start justify-between gap-3">
@@ -956,8 +961,8 @@ function MarketSyncPanel({ markets, onSync, isPending, syncingMarketId }) {
                                             {market.country || 'Unknown country'} • {market.currency || 'KES'}
                                         </p>
                                     </div>
-                                    <span className={`crm-sales-chip ${syncStatusTone(market.sync_last_status)}`}>
-                                        {market.sync_last_status || 'unknown'}
+                                    <span className={`crm-sales-chip ${syncStatusTone(statusLabel)}`}>
+                                        {statusLabel}
                                     </span>
                                 </div>
 
@@ -982,6 +987,11 @@ function MarketSyncPanel({ markets, onSync, isPending, syncingMarketId }) {
                                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                                     <div className="text-sm text-slate-500">
                                         <p>Last sync: <span className="font-medium text-slate-700">{formatDateTime(market.sync_last_synced_at)}</span></p>
+                                        {latestRun?.in_progress ? (
+                                            <p className="mt-1 text-amber-700">
+                                                Background {latestRun.mode || 'delta'} sync is running via {latestRun.protocol || market.client_sync?.protocol || 'pending'}.
+                                            </p>
+                                        ) : null}
                                         <p className="mt-1">
                                             {asNumber(lastDelta.total) > 0
                                                 ? `Last delta processed ${asNumber(lastDelta.total).toLocaleString()} profile updates.`
@@ -1045,6 +1055,10 @@ export default function SalesDashboardView({ user, navigate }) {
         initialDataUpdatedAt: () => readDashboardCache(marketsCacheKey)?.updatedAt,
         staleTime: 300_000,
         refetchOnWindowFocus: false,
+        refetchInterval: (query) => Array.isArray(query.state.data)
+            && query.state.data.some((market) => market?.client_sync?.latest_run?.in_progress)
+            ? 4000
+            : false,
     });
 
     const markets = marketsQuery.data || [];
@@ -1199,14 +1213,10 @@ export default function SalesDashboardView({ user, navigate }) {
             queryClient.invalidateQueries({ queryKey: ['sales-dashboard-markets'] });
             queryClient.invalidateQueries({ queryKey: ['sales-dashboard-summary'] });
             queryClient.invalidateQueries({ queryKey: ['sales-dashboard-my-stats'] });
-            const created = asNumber(data?.profiles_created);
-            const updated = asNumber(data?.profiles_updated);
-            const total = created + updated;
-
-            toast.success(
-                total > 0
-                    ? `${data?.platform?.platform_name || 'Market'} sync completed: ${created} created, ${updated} updated.`
-                    : `${data?.platform?.platform_name || 'Market'} sync completed. No profile changes were found.`
+            toast[data?.reused_run ? 'warning' : 'success'](
+                data?.message || (data?.reused_run
+                    ? `${data?.platform?.platform_name || 'Market'} already has a sync in progress.`
+                    : `${data?.platform?.platform_name || 'Market'} sync started in the background.`)
             );
         },
         onError: (error) => {

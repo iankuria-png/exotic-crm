@@ -1067,6 +1067,7 @@ function IntegrationsWorkspace({
     });
     const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
     const [latestSyncResult, setLatestSyncResult] = useState(null);
+    const [latestClientSyncRun, setLatestClientSyncRun] = useState(null);
     const [supportBoardSyncForm, setSupportBoardSyncForm] = useState({
         refresh: false,
         reason: 'Manual Support Board link sync from integrations workspace',
@@ -1216,6 +1217,12 @@ function IntegrationsWorkspace({
 
     const platformRows = data?.platforms || [];
     const selectedPlatform = platformRows.find((platform) => platform.platform_id === selectedPlatformId) || null;
+    const clientSyncStatusQuery = useQuery({
+        queryKey: ['settings-client-sync', selectedPlatformId],
+        queryFn: () => api.get(`/crm/settings/integrations/platforms/${selectedPlatformId}/sync/latest`).then((response) => response.data),
+        enabled: Boolean(selectedPlatformId) && canManageMarkets,
+        refetchInterval: (query) => query.state.data?.run?.in_progress ? 4000 : false,
+    });
     const supportBoardSyncStatusQuery = useQuery({
         queryKey: ['settings-support-board-sync', selectedPlatformId],
         queryFn: () => api.get(`/crm/settings/integrations/platforms/${selectedPlatformId}/support-board/sync/latest`).then((response) => response.data),
@@ -1298,6 +1305,7 @@ function IntegrationsWorkspace({
 
         setEditor(buildPlatformEditor(selectedPlatform));
         setLatestSyncResult(selectedPlatform.sync?.last_result || null);
+        setLatestClientSyncRun(selectedPlatform.client_sync?.latest_run || null);
         setLatestSupportBoardSyncResult(selectedPlatform.support_board_sync?.latest_run || null);
         setPaymentLinkForm(buildPaymentLinkProviderForm(selectedPlatform));
         setPackageEditor(buildPackageEditor(selectedPlatform));
@@ -1305,6 +1313,17 @@ function IntegrationsWorkspace({
         setWalletProvidersForm(buildWalletProvidersForm(selectedPlatform, walletProviderSchemas, walletEnvironmentOptions));
         setWalletCredentialReveal(null);
     }, [selectedPlatformId, selectedPlatform]);
+
+    useEffect(() => {
+        if (!clientSyncStatusQuery.data) {
+            return;
+        }
+
+        setLatestClientSyncRun(clientSyncStatusQuery.data.run || null);
+        if (clientSyncStatusQuery.data.platform?.sync?.last_result) {
+            setLatestSyncResult(clientSyncStatusQuery.data.platform.sync.last_result);
+        }
+    }, [clientSyncStatusQuery.data]);
 
     useEffect(() => {
         if (!supportBoardSyncStatusQuery.data) {
@@ -1499,8 +1518,16 @@ function IntegrationsWorkspace({
         mutationFn: ({ platformId, payload }) => api.post(`/crm/settings/integrations/platforms/${platformId}/sync`, payload).then((response) => response.data),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['settings-integrations'] });
-            setLatestSyncResult(response?.result || null);
-            toast.success(response?.status === 'partial' ? 'Sync completed with warnings.' : 'Sync completed successfully.');
+            if (response?.run) {
+                queryClient.setQueryData(['settings-client-sync', response?.platform?.platform_id || selectedPlatformId], response);
+                setLatestClientSyncRun(response.run);
+                toast[response?.reused_run ? 'warning' : 'success'](
+                    response?.message || (response?.reused_run ? 'A client sync is already running for this market.' : 'Client sync has been queued.')
+                );
+            } else {
+                setLatestSyncResult(response?.result || null);
+                toast.success(response?.status === 'partial' ? 'Sync completed with warnings.' : 'Sync completed successfully.');
+            }
             setSyncConfirmOpen(false);
         },
         onError: (error) => {
@@ -2973,6 +3000,15 @@ function IntegrationsWorkspace({
     ].join('\n');
 
     const selectedHasCredentials = Boolean(selectedPlatform?.wp_sync?.credentials_ready);
+    const clientSyncQueue = clientSyncStatusQuery.data?.platform?.client_sync?.queue
+        || selectedPlatform?.client_sync?.queue
+        || latestClientSyncRun?.queue
+        || null;
+    const clientSyncActive = Boolean(latestClientSyncRun?.in_progress);
+    const clientSyncQueueReady = Boolean(clientSyncQueue?.available ?? true);
+    const clientSyncStatusLabel = latestClientSyncRun?.status
+        ? latestClientSyncRun.status.replaceAll('_', ' ')
+        : 'idle';
     const canPushActiveWalletCredentials = selectedHasCredentials && selectedWalletEffectiveMode !== 'disabled';
     const selectedSupportBoardConfigured = Boolean(
         selectedPlatform?.support_board_api_url
@@ -5124,7 +5160,6 @@ function IntegrationsWorkspace({
                                         >
                                             <option value="leads">Leads only</option>
                                             <option value="clients">Clients only</option>
-                                            <option value="all">Clients + leads</option>
                                         </select>
                                         <select
                                             value={syncForm.mode}
@@ -5165,12 +5200,23 @@ function IntegrationsWorkspace({
                                         <button
                                             type="button"
                                             onClick={() => setSyncConfirmOpen(true)}
-                                            disabled={runSyncMutation.isPending || !selectedHasCredentials || !syncForm.reason.trim()}
+                                            disabled={
+                                                runSyncMutation.isPending
+                                                || !selectedHasCredentials
+                                                || !syncForm.reason.trim()
+                                                || (syncForm.scope === 'clients' && !clientSyncQueueReady)
+                                            }
                                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                                         >
-                                            {runSyncMutation.isPending ? 'Running...' : 'Run sync'}
+                                            {runSyncMutation.isPending ? 'Running...' : (syncForm.scope === 'clients' ? 'Queue sync' : 'Run sync')}
                                         </button>
                                     </div>
+                                    {syncForm.scope === 'clients' && !clientSyncQueueReady ? (
+                                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                                            <p className="font-semibold">Background queue not ready</p>
+                                            <p className="mt-1">{clientSyncQueue?.issues?.[0] || 'Background client sync is currently unavailable.'}</p>
+                                        </div>
+                                    ) : null}
                                     {latestSyncResult ? (
                                         <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
                                             <p className="font-semibold text-slate-800">Latest sync summary</p>
@@ -5180,6 +5226,36 @@ function IntegrationsWorkspace({
                                             ) : null}
                                             {latestSyncResult.leads ? (
                                                 <p>Leads: {latestSyncResult.leads.created || 0} created, {latestSyncResult.leads.updated || 0} updated, {latestSyncResult.leads.errors?.length || 0} errors</p>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                    {latestClientSyncRun ? (
+                                        <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-700">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <p className="font-semibold text-slate-800">Client sync run</p>
+                                                <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusChip(latestClientSyncRun.status)}`}>
+                                                    {clientSyncStatusLabel}
+                                                </span>
+                                            </div>
+                                            <p className="mt-2">
+                                                Protocol: <span className="font-medium text-slate-900">{latestClientSyncRun.protocol || selectedPlatform?.client_sync?.protocol || 'pending'}</span>
+                                                {' • '}
+                                                Processed: <span className="font-medium text-slate-900">{latestClientSyncRun.processed || 0}</span>
+                                                {' • '}
+                                                Created/updated: <span className="font-medium text-slate-900">{latestClientSyncRun.created || 0}/{latestClientSyncRun.updated || 0}</span>
+                                            </p>
+                                            <p className="mt-1">
+                                                Started: <span className="font-medium text-slate-900">{formatDateTime(latestClientSyncRun.started_at || latestClientSyncRun.created_at)}</span>
+                                                {latestClientSyncRun.in_progress ? ' • Sync continues in the background.' : ''}
+                                            </p>
+                                            {selectedPlatform?.client_sync?.legacy_correctness_risk ? (
+                                                <p className="mt-1 text-amber-700">This market is still using the legacy plugin contract, so reconciliation remains best-effort until the v2 plugin is deployed.</p>
+                                            ) : null}
+                                            {latestClientSyncRun.queue?.message ? (
+                                                <p className="mt-1 text-amber-700">{latestClientSyncRun.queue.message}</p>
+                                            ) : null}
+                                            {latestClientSyncRun.error_details?.[0]?.message ? (
+                                                <p className="mt-1 text-rose-700">{latestClientSyncRun.error_details[0].message}</p>
                                             ) : null}
                                         </div>
                                     ) : null}

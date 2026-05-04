@@ -3,10 +3,11 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RunClientSyncJob;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use App\Models\User;
-use App\Services\ClientSyncService;
+use App\Services\ClientSyncRunService;
 use App\Services\MarketAuthorizationService;
 use App\Services\NotificationService;
 use App\Services\WpSyncService;
@@ -194,27 +195,37 @@ class SetupController extends Controller
         }
 
         $perPage = (int) ($validated['per_page'] ?? 100);
-        $syncResult = (new ClientSyncService($platform))->fullSync($perPage);
-        $payload = [
-            'scope' => 'clients',
-            'mode' => 'full',
-            'ran_at' => now()->toDateTimeString(),
-            'clients' => $syncResult,
-        ];
+        $clientSyncRunService = app(ClientSyncRunService::class);
+        $queue = $clientSyncRunService->queueReadiness();
+        if (!($queue['available'] ?? false)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $queue['issues'][0] ?? 'Background client sync is not available.',
+                'queue' => $queue,
+            ], 503);
+        }
 
-        $platform->forceFill([
-            'sync_last_synced_at' => now(),
-            'sync_last_scope' => 'clients',
-            'sync_last_status' => 'success',
-            'sync_last_error' => null,
-            'sync_last_result' => $payload,
-        ])->save();
+        $started = $clientSyncRunService->startManualRun(
+            $platform,
+            $request->user(),
+            'reconcile',
+            'Initial setup sync'
+        );
+        $run = $started['run'];
+
+        if (!$started['reused']) {
+            RunClientSyncJob::dispatch((int) $run->id, $perPage)->onQueue('sync-clients-reconcile');
+        }
 
         return response()->json([
-            'status' => 'success',
-            'result' => $payload,
+            'status' => $started['reused'] ? 'running' : 'queued',
+            'message' => $started['reused']
+                ? 'A client sync is already running for this market.'
+                : 'Initial market sync has been queued.',
+            'reused_run' => (bool) $started['reused'],
+            'run' => $clientSyncRunService->serializeRun($run),
             'platform' => $this->serializePlatformIntegration($platform->fresh()),
-        ]);
+        ], 202);
     }
 
     public function runDiagnostics(Request $request)

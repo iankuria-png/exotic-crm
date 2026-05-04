@@ -5,6 +5,8 @@ namespace App\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Platform;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Http\UploadedFile;
 use RuntimeException;
 
@@ -65,6 +67,64 @@ class WpSyncService
     public function getClientProfile(int $postId): array
     {
         return $this->get("/clients/{$postId}");
+    }
+
+    public function probeClientSyncMeta(): array
+    {
+        $response = $this->getResponse('/sync/meta');
+        $status = $response->status();
+
+        if ($status === 404) {
+            return [
+                'status' => 'legacy_not_found',
+                'http_status' => 404,
+                'meta' => null,
+            ];
+        }
+
+        if (in_array($status, [401, 403], true)) {
+            throw new RuntimeException('WordPress sync capability probe failed authentication.');
+        }
+
+        if ($status === 405 || $response->serverError()) {
+            throw new RuntimeException(sprintf('WordPress sync capability probe failed with HTTP %d.', $status));
+        }
+
+        if ($response->failed()) {
+            $this->logFailedResponse($response, 'GET', '/sync/meta');
+            $response->throw();
+        }
+
+        $json = $response->json();
+        if (!is_array($json) || !array_key_exists('supports_cursor_sync', $json)) {
+            throw new RuntimeException('WordPress sync capability probe returned a malformed response.');
+        }
+
+        return [
+            'status' => !empty($json['supports_cursor_sync']) ? 'v2' : 'legacy',
+            'http_status' => $status,
+            'meta' => $json,
+        ];
+    }
+
+    public function getCursorClients(array $params = []): array
+    {
+        $params = array_filter(
+            $params,
+            fn ($value) => $value !== null && $value !== ''
+        );
+
+        return $this->get('/clients/sync', $params);
+    }
+
+    public function getClientTombstones(array $params = []): array
+    {
+        $params = array_filter(
+            $params,
+            fn ($value) => $value !== null && $value !== ''
+        );
+
+        return $this->get('/clients/tombstones', $params);
     }
 
     /**
@@ -273,11 +333,37 @@ class WpSyncService
 
     private function get(string $path, array $params = []): array
     {
-        $response = Http::withHeaders($this->headers())
-            ->timeout($this->defaultTimeout)
-            ->get($this->baseUrl . $path, $params);
+        $response = $this->getResponse($path, $params);
 
         return $this->decodeResponse($response, 'GET', $path);
+    }
+
+    private function getResponse(string $path, array $params = []): Response
+    {
+        $attempt = 0;
+
+        beginning:
+        $attempt++;
+
+        try {
+            $response = Http::withHeaders($this->headers())
+                ->timeout($this->defaultTimeout)
+                ->get($this->baseUrl . $path, $params);
+        } catch (ConnectionException $exception) {
+            if ($attempt < 3) {
+                usleep($this->retryDelayMicros($attempt));
+                goto beginning;
+            }
+
+            throw $exception;
+        }
+
+        if (($response->status() === 429 || $response->serverError()) && $attempt < 3) {
+            usleep($this->retryDelayMicros($attempt));
+            goto beginning;
+        }
+
+        return $response;
     }
 
     private function post(string $path, array $body = []): array
@@ -409,14 +495,28 @@ class WpSyncService
     private function decodeResponse($response, string $method, string $path): array
     {
         if ($response->failed()) {
-            Log::error("WpSyncService {$method} failed", [
-                'url'    => $this->baseUrl . $path,
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
+            $this->logFailedResponse($response, $method, $path);
             $response->throw();
         }
 
         return (array) $response->json();
+    }
+
+    private function logFailedResponse(Response $response, string $method, string $path): void
+    {
+        Log::error("WpSyncService {$method} failed", [
+            'url' => $this->baseUrl . $path,
+            'status' => $response->status(),
+            'body' => $response->body(),
+        ]);
+    }
+
+    private function retryDelayMicros(int $attempt): int
+    {
+        return match ($attempt) {
+            1 => 500_000,
+            2 => 1_500_000,
+            default => 3_000_000,
+        };
     }
 }

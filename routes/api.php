@@ -84,6 +84,7 @@ Route::middleware(['auth:sanctum', 'crm.impersonation'])->prefix('crm')->group(f
     Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/products', [CrmDashboardController::class, 'products']);
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/markets/{platform}/sync/latest', [SettingsController::class, 'latestPlatformClientSync'])->middleware('role:admin,sub_admin,sales');
 
     Route::middleware('role:admin,sub_admin,sales')->prefix('todos')->group(function () {
         Route::get('/', [AgentTodoController::class, 'index']);
@@ -395,6 +396,9 @@ Route::middleware(['auth:sanctum', 'crm.impersonation'])->prefix('crm')->group(f
     Route::post('/settings/integrations/platforms/{platform}/wallet/wp-credentials/push', [SettingsController::class, 'pushPlatformWalletWpCredentials'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/test-connection', [SettingsController::class, 'testPlatformConnection'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/sync', [SettingsController::class, 'runPlatformSync'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/integrations/platforms/{platform}/sync/latest', [SettingsController::class, 'latestPlatformClientSync'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/settings/integrations/platforms/{platform}/sync/reset-cursor', [SettingsController::class, 'resetPlatformClientSyncCursor'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/platforms/{platform}/capabilities/refresh', [SettingsController::class, 'refreshPlatformClientSyncCapabilities'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/support-board/sync', [SettingsController::class, 'runPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
     Route::get('/settings/integrations/platforms/{platform}/support-board/sync/latest', [SettingsController::class, 'latestPlatformSupportBoardSync'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/platforms/{platform}/support-board/lead-import', [SettingsController::class, 'runSbLeadImport'])->middleware('role:admin,sub_admin');

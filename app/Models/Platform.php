@@ -20,6 +20,11 @@ class Platform extends Model
         'sync_last_error', 'sync_last_result', 'payment_link_providers', 'support_chat_url',
         'support_board_api_url', 'support_board_token', 'support_board_sender_id',
         'wallet_settings',
+        'client_sync_checkpoint_at', 'client_sync_checkpoint_post_id',
+        'client_sync_tombstone_checkpoint_at', 'client_sync_tombstone_checkpoint_post_id',
+        'client_sync_protocol', 'client_sync_contract_version',
+        'client_sync_capability_checked_at', 'client_sync_capability_status',
+        'client_sync_last_reconciled_at',
     ];
 
     protected $hidden = [
@@ -33,6 +38,12 @@ class Platform extends Model
         'sync_last_checked_at' => 'datetime',
         'sync_last_synced_at' => 'datetime',
         'sync_last_result' => 'array',
+        'client_sync_checkpoint_at' => 'datetime',
+        'client_sync_checkpoint_post_id' => 'integer',
+        'client_sync_tombstone_checkpoint_at' => 'datetime',
+        'client_sync_tombstone_checkpoint_post_id' => 'integer',
+        'client_sync_capability_checked_at' => 'datetime',
+        'client_sync_last_reconciled_at' => 'datetime',
         'payment_link_providers' => 'array',
         'supported_currencies' => 'array',
         'multi_currency_wallet_enabled' => 'boolean',
@@ -64,6 +75,11 @@ class Platform extends Model
     public function users()
     {
         return $this->belongsToMany(User::class, 'user_platforms');
+    }
+
+    public function clientSyncRuns()
+    {
+        return $this->hasMany(ClientSyncRun::class);
     }
 
     public function billingProviderProfiles()

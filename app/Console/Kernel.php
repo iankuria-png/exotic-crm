@@ -84,6 +84,13 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_sync_clients.log'));
 
+        $schedule->command('crm:sync-clients --full')
+            ->name('crm_sync_clients_reconcile')
+            ->dailyAt('02:05')
+            ->withoutOverlapping(120)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_sync_clients_reconcile.log'));
+
         // Backfill Support Board user links shortly after the WordPress client sync completes.
         $schedule->command('crm:sync-sb-users')
             ->name('crm_sync_support_board_users')
@@ -150,15 +157,15 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
-        // Queue worker: processes push queue first (time-sensitive), then alert jobs, then default queue.
+        // Queue worker: processes push queue first (time-sensitive), then client sync queues, alert jobs, then default queue.
         // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
-        // --queue=push,alerts,default ensures payment failure alerts are not blocked by slow default jobs.
+        // --queue=push,sync-clients,sync-clients-reconcile,alerts,default ensures market syncs are handled in the background without blocking alerts.
         // --max-jobs=100 prevents memory leaks during long-running batches.
         $queueConnection = (string) config('queue.default', 'sync');
 
         if ($queueConnection !== 'sync') {
             $schedule->command(sprintf(
-                'queue:work %s --queue=push,alerts,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
+                'queue:work %s --queue=push,sync-clients,sync-clients-reconcile,alerts,default --max-time=55 --max-jobs=100 --tries=3 --sleep=3',
                 $queueConnection
             ))
                 ->name('queue_worker')

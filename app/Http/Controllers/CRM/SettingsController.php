@@ -12,8 +12,10 @@ use App\Billing\BillingPermissions;
 use App\Billing\Support\ProviderProfileManager;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunSbLeadImportJob;
+use App\Jobs\RunClientSyncJob;
 use App\Jobs\RunSupportBoardSyncJob;
 use App\Models\AuditLog;
+use App\Models\ClientSyncRun;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
 use App\Models\SbLeadImportRun;
@@ -32,6 +34,7 @@ use App\Models\ReportingFxRate;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingMarketProviderBinding;
 use App\Services\AuditService;
+use App\Services\ClientSyncRunService;
 use App\Services\ClientSyncService;
 use App\Services\LeadImportService;
 use App\Services\MarketAuthorizationService;
@@ -98,6 +101,7 @@ class SettingsController extends Controller
         private readonly SbLeadImportRunService $sbLeadImportRunService,
         private readonly SupportBoardLeadImportService $supportBoardLeadImportService,
         private readonly SupportBoardSyncRunService $supportBoardSyncRunService,
+        private readonly ClientSyncRunService $clientSyncRunService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly WalletSyncService $walletSyncService,
         private readonly ReportingCurrencyService $reportingCurrencyService,
@@ -3133,42 +3137,76 @@ class SettingsController extends Controller
             ], 422);
         }
 
+        if ($scope === 'all') {
+            return response()->json([
+                'message' => 'Run client sync and lead sync separately. Combined clients + leads runs are disabled during the background client sync rollout.',
+            ], 422);
+        }
+
         $beforeState = $this->platformAuditState($platform);
 
         try {
-            $result = [
-                'scope' => $scope,
-                'mode' => $mode,
-                'dry_run' => $dryRun,
-                'ran_at' => now()->toDateTimeString(),
-                'clients' => null,
-                'leads' => null,
-            ];
+            if ($scope === 'leads') {
+                $result = [
+                    'scope' => $scope,
+                    'mode' => $mode,
+                    'dry_run' => $dryRun,
+                    'ran_at' => now()->toDateTimeString(),
+                    'clients' => null,
+                    'leads' => null,
+                ];
 
-            if (in_array($scope, ['clients', 'all'], true)) {
-                $clientSyncService = new ClientSyncService($platform);
-                $result['clients'] = $mode === 'full'
-                    ? $clientSyncService->fullSync($perPage)
-                    : $clientSyncService->deltaSync();
-            }
-
-            if (in_array($scope, ['leads', 'all'], true)) {
                 $result['leads'] = $this->leadImportService->importPlatform($platform, $dryRun, $perPage);
+
+                $syncStatus = 'success';
+                if (!empty($result['leads']['errors']) && count($result['leads']['errors']) > 0) {
+                    $syncStatus = 'partial';
+                }
+
+                $platform->forceFill([
+                    'sync_last_synced_at' => now(),
+                    'sync_last_scope' => $scope,
+                    'sync_last_status' => $syncStatus,
+                    'sync_last_error' => $syncStatus === 'partial' ? mb_substr((string) $result['leads']['errors'][0], 0, 500) : null,
+                    'sync_last_result' => $result,
+                ])->save();
+                $platform->refresh();
+
+                $this->auditService->fromRequest(
+                    $request,
+                    (int) $platform->id,
+                    CrmAuditAction::INTEGRATION_SYNC_RUN,
+                    'platform',
+                    (int) $platform->id,
+                    $beforeState,
+                    $this->platformAuditState($platform),
+                    $validated['reason'] ?? 'Manual lead sync run'
+                );
+
+                return response()->json([
+                    'status' => $syncStatus,
+                    'result' => $result,
+                    'platform' => $this->serializePlatformIntegration($platform),
+                ]);
             }
 
-            $syncStatus = 'success';
-            if (!empty($result['leads']['errors']) && count($result['leads']['errors']) > 0) {
-                $syncStatus = 'partial';
+            $queue = $this->clientSyncRunService->queueReadiness();
+            if (!($queue['available'] ?? false)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $queue['issues'][0] ?? 'Background client sync is not available.',
+                    'queue' => $queue,
+                ], 503);
             }
 
-            $platform->forceFill([
-                'sync_last_synced_at' => now(),
-                'sync_last_scope' => $scope,
-                'sync_last_status' => $syncStatus,
-                'sync_last_error' => $syncStatus === 'partial' ? mb_substr((string) $result['leads']['errors'][0], 0, 500) : null,
-                'sync_last_result' => $result,
-            ])->save();
-            $platform->refresh();
+            $runMode = $mode === 'full' ? 'reconcile' : 'delta';
+            $started = $this->clientSyncRunService->startManualRun(
+                $platform,
+                $request->user(),
+                $runMode,
+                $validated['reason'] ?? null
+            );
+            $run = $started['run'];
 
             $this->auditService->fromRequest(
                 $request,
@@ -3177,40 +3215,39 @@ class SettingsController extends Controller
                 'platform',
                 (int) $platform->id,
                 $beforeState,
-                $this->platformAuditState($platform),
-                $validated['reason'] ?? 'Manual platform sync run'
+                array_merge($this->platformAuditState($platform), [
+                    'client_sync' => [
+                        'run_id' => (int) $run->id,
+                        'status' => $run->status,
+                        'mode' => $run->mode,
+                        'origin' => $run->origin,
+                    ],
+                ]),
+                $validated['reason'] ?? ($runMode === 'reconcile' ? 'Manual full client sync queued' : 'Manual delta client sync queued')
             );
+
+            if (!$started['reused']) {
+                RunClientSyncJob::dispatch((int) $run->id, $perPage)
+                    ->onQueue($runMode === 'reconcile' ? 'sync-clients-reconcile' : 'sync-clients');
+            }
 
             return response()->json([
-                'status' => $syncStatus,
-                'result' => $result,
-                'platform' => $this->serializePlatformIntegration($platform),
-            ]);
+                'status' => $started['reused'] ? 'running' : 'queued',
+                'message' => $started['reused']
+                    ? 'A client sync is already running for this market.'
+                    : 'Client sync has been queued.',
+                'reused_run' => (bool) $started['reused'],
+                'platform' => $this->serializePlatformIntegration($platform->fresh(), supportBoardSyncRun: null, clientSyncRun: $run),
+                'run' => $this->clientSyncRunService->serializeRun($run),
+            ], 202);
         } catch (\Throwable $exception) {
-            $platform->forceFill([
-                'sync_last_synced_at' => now(),
-                'sync_last_scope' => $scope,
-                'sync_last_status' => 'error',
-                'sync_last_error' => mb_substr($exception->getMessage(), 0, 500),
-            ])->save();
-            $platform->refresh();
-
-            $this->auditService->fromRequest(
-                $request,
-                (int) $platform->id,
-                CrmAuditAction::INTEGRATION_SYNC_RUN,
-                'platform',
-                (int) $platform->id,
-                $beforeState,
-                $this->platformAuditState($platform),
-                $validated['reason'] ?? 'Manual platform sync failed'
-            );
-
             return response()->json([
                 'status' => 'error',
-                'message' => 'Manual sync failed for this market.',
+                'message' => $scope === 'clients'
+                    ? 'Failed to queue the client sync for this market.'
+                    : 'Manual sync failed for this market.',
                 'error' => $exception->getMessage(),
-                'platform' => $this->serializePlatformIntegration($platform),
+                'platform' => $this->serializePlatformIntegration($platform->fresh()),
             ], 422);
         }
     }
@@ -3247,24 +3284,22 @@ class SettingsController extends Controller
         $perPage = (int) ($validated['per_page'] ?? 100);
 
         try {
-            $result = (new ClientSyncService($platform))->deltaSync($perPage);
-            $ranAt = now();
+            $queue = $this->clientSyncRunService->queueReadiness();
+            if (!($queue['available'] ?? false)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $queue['issues'][0] ?? 'Background market sync is not available.',
+                    'queue' => $queue,
+                ], 503);
+            }
 
-            $platform->forceFill([
-                'sync_last_synced_at' => $ranAt,
-                'sync_last_scope' => 'clients',
-                'sync_last_status' => 'success',
-                'sync_last_error' => null,
-                'sync_last_result' => [
-                    'scope' => 'clients',
-                    'mode' => 'delta',
-                    'dry_run' => false,
-                    'ran_at' => $ranAt->toDateTimeString(),
-                    'clients' => $result,
-                    'leads' => null,
-                ],
-            ])->save();
-            $platform->refresh();
+            $started = $this->clientSyncRunService->startManualRun(
+                $platform,
+                $request->user(),
+                'delta',
+                $validated['reason'] ?? 'Sales delta sync'
+            );
+            $run = $started['run'];
 
             $this->auditService->fromRequest(
                 $request,
@@ -3273,52 +3308,147 @@ class SettingsController extends Controller
                 'platform',
                 (int) $platform->id,
                 $beforeState,
-                $this->platformAuditState($platform),
-                $validated['reason'] ?? 'Sales delta sync'
+                array_merge($this->platformAuditState($platform), [
+                    'client_sync' => [
+                        'run_id' => (int) $run->id,
+                        'status' => $run->status,
+                        'mode' => $run->mode,
+                        'origin' => $run->origin,
+                    ],
+                ]),
+                $validated['reason'] ?? 'Sales delta sync queued'
             );
+
+            if (!$started['reused']) {
+                RunClientSyncJob::dispatch((int) $run->id, $perPage)->onQueue('sync-clients');
+            }
+
+            return response()->json([
+                'status' => $started['reused'] ? 'running' : 'queued',
+                'message' => $started['reused']
+                    ? 'A market sync is already running for this market.'
+                    : 'Market sync has been queued.',
+                'reused_run' => (bool) $started['reused'],
+                'platform' => $this->serializePlatformIntegration($platform->fresh(), supportBoardSyncRun: null, clientSyncRun: $run),
+                'run' => $this->clientSyncRunService->serializeRun($run),
+            ], 202);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to queue the market sync.',
+                'error' => $exception->getMessage(),
+                'platform' => $this->serializePlatformIntegration($platform->fresh()),
+            ], 422);
+        }
+    }
+
+    public function latestPlatformClientSync(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [
+                MarketAuthorizationService::ROLE_ADMIN,
+                MarketAuthorizationService::ROLE_SUB_ADMIN,
+                MarketAuthorizationService::ROLE_SALES,
+            ],
+            'You are not allowed to view market sync status.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        $run = $this->clientSyncRunService->latestRunForPlatform((int) $platform->id);
+
+        return response()->json([
+            'platform' => $this->serializePlatformIntegration($platform, supportBoardSyncRun: null, clientSyncRun: $run),
+            'run' => $this->clientSyncRunService->serializeRun($run),
+        ]);
+    }
+
+    public function resetPlatformClientSyncCursor(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can reset client sync cursors.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        if ($this->clientSyncRunService->activeRunForPlatform((int) $platform->id)) {
+            return response()->json([
+                'message' => 'Stop or wait for the active client sync run before resetting the cursor.',
+            ], 409);
+        }
+
+        $platform->forceFill([
+            'client_sync_checkpoint_at' => null,
+            'client_sync_checkpoint_post_id' => null,
+            'client_sync_tombstone_checkpoint_at' => null,
+            'client_sync_tombstone_checkpoint_post_id' => null,
+        ])->save();
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Client sync cursors were reset for this market.',
+            'platform' => $this->serializePlatformIntegration($platform->fresh()),
+        ]);
+    }
+
+    public function refreshPlatformClientSyncCapabilities(Request $request, Platform $platform)
+    {
+        $this->marketAuthorizationService->ensureRole(
+            $request->user(),
+            [MarketAuthorizationService::ROLE_ADMIN, MarketAuthorizationService::ROLE_SUB_ADMIN],
+            'Only admin or sub-admin users can refresh sync capabilities.'
+        );
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $platform->id,
+            'You do not have access to this market.'
+        );
+
+        try {
+            $probe = (new WpSyncService($platform))->probeClientSyncMeta();
+            $status = (string) ($probe['status'] ?? 'unknown');
+            $meta = is_array($probe['meta'] ?? null) ? $probe['meta'] : null;
+
+            if ($status === 'v2') {
+                $platform->forceFill([
+                    'client_sync_capability_checked_at' => now(),
+                    'client_sync_capability_status' => 'v2',
+                    'client_sync_protocol' => 'v2',
+                    'client_sync_contract_version' => (string) ($meta['sync_contract_version'] ?? '2'),
+                ])->save();
+            } elseif (in_array($status, ['legacy', 'legacy_not_found'], true)) {
+                $platform->forceFill([
+                    'client_sync_capability_checked_at' => now(),
+                    'client_sync_capability_status' => 'legacy_not_found',
+                    'client_sync_protocol' => 'v1',
+                ])->save();
+            }
 
             return response()->json([
                 'status' => 'success',
-                'synced_at' => $ranAt->toDateTimeString(),
-                'profiles_created' => (int) ($result['created'] ?? 0),
-                'profiles_updated' => (int) ($result['updated'] ?? 0),
-                'profiles_skipped' => (int) ($result['skipped'] ?? 0),
-                'profiles_total' => (int) ($result['total'] ?? 0),
-                'platform' => $this->serializePlatformIntegration($platform),
+                'capability' => $probe,
+                'platform' => $this->serializePlatformIntegration($platform->fresh()),
             ]);
         } catch (\Throwable $exception) {
-            $ranAt = now();
-
             $platform->forceFill([
-                'sync_last_synced_at' => $ranAt,
-                'sync_last_scope' => 'clients',
-                'sync_last_status' => 'error',
-                'sync_last_error' => mb_substr($exception->getMessage(), 0, 500),
-                'sync_last_result' => [
-                    'scope' => 'clients',
-                    'mode' => 'delta',
-                    'dry_run' => false,
-                    'ran_at' => $ranAt->toDateTimeString(),
-                ],
+                'client_sync_capability_checked_at' => now(),
+                'client_sync_capability_status' => 'probe_error',
             ])->save();
-            $platform->refresh();
-
-            $this->auditService->fromRequest(
-                $request,
-                (int) $platform->id,
-                CrmAuditAction::INTEGRATION_SYNC_RUN,
-                'platform',
-                (int) $platform->id,
-                $beforeState,
-                $this->platformAuditState($platform),
-                $validated['reason'] ?? 'Sales delta sync failed'
-            );
 
             return response()->json([
                 'status' => 'error',
-                'message' => 'Market sync failed.',
+                'message' => 'Unable to refresh market sync capabilities.',
                 'error' => $exception->getMessage(),
-                'platform' => $this->serializePlatformIntegration($platform),
+                'platform' => $this->serializePlatformIntegration($platform->fresh()),
             ], 422);
         }
     }
@@ -4738,7 +4868,11 @@ class SettingsController extends Controller
         ];
     }
 
-    public function serializePlatformIntegration(Platform $platform, ?SupportBoardSyncRun $supportBoardSyncRun = null): array
+    public function serializePlatformIntegration(
+        Platform $platform,
+        ?SupportBoardSyncRun $supportBoardSyncRun = null,
+        ?ClientSyncRun $clientSyncRun = null
+    ): array
     {
         $packageRows = $this->platformPackageRows($platform);
         $packageSetup = $this->platformPackageSetup($platform, $packageRows);
@@ -4746,6 +4880,10 @@ class SettingsController extends Controller
         $hasWpDatabaseCredentials = $this->platformHasWpDatabaseCredentials($platform);
         $lastStatus = (string) ($platform->sync_last_status ?? 'unknown');
         $supportBoardSyncRun = $supportBoardSyncRun ?: $this->supportBoardSyncRunService->latestRunForPlatform((int) $platform->id);
+        $clientSyncRun = $clientSyncRun ?: $this->clientSyncRunService->latestRunForPlatform((int) $platform->id);
+        $clientSyncCapabilityStatus = (string) ($platform->client_sync_capability_status ?? '');
+        $legacyCorrectnessRisk = ($platform->client_sync_protocol ?? null) === 'v1'
+            || $clientSyncCapabilityStatus === 'legacy_not_found';
 
         $wpStatus = 'pending';
         if ($hasWpCredentials) {
@@ -4772,6 +4910,18 @@ class SettingsController extends Controller
                 'queue' => $this->supportBoardSyncRunService->queueReadiness(),
                 'latest_run' => $this->supportBoardSyncRunService->serializeRun($supportBoardSyncRun),
             ],
+            'client_sync' => [
+                'queue' => $this->clientSyncRunService->queueReadiness(),
+                'latest_run' => $this->clientSyncRunService->serializeRun($clientSyncRun),
+                'protocol' => $platform->client_sync_protocol,
+                'contract_version' => $platform->client_sync_contract_version,
+                'capability_status' => $clientSyncCapabilityStatus ?: null,
+                'capability_checked_at' => optional($platform->client_sync_capability_checked_at)->toDateTimeString(),
+                'checkpoint_at' => optional($platform->client_sync_checkpoint_at)->toDateTimeString(),
+                'tombstone_checkpoint_at' => optional($platform->client_sync_tombstone_checkpoint_at)->toDateTimeString(),
+                'last_reconciled_at' => optional($platform->client_sync_last_reconciled_at)->toDateTimeString(),
+                'legacy_correctness_risk' => $legacyCorrectnessRisk,
+            ],
             'wp_sync' => [
                 'status' => $wpStatus,
                 'credentials_ready' => $hasWpCredentials,
@@ -4779,6 +4929,7 @@ class SettingsController extends Controller
                 'api_user' => $platform->wp_api_user,
                 'last_checked_at' => optional($platform->sync_last_checked_at)->toDateTimeString(),
                 'last_error' => $platform->sync_last_error,
+                'client_sync_capability_status' => $clientSyncCapabilityStatus ?: null,
             ],
             'wp_provisioning' => [
                 'credentials_ready' => $hasWpDatabaseCredentials,
@@ -4974,10 +5125,14 @@ class SettingsController extends Controller
         $supportBoardSyncRuns = $this->supportBoardSyncRunService->latestRunsForPlatforms(
             $platforms->pluck('id')->map(fn ($id) => (int) $id)->all()
         );
+        $clientSyncRuns = $this->clientSyncRunService->latestRunsForPlatforms(
+            $platforms->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
         $platformStatuses = $platforms
             ->map(fn (Platform $platform) => $this->serializePlatformIntegration(
                 $platform,
-                $supportBoardSyncRuns->get((int) $platform->id)
+                $supportBoardSyncRuns->get((int) $platform->id),
+                $clientSyncRuns->get((int) $platform->id)
             ))
             ->values();
 

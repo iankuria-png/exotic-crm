@@ -11,9 +11,15 @@ class Client extends Model
 {
     use HasFactory;
 
+    private static bool $suspendRetentionRefresh = false;
+
     protected static function booted(): void
     {
         static::saved(function (Client $client): void {
+            if (self::$suspendRetentionRefresh) {
+                return;
+            }
+
             ClientRetentionInsightService::scheduleRefreshForClientId((int) $client->id);
         });
 
@@ -61,6 +67,10 @@ class Client extends Model
         'last_online_at',
         'last_synced_at',
         'wp_modified_at',
+        'source_presence_status',
+        'source_missing_at',
+        'source_missing_count',
+        'last_seen_in_reconcile_at',
     ];
 
     protected $casts = [
@@ -80,6 +90,9 @@ class Client extends Model
         'wallet_last_synced_at' => 'datetime',
         'last_synced_at' => 'datetime',
         'wp_modified_at' => 'datetime',
+        'source_missing_at' => 'datetime',
+        'source_missing_count' => 'integer',
+        'last_seen_in_reconcile_at' => 'datetime',
         'risk_marked_at' => 'datetime',
         'display_image_checked_at' => 'datetime',
     ];
@@ -185,6 +198,18 @@ class Client extends Model
     public function scopeForPlatform($query, $platformId)
     {
         return $query->where('platform_id', $platformId);
+    }
+
+    public static function withoutRetentionRefresh(callable $callback)
+    {
+        $previous = self::$suspendRetentionRefresh;
+        self::$suspendRetentionRefresh = true;
+
+        try {
+            return $callback();
+        } finally {
+            self::$suspendRetentionRefresh = $previous;
+        }
     }
 
     public function scopeHighRisk($query)

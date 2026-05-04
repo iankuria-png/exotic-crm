@@ -15,6 +15,7 @@ use App\Models\ClientNote;
 use App\Models\RenewalCampaign;
 use App\Models\TimelineEvent;
 use App\Services\ClientRetentionInsightService;
+use App\Services\ClientSyncRunService;
 use App\Services\MarketAuthorizationService;
 use App\Services\RenewalService;
 use App\Services\ReportingCurrencyService;
@@ -40,7 +41,8 @@ class DashboardController extends Controller
         private readonly MarketAuthorizationService $marketAuthorizationService,
         private readonly RenewalService $renewalService,
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
-        private readonly ReportingCurrencyService $reportingCurrencyService
+        private readonly ReportingCurrencyService $reportingCurrencyService,
+        private readonly ClientSyncRunService $clientSyncRunService
     ) {
     }
 
@@ -462,13 +464,16 @@ class DashboardController extends Controller
         }
 
         $platforms = $query->get();
+        $clientSyncRuns = $this->clientSyncRunService->latestRunsForPlatforms(
+            $platforms->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
         $clientCounts = Client::query()
             ->selectRaw('platform_id, COUNT(*) as total')
             ->whereIn('platform_id', $platforms->pluck('id')->all())
             ->groupBy('platform_id')
             ->pluck('total', 'platform_id');
 
-        $markets = $platforms->map(function (Platform $platform) use ($clientCounts) {
+        $markets = $platforms->map(function (Platform $platform) use ($clientCounts, $clientSyncRuns) {
             $lastResult = is_array($platform->sync_last_result) ? $platform->sync_last_result : [];
             $lastDelta = is_array(data_get($lastResult, 'clients')) ? data_get($lastResult, 'clients') : [];
             $profilesTotal = $this->extractSyncedProfilesTotal($lastResult);
@@ -476,6 +481,7 @@ class DashboardController extends Controller
             $needsSync = $platform->sync_last_status === 'error'
                 || !$platform->sync_last_synced_at
                 || $platform->sync_last_synced_at->lt(now()->subHours(12));
+            $latestRun = $clientSyncRuns->get((int) $platform->id);
 
             return [
                 'id' => (int) $platform->id,
@@ -494,6 +500,13 @@ class DashboardController extends Controller
                     'updated' => (int) ($lastDelta['updated'] ?? 0),
                     'skipped' => (int) ($lastDelta['skipped'] ?? 0),
                     'total' => (int) ($lastDelta['total'] ?? 0),
+                ],
+                'client_sync' => [
+                    'latest_run' => $this->clientSyncRunService->serializeRun($latestRun),
+                    'protocol' => $platform->client_sync_protocol,
+                    'capability_status' => $platform->client_sync_capability_status,
+                    'legacy_correctness_risk' => ($platform->client_sync_protocol ?? null) === 'v1'
+                        || ($platform->client_sync_capability_status ?? null) === 'legacy_not_found',
                 ],
                 'needs_sync' => $needsSync,
             ];
