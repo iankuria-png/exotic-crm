@@ -74,6 +74,7 @@ class SubscriptionProvisioningService
             'expires_at' => $expiresAt,
             'payment_id' => $payment?->id ?? $deal->payment_id,
             'payment_reference' => $paymentReference,
+            'duration_days' => $durationDays,
             'is_free_trial' => $isFreeTrial,
             'free_trial_approved_by' => $isFreeTrial ? $approvedBy : null,
         ] + $lifecycleAttributes)->save();
@@ -197,10 +198,12 @@ class SubscriptionProvisioningService
                 'client_id' => (int) $client->id,
                 'payment_id' => (int) $payment->id,
                 'product_id' => $product?->id,
+                'product_price_id' => data_get($payment->payment_data, 'product_price_id'),
                 'plan_type' => $planType,
                 'amount' => (float) $payment->amount,
                 'currency' => $product?->currency ?: ($payment->currency ?: ($payment->platform?->currency_code ?: 'KES')),
                 'duration' => $duration,
+                'duration_days' => data_get($payment->payment_data, 'duration_days'),
                 'status' => 'pending',
                 'assigned_to' => $options['assigned_to'] ?? $client->assigned_to,
                 'payment_reference' => $payment->transaction_reference ?? $payment->reference_number,
@@ -300,6 +303,22 @@ class SubscriptionProvisioningService
             return $explicitDurationDays;
         }
 
+        if ((int) ($deal->duration_days ?? 0) > 0) {
+            return (int) $deal->duration_days;
+        }
+
+        if ((int) ($deal->product_price_id ?? 0) > 0) {
+            $catalogDays = ProductPrice::query()
+                ->whereKey((int) $deal->product_price_id)
+                ->where('product_id', (int) $deal->product_id)
+                ->where('is_active', true)
+                ->value('duration_days');
+
+            if ($catalogDays && (int) $catalogDays > 0) {
+                return (int) $catalogDays;
+            }
+        }
+
         $legacyToDurationKey = [
             'weekly' => '1_week',
             'biweekly' => '2_weeks',
@@ -332,6 +351,11 @@ class SubscriptionProvisioningService
 
     private function resolveDurationDaysForPayment(Payment $payment, Deal $deal): int
     {
+        $paymentDurationDays = (int) data_get($payment->payment_data, 'duration_days', 0);
+        if ($paymentDurationDays > 0) {
+            return $paymentDurationDays;
+        }
+
         if ($deal->duration) {
             return $this->resolveDurationDaysForDeal($deal);
         }

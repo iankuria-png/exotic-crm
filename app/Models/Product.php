@@ -20,12 +20,14 @@ class Product extends Model
         'weekly_price',
         'currency',
         'is_active',
+        'is_public',
         'is_archived',
         'sort_order',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'is_public' => 'boolean',
         'is_archived' => 'boolean',
         'sort_order' => 'integer',
     ];

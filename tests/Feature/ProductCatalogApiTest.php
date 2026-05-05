@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class ProductCatalogApiTest extends TestCase
@@ -45,6 +47,19 @@ class ProductCatalogApiTest extends TestCase
             ]);
         }
 
+        $crmOnlyGhana = $this->createProduct($ghana, 'VIP 2 DAY', 'Vip 2 Day', 'vip_2_day', 35, true, false);
+
+        ProductPrice::factory()->create([
+            'product_id' => $crmOnlyGhana->id,
+            'duration_key' => '2_days',
+            'duration_label' => '2 Days',
+            'duration_days' => 2,
+            'price' => 750,
+            'currency' => 'GHS',
+            'is_active' => true,
+            'sort_order' => 10,
+        ]);
+
         $inactiveGhana = $this->createProduct($ghana, 'LEGACY', 'Legacy', 'legacy', 40, false);
 
         ProductPrice::factory()->create([
@@ -82,6 +97,7 @@ class ProductCatalogApiTest extends TestCase
             ->all();
 
         $this->assertSame($ghanaProducts->pluck('id')->all(), $productIds);
+        $this->assertNotContains($crmOnlyGhana->id, $productIds);
         $this->assertSame(
             [$ghana->id, $ghana->id, $ghana->id],
             collect($response->json('products'))->pluck('platform_id')->all()
@@ -92,13 +108,146 @@ class ProductCatalogApiTest extends TestCase
         );
     }
 
+    public function test_crm_products_endpoint_includes_crm_only_packages_for_authorized_users(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Rwanda',
+            'country' => 'Rwanda',
+            'currency_code' => 'RWF',
+        ]);
+
+        $publicProduct = $this->createProduct($platform, 'VIP', 'Vip', 'vip', 10);
+        $crmOnlyProduct = $this->createProduct($platform, 'VIP 2 DAY', 'Vip 2 Day', 'vip_2_day', 20, true, false);
+
+        foreach ([$publicProduct, $crmOnlyProduct] as $product) {
+            ProductPrice::factory()->create([
+                'product_id' => $product->id,
+                'duration_key' => $product->is_public ? '1_month' : '2_days',
+                'duration_label' => $product->is_public ? '1 Month' : '2 Days',
+                'duration_days' => $product->is_public ? 30 : 2,
+                'price' => $product->is_public ? 40500 : 9000,
+                'currency' => 'RWF',
+                'is_active' => true,
+                'sort_order' => 10,
+            ]);
+        }
+
+        Sanctum::actingAs(User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+        ]));
+
+        $response = $this->getJson('/api/crm/products?platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonCount(2);
+
+        $this->assertSame(
+            [$publicProduct->id, $crmOnlyProduct->id],
+            collect($response->json())->pluck('id')->all()
+        );
+    }
+
+    public function test_public_self_checkout_rejects_crm_only_packages_by_id(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Uganda',
+            'country' => 'Uganda',
+            'currency_code' => 'UGX',
+        ]);
+
+        $crmOnlyProduct = $this->createProduct($platform, 'VIP 2 DAY', 'Vip 2 Day', 'vip_2_day', 10, true, false);
+        $price = ProductPrice::factory()->create([
+            'product_id' => $crmOnlyProduct->id,
+            'duration_key' => '2_days',
+            'duration_label' => '2 Days',
+            'duration_days' => 2,
+            'price' => 50000,
+            'currency' => 'UGX',
+            'is_active' => true,
+            'sort_order' => 10,
+        ]);
+
+        $response = $this->postJson('/api/self-checkout', [
+            'product_id' => $crmOnlyProduct->id,
+            'product_price_id' => $price->id,
+            'platform_id' => $platform->id,
+            'user_id' => 12345,
+            'first_name' => 'Jane',
+            'last_name' => 'Client',
+            'phone' => '0700000000',
+            'duration' => '2_days',
+            'currency' => 'UGX',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('message', 'The selected package is not currently available.');
+    }
+
+    public function test_settings_package_catalog_saves_crm_only_custom_duration_package(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Senegal',
+            'country' => 'Senegal',
+            'currency_code' => 'XOF',
+            'is_active' => false,
+        ]);
+
+        Sanctum::actingAs(User::factory()->create([
+            'role' => 'admin',
+            'status' => 'active',
+        ]));
+
+        $response = $this->patchJson("/api/crm/settings/integrations/platforms/{$platform->id}/packages", [
+            'reason' => 'Create CRM only two day VIP package',
+            'packages' => [
+                [
+                    'name' => 'VIP 2 DAY',
+                    'display_name' => 'Vip 2 Day',
+                    'tier' => 'vip',
+                    'sort_order' => 10,
+                    'is_active' => true,
+                    'is_public' => false,
+                    'prices' => [
+                        [
+                            'duration_key' => '2_days',
+                            'duration_label' => '2 Days',
+                            'duration_days' => 2,
+                            'price' => 25000,
+                            'currency' => 'XOF',
+                            'is_active' => true,
+                            'sort_order' => 10,
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('platform.packages.0.is_public', false)
+            ->assertJsonPath('platform.packages.0.prices.0.duration_days', 2);
+
+        $product = Product::query()->where('platform_id', $platform->id)->where('name', 'VIP 2 DAY')->firstOrFail();
+
+        $this->assertFalse((bool) $product->is_public);
+        $this->assertDatabaseHas('product_prices', [
+            'product_id' => $product->id,
+            'duration_key' => '2_days',
+            'duration_days' => 2,
+            'price' => 25000,
+            'currency' => 'XOF',
+            'is_active' => true,
+        ]);
+    }
+
     private function createProduct(
         Platform $platform,
         string $name,
         string $displayName,
         string $slug,
         int $sortOrder,
-        bool $isActive = true
+        bool $isActive = true,
+        bool $isPublic = true
     ): Product {
         return Product::query()->create([
             'platform_id' => $platform->id,
@@ -111,6 +260,7 @@ class ProductCatalogApiTest extends TestCase
             'monthly_price' => 1000,
             'currency' => $platform->currency_code,
             'is_active' => $isActive,
+            'is_public' => $isPublic,
             'is_archived' => false,
             'sort_order' => $sortOrder,
         ]);

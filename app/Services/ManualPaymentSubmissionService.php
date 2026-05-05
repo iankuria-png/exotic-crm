@@ -151,6 +151,7 @@ class ManualPaymentSubmissionService
                         'billing_surface' => 'manual_confirmation',
                     ],
                     'payment_data' => [
+                        'product_price_id' => $pricing['product_price_id'] ?? null,
                         'duration_key' => (string) ($pricing['duration_key'] ?? 'monthly'),
                         'duration_days' => (int) ($pricing['duration_days'] ?? 30),
                         'duration_label' => (string) ($pricing['duration_label'] ?? ''),

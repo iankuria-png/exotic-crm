@@ -2856,6 +2856,7 @@ class SettingsController extends Controller
             'packages.*.tier' => 'nullable|string|max:32',
             'packages.*.sort_order' => 'nullable|integer|min:0|max:10000',
             'packages.*.is_active' => 'required|boolean',
+            'packages.*.is_public' => 'nullable|boolean',
             'packages.*.is_archived' => 'nullable|boolean',
             'packages.*.weekly_price' => 'nullable|numeric|min:0',
             'packages.*.biweekly_price' => 'nullable|numeric|min:0',
@@ -2896,6 +2897,7 @@ class SettingsController extends Controller
                 $displayName = $displayName !== '' ? $displayName : Str::title(strtolower($name));
                 $isArchived = (bool) ($row['is_archived'] ?? false);
                 $isActive = !$isArchived && (bool) ($row['is_active'] ?? false);
+                $isPublic = (bool) ($row['is_public'] ?? true);
 
                 if (array_key_exists($name, $seen)) {
                     throw ValidationException::withMessages([
@@ -2954,6 +2956,7 @@ class SettingsController extends Controller
                 $product->sort_order = (int) ($row['sort_order'] ?? ((count($touchedProductIds) + 1) * 10));
                 $product->currency = $currency;
                 $product->is_active = $isActive;
+                $product->is_public = $isPublic;
                 $product->is_archived = $isArchived;
                 $product->weekly_price = $product->weekly_price ?? 0;
                 $product->biweekly_price = $product->biweekly_price ?? 0;
@@ -4737,6 +4740,7 @@ class SettingsController extends Controller
                 'monthly_price' => 0,
                 'currency' => $currency,
                 'is_active' => false,
+                'is_public' => true,
                 'sort_order' => match ($name) { 'BASIC' => 30, 'PREMIUM' => 20, 'VIP' => 10, default => 40 },
             ]);
         }
@@ -4809,6 +4813,7 @@ class SettingsController extends Controller
                 'monthly_price' => $product->monthly_price !== null ? (float) $product->monthly_price : 0.0,
                 'currency' => $productCurrency,
                 'is_active' => (bool) $product->is_active,
+                'is_public' => (bool) ($product->is_public ?? true),
                 'is_archived' => (bool) $product->is_archived,
                 'sort_order' => (int) $product->sort_order,
                 'prices' => $prices,

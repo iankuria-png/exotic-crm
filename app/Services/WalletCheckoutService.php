@@ -59,7 +59,7 @@ class WalletCheckoutService
             $amount = round((float) $priceRow->price, 2);
             $durationDays = (int) ($priceRow->duration_days ?: $normalized['duration_days']);
             $durationLabel = $priceRow->duration_label ?: $durationLabel;
-        } elseif (count($effectiveCurrencies) === 1) {
+        } elseif (count($effectiveCurrencies) === 1 && $legacyDuration !== 'manual') {
             $amount = match ($legacyDuration) {
                 'weekly' => (float) $product->weekly_price,
                 'biweekly' => (float) $product->biweekly_price,
@@ -90,6 +90,7 @@ class WalletCheckoutService
             'legacy_duration' => $legacyDuration,
             'duration_days' => $durationDays,
             'duration_label' => $durationLabel,
+            'product_price_id' => $priceRow instanceof ProductPrice ? (int) $priceRow->id : null,
             'amount' => number_format($amount, 2, '.', ''),
             'currency' => $requestedCurrency,
         ];
@@ -105,6 +106,10 @@ class WalletCheckoutService
         $idempotencyKey = trim($idempotencyKey);
         if ($idempotencyKey === '') {
             throw new InvalidArgumentException('Wallet checkout idempotency key is required.');
+        }
+
+        if (!(bool) ($product->is_public ?? true)) {
+            throw new InvalidArgumentException('The selected package is not currently available.');
         }
 
         $pricing = $this->resolveSubscriptionPricing($product, $duration, $options['currency'] ?? null);
@@ -169,6 +174,7 @@ class WalletCheckoutService
                     'wallet_checkout' => true,
                 ],
                 'payment_data' => [
+                    'product_price_id' => $pricing['product_price_id'] ?? null,
                     'duration_key' => $pricing['duration_key'],
                     'duration_days' => $pricing['duration_days'],
                     'duration_label' => $pricing['duration_label'],
@@ -202,6 +208,7 @@ class WalletCheckoutService
                 ),
                 'metadata' => [
                     'product_id' => (int) $product->id,
+                    'product_price_id' => $pricing['product_price_id'] ?? null,
                     'duration_key' => $pricing['duration_key'],
                     'duration_days' => $pricing['duration_days'],
                 ],
@@ -520,7 +527,7 @@ class WalletCheckoutService
     {
         $normalized = strtolower(trim($duration));
 
-        return match ($normalized) {
+        $known = match ($normalized) {
             '1_week', 'weekly', 'week' => [
                 'duration_key' => '1_week',
                 'legacy_duration' => 'weekly',
@@ -539,8 +546,33 @@ class WalletCheckoutService
                 'duration_days' => 30,
                 'duration_label' => '1 Month',
             ],
-            default => throw new InvalidArgumentException('Unsupported subscription duration.'),
+            default => null,
         };
+
+        if ($known !== null) {
+            return $known;
+        }
+
+        $durationKey = preg_replace('/[^a-z0-9_]+/', '_', $normalized) ?: $normalized;
+        $durationKey = trim((string) $durationKey, '_');
+        $days = 30;
+
+        if (preg_match('/^(\d+)_?days?$/', $durationKey, $matches)) {
+            $days = max(1, (int) $matches[1]);
+        } elseif (preg_match('/^(\d+)_?weeks?$/', $durationKey, $matches)) {
+            $days = max(1, (int) $matches[1]) * 7;
+        } elseif (preg_match('/^(\d+)_?months?$/', $durationKey, $matches)) {
+            $days = max(1, (int) $matches[1]) * 30;
+        } elseif (preg_match('/^(\d+)_?years?$/', $durationKey, $matches)) {
+            $days = max(1, (int) $matches[1]) * 365;
+        }
+
+        return [
+            'duration_key' => $durationKey,
+            'legacy_duration' => 'manual',
+            'duration_days' => $days,
+            'duration_label' => ucwords(str_replace('_', ' ', $durationKey)),
+        ];
     }
 
     private function walletReference(string $prefix, array $parts): string

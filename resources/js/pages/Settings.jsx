@@ -44,6 +44,7 @@ const defaultDurationOptions = [
     { key: '6_months', label: '6 Months', days: 180 },
     { key: '1_year', label: '1 Year', days: 365 },
 ];
+const customDurationOptionKey = '__custom';
 const paymentLinkModeOptions = [
     { value: 'static_url', label: 'Static URL' },
     { value: 'proxy_hosted_checkout', label: 'CRM Proxy Checkout' },
@@ -212,6 +213,7 @@ function buildPackageEditor(platform) {
         tier: row.tier || 'custom',
         sort_order: Number(row.sort_order || 0),
         is_active: Boolean(row.is_active),
+        is_public: row.is_public !== false,
         is_archived: Boolean(row.is_archived),
         prices: Array.isArray(row.prices) && row.prices.length > 0
             ? row.prices.map((p) => ({
@@ -245,6 +247,7 @@ function newPackageRow(sortOrder = 0, currency = 'KES') {
         tier: 'custom',
         sort_order: sortOrder,
         is_active: true,
+        is_public: true,
         is_archived: false,
         prices: [{ id: null, duration_key: '1_month', duration_label: '1 Month', duration_days: 30, price: 0, currency, is_active: true, sort_order: 10 }],
     };
@@ -252,6 +255,27 @@ function newPackageRow(sortOrder = 0, currency = 'KES') {
 
 function newPriceRow(sortOrder = 0, currency = '') {
     return { id: null, duration_key: '', duration_label: '', duration_days: 30, price: 0, currency, is_active: true, sort_order: sortOrder };
+}
+
+function isPresetDurationKey(durationKey) {
+    return defaultDurationOptions.some((option) => option.key === durationKey);
+}
+
+function packageDurationSelectValue(durationKey) {
+    if (!durationKey) return '';
+    return isPresetDurationKey(durationKey) ? durationKey : customDurationOptionKey;
+}
+
+function slugDurationKey(label, days) {
+    const parsedDays = Number(days || 0);
+    const dayKey = parsedDays > 0 ? `${parsedDays}_days` : '';
+    const labelKey = String(label || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+    return labelKey || dayKey || 'custom_duration';
 }
 
 function smsProviderLabel(providerId) {
@@ -2764,7 +2788,7 @@ function IntegrationsWorkspace({
                 ...current,
                 rows: current.rows.map((row, i) => {
                     if (i !== rowIndex) return row;
-                    if (field === 'is_active') return { ...row, is_active: Boolean(value) };
+                    if (field === 'is_active' || field === 'is_public') return { ...row, [field]: Boolean(value) };
                     return { ...row, [field]: value };
                 }),
             };
@@ -2783,12 +2807,41 @@ function IntegrationsWorkspace({
                         prices: row.prices.map((price, j) => {
                             if (j !== priceIndex) return price;
                             if (field === 'duration_key') {
+                                if (value === customDurationOptionKey) {
+                                    const customLabel = isPresetDurationKey(price.duration_key) ? '' : price.duration_label;
+                                    const customDays = Number(price.duration_days || 2);
+                                    return {
+                                        ...price,
+                                        duration_key: slugDurationKey(customLabel || `${customDays} Days`, customDays),
+                                        duration_label: customLabel || `${customDays} Days`,
+                                        duration_days: customDays,
+                                    };
+                                }
                                 const preset = defaultDurationOptions.find((d) => d.key === value);
                                 return {
                                     ...price,
                                     duration_key: value,
                                     duration_label: preset ? preset.label : price.duration_label,
                                     duration_days: preset ? preset.days : price.duration_days,
+                                };
+                            }
+                            if (field === 'duration_label') {
+                                return {
+                                    ...price,
+                                    duration_label: value,
+                                    duration_key: isPresetDurationKey(price.duration_key)
+                                        ? price.duration_key
+                                        : slugDurationKey(value, price.duration_days),
+                                };
+                            }
+                            if (field === 'duration_days') {
+                                const days = Number(value || 1);
+                                return {
+                                    ...price,
+                                    duration_days: days,
+                                    duration_key: isPresetDurationKey(price.duration_key)
+                                        ? price.duration_key
+                                        : slugDurationKey(price.duration_label, days),
                                 };
                             }
                             if (field === 'price') return { ...price, price: Number(value || 0) };
@@ -2864,8 +2917,11 @@ function IntegrationsWorkspace({
             }
 
             for (const price of row.prices) {
-                if (!price.duration_key) {
-                    toast.error(`${row.name || 'Unnamed package'} has a duration row without a key. Select a duration or remove the row.`);
+                const durationKey = isPresetDurationKey(price.duration_key)
+                    ? price.duration_key
+                    : slugDurationKey(price.duration_label, price.duration_days);
+                if (!durationKey || !Number(price.duration_days || 0)) {
+                    toast.error(`${row.name || 'Unnamed package'} has an incomplete duration row. Select a preset or enter a custom label and days.`);
                     return;
                 }
             }
@@ -2886,10 +2942,11 @@ function IntegrationsWorkspace({
                     tier: row.tier || undefined,
                     sort_order: row.sort_order,
                     is_active: Boolean(row.is_active),
+                    is_public: row.is_public !== false,
                     is_archived: Boolean(row.is_archived),
                     prices: row.prices.map((p) => ({
                         id: p.id || undefined,
-                        duration_key: p.duration_key,
+                        duration_key: isPresetDurationKey(p.duration_key) ? p.duration_key : slugDurationKey(p.duration_label, p.duration_days),
                         duration_label: p.duration_label || p.duration_key.replace(/_/g, ' '),
                         duration_days: p.duration_days || 30,
                         price: Number(p.price || 0),
@@ -4953,6 +5010,20 @@ function IntegrationsWorkspace({
                                                         />
                                                         Active
                                                     </label>
+                                                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={row.is_public !== false}
+                                                            onChange={(e) => updatePackageRow(rowIndex, 'is_public', e.target.checked)}
+                                                            className="h-3.5 w-3.5 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                                        />
+                                                        Website
+                                                    </label>
+                                                    {row.is_public === false ? (
+                                                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 ring-1 ring-inset ring-slate-200">
+                                                            CRM only
+                                                        </span>
+                                                    ) : null}
                                                     <button
                                                         type="button"
                                                         onClick={() => removePackageRow(rowIndex)}
@@ -4980,7 +5051,7 @@ function IntegrationsWorkspace({
                                                                 <tr key={price.id || `price-${priceIndex}`}>
                                                                     <td className="px-1 py-1">
                                                                         <select
-                                                                            value={price.duration_key}
+                                                                            value={packageDurationSelectValue(price.duration_key)}
                                                                             onChange={(e) => updatePriceRow(rowIndex, priceIndex, 'duration_key', e.target.value)}
                                                                             className="crm-select w-full text-xs"
                                                                         >
@@ -4988,7 +5059,17 @@ function IntegrationsWorkspace({
                                                                             {defaultDurationOptions.map((d) => (
                                                                                 <option key={d.key} value={d.key}>{d.label}</option>
                                                                             ))}
+                                                                            <option value={customDurationOptionKey}>Custom</option>
                                                                         </select>
+                                                                        {packageDurationSelectValue(price.duration_key) === customDurationOptionKey ? (
+                                                                            <input
+                                                                                type="text"
+                                                                                value={price.duration_label || ''}
+                                                                                onChange={(e) => updatePriceRow(rowIndex, priceIndex, 'duration_label', e.target.value)}
+                                                                                placeholder="e.g. 2 Days"
+                                                                                className="crm-input mt-1 w-full text-xs"
+                                                                            />
+                                                                        ) : null}
                                                                     </td>
                                                                     <td className="px-1 py-1">
                                                                         <select

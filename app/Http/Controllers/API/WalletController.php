@@ -89,6 +89,7 @@ class WalletController extends Controller
         $product = Product::query()
             ->where('platform_id', (int) $platform->id)
             ->where('is_active', true)
+            ->where('is_public', true)
             ->where('is_archived', false)
             ->findOrFail($productId);
 

@@ -54,6 +54,34 @@ class ClientPaymentLinkFlowTest extends TestCase
         $this->assertNotNull($deal->payment_id);
     }
 
+    public function test_quick_subscribe_preserves_custom_price_duration_metadata(): void
+    {
+        $platform = $this->createPlatform();
+        $product = $this->createProduct($platform);
+        $price = $this->createPrice($product, 900, '2_days', '2 Days', 2);
+        $client = $this->createClient($platform, 9106);
+        $user = $this->createUser($platform);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/crm/clients/{$client->id}/payment-link", [
+            'mode' => 'quick_subscribe',
+            'product_id' => $product->id,
+            'product_price_id' => $price->id,
+            'reason' => 'Start custom two day checkout from client profile',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('deal.status', 'awaiting_payment')
+            ->assertJsonPath('payment.amount', 900);
+
+        $deal = Deal::query()->latest('id')->firstOrFail();
+
+        $this->assertSame($price->id, $deal->product_price_id);
+        $this->assertSame('manual', $deal->duration);
+        $this->assertSame(2, $deal->duration_days);
+    }
+
     public function test_existing_awaiting_payment_deal_resends_same_payment_link(): void
     {
         $platform = $this->createPlatform();
@@ -346,13 +374,19 @@ class ClientPaymentLinkFlowTest extends TestCase
         ]);
     }
 
-    private function createPrice(Product $product, float $amount): ProductPrice
+    private function createPrice(
+        Product $product,
+        float $amount,
+        string $durationKey = '1_month',
+        string $durationLabel = '1 Month',
+        int $durationDays = 30
+    ): ProductPrice
     {
         return ProductPrice::factory()->create([
             'product_id' => $product->id,
-            'duration_key' => '1_month',
-            'duration_label' => '1 Month',
-            'duration_days' => 30,
+            'duration_key' => $durationKey,
+            'duration_label' => $durationLabel,
+            'duration_days' => $durationDays,
             'price' => $amount,
             'currency' => 'KES',
             'is_active' => true,

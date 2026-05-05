@@ -1626,6 +1626,12 @@ class PaymentController extends Controller
         
                 // Get the product
                 $product = Product::findOrFail($productId);
+                if (!$this->publicProductIsAvailable($product)) {
+                    return response()->json([
+                        'error' => 'Activation failed',
+                        'message' => 'The selected package is not currently available.',
+                    ], 422);
+                }
                 
                 // 1. Check if post exists in this platform
                 $post = WordpressPost::on($connectionName)
@@ -2175,6 +2181,12 @@ class PaymentController extends Controller
             // 3. Lookup product/platform + calculate amount using switch
             $product = Product::findOrFail($validated['product_id']);
             $platform = Platform::findOrFail($validated['platform_id']);
+            if (!$this->publicProductIsAvailable($product)) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'The selected package is not currently available.',
+                ], 422);
+            }
     
             $price = 0;
             switch ($validated['duration']) {
@@ -2331,7 +2343,7 @@ class PaymentController extends Controller
                 ->with(['activePrices', 'platform'])
                 ->findOrFail((int) $validated['product_id']);
 
-            if (!(bool) $product->is_active || (bool) $product->is_archived) {
+            if (!(bool) $product->is_active || !(bool) ($product->is_public ?? true) || (bool) $product->is_archived) {
                 throw new \InvalidArgumentException('The selected package is not currently available.');
             }
 
@@ -2455,6 +2467,7 @@ class PaymentController extends Controller
                     'billing_surface' => 'self_service_subscription',
                 ],
                 'payment_data' => [
+                    'product_price_id' => $pricing['product_price_id'] ?? null,
                     'duration_key' => $pricing['duration_key'],
                     'duration_days' => $pricing['duration_days'],
                     'duration_label' => $pricing['duration_label'],
@@ -2691,7 +2704,7 @@ class PaymentController extends Controller
                 ->with(['activePrices', 'platform'])
                 ->findOrFail((int) $validated['product_id']);
 
-            if (!(bool) $product->is_active || (bool) $product->is_archived) {
+            if (!(bool) $product->is_active || !(bool) ($product->is_public ?? true) || (bool) $product->is_archived) {
                 throw new \InvalidArgumentException('The selected package is not currently available.');
             }
 
@@ -3314,6 +3327,20 @@ class PaymentController extends Controller
                 "error" => $e->getMessage()
             ], 500);
         }
+    }
+
+    private function assertPublicProductAvailable(Product $product): void
+    {
+        if (!$this->publicProductIsAvailable($product)) {
+            throw new \InvalidArgumentException('The selected package is not currently available.');
+        }
+    }
+
+    private function publicProductIsAvailable(Product $product): bool
+    {
+        return (bool) $product->is_active
+            && (bool) ($product->is_public ?? true)
+            && !(bool) $product->is_archived;
     }
 
 }

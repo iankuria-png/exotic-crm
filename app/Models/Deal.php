@@ -23,8 +23,8 @@ class Deal extends Model
 
     protected $fillable = [
         'platform_id', 'client_id', 'lead_id', 'payment_id',
-        'product_id', 'plan_type', 'amount', 'currency',
-        'duration', 'status', 'activated_at', 'expires_at',
+        'product_id', 'product_price_id', 'plan_type', 'amount', 'currency',
+        'duration', 'duration_days', 'status', 'activated_at', 'expires_at',
         'assigned_to', 'is_free_trial', 'free_trial_approved_by', 'payment_reference',
         'discount_percentage', 'original_amount', 'discount_approved_by', 'discount_source',
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
@@ -34,6 +34,7 @@ class Deal extends Model
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'duration_days' => 'integer',
         'discount_percentage' => 'decimal:2',
         'original_amount' => 'decimal:2',
         'activated_at' => 'datetime',
@@ -71,6 +72,11 @@ class Deal extends Model
     public function product()
     {
         return $this->belongsTo(Product::class);
+    }
+
+    public function productPrice()
+    {
+        return $this->belongsTo(ProductPrice::class);
     }
 
     public function assignedAgent()

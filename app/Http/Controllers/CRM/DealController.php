@@ -115,7 +115,9 @@ class DealController extends Controller
             if ($priceRow) {
                 $validated['amount'] = (float) $priceRow->price;
                 $validated['duration'] = $this->dealPaymentService->mapDurationKeyToLegacy($priceRow->duration_key);
+                $validated['duration_days'] = (int) $priceRow->duration_days;
                 $validated['currency'] = strtoupper((string) $priceRow->currency);
+                $validated['product_price_id'] = (int) $priceRow->id;
             } else {
                 $effectiveCurrencies = $product->platform?->effectiveCurrencies()
                     ?? [strtoupper((string) ($product->currency ?: $deal->platform?->currency_code ?: 'KES'))];
@@ -128,8 +130,9 @@ class DealController extends Controller
                 $duration = $validated['duration'] ?? $deal->duration;
                 $validated['amount'] = $this->dealPaymentService->resolveAmountForDuration($product, (string) $duration);
                 $validated['currency'] = $product->currency ?: ($deal->platform?->currency_code ?: $deal->currency ?: 'KES');
+                $validated['product_price_id'] = null;
+                $validated['duration_days'] = $this->dealPaymentService->durationDaysForLegacyDuration((string) $duration);
             }
-            unset($validated['product_price_id']);
         }
 
         $deal->update($validated);

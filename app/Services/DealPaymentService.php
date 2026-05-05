@@ -68,7 +68,7 @@ class DealPaymentService
 
             $resolvedDuration = $duration ?: 'monthly';
             $amount = $this->resolveAmountForDuration($product, $resolvedDuration);
-            $durationDays = null;
+            $durationDays = $this->durationDaysForLegacyDuration($resolvedDuration);
             $currency = $product->currency ?: ($client->platform->currency_code ?? 'KES');
         }
 
@@ -82,10 +82,12 @@ class DealPaymentService
             'client_id' => $client->id,
             'lead_id' => $leadId,
             'product_id' => $product->id,
+            'product_price_id' => $priceRow?->id,
             'plan_type' => $planType,
             'amount' => $amount,
             'currency' => $currency,
             'duration' => $resolvedDuration,
+            'duration_days' => $durationDays,
             'status' => 'pending',
             'assigned_to' => $actorId,
             'subscription_lifecycle' => $lifecycle['subscription_lifecycle'],
@@ -620,6 +622,16 @@ class DealPaymentService
             '2_weeks' => 'biweekly',
             '1_month' => 'monthly',
             default => 'manual',
+        };
+    }
+
+    public function durationDaysForLegacyDuration(string $duration): ?int
+    {
+        return match ($duration) {
+            'weekly' => 7,
+            'biweekly' => 14,
+            'monthly' => 30,
+            default => null,
         };
     }
 

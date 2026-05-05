@@ -31,6 +31,7 @@ class ProductFactory extends Factory
                 return Platform::query()->whereKey($attributes['platform_id'])->value('currency_code') ?: 'KES';
             },
             'is_active' => true,
+            'is_public' => true,
             'is_archived' => false,
             'sort_order' => 0,
         ];

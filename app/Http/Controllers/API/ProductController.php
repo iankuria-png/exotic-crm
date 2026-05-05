@@ -96,6 +96,7 @@ class ProductController extends Controller
 
             $query = Product::query()
                 ->where('is_active', true)
+                ->where('is_public', true)
                 ->where('is_archived', false)
                 ->with('activePrices');
 
