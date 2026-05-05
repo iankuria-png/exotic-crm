@@ -12,14 +12,14 @@ class WpDirectProvisioningService
     private Platform $platform;
     private string $connectionName;
 
-    public function __construct(Platform $platform)
+    public function __construct(Platform $platform, ?array $connectionConfig = null)
     {
         $this->platform = $platform;
         $this->connectionName = 'wp_provision_' . $platform->id;
 
         DynamicDatabaseService::switchConnection(
             $this->connectionName,
-            $platform->getConnectionConfig()
+            $connectionConfig ?? $platform->getConnectionConfig()
         );
     }
 
@@ -46,7 +46,12 @@ class WpDirectProvisioningService
 
         $email = strtolower(trim((string) ($payload['email'] ?? '')));
         $phone = trim((string) ($payload['phone'] ?? ''));
+        $whatsappPayload = trim((string) ($payload['whatsapp'] ?? ''));
+        $whatsapp = $whatsappPayload !== '' ? $whatsappPayload : $phone;
         $city = trim((string) ($payload['city'] ?? ''));
+        $birthday = trim((string) ($payload['birthday'] ?? ''));
+        $height = trim((string) ($payload['height'] ?? ''));
+        $weight = trim((string) ($payload['weight'] ?? ''));
         $website = trim((string) ($payload['website'] ?? ''));
         $personalPhone = trim((string) ($payload['personal_phone'] ?? ''));
 
@@ -68,7 +73,11 @@ class WpDirectProvisioningService
             $personalPhone,
             $requestedUsername,
             $password,
-            $postStatus
+            $postStatus,
+            $whatsapp,
+            $birthday,
+            $height,
+            $weight
         ): array {
             $postType = $this->resolveProfilePostType();
 
@@ -97,7 +106,11 @@ class WpDirectProvisioningService
                 postId: $postId,
                 name: $name,
                 phone: $phone,
+                whatsapp: $whatsapp,
                 city: $city,
+                birthday: $birthday,
+                height: $height,
+                weight: $weight,
                 website: $website,
                 personalPhone: $personalPhone,
                 postStatus: $postStatus
@@ -262,7 +275,11 @@ class WpDirectProvisioningService
         int $postId,
         string $name,
         string $phone,
+        string $whatsapp,
         string $city,
+        string $birthday,
+        string $height,
+        string $weight,
         string $website,
         string $personalPhone,
         string $postStatus
@@ -270,8 +287,20 @@ class WpDirectProvisioningService
         if ($phone !== '') {
             $this->upsertPostMeta($postId, 'phone', $phone);
         }
+        if ($whatsapp !== '') {
+            $this->upsertPostMeta($postId, 'whatsapp', $whatsapp);
+        }
         if ($city !== '') {
             $this->upsertPostMeta($postId, 'city', $city);
+        }
+        if ($birthday !== '') {
+            $this->upsertPostMeta($postId, 'birthday', $birthday);
+        }
+        if ($height !== '') {
+            $this->upsertPostMeta($postId, 'height', $height);
+        }
+        if ($weight !== '') {
+            $this->upsertPostMeta($postId, 'weight', $weight);
         }
         if ($website !== '') {
             $this->upsertPostMeta($postId, 'website', $website);

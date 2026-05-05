@@ -29,6 +29,29 @@ const PLAN_SORT_ORDER = {
     basic: 3,
     featured: 4,
 };
+const CREATE_PROFILE_IMAGE_LIMIT = 6;
+const CREATE_PROFILE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const CREATE_PROFILE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const CREATE_PROFILE_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+
+function createDefaultClientForm(platformId = '') {
+    return {
+        platform_id: platformId,
+        name: '',
+        phone_normalized: '',
+        email: '',
+        city: '',
+        profile_status: 'private',
+        assigned_to: '',
+        onboarding_mode: 'wp_provision',
+        wp_username: '',
+        wp_password: '',
+        birthday: '',
+        height_cm: '',
+        weight_kg: '',
+        profile_images: [],
+    };
+}
 
 function createBulkDeleteDialogState(platformId = '') {
     return {
@@ -420,18 +443,8 @@ export default function Clients() {
         client: null,
         source: 'clients_page',
     });
-    const [createForm, setCreateForm] = useState({
-        platform_id: '',
-        name: '',
-        phone_normalized: '',
-        email: '',
-        city: '',
-        profile_status: 'private',
-        assigned_to: '',
-        onboarding_mode: 'manual',
-        wp_username: '',
-        wp_password: '',
-    });
+    const [createForm, setCreateForm] = useState(() => createDefaultClientForm(''));
+    const [createProfileImagePreviews, setCreateProfileImagePreviews] = useState([]);
     const [csvForm, setCsvForm] = useState({
         platform_id: '',
         has_header: true,
@@ -572,6 +585,26 @@ export default function Clients() {
         }
     }, [showCsvModal, platformOptions, preferredPlatformId, csvForm.platform_id]);
 
+    useEffect(() => {
+        const images = Array.isArray(createForm.profile_images) ? createForm.profile_images : [];
+        if (images.length === 0 || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+            setCreateProfileImagePreviews([]);
+            return undefined;
+        }
+
+        const previews = images.map((file) => ({
+            name: file.name,
+            size: file.size,
+            url: URL.createObjectURL(file),
+        }));
+
+        setCreateProfileImagePreviews(previews);
+
+        return () => {
+            previews.forEach((preview) => URL.revokeObjectURL(preview.url));
+        };
+    }, [createForm.profile_images]);
+
     const { data: ownersData, isLoading: ownersLoading } = useQuery({
         queryKey: ['settings-owners', 'client-create', createForm.platform_id],
         queryFn: () =>
@@ -591,28 +624,56 @@ export default function Clients() {
     });
     const createModalCities = createModalCitiesData?.cities || [];
 
+    const uploadCreateProfileImages = async (client, files) => {
+        const imageFiles = Array.isArray(files) ? files : [];
+        if (!client?.id || imageFiles.length === 0) {
+            return;
+        }
+
+        toast.info(`${imageFiles.length} image${imageFiles.length === 1 ? '' : 's'} uploading in the background.`);
+
+        const formData = new FormData();
+        imageFiles.forEach((file) => {
+            formData.append('files[]', file);
+        });
+        formData.append('set_main', imageFiles.length === 1 ? '1' : '0');
+        formData.append('reason', 'Background image upload from add-client flow');
+
+        try {
+            await api.post(`/crm/clients/${client.id}/media`, formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            toast.success('Client created. Images uploaded.');
+        } catch {
+            toast.warning('Client created. Some images may need retry from the Media tab.', { duration: 7000 });
+        }
+    };
+
     const createMutation = useMutation({
-        mutationFn: (payload) => api.post('/crm/clients', payload).then((response) => response.data),
+        mutationFn: (payload) => {
+            const requestPayload = { ...payload };
+            delete requestPayload.profile_images;
+
+            return api.post('/crm/clients', requestPayload).then((response) => response.data);
+        },
         onSuccess: (createdClient, variables) => {
+            const backgroundImages = Array.isArray(variables?.profile_images) ? variables.profile_images : [];
+            const isWpProvision = variables?.onboarding_mode === 'wp_provision';
             queryClient.invalidateQueries({ queryKey: ['clients'] });
             queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             setShowCreateModal(false);
-            setCreateForm({
-                platform_id: preferredPlatformId,
-                name: '',
-                phone_normalized: '',
-                email: '',
-                city: '',
-                profile_status: 'private',
-                assigned_to: '',
-                onboarding_mode: 'manual',
-                wp_username: '',
-                wp_password: '',
-            });
+            setCreateForm(createDefaultClientForm(preferredPlatformId));
 
-            const isWpProvision = variables?.onboarding_mode === 'wp_provision';
             if (isWpProvision && createdClient?.id) {
-                toast.success('Client provisioned. Dispatch credentials to complete onboarding.');
+                if (backgroundImages.length > 0) {
+                    toast.success('Client provisioned. Images will upload in the background.');
+                    void uploadCreateProfileImages(createdClient, backgroundImages);
+                } else {
+                    toast.success('Client provisioned. Dispatch credentials to complete onboarding.');
+                }
                 setCredentialDrawer({
                     open: true,
                     client: createdClient,
@@ -812,6 +873,67 @@ export default function Clients() {
         event.preventDefault();
         setSearch(searchInput.trim());
         setPage(1);
+    };
+
+    const handleCreateProfileImageSelect = (event) => {
+        const selectedFiles = Array.from(event.target.files || []);
+        event.target.value = '';
+
+        if (selectedFiles.length === 0) {
+            return;
+        }
+
+        const currentImages = Array.isArray(createForm.profile_images) ? createForm.profile_images : [];
+        const nextImages = [...currentImages];
+        let rejectedTypeCount = 0;
+        let rejectedSizeCount = 0;
+        let rejectedLimitCount = 0;
+
+        selectedFiles.forEach((file) => {
+            if (nextImages.length >= CREATE_PROFILE_IMAGE_LIMIT) {
+                rejectedLimitCount++;
+                return;
+            }
+
+            const extension = String(file.name || '').split('.').pop()?.toLowerCase() || '';
+            const isAllowedType = CREATE_PROFILE_IMAGE_TYPES.has(file.type) || CREATE_PROFILE_IMAGE_EXTENSIONS.has(extension);
+            if (!isAllowedType) {
+                rejectedTypeCount++;
+                return;
+            }
+
+            if (file.size > CREATE_PROFILE_IMAGE_MAX_BYTES) {
+                rejectedSizeCount++;
+                return;
+            }
+
+            nextImages.push(file);
+        });
+
+        if (nextImages.length !== currentImages.length) {
+            setCreateForm((current) => ({
+                ...current,
+                profile_images: nextImages,
+            }));
+        }
+
+        if (rejectedLimitCount > 0) {
+            toast.warning(`Add-client uploads are limited to ${CREATE_PROFILE_IMAGE_LIMIT} images.`);
+        }
+        if (rejectedTypeCount > 0) {
+            toast.warning('Only JPG, PNG, and WEBP images can be added during client creation.');
+        }
+        if (rejectedSizeCount > 0) {
+            toast.warning('Images must be 5MB or smaller.');
+        }
+    };
+
+    const removeCreateProfileImage = (indexToRemove) => {
+        setCreateForm((current) => ({
+            ...current,
+            profile_images: (Array.isArray(current.profile_images) ? current.profile_images : [])
+                .filter((_, index) => index !== indexToRemove),
+        }));
     };
 
     const bulkActions = [
@@ -1784,7 +1906,16 @@ export default function Clients() {
                                 <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
                                     <button
                                         type="button"
-                                        onClick={() => setCreateForm((current) => ({ ...current, onboarding_mode: 'manual', wp_username: '', wp_password: '' }))}
+                                        onClick={() => setCreateForm((current) => ({
+                                            ...current,
+                                            onboarding_mode: 'manual',
+                                            wp_username: '',
+                                            wp_password: '',
+                                            birthday: '',
+                                            height_cm: '',
+                                            weight_kg: '',
+                                            profile_images: [],
+                                        }))}
                                         className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
                                             createForm.onboarding_mode === 'manual'
                                                 ? 'bg-white text-slate-900 shadow-sm'
@@ -1916,6 +2047,94 @@ export default function Clients() {
                                             placeholder="Auto-generated if blank"
                                         />
                                     </div>
+
+                                    <div className="md:col-span-2 border-t border-slate-100 pt-3">
+                                        <div className="mb-3 flex items-center justify-between gap-3">
+                                            <div>
+                                                <p className="text-sm font-semibold text-slate-800">Profile basics</p>
+                                                <p className="text-xs text-slate-500">Optional fields for a usable first WordPress profile.</p>
+                                            </div>
+                                            <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                                Optional
+                                            </span>
+                                        </div>
+
+                                        <div className="grid gap-3 md:grid-cols-3">
+                                            <div>
+                                                <label htmlFor="client-birthday" className="mb-1 block text-sm font-medium text-slate-700">Birthday</label>
+                                                <input
+                                                    id="client-birthday"
+                                                    type="date"
+                                                    value={createForm.birthday}
+                                                    onChange={(event) => setCreateForm((current) => ({ ...current, birthday: event.target.value }))}
+                                                    className="crm-input"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label htmlFor="client-height" className="mb-1 block text-sm font-medium text-slate-700">Height</label>
+                                                <input
+                                                    id="client-height"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={createForm.height_cm}
+                                                    onChange={(event) => setCreateForm((current) => ({ ...current, height_cm: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="e.g. 167"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label htmlFor="client-weight" className="mb-1 block text-sm font-medium text-slate-700">Weight</label>
+                                                <input
+                                                    id="client-weight"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={createForm.weight_kg}
+                                                    onChange={(event) => setCreateForm((current) => ({ ...current, weight_kg: event.target.value }))}
+                                                    className="crm-input"
+                                                    placeholder="e.g. 55"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <label htmlFor="client-profile-images" className="block text-sm font-medium text-slate-700">Profile images</label>
+                                                <span className="text-xs text-slate-500">
+                                                    {createForm.profile_images.length}/{CREATE_PROFILE_IMAGE_LIMIT} selected
+                                                </span>
+                                            </div>
+                                            <input
+                                                id="client-profile-images"
+                                                type="file"
+                                                accept="image/jpeg,image/png,image/webp"
+                                                multiple
+                                                onChange={handleCreateProfileImageSelect}
+                                                className="crm-input mt-1"
+                                            />
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                Images upload in the background after the client is created. JPG, PNG, or WEBP up to 5MB each.
+                                            </p>
+
+                                            {createProfileImagePreviews.length > 0 ? (
+                                                <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6">
+                                                    {createProfileImagePreviews.map((preview, index) => (
+                                                        <div key={`${preview.name}-${index}`} className="group relative overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                                                            <img src={preview.url} alt="" className="aspect-square w-full object-cover" />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeCreateProfileImage(index)}
+                                                                className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700 shadow-sm transition hover:bg-white hover:text-rose-700"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    </div>
                                 </>
                             ) : null}
                         </div>
@@ -1957,6 +2176,10 @@ export default function Clients() {
                                         onboarding_mode: createForm.onboarding_mode,
                                         wp_username: createForm.onboarding_mode === 'wp_provision' ? (createForm.wp_username.trim() || null) : null,
                                         wp_password: createForm.onboarding_mode === 'wp_provision' ? (createForm.wp_password.trim() || null) : null,
+                                        birthday: createForm.onboarding_mode === 'wp_provision' ? (createForm.birthday || null) : null,
+                                        height: createForm.onboarding_mode === 'wp_provision' ? (createForm.height_cm.trim() || null) : null,
+                                        weight: createForm.onboarding_mode === 'wp_provision' ? (createForm.weight_kg.trim() || null) : null,
+                                        profile_images: createForm.onboarding_mode === 'wp_provision' ? [...createForm.profile_images] : [],
                                         reason: createForm.onboarding_mode === 'wp_provision'
                                             ? 'WordPress-provisioned client create from clients page'
                                             : 'Manual client create from clients page',

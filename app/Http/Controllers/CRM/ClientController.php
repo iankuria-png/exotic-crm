@@ -360,6 +360,9 @@ class ClientController extends Controller
             'onboarding_mode' => 'nullable|in:manual,wp_provision',
             'wp_username' => ['nullable', 'string', 'max:60', 'regex:/^[A-Za-z0-9._-]+$/'],
             'wp_password' => 'nullable|string|min:8|max:100',
+            'birthday' => 'nullable|date_format:Y-m-d',
+            'height' => 'nullable|string|max:50',
+            'weight' => 'nullable|string|max:50',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -2704,12 +2707,17 @@ class ClientController extends Controller
         }
 
         $assignedTo = $this->resolveAssignedOwner($platformId, $payload, $name);
+        $normalizedPhone = PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix) ?? '';
 
         $provisioningResult = (new WpDirectProvisioningService($platform))->provisionEscort([
             'name' => $name,
             'email' => !empty($payload['email']) ? trim((string) $payload['email']) : '',
-            'phone' => PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix) ?? '',
+            'phone' => $normalizedPhone,
+            'whatsapp' => $normalizedPhone,
             'city' => !empty($payload['city']) ? trim((string) $payload['city']) : '',
+            'birthday' => !empty($payload['birthday']) ? trim((string) $payload['birthday']) : '',
+            'height' => !empty($payload['height']) ? trim((string) $payload['height']) : '',
+            'weight' => !empty($payload['weight']) ? trim((string) $payload['weight']) : '',
             'post_status' => $profileStatus,
             'username' => !empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
             'password' => !empty($payload['wp_password']) ? (string) $payload['wp_password'] : '',
@@ -2730,7 +2738,7 @@ class ClientController extends Controller
                 'wp_user_id' => $wpUserId,
                 'client_type' => 'escort',
                 'name' => $name,
-                'phone_normalized' => PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix),
+                'phone_normalized' => $normalizedPhone !== '' ? $normalizedPhone : null,
                 'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
                 'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
                 'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
