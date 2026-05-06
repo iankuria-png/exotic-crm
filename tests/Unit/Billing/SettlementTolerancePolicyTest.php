@@ -118,6 +118,42 @@ class SettlementTolerancePolicyTest extends TestCase
         $this->assertNull($assessment['variance_amount']);
     }
 
+    public function test_it_accepts_cfa_to_xof_settlement_when_market_context_resolves_to_benin(): void
+    {
+        $payment = Payment::factory()->create([
+            'amount' => 22000,
+            'currency' => 'CFA',
+            'provider_key' => 'pawapay',
+            'payment_data' => [
+                'charge_pricing' => [
+                    'amount' => '22000.00',
+                    'currency' => 'CFA',
+                ],
+            ],
+        ]);
+        $payment->platform->forceFill([
+            'name' => 'Benin',
+            'country' => 'Benin',
+            'currency_code' => 'CFA',
+        ])->save();
+
+        $assessment = app(SettlementTolerancePolicy::class)->evaluate($payment, [
+            'amount' => '22000.00',
+            'currency' => 'XOF',
+            'country' => 'BEN',
+        ]);
+
+        $this->assertSame('accepted_exact', $assessment['disposition']);
+        $this->assertSame('settled_exact', $assessment['settlement_status']);
+        $this->assertSame('allow_completion', $assessment['completion_policy']);
+        $this->assertSame('CFA', $assessment['expected_currency']);
+        $this->assertSame('XOF', $assessment['expected_settlement_currency']);
+        $this->assertSame('XOF', $assessment['settled_currency']);
+        $this->assertSame('XOF', $assessment['settled_settlement_currency']);
+        $this->assertSame(0.0, $assessment['variance_amount']);
+        $this->assertFalse($assessment['review_required']);
+    }
+
     public function test_it_uses_locked_fx_metadata_from_the_pinned_routing_decision(): void
     {
         $payment = Payment::factory()->create([

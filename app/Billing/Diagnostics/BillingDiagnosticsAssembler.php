@@ -631,7 +631,7 @@ class BillingDiagnosticsAssembler implements BillingDiagnosticsAssemblerContract
             return 'attention';
         }
 
-        if (in_array($status, ['underpaid_review_required', 'client_unresolved', 'suppressed_sandbox'], true)) {
+        if (in_array($status, ['underpaid_review_required', 'currency_mismatch_review_required', 'client_unresolved', 'suppressed_sandbox'], true)) {
             return 'degraded';
         }
 

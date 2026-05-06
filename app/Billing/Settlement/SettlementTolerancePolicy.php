@@ -4,9 +4,15 @@ namespace App\Billing\Settlement;
 
 use App\Models\BillingRoutingDecision;
 use App\Models\Payment;
+use App\Services\CurrencyCanonicalizer;
 
 class SettlementTolerancePolicy
 {
+    public function __construct(
+        private readonly CurrencyCanonicalizer $currencyCanonicalizer
+    ) {
+    }
+
     public function evaluate(Payment $payment, array $providerPayload = [], array $options = []): array
     {
         $decision = $this->latestPinnedDecision($payment);
@@ -36,6 +42,11 @@ class SettlementTolerancePolicy
         [$settledAmount, $settledCurrency] = $this->resolveSettledAmountAndCurrency($providerType, $providerPayload, $options);
         [$feeAmount, $feeCurrency] = $this->resolveFeeAmountAndCurrency($providerType, $providerPayload, $options, $settledCurrency);
         [$fxRate, $fxSource, $fxLockedAt] = $this->resolveFxMetadata($payment, $decision, $options);
+        $currencyContext = $this->currencyContext($payment, $providerPayload, $options);
+        $expectedSettlementCurrency = $this->canonicalSettlementCurrency($expectedCurrency, $currencyContext);
+        $settledSettlementCurrency = $this->canonicalSettlementCurrency($settledCurrency, $currencyContext);
+        $quotedSettlementCurrency = $this->canonicalSettlementCurrency($quotedCurrency, $currencyContext);
+        $feeSettlementCurrency = $this->canonicalSettlementCurrency($feeCurrency, $currencyContext);
 
         $varianceAmount = null;
         $reviewRequired = false;
@@ -44,7 +55,7 @@ class SettlementTolerancePolicy
         $completionPolicy = 'allow_completion';
 
         if ($settledAmount !== null && $settledCurrency !== null) {
-            if ($settledCurrency !== $expectedCurrency) {
+            if ($settledSettlementCurrency !== $expectedSettlementCurrency) {
                 $disposition = 'currency_mismatch_review_required';
                 $settlementStatus = 'currency_mismatch';
                 $completionPolicy = 'hold_for_review';
@@ -73,12 +84,16 @@ class SettlementTolerancePolicy
             'provider_type_key' => $providerType !== '' ? $providerType : 'unknown',
             'expected_amount' => $expectedAmount,
             'expected_currency' => $expectedCurrency,
+            'expected_settlement_currency' => $expectedSettlementCurrency,
             'quoted_amount' => $quotedAmount,
             'quoted_currency' => $quotedCurrency,
+            'quoted_settlement_currency' => $quotedSettlementCurrency,
             'settled_amount' => $settledAmount,
             'settled_currency' => $settledCurrency,
+            'settled_settlement_currency' => $settledSettlementCurrency,
             'fee_amount' => $feeAmount,
             'fee_currency' => $feeCurrency,
+            'fee_settlement_currency' => $feeSettlementCurrency,
             'fx_rate' => $fxRate,
             'fx_source' => $fxSource,
             'fx_locked_at' => $fxLockedAt,
@@ -88,6 +103,31 @@ class SettlementTolerancePolicy
             'completion_policy' => $completionPolicy,
             'review_required' => $reviewRequired,
         ];
+    }
+
+    private function currencyContext(Payment $payment, array $providerPayload, array $options): array
+    {
+        $platform = $payment->relationLoaded('platform')
+            ? $payment->platform
+            : $payment->platform()->first();
+
+        return [
+            'platform_country' => $options['platform_country'] ?? $platform?->country,
+            'country' => $options['country'] ?? data_get($providerPayload, 'country'),
+            'platform_name' => $options['platform_name'] ?? $platform?->name,
+            'name' => $options['name'] ?? $platform?->name,
+        ];
+    }
+
+    private function canonicalSettlementCurrency(?string $currency, array $context): ?string
+    {
+        if ($currency === null || $currency === '') {
+            return null;
+        }
+
+        $resolved = $this->currencyCanonicalizer->resolve($currency, $context);
+
+        return $resolved['code'] ?? $currency;
     }
 
     private function latestPinnedDecision(Payment $payment): ?BillingRoutingDecision

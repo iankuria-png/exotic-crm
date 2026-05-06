@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
+use App\Billing\Support\BillingProviderTransactionRecorder;
 use App\Billing\Support\MarketBillingMethodPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -46,6 +47,7 @@ class PaymentController extends Controller
         private readonly ManualPaymentSubmissionService $manualPaymentSubmissionService,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
+        private readonly BillingProviderTransactionRecorder $billingProviderTransactionRecorder,
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
         private readonly SelfServiceIncentiveService $selfServiceIncentiveService
     ) {
@@ -2574,6 +2576,10 @@ class PaymentController extends Controller
                     'checkout_url' => $action['url'] ?? null,
                 ]),
             ])->save();
+
+            $this->billingProviderTransactionRecorder->recordInitiation($payment, $dispatchContext, $action, [
+                'reason_code' => 'self_checkout_initial_initiation',
+            ]);
 
             $this->paymentAttemptService->record($payment, 'hosted_checkout_init', 'success', [
                 'provider' => $attemptProvider,

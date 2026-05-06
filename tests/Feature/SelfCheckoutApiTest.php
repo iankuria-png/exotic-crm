@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\BillingSubscriptionRule;
 use App\Models\BillingMarketProviderBinding;
+use App\Models\BillingProviderTransaction;
 use App\Models\BillingProviderProfile;
 use App\Models\Client;
 use App\Models\BillingRoutingDecision;
@@ -317,6 +318,7 @@ class SelfCheckoutApiTest extends TestCase
 
         $payment = Payment::query()->firstOrFail();
         $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->firstOrFail();
+        $providerTransaction = BillingProviderTransaction::query()->where('payment_id', $payment->id)->firstOrFail();
 
         $this->assertSame('254748612016', $payment->phone);
         $this->assertSame('254748612016', data_get($payment->payment_data, 'customer.phone'));
@@ -324,6 +326,9 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('https://sandbox.paywith.pawapay.io/session/self-checkout-001', data_get($payment->payment_data, 'checkout_url'));
         $this->assertSame('success', $attempt->status);
         $this->assertSame('pawapay', $attempt->provider);
+        $this->assertSame('pawapay', $providerTransaction->provider_type_key);
+        $this->assertSame($payment->transaction_reference, $providerTransaction->provider_transaction_id);
+        $this->assertSame('self_checkout_initial_initiation', data_get($providerTransaction->confirmation_state_json, 'reason_code'));
 
         Http::assertSentCount(1);
     }

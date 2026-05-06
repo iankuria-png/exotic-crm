@@ -218,7 +218,7 @@ class PaymentCompletionService
             if ($this->shouldHoldForSettlementReview($settlementAssessment)) {
                 $payment = $this->markPaymentForSettlementReview($payment, $providerPayload, array_merge($options, [
                     'payment_intent_status' => $this->settlementIntentStatus($settlementAssessment),
-                    'provisioning_status' => 'underpaid_review_required',
+                    'provisioning_status' => $this->settlementProvisioningStatus($settlementAssessment),
                     'transition' => 'subscription_settlement_review',
                     'payment_data' => array_merge(
                         is_array($options['payment_data'] ?? null) ? $options['payment_data'] : [],
@@ -529,6 +529,14 @@ class PaymentCompletionService
         return match ($settlementAssessment['settlement_status'] ?? null) {
             'currency_mismatch' => 'currency_mismatch',
             default => 'underpaid',
+        };
+    }
+
+    private function settlementProvisioningStatus(array $settlementAssessment): string
+    {
+        return match ($settlementAssessment['settlement_status'] ?? null) {
+            'currency_mismatch' => 'currency_mismatch_review_required',
+            default => 'underpaid_review_required',
         };
     }
 

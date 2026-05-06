@@ -18,29 +18,43 @@ class CurrencyCanonicalizer
     ];
 
     private const XOF_COUNTRIES = [
+        'BEN',
         'BENIN',
         'BENIN REPUBLIC',
+        'BFA',
         'BURKINA FASO',
+        'CIV',
         'COTE D IVOIRE',
         "COTE D'IVOIRE",
         'CÔTE D IVOIRE',
         "CÔTE D'IVOIRE",
+        'GNB',
         'GUINEA-BISSAU',
         'GUINEA BISSAU',
         'IVORY COAST',
+        'MLI',
         'MALI',
+        'NER',
         'NIGER',
+        'SEN',
         'SENEGAL',
+        'TGO',
         'TOGO',
     ];
 
     private const XAF_COUNTRIES = [
+        'CMR',
         'CAMEROON',
+        'CAF',
         'CENTRAL AFRICAN REPUBLIC',
+        'TCD',
         'CHAD',
         'CONGO',
+        'GNQ',
         'EQUATORIAL GUINEA',
+        'GAB',
         'GABON',
+        'COG',
         'REPUBLIC OF THE CONGO',
     ];
 
