@@ -144,6 +144,8 @@ class ClientSyncService
         $email = mb_substr($wpClient['email'] ?? '', 0, 255);
         $city = CityNormalizer::fromWpPayload($wpClient);
         $imageUrl = mb_substr($wpClient['main_image_url'] ?? '', 0, 500);
+        $profilePermalink = mb_substr((string) ($wpClient['wp_profile_permalink'] ?? ''), 0, 500);
+        $profileSlug = mb_substr((string) ($wpClient['wp_profile_slug'] ?? ''), 0, 255);
         $premiumExpire = $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null);
         $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
         $escortExpire = $this->resolveEscortExpiry($wpClient, $premiumExpire, $featuredExpire);
@@ -157,6 +159,8 @@ class ClientSyncService
 
         $syncData = [
             'wp_user_id'      => $wpClient['wp_user_id'] ?? null,
+            'wp_profile_permalink' => $profilePermalink !== '' ? $profilePermalink : null,
+            'wp_profile_slug' => $profileSlug !== '' ? $profileSlug : null,
             'client_type'     => 'escort',
             'name'            => $name ?: null,
             'phone_normalized'=> $phone ?: null,
@@ -442,6 +446,8 @@ class ClientSyncService
                     ['platform_id', 'wp_post_id'],
                     [
                         'wp_user_id',
+                        'wp_profile_permalink',
+                        'wp_profile_slug',
                         'client_type',
                         'name',
                         'phone_normalized',
@@ -488,6 +494,8 @@ class ClientSyncService
         $email = mb_substr((string) ($wpClient['email'] ?? ''), 0, 255);
         $city = CityNormalizer::fromWpPayload($wpClient);
         $imageUrl = mb_substr((string) ($wpClient['main_image_url'] ?? ''), 0, 500);
+        $profilePermalink = mb_substr((string) ($wpClient['wp_profile_permalink'] ?? ''), 0, 500);
+        $profileSlug = mb_substr((string) ($wpClient['wp_profile_slug'] ?? ''), 0, 255);
         $premiumExpire = $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null);
         $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
         $newBadgeMode = $this->resolveNewBadgeMode($wpClient);
@@ -497,6 +505,8 @@ class ClientSyncService
             'platform_id' => (int) $this->platform->id,
             'wp_post_id' => (int) ($wpClient['wp_post_id'] ?? 0),
             'wp_user_id' => $wpClient['wp_user_id'] ?? null,
+            'wp_profile_permalink' => $profilePermalink !== '' ? $profilePermalink : null,
+            'wp_profile_slug' => $profileSlug !== '' ? $profileSlug : null,
             'client_type' => 'escort',
             'name' => $name !== '' ? $name : null,
             'phone_normalized' => $phone !== '' ? $phone : null,

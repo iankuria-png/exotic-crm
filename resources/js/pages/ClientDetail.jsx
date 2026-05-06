@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
@@ -208,6 +208,59 @@ function formatDateTime(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '—';
     return date.toLocaleString();
+}
+
+function formatProfileDate(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleDateString();
+}
+
+function parseDateValue(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseUnixDate(value) {
+    const timestamp = Number(value || 0);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+    const date = new Date(timestamp * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function resolveClientExpiryDate(client) {
+    return parseDateValue(client?.active_deal?.expires_at)
+        || parseUnixDate(client?.escort_expire)
+        || parseUnixDate(client?.premium_expire)
+        || parseUnixDate(client?.featured_expire)
+        || null;
+}
+
+function buildSubscriptionExpiryMessage(client, isForeverPlan = false) {
+    const expiryDate = resolveClientExpiryDate(client);
+
+    if (expiryDate) {
+        const label = formatProfileDate(expiryDate);
+        return expiryDate < new Date()
+            ? `Subscription expired on ${label}`
+            : `Subscription will expire on ${label}`;
+    }
+
+    return isForeverPlan ? 'Subscription does not expire' : 'No expiry date tracked';
+}
+
+function buildProfileCopyMessage(client, isForeverPlan = false) {
+    const profileUrl = client?.wp_profile_permalink || client?.wp_profile_url || '';
+    return `Profile: ${profileUrl}\n${buildSubscriptionExpiryMessage(client, isForeverPlan)}`;
+}
+
+async function copyTextValue(value) {
+    if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+    }
+
+    throw new Error('Clipboard access is unavailable.');
 }
 
 function resolveDialogPredictedLifecycle(dialogType, record) {
@@ -646,6 +699,7 @@ export default function ClientDetail() {
     const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const toast = useToast();
+    const profileLinkPopoverRef = useRef(null);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
     const initialTab = ['overview', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
         .includes(requestedTab)
@@ -732,6 +786,7 @@ export default function ClientDetail() {
         pin: '',
         reason: 'Wallet adjustment from client profile',
     });
+    const [showProfileLinkPeek, setShowProfileLinkPeek] = useState(false);
 
     const navigateToTab = useCallback((tabKey, sectionKey = null) => {
         setActiveTab(tabKey);
@@ -778,6 +833,32 @@ export default function ClientDetail() {
         retry: false,
         refetchOnWindowFocus: false,
     });
+
+    useEffect(() => {
+        if (!showProfileLinkPeek) {
+            return undefined;
+        }
+
+        const handlePointerDown = (event) => {
+            if (profileLinkPopoverRef.current && !profileLinkPopoverRef.current.contains(event.target)) {
+                setShowProfileLinkPeek(false);
+            }
+        };
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setShowProfileLinkPeek(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [showProfileLinkPeek]);
 
     const { data: mediaData, isLoading: mediaLoading, error: mediaError } = useQuery({
         queryKey: ['client-media', id],
@@ -1576,17 +1657,22 @@ export default function ClientDetail() {
     const profileState = deriveClientProfileState(client);
     const currentNewBadgeMode = normalizeNewBadgeMode(client.new_badge_mode, client.force_new);
     const newBadgePresentation = getNewBadgeModePresentation(currentNewBadgeMode);
-    const isExpired = client.escort_expire ? new Date(client.escort_expire * 1000) < new Date() : false;
+    const canonicalExpiryDate = resolveClientExpiryDate(client);
+    const isExpired = canonicalExpiryDate ? canonicalExpiryDate < new Date() : false;
     const isUntrackedForeverPlan = isClientTrueForeverPlan(client);
     const activeSubscriptionLabel = client.active_deal
         ? (client.active_deal.product?.name || client.active_deal.plan_type)
         : (isUntrackedForeverPlan ? 'Forever plan' : 'None');
-    const subscriptionExpiryLabel = client.escort_expire
-        ? new Date(client.escort_expire * 1000).toLocaleDateString()
+    const subscriptionExpiryLabel = canonicalExpiryDate
+        ? formatProfileDate(canonicalExpiryDate)
         : (isUntrackedForeverPlan ? 'Forever' : '—');
-    const subscriptionExpiryDetailLabel = client.escort_expire
-        ? new Date(client.escort_expire * 1000).toLocaleString()
+    const subscriptionExpiryDetailLabel = canonicalExpiryDate
+        ? canonicalExpiryDate.toLocaleString()
         : (isUntrackedForeverPlan ? 'Forever' : '—');
+    const profilePrimaryUrl = client.wp_profile_permalink || client.wp_profile_url || '';
+    const profileExpiryMessage = buildSubscriptionExpiryMessage(client, isUntrackedForeverPlan);
+    const profileCopyMessage = buildProfileCopyMessage(client, isUntrackedForeverPlan);
+    const hasProfileUrl = Boolean(profilePrimaryUrl);
 
     const canSyncFromWp = Number(client.wp_post_id || 0) > 0;
     const canOpenClientAccess = Boolean(client?.id);
@@ -1826,16 +1912,39 @@ export default function ClientDetail() {
             return;
         }
 
-        if (!navigator?.clipboard?.writeText) {
-            toast.error('Clipboard copy is not available in this browser.');
+        try {
+            await copyTextValue(paymentUrl);
+            toast.success('Payment link copied.');
+        } catch (error) {
+            toast.error('Payment link could not be copied.');
+        }
+    };
+
+    const copyProfileMessage = async () => {
+        if (!hasProfileUrl) {
+            toast.error('No profile URL is available to copy.');
             return;
         }
 
         try {
-            await navigator.clipboard.writeText(paymentUrl);
-            toast.success('Payment link copied.');
+            await copyTextValue(profileCopyMessage);
+            toast.success('Profile message copied.');
         } catch (error) {
-            toast.error('Payment link could not be copied.');
+            toast.error('Profile message could not be copied.');
+        }
+    };
+
+    const copyProfileUrl = async (label, value) => {
+        if (!value) {
+            toast.error(`${label} is not available.`);
+            return;
+        }
+
+        try {
+            await copyTextValue(value);
+            toast.success(`${label} copied.`);
+        } catch (error) {
+            toast.error(`${label} could not be copied.`);
         }
     };
 
@@ -2367,12 +2476,113 @@ export default function ClientDetail() {
                         <DefinitionRow label="WP Post ID" value={client.wp_post_id || '—'} mono />
                         <DefinitionRow label="WP User ID" value={client.wp_user_id || '—'} mono />
                         <DefinitionRow
-                            label="Profile URL"
-                            value={client.wp_profile_url ? (
-                                <a href={client.wp_profile_url} target="_blank" rel="noreferrer" className="text-teal-700 underline decoration-teal-200 underline-offset-2">
-                                    Open profile
-                                </a>
-                            ) : 'Not available'}
+                            label="Profile link"
+                            value={(
+                                <div ref={profileLinkPopoverRef} className="relative flex flex-wrap items-center justify-end gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowProfileLinkPeek((current) => !current)}
+                                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                                    >
+                                        Peek
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={copyProfileMessage}
+                                        disabled={!hasProfileUrl}
+                                        className="rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-700 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        Copy message
+                                    </button>
+                                    {hasProfileUrl ? (
+                                        <a
+                                            href={profilePrimaryUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                                        >
+                                            Open
+                                        </a>
+                                    ) : (
+                                        <span className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-400">
+                                            Open
+                                        </span>
+                                    )}
+
+                                    {showProfileLinkPeek ? (
+                                        <div className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg">
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Public URL</p>
+                                                    {client.wp_profile_permalink ? (
+                                                        <div className="mt-1 flex items-center gap-2">
+                                                            <a
+                                                                href={client.wp_profile_permalink}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                title={client.wp_profile_permalink}
+                                                                className="min-w-0 flex-1 truncate text-xs font-medium text-teal-700 underline decoration-teal-200 underline-offset-2"
+                                                            >
+                                                                {client.wp_profile_permalink}
+                                                            </a>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => copyProfileUrl('Public URL', client.wp_profile_permalink)}
+                                                                className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                                                            >
+                                                                Copy
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="mt-1 text-xs text-slate-500">Not synced yet</p>
+                                                    )}
+                                                </div>
+
+                                                <div>
+                                                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Short WP URL</p>
+                                                    {client.wp_profile_url ? (
+                                                        <div className="mt-1 flex items-center gap-2">
+                                                            <a
+                                                                href={client.wp_profile_url}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                title={client.wp_profile_url}
+                                                                className="crm-mono min-w-0 flex-1 truncate text-xs font-medium text-slate-700 underline decoration-slate-200 underline-offset-2"
+                                                            >
+                                                                {client.wp_profile_url}
+                                                            </a>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => copyProfileUrl('Short WP URL', client.wp_profile_url)}
+                                                                className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                                                            >
+                                                                Copy
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="mt-1 text-xs text-slate-500">Not available</p>
+                                                    )}
+                                                </div>
+
+                                                <div className="grid gap-2 border-t border-slate-100 pt-3">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <span className="text-xs text-slate-500">Slug</span>
+                                                        <span className="crm-mono max-w-[13rem] truncate text-right text-xs font-semibold text-slate-800" title={client.wp_profile_slug || 'Not synced yet'}>
+                                                            {client.wp_profile_slug || 'Not synced yet'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <span className="text-xs text-slate-500">Expiry message</span>
+                                                        <span className={`max-w-[13rem] text-right text-xs font-semibold ${isExpired ? 'text-rose-700' : 'text-slate-800'}`}>
+                                                            {profileExpiryMessage}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            )}
                         />
                         <DefinitionRow
                             label="Last Online"

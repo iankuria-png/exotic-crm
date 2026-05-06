@@ -32,6 +32,8 @@ class Client extends Model
         'platform_id',
         'wp_post_id',
         'wp_user_id',
+        'wp_profile_permalink',
+        'wp_profile_slug',
         'client_type',
         'signup_source',
         'name',
