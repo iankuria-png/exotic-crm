@@ -1,5 +1,6 @@
 const AUTH_TOKEN_KEY = 'crm_token';
 const AUTH_USER_KEY = 'crm_user';
+const SESSION_AUTH_KEY = 'crm_session_auth';
 const SESSION_TOKEN_KEY = 'crm_session_token';
 const AUTH_CHANGE_EVENT = 'crm-auth-changed';
 const IMPERSONATION_KEY = 'crm_impersonation';
@@ -7,6 +8,7 @@ const IMPERSONATION_KEY = 'crm_impersonation';
 let lastToken = null;
 let lastUserValue = null;
 let lastImpersonationValue = null;
+let lastSessionAuth = null;
 let lastSnapshot = {
     token: null,
     user: null,
@@ -77,21 +79,28 @@ export function readAuthSnapshot() {
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     const userValue = localStorage.getItem(AUTH_USER_KEY);
     const impersonationValue = sessionStorage.getItem(IMPERSONATION_KEY);
+    const sessionAuth = sessionStorage.getItem(SESSION_AUTH_KEY) === '1';
 
-    if (token === lastToken && userValue === lastUserValue && impersonationValue === lastImpersonationValue) {
+    if (
+        token === lastToken
+        && userValue === lastUserValue
+        && impersonationValue === lastImpersonationValue
+        && sessionAuth === lastSessionAuth
+    ) {
         return lastSnapshot;
     }
 
     lastToken = token;
     lastUserValue = userValue;
     lastImpersonationValue = impersonationValue;
+    lastSessionAuth = sessionAuth;
     const impersonation = parseStoredImpersonation(impersonationValue);
     const storedUser = parseStoredUser(userValue);
-    const hasToken = Boolean(token);
+    const hasAuth = Boolean(token) || sessionAuth;
     lastSnapshot = {
         token,
-        user: hasToken ? (impersonation?.user || storedUser) : null,
-        impersonation: hasToken ? impersonation : null,
+        user: hasAuth ? (impersonation?.user || storedUser) : null,
+        impersonation: hasAuth ? impersonation : null,
     };
 
     return lastSnapshot;
@@ -119,7 +128,13 @@ export function storeAuthSnapshot(token, user) {
     }
 
     sessionStorage.removeItem(IMPERSONATION_KEY);
-    localStorage.setItem(AUTH_TOKEN_KEY, token);
+    if (token) {
+        localStorage.setItem(AUTH_TOKEN_KEY, token);
+        sessionStorage.removeItem(SESSION_AUTH_KEY);
+    } else {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        sessionStorage.setItem(SESSION_AUTH_KEY, '1');
+    }
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
     emitAuthChange();
 }
@@ -150,6 +165,7 @@ export function clearAuthSnapshot({ clearSessionToken = false } = {}) {
 
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
+    sessionStorage.removeItem(SESSION_AUTH_KEY);
 
     if (clearSessionToken) {
         sessionStorage.removeItem(SESSION_TOKEN_KEY);

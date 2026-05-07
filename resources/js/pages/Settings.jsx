@@ -32,6 +32,7 @@ const baseTabs = [
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
+    { id: 'security', label: 'Security' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'health', label: 'System Health' },
 ];
@@ -7659,12 +7660,317 @@ function ReportingCurrencySettingsPanel() {
     );
 }
 
+function authStatusTone(settings) {
+    if (settings?.google?.enabled && settings?.google?.ready) return 'connected';
+    if (settings?.google?.configured) return 'pending';
+    return 'unknown';
+}
+
+function buildAuthSettingsForm(settings) {
+    const google = settings?.google || {};
+
+    return {
+        password_login_policy: settings?.password_login_policy || 'enabled',
+        require_google_for_non_admin: Boolean(settings?.require_google_for_non_admin),
+        google: {
+            enabled: Boolean(google.enabled),
+            primary: Boolean(google.primary),
+            client_id: google.client_id || '',
+            client_secret: '',
+            redirect_uri: google.redirect_uri || `${window.location.origin}/auth/google/callback`,
+            allowed_domains: Array.isArray(google.allowed_domains) ? google.allowed_domains.join('\n') : '',
+            allowed_emails: Array.isArray(google.allowed_emails) ? google.allowed_emails.join('\n') : '',
+            auto_link_existing_users: google.auto_link_existing_users !== false,
+        },
+    };
+}
+
+function parseAuthList(value) {
+    return String(value || '')
+        .split(/[\n,]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function SecuritySettingsWorkspace() {
+    const queryClient = useQueryClient();
+    const toast = useToast();
+    const [form, setForm] = useState(() => buildAuthSettingsForm(null));
+
+    const authQuery = useQuery({
+        queryKey: ['settings-auth'],
+        queryFn: () => api.get('/crm/settings/auth').then((response) => response.data),
+    });
+
+    const settings = authQuery.data?.settings || null;
+    const policyOptions = authQuery.data?.password_policy_options || [
+        { value: 'enabled', label: 'Enabled for everyone' },
+        { value: 'admin_only', label: 'Admins only' },
+        { value: 'disabled', label: 'Disabled' },
+    ];
+
+    useEffect(() => {
+        if (settings) {
+            setForm(buildAuthSettingsForm(settings));
+        }
+    }, [settings]);
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const googleTest = params.get('googleTest');
+        if (!googleTest) return;
+
+        if (googleTest === 'success') {
+            toast.success('Google SSO test passed.');
+        } else {
+            toast.warning('Google SSO test failed. Review the status panel.');
+        }
+        params.delete('googleTest');
+        const nextSearch = params.toString();
+        window.history.replaceState({}, '', `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}`);
+        queryClient.invalidateQueries({ queryKey: ['settings-auth'] });
+    }, [queryClient, toast]);
+
+    const saveMutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/auth', payload).then((response) => response.data),
+        onSuccess: (data) => {
+            queryClient.setQueryData(['settings-auth'], (current) => ({
+                ...(current || {}),
+                settings: data.settings,
+            }));
+            toast.success('Authentication settings saved.');
+        },
+        onError: (error) => {
+            toast.error(error.response?.data?.message || 'Unable to save authentication settings.');
+        },
+    });
+
+    const activateMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/auth/google/activate').then((response) => response.data),
+        onSuccess: (data) => {
+            queryClient.setQueryData(['settings-auth'], (current) => ({
+                ...(current || {}),
+                settings: data.settings,
+            }));
+            toast.success('Google SSO is active.');
+        },
+        onError: (error) => {
+            toast.error(error.response?.data?.message || 'Google SSO is not ready to activate.');
+        },
+    });
+
+    const rollbackMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/auth/rollback').then((response) => response.data),
+        onSuccess: (data) => {
+            queryClient.setQueryData(['settings-auth'], (current) => ({
+                ...(current || {}),
+                settings: data.settings,
+            }));
+            toast.success('Password login restored and Google SSO disabled.');
+        },
+    });
+
+    const testMutation = useMutation({
+        mutationFn: () => api.post('/crm/settings/auth/google/test/start').then((response) => response.data),
+        onSuccess: (data) => {
+            if (data?.url) {
+                window.location.href = data.url;
+            }
+        },
+        onError: (error) => {
+            toast.error(error.response?.data?.message || 'Save Google settings before testing.');
+        },
+    });
+
+    const save = () => {
+        saveMutation.mutate({
+            password_login_policy: form.password_login_policy,
+            require_google_for_non_admin: form.require_google_for_non_admin,
+            google: {
+                enabled: false,
+                primary: form.google.primary,
+                client_id: form.google.client_id,
+                client_secret: form.google.client_secret,
+                redirect_uri: form.google.redirect_uri,
+                allowed_domains: parseAuthList(form.google.allowed_domains),
+                allowed_emails: parseAuthList(form.google.allowed_emails),
+                auto_link_existing_users: form.google.auto_link_existing_users,
+            },
+        });
+    };
+
+    const passwordLabel = {
+        enabled: 'Enabled',
+        admin_only: 'Admins only',
+        disabled: 'Disabled',
+    }[settings?.password_login_policy || 'enabled'];
+    const googleTone = authStatusTone(settings);
+    const googleStatus = settings?.google?.enabled
+        ? 'Active'
+        : settings?.google?.ready
+            ? 'Ready to activate'
+            : settings?.google?.configured
+                ? 'Test required'
+                : 'Not configured';
+
+    return (
+        <div className="space-y-4">
+            <section className="grid gap-4 lg:grid-cols-4">
+                <MetricCard label="Email Login" value={passwordLabel} hint={settings?.emergency_password_login ? 'Emergency fallback on' : 'No emergency fallback'} tone={settings?.password_login_policy === 'disabled' ? 'warning' : 'success'} />
+                <MetricCard label="Google SSO" value={googleStatus} hint={settings?.google?.last_test?.tested_at ? `Last tested ${formatDateTime(settings.google.last_test.tested_at)}` : 'No live test yet'} tone={googleTone === 'connected' ? 'success' : googleTone === 'pending' ? 'warning' : 'neutral'} />
+                <MetricCard label="Workspace Domains" value={(settings?.google?.allowed_domains || []).length || 0} hint={(settings?.google?.allowed_domains || []).join(', ') || 'No domain restriction'} tone="neutral" />
+                <MetricCard label="Login Default" value={settings?.google?.primary ? 'Google' : 'Email'} hint={settings?.require_google_for_non_admin ? 'Google required for non-admins' : 'Flexible during rollout'} tone="neutral" />
+            </section>
+
+            <section className="crm-surface overflow-hidden">
+                <div className="border-b border-slate-200 px-5 py-4">
+                    <h3 className="crm-panel-title">Authentication Methods</h3>
+                    <p className="mt-1 text-sm text-slate-500">Change login policy without removing the emergency recovery path.</p>
+                </div>
+                <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                    <div className="space-y-4">
+                        <label className="block">
+                            <span className="text-sm font-medium text-slate-700">Password login policy</span>
+                            <select
+                                value={form.password_login_policy}
+                                onChange={(event) => setForm((current) => ({ ...current, password_login_policy: event.target.value }))}
+                                className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                            >
+                                {policyOptions.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                            <input
+                                type="checkbox"
+                                checked={form.require_google_for_non_admin}
+                                onChange={(event) => setForm((current) => ({ ...current, require_google_for_non_admin: event.target.checked }))}
+                                className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
+                            />
+                            <span>
+                                <span className="block text-sm font-semibold text-slate-800">Require Google for non-admin users</span>
+                                <span className="mt-1 block text-xs leading-5 text-slate-500">Admins keep password recovery while the team moves to Workspace SSO.</span>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+                        Settings will not allow Google-only or restricted password login until Google has completed a live OAuth test. The server-side emergency fallback remains controlled by environment config.
+                    </div>
+                </div>
+            </section>
+
+            <section className="crm-surface overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+                    <div>
+                        <h3 className="crm-panel-title">Google SSO Configuration</h3>
+                        <p className="mt-1 text-sm text-slate-500">Use Google Workspace to verify identity, then keep CRM permissions local.</p>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusChip(settings?.google?.enabled ? 'connected' : settings?.google?.configured ? 'pending' : 'unknown')}`}>
+                        {googleStatus}
+                    </span>
+                </div>
+
+                <div className="grid gap-5 p-5 lg:grid-cols-2">
+                    <label className="block">
+                        <span className="text-sm font-medium text-slate-700">Google client ID</span>
+                        <input
+                            value={form.google.client_id}
+                            onChange={(event) => setForm((current) => ({ ...current, google: { ...current.google, client_id: event.target.value } }))}
+                            className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                            placeholder="1234567890-abc.apps.googleusercontent.com"
+                        />
+                    </label>
+
+                    <label className="block">
+                        <span className="text-sm font-medium text-slate-700">Google client secret</span>
+                        <input
+                            type="password"
+                            value={form.google.client_secret}
+                            onChange={(event) => setForm((current) => ({ ...current, google: { ...current.google, client_secret: event.target.value } }))}
+                            className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                            placeholder={settings?.google?.client_secret_configured ? 'Secret saved. Enter a new value to replace it.' : 'Paste client secret'}
+                        />
+                    </label>
+
+                    <label className="block lg:col-span-2">
+                        <span className="text-sm font-medium text-slate-700">Redirect URI</span>
+                        <input
+                            value={form.google.redirect_uri}
+                            onChange={(event) => setForm((current) => ({ ...current, google: { ...current.google, redirect_uri: event.target.value } }))}
+                            className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                        />
+                    </label>
+
+                    <label className="block">
+                        <span className="text-sm font-medium text-slate-700">Allowed Workspace domains</span>
+                        <textarea
+                            value={form.google.allowed_domains}
+                            onChange={(event) => setForm((current) => ({ ...current, google: { ...current.google, allowed_domains: event.target.value } }))}
+                            className="mt-2 min-h-24 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                            placeholder="exotic-online.com"
+                        />
+                    </label>
+
+                    <label className="block">
+                        <span className="text-sm font-medium text-slate-700">Allowed email overrides</span>
+                        <textarea
+                            value={form.google.allowed_emails}
+                            onChange={(event) => setForm((current) => ({ ...current, google: { ...current.google, allowed_emails: event.target.value } }))}
+                            className="mt-2 min-h-24 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                            placeholder="admin@example.com"
+                        />
+                    </label>
+
+                    <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 lg:col-span-2">
+                        <input
+                            type="checkbox"
+                            checked={form.google.auto_link_existing_users}
+                            onChange={(event) => setForm((current) => ({ ...current, google: { ...current.google, auto_link_existing_users: event.target.checked } }))}
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
+                        />
+                        <span>
+                            <span className="block text-sm font-semibold text-slate-800">Auto-link existing CRM users by verified Google email</span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-500">No Google account can create a CRM user. This only links users already present in Roles & Permissions.</span>
+                        </span>
+                    </label>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-4">
+                    <div className="text-sm text-slate-500">
+                        {settings?.google?.last_test?.status === 'passed'
+                            ? `Last test passed for ${settings.google.last_test.email || 'Google account'}.`
+                            : settings?.google?.last_test?.message || 'Save the draft, then run a live Google OAuth test.'}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={save} disabled={saveMutation.isPending} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60">
+                            {saveMutation.isPending ? 'Saving...' : 'Save draft'}
+                        </button>
+                        <button type="button" onClick={() => testMutation.mutate()} disabled={testMutation.isPending || !settings?.google?.configured} className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-100 disabled:opacity-60">
+                            {testMutation.isPending ? 'Opening...' : 'Test Google login'}
+                        </button>
+                        <button type="button" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending || !settings?.google?.ready} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:opacity-60">
+                            Activate Google SSO
+                        </button>
+                        <button type="button" onClick={() => rollbackMutation.mutate()} disabled={rollbackMutation.isPending} className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60">
+                            Restore password login
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    );
+}
+
 export default function Settings() {
     const { user } = useAuth();
     const isSales = (user?.role || '') === 'sales';
     const [activeTab, setActiveTab] = useState('integrations');
     const canManageTemplates = ['admin', 'sub_admin'].includes(user?.role || '');
     const canViewRoles = (user?.role || '') === 'admin';
+    const canManageSecurity = (user?.role || '') === 'admin';
     const canCreateMarkets = (user?.role || '') === 'admin';
     const canManageMarkets = ['admin', 'sub_admin'].includes(user?.role || '');
     const canEditPaymentLinks = ['admin', 'sub_admin'].includes(user?.role || '');
@@ -7691,13 +7997,25 @@ export default function Settings() {
                 return canViewRoles;
             }
 
+            if (tab.id === 'security') {
+                return canManageSecurity;
+            }
+
             if (tab.id === 'billing') {
                 return canAccessBillingWorkspace && billingWorkspaceEnabled;
             }
 
             return true;
         });
-    }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canViewRoles]);
+    }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canManageSecurity, canViewRoles]);
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const requestedTab = params.get('tab');
+        if (requestedTab && tabs.some((tab) => tab.id === requestedTab)) {
+            setActiveTab(requestedTab);
+        }
+    }, [tabs]);
 
     useEffect(() => {
         if (!tabs.find((tab) => tab.id === activeTab)) {
@@ -7745,6 +8063,7 @@ export default function Settings() {
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
+            {activeTab === 'security' && canManageSecurity ? <SecuritySettingsWorkspace /> : null}
             {activeTab === 'dashboard' ? (
                 <div className="space-y-4">
                     <ReportingCurrencySettingsPanel />

@@ -210,59 +210,13 @@ class AuthController extends Controller
     
     public function redirectToGoogle()
     {
-        try {
-            $url = Socialite::driver('google')
-                ->stateless()
-                ->redirect()
-                ->getTargetUrl();
-    
-            return response()->json(['url' => $url]);
-    
-        } catch (\Exception $e) {
-            return response()->json([
-                'error' => 'Unable to initiate Google authentication',
-                'details' => $e->getMessage()
-            ], 500);
-        }
+        return response()->json(['url' => url('/auth/google/redirect')]);
     }
 
     
 public function handleGoogleCallback()
 {
-    try {
-        $googleUser = Socialite::driver('google')->stateless()->user();
-
-        $user = User::where('email', $googleUser->email)->first();
-
-        if (!$user) {
-            return redirect()->away('https://testing.exotic-ads.com/login?error=Email%20not%20allowed');
-        }
-
-        // Update the name
-        $user->update(['name' => $googleUser->name]);
-
-        // Generate token
-        $token = $user->createToken('google-auth')->plainTextToken;
-
-        // Load platforms
-        if ($user->role === 'sales') {
-            $user->load('platforms');
-        }
-
-        // REDIRECT BACK TO FRONTEND
-        $redirectUrl = 'https://testing.exotic-ads.com/google-auth-success'
-            . '?success=true'
-            . '&token=' . urlencode($token)
-            . '&id=' . $user->id
-            . '&name=' . urlencode($user->name)
-            . '&email=' . urlencode($user->email)
-            . '&role=' . urlencode($user->role);
-
-        return redirect()->away($redirectUrl);
-
-    } catch (\Exception $e) {
-        return redirect()->away('https://testing.exotic-ads.com/login?success=false&error=Google%20login%20failed');
-    }
+    abort(410, 'Use the CRM Google SSO callback route.');
 }
 
 

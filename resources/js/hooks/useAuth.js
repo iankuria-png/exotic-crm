@@ -21,41 +21,37 @@ export function useAuth() {
     const user = auth.user;
     const token = auth.token;
     const impersonation = auth.impersonation || null;
-    const [isLoading, setIsLoading] = useState(() => Boolean(token && !user));
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
         let cancelled = false;
 
-        if (token && !user) {
-            api.get('/crm/me')
-                .then(({ data }) => {
-                    if (cancelled) {
-                        return;
-                    }
+        api.get('/crm/me')
+            .then(({ data }) => {
+                if (cancelled) {
+                    return;
+                }
 
-                    updateStoredUser(data.user);
-                    ensureSessionToken();
-                })
-                .catch(() => {
-                    if (cancelled) {
-                        return;
-                    }
+                updateStoredUser(data.user);
+                ensureSessionToken();
+            })
+            .catch(() => {
+                if (cancelled) {
+                    return;
+                }
 
-                    clearAuthSnapshot({ clearSessionToken: true });
-                })
-                .finally(() => {
-                    if (!cancelled) {
-                        setIsLoading(false);
-                    }
-                });
-        } else {
-            setIsLoading(false);
-        }
+                clearAuthSnapshot({ clearSessionToken: true });
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setIsLoading(false);
+                }
+            });
 
         return () => {
             cancelled = true;
         };
-    }, [token, user]);
+    }, [token]);
 
     useEffect(() => {
         if (token && user) {

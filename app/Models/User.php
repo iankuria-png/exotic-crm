@@ -14,6 +14,8 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'google_sub',
+        'google_linked_at',
         'password',
         'role',
         'assigned_market_ids',
@@ -29,6 +31,7 @@ class User extends Authenticatable
 
     protected $casts = [
         'email_verified_at' => 'datetime',
+        'google_linked_at' => 'datetime',
         'assigned_market_ids' => 'array',
         'notification_prefs' => 'array',
     ];

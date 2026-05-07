@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Services\AuthSettingsService;
 use App\Services\TeamActivityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -13,7 +14,8 @@ use App\Models\User;
 class AuthController extends Controller
 {
     public function __construct(
-        private readonly TeamActivityService $teamActivityService
+        private readonly TeamActivityService $teamActivityService,
+        private readonly AuthSettingsService $authSettingsService
     ) {
     }
 
@@ -28,6 +30,10 @@ class AuthController extends Controller
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json(['message' => 'Invalid credentials'], 401);
+        }
+
+        if (!$this->authSettingsService->passwordLoginAllowedFor((string) $user->role)) {
+            return response()->json(['message' => 'Password login is not enabled for this account. Use Google SSO.'], 403);
         }
 
         if (($user->status ?? 'active') !== 'active') {
@@ -79,7 +85,7 @@ class AuthController extends Controller
             );
         }
 
-        $request->user()->currentAccessToken()->delete();
+        $request->user()->currentAccessToken()?->delete();
         Auth::guard('web')->logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();

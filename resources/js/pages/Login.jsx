@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import api from '../services/api';
+import { storeAuthSnapshot } from '../utils/authStorage';
 
 const brandLogo = '/Exotic%20Online%20Adv%20Logo-01-ChOpI09X.png';
 
@@ -16,7 +17,12 @@ export default function Login() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [googleLoading, setGoogleLoading] = useState(false);
     const [checkingSetup, setCheckingSetup] = useState(true);
+    const [authConfig, setAuthConfig] = useState({
+        password: { enabled: true, policy: 'enabled' },
+        google: { enabled: false, primary: false, configured: false },
+    });
     const { login } = useAuth();
     const navigate = useNavigate();
 
@@ -25,10 +31,29 @@ export default function Login() {
 
         const checkSetupStatus = async () => {
             try {
+                const params = new URLSearchParams(window.location.search);
+                const errorMessage = params.get('error');
+                if (errorMessage && !cancelled) {
+                    setError(errorMessage);
+                }
+
                 const { data } = await api.get('/crm/setup/status');
                 if (!cancelled && data?.is_first_run) {
                     navigate('/setup', { replace: true });
                     return;
+                }
+
+                const configResponse = await api.get('/crm/auth/config');
+                if (!cancelled) {
+                    setAuthConfig(configResponse.data);
+                }
+
+                if (params.get('google') === 'success') {
+                    const meResponse = await api.get('/crm/me');
+                    if (!cancelled) {
+                        storeAuthSnapshot('', meResponse.data.user);
+                        navigate('/', { replace: true });
+                    }
                 }
             } catch {
                 // Fall through to the login form if setup status cannot be determined.
@@ -60,6 +85,16 @@ export default function Login() {
             setLoading(false);
         }
     };
+
+    const handleGoogleLogin = () => {
+        setError('');
+        setGoogleLoading(true);
+        window.location.href = '/auth/google/redirect';
+    };
+
+    const passwordEnabled = authConfig.password?.enabled !== false;
+    const googleEnabled = Boolean(authConfig.google?.enabled);
+    const googlePrimary = googleEnabled && Boolean(authConfig.google?.primary);
 
     return (
         <div className="relative min-h-screen overflow-hidden bg-slate-950">
@@ -93,13 +128,39 @@ export default function Login() {
                             Sign in to manage leads, subscriptions, payments, and campaign performance in one secure environment.
                         </p>
 
-                        <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+                        <div className="mt-8 space-y-5">
                             {error && (
                                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700">
                                     {error}
                                 </div>
                             )}
 
+                            {googleEnabled ? (
+                                <button
+                                    type="button"
+                                    onClick={handleGoogleLogin}
+                                    disabled={googleLoading}
+                                    className={`inline-flex h-12 w-full items-center justify-center gap-3 rounded-xl border px-4 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                        googlePrimary
+                                            ? 'border-teal-700 bg-teal-700 text-white hover:bg-teal-800'
+                                            : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-[13px] font-bold text-blue-600">G</span>
+                                    {googleLoading ? 'Opening Google...' : 'Continue with Google'}
+                                </button>
+                            ) : null}
+
+                            {googleEnabled && passwordEnabled ? (
+                                <div className="flex items-center gap-3">
+                                    <div className="h-px flex-1 bg-slate-200" />
+                                    <span className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">or</span>
+                                    <div className="h-px flex-1 bg-slate-200" />
+                                </div>
+                            ) : null}
+
+                            {passwordEnabled ? (
+                                <form onSubmit={handleSubmit} className="space-y-5">
                             <div>
                                 <label htmlFor="email" className="block text-sm font-medium text-slate-700">
                                     Email
@@ -149,7 +210,13 @@ export default function Login() {
                             >
                                 {loading ? 'Signing in...' : 'Sign in'}
                             </button>
-                        </form>
+                                </form>
+                            ) : (
+                                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                                    Password login is disabled. Use Google SSO to access the CRM.
+                                </div>
+                            )}
+                        </div>
 
                         <p className="mt-5 text-xs text-slate-500">
                             Access is restricted to authorized team members.

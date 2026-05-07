@@ -13,6 +13,7 @@ use App\Http\Controllers\API\SmsLogController;
 use App\Http\Controllers\API\ActivityLogController;
 use App\Http\Controllers\AfricanCountryController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
+use App\Http\Controllers\CRM\AuthSettingsController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientWalletController;
@@ -48,6 +49,7 @@ Route::get('/ping', function () {
 
 // CRM Auth (public)
 Route::post('/crm/login', [CrmAuthController::class, 'login']);
+Route::get('/crm/auth/config', [AuthSettingsController::class, 'publicConfig']);
 Route::get('/billing/health', [BillingController::class, 'health']);
 Route::get('/payments/link/{token}', [PaymentLinkProxyController::class, 'handle']);
 
@@ -70,7 +72,7 @@ Route::prefix('crm/setup')->middleware('throttle:5,1')->group(function () {
 });
 
 // CRM Protected Routes (Sanctum token required)
-Route::middleware(['auth:sanctum', 'crm.impersonation'])->prefix('crm')->group(function () {
+Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('crm')->group(function () {
     // Auth
     Route::get('/me', [CrmAuthController::class, 'me']);
     Route::post('/logout', [CrmAuthController::class, 'logout']);
@@ -329,6 +331,11 @@ Route::middleware(['auth:sanctum', 'crm.impersonation'])->prefix('crm')->group(f
 
     // Settings
     Route::get('/settings/integrations', [SettingsController::class, 'integrations']);
+    Route::get('/settings/auth', [AuthSettingsController::class, 'show'])->middleware('role:admin');
+    Route::patch('/settings/auth', [AuthSettingsController::class, 'update'])->middleware('role:admin');
+    Route::post('/settings/auth/google/test/start', [AuthSettingsController::class, 'startGoogleTest'])->middleware('role:admin');
+    Route::post('/settings/auth/google/activate', [AuthSettingsController::class, 'activateGoogle'])->middleware('role:admin');
+    Route::post('/settings/auth/rollback', [AuthSettingsController::class, 'rollback'])->middleware('role:admin');
     Route::get('/settings/reporting-currency', [SettingsController::class, 'reportingCurrency'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/settings/reporting-currency', [SettingsController::class, 'updateReportingCurrency'])->middleware('role:admin,sub_admin');
     Route::get('/settings/reporting-currency/test', [SettingsController::class, 'testReportingCurrencyProvider'])->middleware('role:admin,sub_admin');

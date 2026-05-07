@@ -37,6 +37,13 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI'),
     ],
 
+    'crm_auth' => [
+        'password_login_enabled' => filter_var(env('CRM_PASSWORD_LOGIN_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'emergency_password_login' => filter_var(env('CRM_AUTH_EMERGENCY_PASSWORD_LOGIN', true), FILTER_VALIDATE_BOOL),
+        'google_allowed_domains' => env('GOOGLE_ALLOWED_DOMAINS', ''),
+        'google_allowed_emails' => env('GOOGLE_ALLOWED_EMAILS', ''),
+    ],
+
     'cybersource' => [
         'access_key' => env('CYBERSOURCE_ACCESS_KEY'),
         'profile_id' => env('CYBERSOURCE_PROFILE_ID'),

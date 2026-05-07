@@ -73,6 +73,7 @@ class Kernel extends HttpKernel
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
         'role' => \App\Http\Middleware\RoleMiddleware::class,
+        'crm.active' => \App\Http\Middleware\EnsureCrmUserIsActive::class,
         'crm.impersonation' => \App\Http\Middleware\CrmImpersonationMiddleware::class,
         'wallet.auth' => \App\Http\Middleware\AuthenticateWalletRequest::class,
     ];
