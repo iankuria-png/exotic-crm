@@ -11,6 +11,7 @@ import { FaqIconBubble, FaqWorkflowPill, resolveFaqArticleVisual, resolveFaqCate
 import { useToast } from '../../components/ToastProvider';
 
 const FEATURED_ARTICLE_SLUGS = [
+    'customer-payment-scripts',
     'adding-a-client-crm-only-vs-wordpress-provision',
     'search-visibility-and-market-sync',
     'client-access-setup-links-passwords-and-login-as-client',
@@ -102,7 +103,7 @@ export default function FaqHome() {
         <div className="space-y-4">
             <PageHeader
                 title="Knowledge Center"
-                subtitle="Operational guides for profile onboarding, access, subscriptions, payments, and market discipline."
+                subtitle="Operational runbooks and sales scripts for onboarding, access, payments, subscriptions, and live CRM edge cases."
                 actions={(
                     <>
                         <form

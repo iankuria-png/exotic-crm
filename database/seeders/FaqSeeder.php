@@ -157,6 +157,22 @@ class FaqSeeder extends Seeder
                 ],
             ],
             [
+                'slug' => 'sales-scripts',
+                'name' => 'Sales Scripts',
+                'description' => 'Copy-ready scripts for payments, objections, lead-source friction, and controlled fallback handling.',
+                'crm_page' => null,
+                'articles' => [
+                    'Customer Payment Scripts',
+                    'Existing user: payment methods available',
+                    'Existing user: push wallet',
+                    'Payment link sent but not paid',
+                    'Payment failed: retry and recovery',
+                    'Legacy payment objection handling',
+                    'Legacy payment escalation and CRM tags',
+                    'Lead sources: CRM is not the only source',
+                ],
+            ],
+            [
                 'slug' => 'team',
                 'name' => 'Team',
                 'description' => 'Read the leaderboard, goal completion, and coaching signals across support and sales.',
@@ -187,6 +203,37 @@ class FaqSeeder extends Seeder
             'Reconciling untracked payments' => 'untracked-payment-reconciliation',
             'Importing payments from CSV' => 'payments-csv-import',
             'Recording a shared manual payment' => 'record-shared-manual-payment',
+        ];
+
+        $contextMap = [
+            'Customer Payment Scripts' => [
+                ['crm_page' => 'payments', 'context_kind' => 'script', 'priority' => 10],
+                ['crm_page' => 'leads', 'context_kind' => 'script', 'priority' => 20],
+            ],
+            'Existing user: payment methods available' => [
+                ['crm_page' => 'client_detail', 'context_kind' => 'script', 'priority' => 10],
+                ['crm_page' => 'leads', 'context_kind' => 'script', 'priority' => 30],
+            ],
+            'Existing user: push wallet' => [
+                ['crm_page' => 'client_detail', 'context_kind' => 'script', 'priority' => 20],
+            ],
+            'Payment link sent but not paid' => [
+                ['crm_page' => 'payments', 'context_kind' => 'script', 'priority' => 20],
+                ['crm_page' => 'client_detail', 'context_kind' => 'script', 'priority' => 30],
+            ],
+            'Payment failed: retry and recovery' => [
+                ['crm_page' => 'payments', 'context_kind' => 'script', 'priority' => 30],
+            ],
+            'Legacy payment objection handling' => [
+                ['crm_page' => 'payments', 'context_kind' => 'script', 'priority' => 40],
+                ['crm_page' => 'client_detail', 'context_kind' => 'script', 'priority' => 40],
+            ],
+            'Legacy payment escalation and CRM tags' => [
+                ['crm_page' => 'payments', 'context_kind' => 'script', 'priority' => 50],
+            ],
+            'Lead sources: CRM is not the only source' => [
+                ['crm_page' => 'leads', 'context_kind' => 'script', 'priority' => 10],
+            ],
         ];
 
         foreach (array_values($categories) as $categoryIndex => $categoryDefinition) {
@@ -237,6 +284,18 @@ class FaqSeeder extends Seeder
                         'prefill_payload' => null,
                         'walkthrough_id' => $walkthroughMap[$title],
                     ]);
+                }
+
+                if (isset($contextMap[$title])) {
+                    $article->contexts()->delete();
+                    foreach ($contextMap[$title] as $row) {
+                        $article->contexts()->create([
+                            'crm_page' => $row['crm_page'],
+                            'surface' => 'help_drawer',
+                            'context_kind' => $row['context_kind'],
+                            'priority' => $row['priority'],
+                        ]);
+                    }
                 }
             }
         }
@@ -294,6 +353,14 @@ class FaqSeeder extends Seeder
             'Recording a shared manual payment' => 'How to split one manual payment across multiple targets without breaking references.',
             'Deactivation reason codes' => 'What each reason code communicates to reporting and future triage.',
             'Renewal pipeline vs Recently Expired vs Untracked Active' => 'How to tell these three queues apart so you work the right one.',
+            'Customer Payment Scripts' => 'The policy-backed scripts sales can use to move clients into checkout or wallet without sounding robotic.',
+            'Existing user: payment methods available' => 'Short reusable replies for explaining payment options and steering clients toward trackable payment paths.',
+            'Existing user: push wallet' => 'How to recommend wallet clearly when faster future renewals or upgrades matter.',
+            'Payment link sent but not paid' => 'Follow-up scripts for incomplete checkout without sounding pushy or losing control of the workflow.',
+            'Payment failed: retry and recovery' => 'General recovery scripts that keep the new payment workflow intact before manual fallback is offered.',
+            'Legacy payment objection handling' => 'How to acknowledge resistance to the new flow while still guiding the client into checkout or wallet first.',
+            'Legacy payment escalation and CRM tags' => 'The internal escalation line, do and do-not rules, and the tags that make payment friction measurable.',
+            'Lead sources: CRM is not the only source' => 'How to explain missing or delayed profiles when the lead started in WordPress, admin sync, or another intake path.',
             'Team leaderboard and goal settings' => 'How to use the leaderboard, role filters, and goals tabs for coaching rather than vanity ranking.',
             default => 'A practical guide for the ' . strtolower($categoryName) . ' workflow in Exotic CRM.',
         };
@@ -1688,6 +1755,302 @@ These rows look operationally active but do not have a clean tracked subscriptio
 - **untracked active:** investigate before acting
 
 Confusing these three queues leads to the wrong messaging and the wrong data fixes.
+MD,
+            'Customer Payment Scripts' => <<<'MD'
+# Customer Payment Scripts
+
+## When to use
+Use this script pack when a live client is asking how to pay, hesitating about checkout or wallet, or drifting back toward legacy/manual habits.
+
+The goal is not to force a robotic line. The goal is to keep the conversation human while protecting the new payment workflow:
+
+- checkout and wallet first
+- manual or legacy support only as controlled fallback
+- every payment conversation leaves a clean CRM trail
+
+## Quick reply
+Hi [Name], yes, you can complete payment now.
+
+The fastest options are self-checkout or wallet because they are easier to track, faster to confirm, and help us update your account without delays.
+
+If you want, I can send the correct payment link now.
+
+## Warmer version
+Hi [Name], welcome back.
+
+For payments, we now recommend checkout or wallet first because it helps us confirm your payment faster and reduces activation or renewal delays.
+
+Depending on your country, other options may still be available, but checkout or wallet is the safest path for a faster update.
+
+I can send the right link now and guide you if needed.
+
+## Call version
+Hi [Name], thanks for reaching out.
+
+For payment, the best option is checkout or wallet because it gives us a clearer payment record, speeds up confirmation, and helps us activate or renew your account faster.
+
+I can send the correct payment link right away. Once you complete it, we can confirm and move to the next step from there.
+
+## Policy line
+Preferred payment paths are checkout and wallet because they are easier to track, faster to confirm, and reduce activation delays. Manual or legacy handling stays available only as fallback when the preferred flow fails or an approved exception is needed.
+MD,
+            'Existing user: payment methods available' => <<<'MD'
+# Existing user: payment methods available
+
+## When to use
+Use this when an existing client asks:
+
+- how can I pay?
+- what payment methods are available?
+- can I renew now?
+- which option should I use?
+
+## Quick reply
+Hi [Name], yes, you can renew or complete payment now.
+
+The best options are self-checkout or wallet because they are faster to confirm, easier to track, and help us avoid account-update delays.
+
+If you want, I can send the correct payment link now.
+
+## Warmer version
+Hi [Name], welcome back.
+
+For payment, we recommend checkout or wallet first because it helps us confirm faster and update your account with less delay.
+
+Depending on your country, other methods may still be available, but checkout or wallet is the smoothest option.
+
+I can send the correct link now so you can complete it directly.
+
+## Call version
+Hi [Name], thanks for checking in.
+
+For payment, we now guide most renewals through checkout or wallet because it gives both you and our team a cleaner record and helps us process renewals faster.
+
+I can send you the correct link right away and stay with you while you complete it if needed.
+
+## Agent note
+If the client is already inside Client Detail, confirm the active market and send the payment path tied to the correct profile before you message them.
+MD,
+            'Existing user: push wallet' => <<<'MD'
+# Existing user: push wallet
+
+## When to use
+Use this when a client can pay normally, but you want to encourage wallet adoption because future renewals or upgrades are likely.
+
+## Quick reply
+Hi [Name], you can complete payment through the normal checkout link.
+
+If you plan to renew or upgrade again later, I recommend wallet because it makes future payments faster and easier to track.
+
+Would you like to use wallet or direct checkout this time?
+
+## Warmer version
+Hi [Name], for faster renewals, I recommend wallet.
+
+With wallet, your balance is visible, easier to track, and much simpler to use the next time you renew or upgrade.
+
+You can still use direct checkout if you prefer, but wallet is the smoother option going forward.
+
+## Call version
+Hi [Name], both options can work today, but wallet is usually better if you expect to renew again.
+
+It makes future payments faster because the balance stays visible and easier to apply, and it also reduces confusion when we confirm your next renewal or upgrade.
+
+## Agent note
+Do not oversell wallet if the client only needs one urgent payment right now. Use it when the future-speed benefit is real.
+MD,
+            'Payment link sent but not paid' => <<<'MD'
+# Payment link sent but not paid
+
+## When to use
+Use this when a client was already sent a payment link but the payment has not been completed yet.
+
+## Quick reply
+Hi [Name], just following up.
+
+I sent the payment link earlier, but I can see the payment has not been completed yet.
+
+Would you like me to resend the link, or are you having an issue with the payment method?
+
+## Warmer version
+Hi [Name], checking in again so we can avoid delays with your account.
+
+If the earlier payment link did not work, I can resend it or guide you through another available option.
+
+Should I resend the link now?
+
+## Call version
+Hi [Name], I’m following up on the payment link I sent earlier.
+
+It looks like the payment has not been completed yet. If there was any issue with the link or the method, I can resend it now and help you through the next step.
+
+## Escalation
+Hi [Name], I can see the payment has still not gone through.
+
+Let’s start by resending the payment link so we can rule out a simple access issue. If it still fails, I’ll help you with the next available payment option.
+
+## Agent note
+If the link was sent from Client Detail, confirm the client record and current market before resending. Do not generate a fresh link for the wrong profile.
+MD,
+            'Payment failed: retry and recovery' => <<<'MD'
+# Payment failed: retry and recovery
+
+## When to use
+Use this when the payment failed, timed out, or the client says the prompt did not complete correctly.
+
+In v1 contextual help, treat these as general recovery scripts. Do not assume you already know the exact failure reason unless diagnostics confirms it.
+
+## Quick reply
+Hi [Name], I noticed the payment did not complete.
+
+This can happen because of a timeout, insufficient funds, a wrong PIN, or another account issue.
+
+Would you like to retry now, or should I share another available payment option?
+
+## Warmer version
+Hi [Name], it looks like the payment did not complete successfully.
+
+No problem. We can either retry now or switch to another available option if the first method is not working for you.
+
+If you want, I can resend the prompt or link now.
+
+## Call version
+Hi [Name], I can see the payment did not go through.
+
+That usually means the request timed out, funds were not available, or the authorization step did not complete. We can retry now, and if it still fails, I’ll guide you to the next safe option.
+
+## Escalation
+Hi [Name], since the payment is still not going through after retrying, we can move to an alternative payment option.
+
+Once payment is made, please share the confirmation so finance can match it correctly and avoid delays with your account update.
+
+## Agent note
+Use Payment Diagnostics before promising the next step. If diagnostics shows repeated failure, communicate clearly and do not keep looping the client through the same retry path without explanation.
+MD,
+            'Legacy payment objection handling' => <<<'MD'
+# Legacy payment objection handling
+
+## When to use
+Use this when a client asks for the old number, says they do not trust the new link, or insists on paying the old way.
+
+The posture is:
+
+1. acknowledge their comfort with the old method
+2. explain why the new path exists
+3. offer guided support
+4. keep manual help as fallback, not first choice
+
+## Quick reply
+Hi [Name], I understand. You’re used to the previous payment method, and that’s completely okay.
+
+We are now encouraging checkout or wallet because it is easier to track, faster to confirm, and helps avoid delays or missing payment records.
+
+I can send the link and stay online while you complete it if that helps.
+
+## Warmer version
+Hi [Name], I understand why you prefer the previous method.
+
+We are moving more payments through checkout or wallet because it gives both you and our team a clearer record, faster confirmation, and fewer delays during activation or renewal.
+
+Let’s try the new link first, and I’ll guide you through it.
+
+## Call version
+Hi [Name], I understand your concern.
+
+The reason we are moving away from the older payment route is to reduce payment confusion, missed confirmations, and delays. With the new flow, your payment is easier to match to your account and faster for us to confirm.
+
+Let me send the correct link first and guide you through it. If it does not work, I’ll help you with the next option.
+
+## Escalation
+Hi [Name], I understand you still prefer the previous method.
+
+To avoid delaying your account, I’ll escalate this for manual payment support. Please note that manual confirmation may take longer because finance has to match the payment to your account.
+
+The fastest option remains checkout or wallet, but I’ll assist you with the available fallback.
+
+## Objection handling
+If the client says “I don’t trust links,” reassure them that the link is generated for their account and should only be used from the official support or sales channel.
+
+If the client says “just give me the old number,” explain that checkout or wallet must be tried first because it is easier to track and confirm.
+
+## Agent note
+Do not argue with the client, insult the old method, or blame finance, R&D, or management.
+MD,
+            'Legacy payment escalation and CRM tags' => <<<'MD'
+# Legacy payment escalation and CRM tags
+
+## When to use
+Use this article after two failed attempts to move the client into checkout or wallet, or when you need to document why a controlled fallback was used.
+
+## Escalation
+Hi [Name], I understand you still prefer the previous method.
+
+To avoid delaying your account, I will escalate this for manual payment support. Please note that manual confirmation may take longer because finance has to match the payment to your account.
+
+The fastest option remains checkout or wallet, but I’ll assist you with the available fallback.
+
+## Agent note
+After escalating, leave enough CRM context so the next agent knows:
+
+- what the client objected to
+- whether checkout or wallet was attempted
+- whether a payment link was resent
+- whether diagnostics showed a recurring failure
+
+## CRM tags
+- Legacy Payment Preference
+- Checkout Resistance
+- Payment Trust Concern
+- Payment Failed
+- Manual Payment Requested
+- Insufficient Funds
+- Wrong PIN
+- Payment Timeout
+- Payment Confirmed
+- Checkout Abandoned
+
+## Policy line
+The goal is not to fight clients who prefer the old method. The goal is to guide them into the new payment flow while keeping manual payment as a controlled fallback.
+MD,
+            'Lead sources: CRM is not the only source' => <<<'MD'
+# Lead sources: CRM is not the only source
+
+## When to use
+Use this when sales says “the lead is missing” or when a user says they already registered but the expected profile or lead is not visible in the current CRM view.
+
+Leads and profiles can originate from more than one place:
+
+- CRM-created records
+- WordPress/admin-side records
+- synced records waiting to appear in the CRM view
+
+## Quick reply
+Hi [Name], thank you for checking.
+
+If your profile or registration is not visible yet, it may still be coming through a different intake or sync path. I’ll confirm the current record path and update you from there.
+
+## Warmer version
+Hi [Name], thanks for flagging that.
+
+If the profile is not visible yet, it may have started on the WordPress or admin side and may still need a sync into the CRM view. I’ll check the record path and confirm the next step for you.
+
+## Call version
+Hi [Name], thanks for your patience.
+
+If a profile or lead does not appear immediately in CRM, it does not always mean the registration failed. Sometimes it was created from another operational path and still needs to be synced or verified on our side.
+
+I’ll confirm the record source and update you with the next step.
+
+## Agent note
+Before saying a lead or profile is missing:
+
+1. confirm current market scope
+2. search the expected record path
+3. check whether the profile was created from WordPress/admin side
+4. use Market Sync where appropriate
+
+## Policy line
+Sales should stop assuming every lead starts in CRM. Missing visibility may be a source-path or sync issue, not a failed registration.
 MD,
             'Team leaderboard and goal settings' => <<<'MD'
 # Team leaderboard and goal settings

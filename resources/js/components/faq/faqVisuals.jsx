@@ -160,8 +160,14 @@ export function resolveFaqCategoryVisual(category) {
 export function resolveFaqArticleVisual(article) {
     const title = String(article?.title || article || '').toLowerCase();
 
+    if (title.includes('customer payment scripts')) return { tone: 'indigo', icon: 'chat', label: 'Sales scripts' };
     if (title.includes('adding a client')) return { tone: 'teal', icon: 'user-plus', label: 'Create client' };
     if (title.includes('editing a client')) return { tone: 'sky', icon: 'clipboard', label: 'Edit safely' };
+    if (title.includes('payment methods available')) return { tone: 'indigo', icon: 'link', label: 'Payment options' };
+    if (title.includes('push wallet')) return { tone: 'emerald', icon: 'credit-card', label: 'Push wallet' };
+    if (title.includes('payment link sent but not paid')) return { tone: 'indigo', icon: 'link', label: 'Follow up payment' };
+    if (title.includes('legacy payment')) return { tone: 'amber', icon: 'chat', label: 'Handle objections' };
+    if (title.includes('lead sources')) return { tone: 'sky', icon: 'funnel', label: 'Lead-source friction' };
     if (title.includes('market sync') || title.includes('sync')) return { tone: 'sky', icon: 'layout', label: 'Sync and visibility' };
     if (title.includes('client access')) return { tone: 'amber', icon: 'key', label: 'Access tools' };
     if (title.includes('payment link')) return { tone: 'indigo', icon: 'link', label: 'Send payment link' };

@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 import faqApi from '../../services/faqApi';
 import { FaqIconBubble, FaqWorkflowPill, resolveFaqArticleVisual, resolveFaqCategoryVisual } from './faqVisuals';
 import FaqFlyoutPanel from './FaqFlyoutPanel';
+import { useToast } from '../ToastProvider';
 
 function resolveCrmPage(pathname) {
     if (pathname.startsWith('/team')) return 'team';
@@ -41,14 +42,38 @@ export default function HelpButton() {
     const location = useLocation();
     const crmPage = resolveCrmPage(location.pathname);
     const deferredSearch = useDeferredValue(search.trim());
+    const toast = useToast();
     const query = useQuery({
         queryKey: ['faq-help-drawer', crmPage, deferredSearch],
-        queryFn: () => faqApi.listArticles({ crm_page: crmPage, per_page: 8, search: deferredSearch || undefined }),
+        queryFn: () => faqApi.getContext({ crm_page: crmPage, search: deferredSearch || undefined }),
         enabled: open,
     });
-    const results = useMemo(() => query.data?.articles || [], [query.data]);
-    const total = query.data?.pagination?.total || results.length;
-    const visibleResults = results.slice(0, 5);
+    const scripts = useMemo(() => query.data?.scripts || [], [query.data]);
+    const runbooks = useMemo(() => query.data?.runbooks || [], [query.data]);
+    const totals = query.data?.meta || {};
+    const searchLogId = query.data?.search_log_id;
+    const snippetCards = useMemo(() => (
+        scripts.flatMap((article) => (article.snippets || []).map((snippet) => ({
+            ...snippet,
+            article,
+        }))).slice(0, 3)
+    ), [scripts]);
+    const scriptArticlesWithoutSnippets = useMemo(
+        () => scripts.filter((article) => !(article.snippets || []).length).slice(0, 2),
+        [scripts],
+    );
+    const visibleRunbooks = useMemo(() => runbooks.slice(0, 5), [runbooks]);
+
+    const withSearchLog = (slug) => `/faq/a/${slug}${searchLogId ? `?search_log_id=${searchLogId}` : ''}`;
+
+    const handleCopy = async (text) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            toast.success('Snippet copied.');
+        } catch (error) {
+            toast.error('Unable to copy snippet.');
+        }
+    };
 
     return (
         <>
@@ -67,12 +92,14 @@ export default function HelpButton() {
                 open={open}
                 onClose={() => setOpen(false)}
                 title="Contextual help"
-                subtitle={`Search the runbooks mapped to ${crmPageLabel(crmPage)} without leaving the workflow.`}
+                subtitle={`Search scripts and runbooks mapped to ${crmPageLabel(crmPage)} without leaving the workflow.`}
                 widthClassName="max-w-xl"
                 footer={(
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <p className="text-sm text-slate-500">
-                            {total ? `${total} article${total === 1 ? '' : 's'} available for this screen.` : 'No mapped articles yet.'}
+                            {totals.total_count
+                                ? `${totals.total_count} contextual item${totals.total_count === 1 ? '' : 's'} available for this screen.`
+                                : 'No mapped articles yet.'}
                         </p>
                         <Link to={`/faq?crm_page=${crmPage}`} onClick={() => setOpen(false)} className="crm-btn-secondary inline-flex rounded-lg px-3 py-2 text-sm">
                             Open Knowledge Center
@@ -115,41 +142,116 @@ export default function HelpButton() {
                             <div className="mt-2 flex items-start justify-between gap-3">
                                 <div>
                                     <p className="text-sm font-semibold text-slate-900">{crmPageLabel(crmPage)}</p>
-                                    <p className="mt-1 text-sm leading-6 text-slate-500">Use these notes for the next safe action, not a general product tour.</p>
+                                    <p className="mt-1 text-sm leading-6 text-slate-500">Use the recommended scripts first, then drop into the deeper runbooks if you need policy or diagnostics context.</p>
                                 </div>
                                 <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                                    {total} mapped
+                                    {totals.scripts_count || 0} scripts
                                 </span>
                             </div>
                         </div>
                     </div>
                     {query.isLoading ? <p className="text-sm text-slate-500">Loading help articles...</p> : null}
-                    {!query.isLoading && !results.length ? (
+                    {!query.isLoading && !scripts.length && !runbooks.length ? (
                         <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-4 text-sm text-slate-500">
                             {deferredSearch
                                 ? `No contextual matches for “${deferredSearch}”. Try a broader term or open the full knowledge center.`
                                 : 'No mapped articles yet for this screen.'}
                         </div>
                     ) : null}
-                    {visibleResults.map((article) => (
-                        <Link
-                            key={article.id}
-                            to={`/faq/a/${article.slug}`}
-                            onClick={() => setOpen(false)}
-                            className="block rounded-xl border border-slate-200 px-4 py-4 transition hover:border-teal-200 hover:bg-teal-50/50"
-                        >
-                            <div className="flex items-start gap-3">
-                                <FaqIconBubble visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} className="mt-0.5 h-10 w-10 rounded-xl" />
+                    {snippetCards.length ? (
+                        <section className="space-y-3">
+                            <div className="flex items-center justify-between gap-3">
                                 <div>
-                                    <FaqWorkflowPill visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} />
-                                    <p className="mt-2 text-sm font-semibold text-slate-900">{article.title}</p>
-                                    <p className="mt-1 text-sm leading-6 text-slate-500">{article.summary}</p>
+                                    <p className="text-sm font-semibold text-slate-900">Recommended scripts</p>
+                                    <p className="text-sm text-slate-500">Copy the customer-safe reply that matches the conversation you are already in.</p>
                                 </div>
+                                <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                    Top 3
+                                </span>
                             </div>
-                        </Link>
-                    ))}
-                    {results.length > visibleResults.length ? (
-                        <p className="text-sm text-slate-500">Showing the top {visibleResults.length}. Open the knowledge center for the full list.</p>
+                            {snippetCards.map(({ article, label, copy_text, section_slug }, index) => (
+                                <div key={`${article.id}-${section_slug}-${index}`} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                                    <div className="flex items-start gap-3">
+                                        <FaqIconBubble visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} className="mt-0.5 h-10 w-10 rounded-xl" />
+                                        <div className="min-w-0 flex-1 space-y-3">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <FaqWorkflowPill visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} />
+                                                <span className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-teal-700">
+                                                    {label}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-semibold text-slate-900">{article.title}</p>
+                                                <p className="mt-1 whitespace-pre-line text-sm leading-6 text-slate-600">{copy_text}</p>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                <button type="button" onClick={() => handleCopy(copy_text)} className="crm-btn-secondary rounded-lg px-3 py-2 text-sm">
+                                                    Copy
+                                                </button>
+                                                <Link to={withSearchLog(article.slug)} onClick={() => setOpen(false)} className="crm-btn-secondary inline-flex rounded-lg px-3 py-2 text-sm">
+                                                    Open full article
+                                                </Link>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </section>
+                    ) : null}
+                    {scriptArticlesWithoutSnippets.length ? (
+                        <section className="space-y-3">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-900">Mapped script articles</p>
+                                <p className="text-sm text-slate-500">These are still relevant here, but they do not expose copy-ready snippets in the drawer.</p>
+                            </div>
+                            {scriptArticlesWithoutSnippets.map((article) => (
+                                <Link
+                                    key={article.id}
+                                    to={withSearchLog(article.slug)}
+                                    onClick={() => setOpen(false)}
+                                    className="block rounded-xl border border-slate-200 px-4 py-4 transition hover:border-teal-200 hover:bg-teal-50/50"
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <FaqIconBubble visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} className="mt-0.5 h-10 w-10 rounded-xl" />
+                                        <div>
+                                            <FaqWorkflowPill visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} />
+                                            <p className="mt-2 text-sm font-semibold text-slate-900">{article.title}</p>
+                                            <p className="mt-1 text-sm leading-6 text-slate-500">{article.summary}</p>
+                                        </div>
+                                    </div>
+                                </Link>
+                            ))}
+                        </section>
+                    ) : null}
+                    {visibleRunbooks.length ? (
+                        <section className="space-y-3">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-900">Related runbooks</p>
+                                    <p className="text-sm text-slate-500">Use these when you need the deeper workflow, policy, or diagnostics context behind the script.</p>
+                                </div>
+                                <span className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                    {totals.runbooks_count || visibleRunbooks.length} runbooks
+                                </span>
+                            </div>
+                            {visibleRunbooks.map((article) => (
+                                <Link
+                                    key={article.id}
+                                    to={withSearchLog(article.slug)}
+                                    onClick={() => setOpen(false)}
+                                    className="block rounded-xl border border-slate-200 px-4 py-4 transition hover:border-teal-200 hover:bg-teal-50/50"
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <FaqIconBubble visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} className="mt-0.5 h-10 w-10 rounded-xl" />
+                                        <div>
+                                            <FaqWorkflowPill visual={resolveFaqArticleVisual(article) || resolveFaqCategoryVisual(article.category)} />
+                                            <p className="mt-2 text-sm font-semibold text-slate-900">{article.title}</p>
+                                            <p className="mt-1 text-sm leading-6 text-slate-500">{article.summary}</p>
+                                        </div>
+                                    </div>
+                                </Link>
+                            ))}
+                        </section>
                     ) : null}
                 </div>
             </FaqFlyoutPanel>

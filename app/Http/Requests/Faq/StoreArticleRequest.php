@@ -7,6 +7,8 @@ use Illuminate\Validation\Rule;
 
 class StoreArticleRequest extends FormRequest
 {
+    private const CRM_PAGES = ['dashboard', 'clients', 'client_detail', 'deals', 'payments', 'conversations', 'campaigns', 'leads', 'cross_cutting', 'team'];
+
     public function authorize(): bool
     {
         return true;
@@ -31,6 +33,12 @@ class StoreArticleRequest extends FormRequest
             'ctas.*.prefill_payload' => ['nullable', 'array'],
             'ctas.*.walkthrough_id' => ['nullable', 'string', 'max:255', 'exists:faq_walkthroughs,slug'],
             'ctas.*.position' => ['nullable', 'integer', 'min:0'],
+            'contexts' => ['nullable', 'array'],
+            'contexts.*.id' => ['nullable', 'integer', 'exists:faq_article_contexts,id'],
+            'contexts.*.crm_page' => ['required_with:contexts', Rule::in(self::CRM_PAGES)],
+            'contexts.*.surface' => ['nullable', Rule::in(['help_drawer'])],
+            'contexts.*.context_kind' => ['required_with:contexts', Rule::in(['script', 'runbook'])],
+            'contexts.*.priority' => ['nullable', 'integer', 'min:1', 'max:9999'],
         ];
     }
 }

@@ -40,6 +40,10 @@ class FaqAccessTest extends TestCase
                 ->assertOk()
                 ->assertJsonPath('articles.0.slug', $article->slug);
 
+            $this->getJson('/api/crm/faq/context?crm_page=clients')
+                ->assertOk()
+                ->assertJsonStructure(['scripts', 'runbooks', 'meta']);
+
             $this->getJson('/api/crm/faq/articles/' . $article->slug)
                 ->assertOk()
                 ->assertJsonPath('article.slug', $article->slug);

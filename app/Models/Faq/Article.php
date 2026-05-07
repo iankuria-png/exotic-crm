@@ -58,6 +58,11 @@ class Article extends Model
         return $this->hasMany(Cta::class, 'article_id')->orderBy('position')->orderBy('id');
     }
 
+    public function contexts()
+    {
+        return $this->hasMany(ArticleContext::class, 'article_id')->orderBy('priority')->orderBy('id');
+    }
+
     public function media()
     {
         return $this->hasMany(Media::class, 'article_id')->orderBy('position')->orderBy('id');

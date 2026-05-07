@@ -56,7 +56,7 @@ export default function InlineCategoryManager({ open, categories, onCreate, onUp
                 <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value, slug: event.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-') }))} className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="Category name" />
                 <input value={draft.slug} onChange={(event) => setDraft((current) => ({ ...current, slug: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-2 text-sm" placeholder="Slug" />
                 <select value={draft.crm_page} onChange={(event) => setDraft((current) => ({ ...current, crm_page: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
-                    {['dashboard', 'clients', 'client_detail', 'deals', 'payments', 'conversations', 'campaigns', 'leads', 'cross_cutting'].map((value) => (
+                    {['dashboard', 'clients', 'client_detail', 'deals', 'payments', 'conversations', 'campaigns', 'leads', 'cross_cutting', 'team'].map((value) => (
                         <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>
                     ))}
                 </select>

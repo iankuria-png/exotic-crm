@@ -33,6 +33,14 @@ class FaqArticleCrudTest extends TestCase
             'summary' => 'How to work the untracked queue safely.',
             'body' => "# Reconciling Untracked payments\n\nUse the queue to find orphaned payment records.",
             'status' => 'draft',
+            'contexts' => [
+                [
+                    'crm_page' => 'payments',
+                    'surface' => 'help_drawer',
+                    'context_kind' => 'script',
+                    'priority' => 5,
+                ],
+            ],
             'ctas' => [
                 [
                     'kind' => 'deep_link',
@@ -45,7 +53,8 @@ class FaqArticleCrudTest extends TestCase
 
         $createResponse->assertCreated()
             ->assertJsonPath('article.status', 'draft')
-            ->assertJsonPath('article.ctas.0.label', 'Open Payments Queue');
+            ->assertJsonPath('article.ctas.0.label', 'Open Payments Queue')
+            ->assertJsonPath('article.contexts.0.crm_page', 'payments');
 
         $articleId = (int) $createResponse->json('article.id');
         $article = Article::query()->findOrFail($articleId);

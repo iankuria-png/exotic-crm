@@ -18,7 +18,7 @@ class StoreCategoryRequest extends FormRequest
             'slug' => ['required', 'string', 'max:160', 'alpha_dash', 'unique:faq_categories,slug'],
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'crm_page' => ['nullable', Rule::in(['dashboard', 'clients', 'client_detail', 'deals', 'payments', 'conversations', 'campaigns', 'leads', 'cross_cutting'])],
+            'crm_page' => ['nullable', Rule::in(['dashboard', 'clients', 'client_detail', 'deals', 'payments', 'conversations', 'campaigns', 'leads', 'cross_cutting', 'team'])],
             'position' => ['nullable', 'integer', 'min:0'],
         ];
     }

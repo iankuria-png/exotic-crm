@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Faq\StoreArticleRequest;
 use App\Http\Requests\Faq\UpdateArticleRequest;
 use App\Models\Faq\Article;
+use App\Models\Faq\ArticleContext;
 use App\Models\Faq\Cta;
 use App\Models\Faq\SearchLog;
 use App\Services\AuditService;
@@ -26,7 +27,7 @@ class ArticleController extends Controller
     {
         $isAdmin = $this->isAdmin($request);
         $query = Article::query()
-            ->with(['category', 'ctas.walkthrough', 'media'])
+            ->with(['category', 'ctas.walkthrough', 'media', 'contexts'])
             ->withCount(['feedback', 'media'])
             ->orderBy('position')
             ->orderByDesc('published_at')
@@ -104,7 +105,7 @@ class ArticleController extends Controller
                 ->update(['clicked_article_id' => $article->id]);
         }
 
-        $article->load(['category', 'ctas.walkthrough', 'media', 'author:id,name', 'lastEditor:id,name']);
+        $article->load(['category', 'ctas.walkthrough', 'media', 'contexts', 'author:id,name', 'lastEditor:id,name']);
         $article->increment('view_count');
         $article->refresh();
 
@@ -130,9 +131,11 @@ class ArticleController extends Controller
     {
         $validated = $request->validated();
         $ctas = $validated['ctas'] ?? [];
+        $contexts = $validated['contexts'] ?? [];
         unset($validated['ctas']);
+        unset($validated['contexts']);
 
-        $article = DB::transaction(function () use ($validated, $request, $ctas) {
+        $article = DB::transaction(function () use ($validated, $request, $ctas, $contexts) {
             $payload = $validated;
             $payload['author_id'] = $request->user()->id;
             $payload['last_editor_id'] = $request->user()->id;
@@ -142,8 +145,9 @@ class ArticleController extends Controller
 
             $article = Article::create($payload);
             $this->syncCtas($article, $ctas);
+            $this->syncContexts($article, $contexts);
 
-            return $article->load(['category', 'ctas.walkthrough', 'media']);
+            return $article->load(['category', 'ctas.walkthrough', 'media', 'contexts']);
         });
 
         $this->auditService->fromSystemRequest(
@@ -152,7 +156,7 @@ class ArticleController extends Controller
             'faq_article',
             (int) $article->id,
             null,
-            $article->toArray(),
+            $this->articleAuditState($article),
             'Created FAQ article'
         );
 
@@ -166,11 +170,13 @@ class ArticleController extends Controller
     {
         $validated = $request->validated();
         $ctas = $validated['ctas'] ?? null;
+        $contexts = $validated['contexts'] ?? null;
         unset($validated['ctas']);
+        unset($validated['contexts']);
 
-        $before = $article->load(['ctas', 'media', 'category'])->toArray();
+        $before = $this->articleAuditState($article->load(['ctas', 'media', 'category', 'contexts']));
 
-        $article = DB::transaction(function () use ($validated, $request, $article, $ctas) {
+        $article = DB::transaction(function () use ($validated, $request, $article, $ctas, $contexts) {
             $payload = $validated;
             $payload['last_editor_id'] = $request->user()->id;
             if (($payload['status'] ?? null) === 'published' && !$article->published_at) {
@@ -187,7 +193,11 @@ class ArticleController extends Controller
                 $this->syncCtas($article, $ctas);
             }
 
-            return $article->load(['category', 'ctas.walkthrough', 'media']);
+            if (is_array($contexts)) {
+                $this->syncContexts($article, $contexts);
+            }
+
+            return $article->load(['category', 'ctas.walkthrough', 'media', 'contexts']);
         });
 
         $this->auditService->fromSystemRequest(
@@ -196,7 +206,7 @@ class ArticleController extends Controller
             'faq_article',
             (int) $article->id,
             $before,
-            $article->toArray(),
+            $this->articleAuditState($article),
             'Updated FAQ article'
         );
 
@@ -209,7 +219,7 @@ class ArticleController extends Controller
     public function saveDraft(UpdateArticleRequest $request, Article $article)
     {
         $validated = $request->validated();
-        $before = $article->toArray();
+        $before = $this->articleAuditState($article->loadMissing('contexts'));
 
         $article->fill([
             'title' => $validated['title'] ?? $article->title,
@@ -219,25 +229,29 @@ class ArticleController extends Controller
         ]);
         $article->save();
 
+        if (is_array($validated['contexts'] ?? null)) {
+            $this->syncContexts($article, $validated['contexts']);
+        }
+
         $this->auditService->fromSystemRequest(
             $request,
             'faq_article_draft_saved',
             'faq_article',
             (int) $article->id,
             $before,
-            $article->fresh()->toArray(),
+            $this->articleAuditState($article->fresh()->load('contexts')),
             'Saved FAQ article draft'
         );
 
         return response()->json([
             'message' => 'Draft saved.',
-            'article' => $this->serializeArticle($article->fresh()->load(['category', 'ctas.walkthrough', 'media']), true, includeBodyDraft: true, includeRelations: true),
+            'article' => $this->serializeArticle($article->fresh()->load(['category', 'ctas.walkthrough', 'media', 'contexts']), true, includeBodyDraft: true, includeRelations: true),
         ]);
     }
 
     public function publish(Request $request, Article $article)
     {
-        $before = $article->toArray();
+        $before = $this->articleAuditState($article->loadMissing('contexts'));
         $article->forceFill([
             'body' => $article->body_draft ?: $article->body,
             'status' => 'published',
@@ -251,18 +265,20 @@ class ArticleController extends Controller
             'faq_article',
             (int) $article->id,
             $before,
-            $article->fresh()->toArray(),
+            $this->articleAuditState($article->fresh()->load('contexts')),
             'Published FAQ article'
         );
 
         return response()->json([
             'message' => 'FAQ article published.',
-            'article' => $this->serializeArticle($article->fresh()->load(['category', 'ctas.walkthrough', 'media']), true, includeBodyDraft: true, includeRelations: true),
+            'article' => $this->serializeArticle($article->fresh()->load(['category', 'ctas.walkthrough', 'media', 'contexts']), true, includeBodyDraft: true, includeRelations: true),
         ]);
     }
 
     public function duplicate(Request $request, Article $article)
     {
+        $article->loadMissing(['ctas', 'media', 'contexts']);
+
         $copy = DB::transaction(function () use ($request, $article) {
             $baseSlug = Str::limit($article->slug . '-copy', 170, '');
             $slug = $baseSlug;
@@ -307,7 +323,16 @@ class ArticleController extends Controller
                 ]);
             }
 
-            return $clone->load(['category', 'ctas.walkthrough', 'media']);
+            foreach ($article->contexts as $context) {
+                $clone->contexts()->create([
+                    'crm_page' => $context->crm_page,
+                    'surface' => $context->surface,
+                    'context_kind' => $context->context_kind,
+                    'priority' => $context->priority,
+                ]);
+            }
+
+            return $clone->load(['category', 'ctas.walkthrough', 'media', 'contexts']);
         });
 
         $this->auditService->fromSystemRequest(
@@ -316,7 +341,7 @@ class ArticleController extends Controller
             'faq_article',
             (int) $copy->id,
             null,
-            $copy->toArray(),
+            $this->articleAuditState($copy),
             'Duplicated FAQ article'
         );
 
@@ -344,7 +369,7 @@ class ArticleController extends Controller
 
     public function destroy(Request $request, Article $article)
     {
-        $before = $article->load(['ctas', 'media', 'category'])->toArray();
+        $before = $this->articleAuditState($article->load(['ctas', 'media', 'category', 'contexts']));
         $articleId = (int) $article->id;
         $article->delete();
 
@@ -397,6 +422,24 @@ class ArticleController extends Controller
         }
     }
 
+    private function syncContexts(Article $article, array $rows): void
+    {
+        $article->contexts()->delete();
+
+        foreach (array_values($rows) as $index => $row) {
+            if (empty($row['crm_page']) || empty($row['context_kind'])) {
+                continue;
+            }
+
+            $article->contexts()->create([
+                'crm_page' => $row['crm_page'],
+                'surface' => $row['surface'] ?? 'help_drawer',
+                'context_kind' => $row['context_kind'],
+                'priority' => (int) ($row['priority'] ?? ($index + 1)),
+            ]);
+        }
+    }
+
     private function serializeArticle(Article $article, bool $isAdmin, bool $includeBodyDraft = false, bool $includeRelations = false): array
     {
         return [
@@ -423,6 +466,15 @@ class ArticleController extends Controller
                 'name' => $article->category?->name,
                 'crm_page' => $article->category?->crm_page,
             ] : null,
+            'contexts' => $article->relationLoaded('contexts')
+                ? $article->contexts->map(fn (ArticleContext $context) => [
+                    'id' => $context->id,
+                    'crm_page' => $context->crm_page,
+                    'surface' => $context->surface,
+                    'context_kind' => $context->context_kind,
+                    'priority' => (int) $context->priority,
+                ])->values()
+                : [],
             'ctas' => $article->relationLoaded('ctas')
                 ? $article->ctas->map(fn ($cta) => [
                     'id' => $cta->id,
@@ -453,6 +505,21 @@ class ArticleController extends Controller
                 : [],
             'feedback_count' => isset($article->feedback_count) ? (int) $article->feedback_count : null,
             'media_count' => isset($article->media_count) ? (int) $article->media_count : null,
+        ];
+    }
+
+    private function articleAuditState(Article $article): array
+    {
+        return [
+            ...$article->toArray(),
+            'contexts' => $article->relationLoaded('contexts')
+                ? $article->contexts->map(fn (ArticleContext $context) => [
+                    'crm_page' => $context->crm_page,
+                    'surface' => $context->surface,
+                    'context_kind' => $context->context_kind,
+                    'priority' => (int) $context->priority,
+                ])->values()->all()
+                : [],
         ];
     }
 

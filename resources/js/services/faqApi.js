@@ -39,6 +39,9 @@ export const faqApi = {
     listArticles(params) {
         return api.get(withParams('/crm/faq/articles', params)).then((response) => response.data);
     },
+    getContext(params) {
+        return api.get(withParams('/crm/faq/context', params)).then((response) => response.data);
+    },
     getArticle(slug, params) {
         return api.get(withParams(`/crm/faq/articles/${slug}`, params)).then((response) => response.data);
     },

@@ -35,6 +35,7 @@ use App\Http\Controllers\CRM\SystemHealthUpdateController;
 use App\Http\Controllers\CRM\AgentTodoController;
 use App\Http\Controllers\CRM\Faq\CategoryController as FaqCategoryController;
 use App\Http\Controllers\CRM\Faq\ArticleController as FaqArticleController;
+use App\Http\Controllers\CRM\Faq\ContextController as FaqContextController;
 use App\Http\Controllers\CRM\Faq\MediaController as FaqMediaController;
 use App\Http\Controllers\CRM\Faq\WalkthroughController as FaqWalkthroughController;
 use App\Http\Controllers\CRM\Faq\FeedbackController as FaqFeedbackController;
@@ -290,6 +291,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
     Route::prefix('faq')->group(function () {
         Route::get('/categories', [FaqCategoryController::class, 'index']);
+        Route::get('/context', [FaqContextController::class, 'index']);
         Route::get('/articles', [FaqArticleController::class, 'index']);
         Route::get('/articles/{article}', [FaqArticleController::class, 'show']);
         Route::get('/walkthroughs', [FaqWalkthroughController::class, 'index']);

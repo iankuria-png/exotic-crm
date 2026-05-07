@@ -22,7 +22,7 @@ class UpdateCategoryRequest extends FormRequest
             'slug' => ['sometimes', 'string', 'max:160', 'alpha_dash', Rule::unique('faq_categories', 'slug')->ignore($category?->id)],
             'name' => ['sometimes', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'crm_page' => ['nullable', Rule::in(['dashboard', 'clients', 'client_detail', 'deals', 'payments', 'conversations', 'campaigns', 'leads', 'cross_cutting'])],
+            'crm_page' => ['nullable', Rule::in(['dashboard', 'clients', 'client_detail', 'deals', 'payments', 'conversations', 'campaigns', 'leads', 'cross_cutting', 'team'])],
             'position' => ['nullable', 'integer', 'min:0'],
         ];
     }
