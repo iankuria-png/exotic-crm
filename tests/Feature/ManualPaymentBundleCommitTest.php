@@ -87,12 +87,14 @@ class ManualPaymentBundleCommitTest extends TestCase
 
         $this->assertSame('active', $firstDeal->status);
         $this->assertSame('manual_payment_bundle', $firstDeal->origin);
+        $this->assertGreaterThan(20, strlen((string) $firstDeal->origin));
         $this->assertSame('agent_manual', $firstDeal->discount_source);
         $this->assertSame(16.67, round((float) $firstDeal->discount_percentage, 2));
         $this->assertSame(3000.0, (float) $firstDeal->original_amount);
 
         $this->assertSame('active', $secondDeal->status);
         $this->assertSame('manual_payment_bundle', $secondDeal->origin);
+        $this->assertGreaterThan(20, strlen((string) $secondDeal->origin));
         $this->assertSame('agent_manual', $secondDeal->discount_source);
         $this->assertSame(16.67, round((float) $secondDeal->discount_percentage, 2));
         $this->assertSame(3000.0, (float) $secondDeal->original_amount);
