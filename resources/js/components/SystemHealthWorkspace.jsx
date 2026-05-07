@@ -35,6 +35,8 @@ function extractProfileCount(latestResult, platform) {
     return match !== undefined ? Number(match) : null;
 }
 
+const BACKUP_PREVIEW_LIMIT = 3;
+
 function CheckRow({ label, ok, detail }) {
     return (
         <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
@@ -78,6 +80,7 @@ export default function SystemHealthWorkspace({
     const [rollbackTarget, setRollbackTarget] = useState(null);
     const [selectedBackup, setSelectedBackup] = useState('');
     const [backupUploading, setBackupUploading] = useState(false);
+    const [backupsExpanded, setBackupsExpanded] = useState(false);
 
     const settingsQuery = useQuery({
         queryKey: ['settings-integrations'],
@@ -262,6 +265,12 @@ export default function SystemHealthWorkspace({
             toast.error(error?.response?.data?.message || 'Unable to delete backup.');
         },
     });
+
+    const databaseBackups = backupsQuery.data?.backups || [];
+    const visibleDatabaseBackups = backupsExpanded
+        ? databaseBackups
+        : databaseBackups.slice(0, BACKUP_PREVIEW_LIMIT);
+    const hiddenDatabaseBackupCount = Math.max(0, databaseBackups.length - BACKUP_PREVIEW_LIMIT);
 
     const queueStatusQuery = useQuery({
         queryKey: ['queue-worker-status'],
@@ -1194,30 +1203,45 @@ export default function SystemHealthWorkspace({
                                             />
                                         </label>
                                     </div>
-                                    <div className="mt-3 space-y-2">
+                                    <div id="database-backup-list" className="mt-3 space-y-2">
                                         {backupsQuery.isLoading ? (
                                             <p className="text-xs text-slate-500">Loading backups...</p>
-                                        ) : (backupsQuery.data?.backups || []).length ? (
-                                            backupsQuery.data.backups.map((b) => (
-                                                <div key={b.filename} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                    <div className="min-w-0">
-                                                        <p className="truncate text-sm font-medium text-slate-900">{b.filename}</p>
-                                                        <p className="text-xs text-slate-500">{b.size_human} &middot; {formatDateTime(b.modified_at)}</p>
+                                        ) : databaseBackups.length ? (
+                                            <>
+                                                {visibleDatabaseBackups.map((b) => (
+                                                    <div key={b.filename} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                        <div className="min-w-0">
+                                                            <p className="truncate text-sm font-medium text-slate-900">{b.filename}</p>
+                                                            <p className="text-xs text-slate-500">{b.size_human} &middot; {formatDateTime(b.modified_at)}</p>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                if (window.confirm(`Delete backup "${b.filename}"?`)) {
+                                                                    deleteBackupMutation.mutate(b.filename);
+                                                                }
+                                                            }}
+                                                            disabled={deleteBackupMutation.isPending}
+                                                            className="shrink-0 text-xs font-medium text-rose-600 hover:text-rose-800 disabled:opacity-50"
+                                                        >
+                                                            Delete
+                                                        </button>
                                                     </div>
+                                                ))}
+                                                {hiddenDatabaseBackupCount > 0 ? (
                                                     <button
                                                         type="button"
-                                                        onClick={() => {
-                                                            if (window.confirm(`Delete backup "${b.filename}"?`)) {
-                                                                deleteBackupMutation.mutate(b.filename);
-                                                            }
-                                                        }}
-                                                        disabled={deleteBackupMutation.isPending}
-                                                        className="shrink-0 text-xs font-medium text-rose-600 hover:text-rose-800 disabled:opacity-50"
+                                                        aria-expanded={backupsExpanded}
+                                                        aria-controls="database-backup-list"
+                                                        onClick={() => setBackupsExpanded((expanded) => !expanded)}
+                                                        className="w-full rounded-md border border-dashed border-slate-300 px-3 py-2 text-center text-xs font-medium text-teal-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2"
                                                     >
-                                                        Delete
+                                                        {backupsExpanded
+                                                            ? `Show latest ${BACKUP_PREVIEW_LIMIT} backups`
+                                                            : `Show ${hiddenDatabaseBackupCount} older backup${hiddenDatabaseBackupCount === 1 ? '' : 's'}`}
                                                     </button>
-                                                </div>
-                                            ))
+                                                ) : null}
+                                            </>
                                         ) : (
                                             <p className="rounded-md border border-dashed border-slate-300 px-4 py-4 text-center text-xs text-slate-500">
                                                 No backups uploaded yet. Download a <code className="text-xs">.sql</code> backup from cPanel and upload it here.
