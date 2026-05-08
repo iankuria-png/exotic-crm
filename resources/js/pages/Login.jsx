@@ -97,6 +97,7 @@ export default function Login() {
     const googlePrimary = googleEnabled && Boolean(authConfig.google?.primary);
     const passwordFallbackRequested = new URLSearchParams(window.location.search).get('password') === '1';
     const showPasswordForm = passwordEnabled && (!googleEnabled || passwordFallbackRequested);
+    const singleSsoMode = googleEnabled && !showPasswordForm;
 
     return (
         <div className="relative min-h-screen overflow-hidden bg-slate-950">
@@ -113,8 +114,9 @@ export default function Login() {
             <div className="absolute -bottom-20 right-0 h-72 w-72 rounded-full bg-cyan-400/20 blur-3xl" aria-hidden="true" />
 
             <div className="relative mx-auto flex min-h-screen w-full max-w-6xl items-center px-4 py-8 sm:px-6 lg:px-8">
-                <div className="grid w-full overflow-hidden rounded-[30px] border border-white/10 bg-white/95 shadow-[0_32px_80px_rgba(2,6,23,0.55)] backdrop-blur lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-                    <section className="px-6 pb-8 pt-7 sm:px-10 sm:py-9">
+                <div className="grid w-full overflow-hidden rounded-[30px] border border-white/10 bg-white/95 shadow-[0_32px_80px_rgba(2,6,23,0.55)] backdrop-blur lg:min-h-[560px] lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                    <section className={`px-6 py-8 sm:px-10 lg:px-12 ${singleSsoMode ? 'flex items-center' : ''}`}>
+                        <div className={`w-full ${singleSsoMode ? 'mx-auto max-w-md' : ''}`}>
                         <div className="flex items-center gap-3">
                             <div className="rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-slate-200">
                                 <img src={brandLogo} alt="Exotic Online Advertising logo" className="h-10 w-auto object-contain" />
@@ -125,12 +127,12 @@ export default function Login() {
                             </div>
                         </div>
 
-                        <h1 className="mt-8 text-[2rem] leading-tight font-semibold tracking-tight text-slate-900 sm:text-[2.25rem]">Welcome back</h1>
-                        <p className="mt-3 max-w-md text-sm leading-6 text-slate-600">
+                        <h1 className={`${singleSsoMode ? 'mt-12' : 'mt-8'} text-[2rem] leading-tight font-semibold tracking-tight text-slate-900 sm:text-[2.25rem]`}>Welcome back</h1>
+                        <p className="mt-4 max-w-md text-sm leading-6 text-slate-600">
                             Sign in to manage leads, subscriptions, payments, and campaign performance in one secure environment.
                         </p>
 
-                        <div className="mt-8 space-y-5">
+                        <div className={`${singleSsoMode ? 'mt-10' : 'mt-8'} space-y-5`}>
                             {error && (
                                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700">
                                     {error}
@@ -220,16 +222,17 @@ export default function Login() {
                             ) : null}
                         </div>
 
-                        <p className="mt-5 text-xs text-slate-500">
+                        <p className={`${singleSsoMode ? 'mt-7' : 'mt-5'} text-xs text-slate-500`}>
                             Access is restricted to authorized team members.
                         </p>
+                        </div>
                     </section>
 
-                    <aside className="relative hidden overflow-hidden bg-gradient-to-br from-teal-900 via-slate-900 to-slate-900 px-8 py-10 text-slate-100 lg:flex lg:flex-col">
+                    <aside className="relative hidden overflow-hidden bg-gradient-to-br from-teal-900 via-slate-900 to-slate-900 px-8 py-10 text-slate-100 lg:flex lg:flex-col lg:justify-center lg:px-12">
                         <div className="absolute -right-16 top-10 h-60 w-60 rounded-full bg-teal-300/25 blur-3xl" aria-hidden="true" />
                         <div className="absolute -left-20 bottom-6 h-64 w-64 rounded-full bg-cyan-400/15 blur-3xl" aria-hidden="true" />
 
-                        <div className="relative">
+                        <div className="relative w-full">
                             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-teal-200/85">Exotic Online Advertising</p>
                             <h2 className="mt-4 text-[2.1rem] leading-[1.15] font-semibold tracking-tight text-white">
                                 Keep your sales operation sharp, visible, and aligned.
@@ -239,7 +242,7 @@ export default function Login() {
                             </p>
                         </div>
 
-                        <ul className="relative mt-8 space-y-3">
+                        <ul className="relative mt-9 space-y-3">
                             {highlights.map((item) => (
                                 <li key={item} className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3.5 text-sm text-slate-100/95 backdrop-blur-sm">
                                     <span className="mt-1.5 h-2 w-2 rounded-full bg-teal-300" aria-hidden="true" />
@@ -248,7 +251,7 @@ export default function Login() {
                             ))}
                         </ul>
 
-                        <div className="relative mt-auto rounded-2xl border border-white/15 bg-white/[0.06] p-4 backdrop-blur-sm">
+                        <div className="relative mt-8 rounded-2xl border border-white/15 bg-white/[0.06] p-4 backdrop-blur-sm">
                             <div className="flex items-center gap-3">
                                 <div className="rounded-lg bg-white p-1.5">
                                     <img src={brandLogo} alt="" aria-hidden="true" className="h-8 w-auto object-contain" />
