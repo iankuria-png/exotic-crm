@@ -28,6 +28,7 @@ use App\Services\PaymentMatchingService;
 use App\Services\PaymentAttemptService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentLinkService;
+use App\Services\PaymentQueueQueryBuilder;
 use App\Services\ProviderStatusQueryOrchestrator;
 use App\Services\ReportingCurrencyService;
 use App\Services\LegacyStkService;
@@ -60,6 +61,7 @@ class PaymentQueueController extends Controller
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly PaymentQueueQueryBuilder $paymentQueueQueryBuilder,
         private readonly AuditService $auditService,
         private readonly NotificationService $notificationService,
         private readonly PaymentAttemptService $paymentAttemptService,
@@ -85,17 +87,7 @@ class PaymentQueueController extends Controller
 
     public function index(Request $request)
     {
-        $validated = $request->validate([
-            'from' => 'nullable|date',
-            'to' => 'nullable|date|after_or_equal:from',
-            'environment' => 'nullable|in:production,sandbox',
-            'test_visibility' => 'nullable|in:hide,include,only',
-            'has_discount' => 'nullable|in:0,1',
-            'resolution_code' => 'nullable|in:reversed,invalid_reference',
-            'customer_mix_segment' => 'nullable|in:new_active,existing_active,unattributed,other_matched',
-            'currency_mode' => 'nullable|in:native,flat',
-            'reporting_currency' => 'nullable|string|min:3|max:8',
-        ]);
+        $validated = $request->validate($this->paymentQueueQueryBuilder->validationRules());
 
         $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
             $request,
@@ -103,161 +95,47 @@ class PaymentQueueController extends Controller
             'You do not have access to this payment market.'
         );
 
-        $environmentFilter = strtolower(trim((string) $request->input('environment', '')));
-        $testVisibility = strtolower(trim((string) ($validated['test_visibility'] ?? 'hide')));
-        $testVisibility = in_array($testVisibility, ['hide', 'include', 'only'], true) ? $testVisibility : 'hide';
-        $canViewTests = $this->canViewTests($request);
+        $context = $this->paymentQueueQueryBuilder->resolveContext($request, $validated);
+        $environmentFilter = $context['environment_filter'];
+        $testVisibility = $context['test_visibility'];
+        $canViewTests = $context['can_view_tests'];
         $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($validated['reporting_currency'] ?? null);
         $currencyMode = $this->reportingCurrencyService->resolveMode($validated['currency_mode'] ?? null, false);
-
-        if (($testVisibility !== 'hide' || $environmentFilter === 'sandbox') && !$canViewTests) {
-            abort(403, 'Only admin users can view test payments.');
-        }
-
-        $latestProviderTransactionOrder = 'COALESCE(last_status_at, created_at) DESC, id DESC';
-
-        $baseQuery = Payment::query()
-            ->with([
+        $query = $this->paymentQueueQueryBuilder->buildRowsQuery(
+            $request,
+            $validated,
+            [
                 'platform',
                 'product',
                 'client',
                 'deal:id,payment_id,discount_percentage,original_amount,discount_source,discount_approved_by',
                 'manualSubmission',
                 'manualPaymentBundle',
-            ])
-            ->select('payments.*')
-            ->selectSub(
-                BillingProviderTransaction::query()
-                    ->selectRaw("CASE WHEN provider_type_key = 'pawapay' THEN provider_reported_transaction_id ELSE provider_transaction_id END")
-                    ->whereColumn('payment_id', 'payments.id')
-                    ->orderByRaw($latestProviderTransactionOrder)
-                    ->limit(1),
-                'provider_transaction_id'
-            )
-            ->selectSub(
-                BillingProviderTransaction::query()
-                    ->select('provider_reported_phone')
-                    ->whereColumn('payment_id', 'payments.id')
-                    ->orderByRaw($latestProviderTransactionOrder)
-                    ->limit(1),
-                'provider_reported_phone'
-            );
-        $this->marketAuthorizationService->applyPlatformScope($baseQuery, $request->user());
-
-        if ($request->filled('platform_id')) {
-            $baseQuery->where('platform_id', $request->platform_id);
-        }
-
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $baseQuery->where(function ($q) use ($search) {
-                $q->where('phone', 'like', "%{$search}%")
-                    ->orWhere('transaction_reference', 'like', "%{$search}%")
-                    ->orWhereHas('providerTransactions', function (Builder $providerTransactions) use ($search) {
-                        $providerTransactions->where('provider_reported_transaction_id', 'like', "%{$search}%")
-                            ->orWhere('provider_transaction_id', 'like', "%{$search}%")
-                            ->orWhere('provider_reported_phone', 'like', "%{$search}%");
-                    });
-            });
-        }
-
-        $query = clone $baseQuery;
-        $this->applyPaymentWorkspaceVisibility($query, $testVisibility, $environmentFilter);
-
+            ],
+            true,
+            $context
+        );
         $statsVisibility = $testVisibility === 'include' && $environmentFilter === ''
             ? 'hide'
             : $testVisibility;
-        $statsQuery = clone $baseQuery;
-        $this->applyPaymentWorkspaceVisibility($statsQuery, $statsVisibility, $environmentFilter);
-
-        $successfulStatuses = $this->successfulPaymentStatuses();
-        $statusFilter = trim((string) $request->input('status', ''));
-        if ($statusFilter !== '') {
-            if ($statusFilter === 'awaiting_payment') {
-                $query->whereIn('status', ['initiated', 'pending']);
-            } elseif ($statusFilter === 'completed') {
-                $query->whereIn('status', $successfulStatuses);
-            } elseif ($statusFilter === 'recovery_queue') {
-                $query->where(function ($builder) use ($successfulStatuses) {
-                    $builder->whereIn('status', ['initiated', 'pending', 'failed'])
-                        ->orWhere(function ($unmatchedCompleted) use ($successfulStatuses) {
-                            $unmatchedCompleted->whereIn('status', $successfulStatuses)
-                                ->whereNull('client_id');
-                        });
-                });
-            } elseif ($statusFilter === 'reversed') {
-                $query->where(function ($builder) use ($successfulStatuses) {
-                    $builder->where('status', 'reversed')
-                        ->orWhere(function ($inner) use ($successfulStatuses) {
-                            $inner->whereIn('status', $successfulStatuses)
-                                ->where('resolution_code', Payment::RESOLUTION_REVERSED);
-                        });
-                });
-            } else {
-                $query->where('status', $statusFilter);
-            }
-        }
-
-        if ($request->filled('matched')) {
-            if ($request->matched === 'unmatched') {
-                $query->whereNull('client_id');
-            } elseif ($request->matched === 'matched') {
-                $query->whereNotNull('client_id');
-            }
-        }
-
-        if ($request->filled('source')) {
-            $query->where('source', $request->source);
-        }
-
-        $hasDiscountFilter = trim((string) ($validated['has_discount'] ?? ''));
-        if ($hasDiscountFilter !== '') {
-            if ($hasDiscountFilter === '1') {
-                $query->whereHas('deal', function (Builder $dealQuery) {
-                    $dealQuery->whereNotNull('discount_percentage');
-                });
-            } else {
-                $query->where(function (Builder $builder) {
-                    $builder->whereNull('deal_id')
-                        ->orWhereHas('deal', function (Builder $dealQuery) {
-                            $dealQuery->whereNull('discount_percentage');
-                        });
-                });
-            }
-        }
-
-        $confidenceFilter = trim((string) $request->input('match_confidence', ''));
-        if ($confidenceFilter !== '') {
-            if (in_array($confidenceFilter, ['high', 'medium', 'low'], true)) {
-                $query->where('reconciliation_confidence', $confidenceFilter);
-            } else {
-                $query->where('match_confidence', $confidenceFilter);
-            }
-        }
-
-        if ($request->filled('review_state')) {
-            $query->where('reconciliation_state', $request->review_state);
-        }
-
-        if (!empty($validated['resolution_code'])) {
-            $query->where('resolution_code', (string) $validated['resolution_code']);
-        }
-
-        // Date range filtering — defaults to baseline cutoff → now
-        $baselineCutoff = $this->resolveBaselineCutoff();
-        $from = !empty($validated['from'])
-            ? Carbon::parse($validated['from'])->startOfDay()
-            : ($baselineCutoff ? (clone $baselineCutoff) : null);
-        $to = !empty($validated['to'])
-            ? Carbon::parse($validated['to'])->endOfDay()
-            : Carbon::now()->endOfDay();
-
-        if ($from) {
-            $query->where('created_at', '>=', $from);
-            $statsQuery->where('created_at', '>=', $from);
-        }
-        $query->where('created_at', '<=', $to);
-        $statsQuery->where('created_at', '<=', $to);
+        $statsQuery = $this->paymentQueueQueryBuilder->buildStatsQuery(
+            $request,
+            $validated,
+            [
+                'platform',
+                'product',
+                'client',
+                'deal:id,payment_id,discount_percentage,original_amount,discount_source,discount_approved_by',
+                'manualSubmission',
+                'manualPaymentBundle',
+            ],
+            true,
+            $context
+        );
+        $successfulStatuses = $context['successful_statuses'];
+        $baselineCutoff = $context['baseline_cutoff'];
+        $from = $context['from'];
+        $to = $context['to'];
 
         $awaitingStatuses = ['initiated', 'pending'];
         $oneHourAgo = Carbon::now()->subHour();
@@ -270,11 +148,6 @@ class PaymentQueueController extends Controller
                 $builder->whereNull('reconciliation_state')
                     ->orWhere('reconciliation_state', '!=', 'manual_review');
             });
-
-        $customerMixSegment = trim((string) ($validated['customer_mix_segment'] ?? ''));
-        if ($customerMixSegment !== '') {
-            $this->applyCustomerMixSegmentFilter($query, $customerMixSegment, $from, $to, $successfulStatuses);
-        }
 
         $reversedStatsQuery = (clone $statsQuery)
             ->where(function (Builder $builder) use ($successfulStatuses) {
@@ -2809,35 +2682,6 @@ class PaymentQueueController extends Controller
         ];
     }
 
-    private function applyPaymentWorkspaceVisibility(Builder $query, string $testVisibility, string $environmentFilter): Builder
-    {
-        $query->workspaceVisible($testVisibility);
-
-        if ($environmentFilter === 'production') {
-            $query->where(function (Builder $builder) {
-                $builder->whereNull('provider_environment')
-                    ->orWhereRaw("LOWER(provider_environment) = ?", ['production']);
-            });
-        } elseif ($environmentFilter === 'sandbox') {
-            $query->sandboxTest();
-        }
-
-        return $query;
-    }
-
-    private function applyCustomerMixSegmentFilter(Builder $query, string $segment, ?Carbon $from, Carbon $to, array $successfulStatuses): Builder
-    {
-        $query
-            ->whereIn('payments.status', $successfulStatuses)
-            ->whereNull('payments.resolution_code')
-            ->where(function (Builder $builder) {
-                $builder->whereNull('payments.reconciliation_state')
-                    ->orWhere('payments.reconciliation_state', '!=', 'manual_review');
-            });
-
-        return $this->applyCustomerMixBucketScope($query, $segment, $from, $to);
-    }
-
     private function buildCustomerMixStats(Builder $confirmedStatsQuery, ?Carbon $from, Carbon $to, string $targetCurrency, array $confirmedBreakdown, array $confirmedNormalized): array
     {
         $bucketKeys = ['new_active', 'existing_active', 'unattributed', 'other_matched'];
@@ -2990,11 +2834,6 @@ class PaymentQueueController extends Controller
         }
 
         return 'business';
-    }
-
-    private function canViewTests(Request $request): bool
-    {
-        return $this->marketAuthorizationService->hasRole($request->user(), [MarketAuthorizationService::ROLE_ADMIN]);
     }
 
     private function testPaymentDeleteBlockers(Payment $payment): array
@@ -3366,45 +3205,4 @@ class PaymentQueueController extends Controller
         };
     }
 
-    /**
-     * Successful payments can later move to `expired` when the linked subscription
-     * lapses. The payments workspace still treats those rows as confirmed revenue.
-     *
-     * @return array<int, string>
-     */
-    private function successfulPaymentStatuses(): array
-    {
-        return ['completed', 'expired'];
-    }
-
-    /**
-     * Return the baseline cutoff as a Carbon date if mode is 'fresh_start', else null.
-     */
-    private function resolveBaselineCutoff(): ?Carbon
-    {
-        try {
-            $value = IntegrationSetting::query()
-                ->where('key', 'data_baseline_mode')
-                ->value('value');
-        } catch (\Throwable) {
-            return null;
-        }
-
-        if (!is_array($value)) {
-            return null;
-        }
-
-        $mode = $value['mode'] ?? 'fresh_start';
-        $cutoffDate = $value['cutoff_date'] ?? null;
-
-        if ($mode !== 'fresh_start' || !$cutoffDate) {
-            return null;
-        }
-
-        try {
-            return Carbon::parse($cutoffDate)->startOfDay();
-        } catch (\Throwable) {
-            return null;
-        }
-    }
 }

@@ -19,6 +19,7 @@ use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientWalletController;
 use App\Http\Controllers\CRM\LeadController;
 use App\Http\Controllers\CRM\PaymentQueueController;
+use App\Http\Controllers\CRM\PaymentExportController;
 use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
@@ -28,6 +29,7 @@ use App\Http\Controllers\CRM\ImageProxyController;
 use App\Http\Controllers\CRM\PushCampaignController;
 use App\Http\Controllers\CRM\RenewalController;
 use App\Http\Controllers\CRM\ReportController;
+use App\Http\Controllers\CRM\ScorecardExportController;
 use App\Http\Controllers\CRM\SetupController;
 use App\Http\Controllers\CRM\SupportBoardController;
 use App\Http\Controllers\CRM\TeamController;
@@ -251,9 +253,12 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
 
         // Reports
         Route::get('/reports/summary', [ReportController::class, 'summary']);
+        Route::get('/reports/scorecard/preview', [ScorecardExportController::class, 'weeklyScorecard']);
+        Route::post('/reports/scorecard/export', [ScorecardExportController::class, 'exportScorecard']);
 
         // Payments
         Route::get('/payments', [PaymentQueueController::class, 'index']);
+        Route::post('/payments/export', [PaymentExportController::class, 'exportPayments']);
         Route::get('/payments/reference-check', [ManualPaymentBundleController::class, 'referenceCheck']);
         Route::post('/payments/import/preview', [PaymentQueueController::class, 'importPreview']);
         Route::post('/payments/import/commit', [PaymentQueueController::class, 'importCommit']);

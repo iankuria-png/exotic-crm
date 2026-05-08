@@ -6,6 +6,7 @@ import PageHeader from '../components/PageHeader';
 import MetricCard from '../components/MetricCard';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
+import ScorecardExportModal from '../components/ScorecardExportModal';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
 import useReportingCurrency from '../hooks/useReportingCurrency';
@@ -25,31 +26,6 @@ function formatPercent(value, digits = 1) {
 function percent(value, total) {
     if (!total) return 0;
     return Math.round((value / total) * 100);
-}
-
-function toCsvCell(value) {
-    const stringValue = String(value ?? '');
-    if (/[",\n]/.test(stringValue)) {
-        return `"${stringValue.replace(/"/g, '""')}"`;
-    }
-    return stringValue;
-}
-
-function toCsvRow(values) {
-    return values.map((value) => toCsvCell(value)).join(',');
-}
-
-function downloadCsv(filename, rows) {
-    const csvContent = rows.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.setAttribute('download', filename);
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
 }
 
 function startCase(value) {
@@ -281,7 +257,7 @@ export default function Reports() {
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [hasInitializedFrom, setHasInitializedFrom] = useState(false);
-    const [isExporting, setIsExporting] = useState(false);
+    const [scorecardModalOpen, setScorecardModalOpen] = useState(false);
     const [engagementPage, setEngagementPage] = useState(1);
     const [engagementSortBy, setEngagementSortBy] = useState('engagement_score');
     const [engagementOrder, setEngagementOrder] = useState('desc');
@@ -456,121 +432,6 @@ export default function Reports() {
         ? `${new Date(engagementData.period.from).toLocaleDateString()} - ${new Date(engagementData.period.to).toLocaleDateString()}`
         : rangeLabel;
 
-    const exportCsv = () => {
-        if (!data && !engagementData) {
-            toast.warning('No report data to export yet.');
-            return;
-        }
-
-        if (isRangeInvalid) {
-            toast.error('The "from" date cannot be later than the "to" date.');
-            return;
-        }
-
-        setIsExporting(true);
-        try {
-            const rows = [];
-            rows.push(toCsvRow(['Section', 'Metric', 'Currency', 'Value']));
-            if (data) {
-                // KPIs: one row per currency in the breakdown (never a mixed-currency scalar)
-                const totalRevBreakdown = kpis.total_revenue_breakdown ?? {};
-                if (kpis.total_revenue_normalized !== null && kpis.total_revenue_normalized !== undefined) {
-                    rows.push(toCsvRow(['KPI', 'Collected Revenue Normalized', kpis.normalized_currency || normalizedCurrency, kpis.total_revenue_normalized]));
-                }
-                if (Object.keys(totalRevBreakdown).length > 0) {
-                    Object.entries(totalRevBreakdown).forEach(([currency, amount]) =>
-                        rows.push(toCsvRow(['KPI', 'Collected Revenue', currency, amount])),
-                    );
-                } else {
-                    rows.push(toCsvRow(['KPI', 'Collected Revenue', resolvedReportCurrency, kpis.total_revenue ?? 0]));
-                }
-                const revMtdBreakdown = kpis.revenue_mtd_breakdown ?? {};
-                if (kpis.revenue_mtd_normalized !== null && kpis.revenue_mtd_normalized !== undefined) {
-                    rows.push(toCsvRow(['KPI', 'Revenue MTD Normalized', kpis.normalized_currency || normalizedCurrency, kpis.revenue_mtd_normalized]));
-                }
-                if (Object.keys(revMtdBreakdown).length > 0) {
-                    Object.entries(revMtdBreakdown).forEach(([currency, amount]) =>
-                        rows.push(toCsvRow(['KPI', 'Revenue MTD', currency, amount])),
-                    );
-                } else {
-                    rows.push(toCsvRow(['KPI', 'Revenue MTD', resolvedReportCurrency, kpis.revenue_mtd ?? 0]));
-                }
-                rows.push(toCsvRow(['KPI', 'Active Clients', '', kpis.active_clients ?? 0]));
-                rows.push(toCsvRow(['KPI', 'Total Clients', '', kpis.total_clients ?? 0]));
-                rows.push(toCsvRow(['KPI', 'Conversion Rate', '', conversionRate]));
-                rows.push(toCsvRow(['KPI', 'Renewal Rate', '', renewalRate]));
-                rows.push(toCsvRow(['KPI', 'Range From', '', data?.range?.from || '']));
-                rows.push(toCsvRow(['KPI', 'Range To', '', data?.range?.to || '']));
-
-                // Revenue trend: one row per (month, currency)
-                (data.revenue_trend || []).forEach((row) => {
-                    const bd = row.revenue_breakdown ?? {};
-                    if (Object.keys(bd).length > 0) {
-                        Object.entries(bd).forEach(([currency, amount]) =>
-                            rows.push(toCsvRow(['Revenue Trend', row.label, currency, amount])),
-                        );
-                    } else {
-                        rows.push(toCsvRow(['Revenue Trend', row.label, resolvedReportCurrency, row.value ?? 0]));
-                    }
-                });
-
-                (data.lead_sources || []).forEach((row) => rows.push(toCsvRow(['Lead Source', row.source, '', row.value])));
-                (data.lead_funnel_stages || []).forEach((row) => rows.push(toCsvRow(['Lead Funnel', row.label, '', row.count])));
-
-                // Package revenue: one row per (package, currency)
-                (data.package_revenue || []).forEach((row) => {
-                    const bd = row.revenue_breakdown ?? {};
-                    if (row.normalized_total !== null && row.normalized_total !== undefined) {
-                        rows.push(toCsvRow(['Package Revenue Normalized', row.label, row.normalized_currency || normalizedCurrency, row.normalized_total]));
-                    }
-                    if (Object.keys(bd).length > 0) {
-                        Object.entries(bd).forEach(([currency, amount]) =>
-                            rows.push(toCsvRow(['Package Revenue', row.label, currency, amount])),
-                        );
-                    } else {
-                        rows.push(toCsvRow(['Package Revenue', row.label, resolvedReportCurrency, row.value ?? 0]));
-                    }
-                });
-
-                // Owner performance: one row per (owner, currency)
-                (data.owner_performance || []).forEach((row) => {
-                    const paymentCount = row.payments_count ?? row.deals ?? 0;
-                    const bd = row.revenue_breakdown ?? {};
-                    if (row.normalized_revenue !== null && row.normalized_revenue !== undefined) {
-                        rows.push(toCsvRow(['Owner Performance Normalized', row.owner, row.normalized_currency || normalizedCurrency, `${paymentCount} successful payments | ${row.normalized_revenue} revenue`]));
-                    }
-                    if (Object.keys(bd).length > 0) {
-                        Object.entries(bd).forEach(([currency, amount]) =>
-                            rows.push(toCsvRow(['Owner Performance', row.owner, currency, `${paymentCount} successful payments | ${amount} revenue`])),
-                        );
-                    } else {
-                        rows.push(toCsvRow(['Owner Performance', row.owner, resolvedReportCurrency, `${paymentCount} successful payments | ${row.revenue ?? 0} revenue`]));
-                    }
-                });
-            }
-
-            if (engagementData) {
-                rows.push(toCsvRow(['Profile Engagement', 'Views', engagementPlatformTotals.profile_view?.total ?? 0]));
-                rows.push(toCsvRow(['Profile Engagement', 'Unique Visitors', engagementPlatformTotals.unique_visitors?.total ?? 0]));
-                rows.push(toCsvRow(['Profile Engagement', 'Contacts', engagementPlatformTotals.contact_actions?.total ?? 0]));
-                rows.push(toCsvRow(['Profile Engagement', 'Contact Rate', engagementPlatformTotals.contact_rate_percent?.value ?? 0]));
-
-                engagementContactMix.forEach((row) => rows.push(toCsvRow(['Contact Mix', row.label, row.formattedValue])));
-                engagementProfiles.forEach((row) => rows.push(toCsvRow([
-                    'Ranking',
-                    row.name,
-                    `${row.subscription_tier || 'No plan'} | ${row.assigned_agent_name || 'Unassigned'} | ${asNumber(row.totals?.profile_view?.total)} views | ${asNumber(row.contact_actions_total)} contacts | ${asNumber(row.contact_rate_percent).toFixed(1)}%`,
-                ])));
-            }
-
-            const filename = `crm-reports-${data?.range?.from || engagementData?.period?.from || 'from'}-to-${data?.range?.to || engagementData?.period?.to || 'to'}.csv`;
-            downloadCsv(filename, rows);
-            toast.success('Report export generated.');
-        } finally {
-            setIsExporting(false);
-        }
-    };
-
     const toggleEngagementSort = (field) => {
         setEngagementPage(1);
 
@@ -636,14 +497,22 @@ export default function Reports() {
                         ) : null}
                         <button
                             type="button"
-                            onClick={exportCsv}
-                            disabled={isExporting || isRangeInvalid}
+                            onClick={() => setScorecardModalOpen(true)}
+                            disabled={isRangeInvalid}
                             className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-70"
                         >
-                            {isExporting ? 'Exporting...' : 'Export CSV'}
+                            Export Scorecard
                         </button>
                     </div>
                 )}
+            />
+            <ScorecardExportModal
+                open={scorecardModalOpen}
+                onClose={() => setScorecardModalOpen(false)}
+                platformId={platformFilter ? Number(platformFilter) : null}
+                fromDate={fromDate}
+                toDate={toDate}
+                reportingCurrency={reportingCurrency}
             />
             {isRangeInvalid ? (
                 <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">

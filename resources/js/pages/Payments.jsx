@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentImportDrawer from '../components/PaymentImportDrawer';
+import PaymentExportModal from '../components/PaymentExportModal';
 import ReportingCurrencyControl from '../components/ReportingCurrencyControl';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import { useToast } from '../components/ToastProvider';
@@ -824,6 +825,7 @@ export default function Payments() {
         notes: '',
     });
     const [importDrawerOpen, setImportDrawerOpen] = useState(false);
+    const [exportModalOpen, setExportModalOpen] = useState(false);
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
 
     const { data: integrationData } = useQuery({
@@ -844,6 +846,40 @@ export default function Payments() {
     const resolveCurrency = (currencyCode) => currencyCode || selectedPlatformCurrency || 'KES';
 
     const isRangeInvalid = Boolean(fromDate && toDate && fromDate > toDate);
+    const activeFilters = useMemo(() => ({
+        ...(search && { search }),
+        ...(statusFilter && { status: statusFilter }),
+        ...(matchFilter && { matched: matchFilter }),
+        ...(hasDiscountFilter && { has_discount: hasDiscountFilter }),
+        ...(platformFilter && { platform_id: Number(platformFilter) }),
+        ...(sourceFilter && { source: sourceFilter }),
+        ...((canViewTests && environmentFilter) && { environment: environmentFilter }),
+        ...((canViewTests && testVisibility !== 'hide') && { test_visibility: testVisibility }),
+        ...(confidenceFilter && { match_confidence: confidenceFilter }),
+        ...(reviewStateFilter && { review_state: reviewStateFilter }),
+        ...(resolutionFilter && { resolution_code: resolutionFilter }),
+        ...(customerMixSegment && { customer_mix_segment: customerMixSegment }),
+        ...(fromDate && { from: fromDate }),
+        ...(toDate && { to: toDate }),
+        ...reportingCurrency.queryParams,
+    }), [
+        search,
+        statusFilter,
+        matchFilter,
+        hasDiscountFilter,
+        platformFilter,
+        sourceFilter,
+        canViewTests,
+        environmentFilter,
+        testVisibility,
+        confidenceFilter,
+        reviewStateFilter,
+        resolutionFilter,
+        customerMixSegment,
+        fromDate,
+        toDate,
+        reportingCurrency.queryParams,
+    ]);
 
     const { data, isLoading } = useQuery({
         queryKey: ['payments', page, perPage, search, statusFilter, matchFilter, hasDiscountFilter, platformFilter, sourceFilter, environmentFilter, testVisibility, confidenceFilter, reviewStateFilter, resolutionFilter, customerMixSegment, fromDate, toDate, canViewTests, reportingCurrency.displayMode, reportingCurrency.targetCurrency],
@@ -2162,6 +2198,13 @@ export default function Payments() {
                             data-tour="payments-import-panel"
                         >
                             Upload payments
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setExportModalOpen(true)}
+                            className="crm-btn-secondary px-3 py-2"
+                        >
+                            Export
                         </button>
                         <button
                             onClick={() => setQueueAutoMatchDialog({ open: true, reason: 'Batch auto-match from payment queue', preview: null, step: 'reason' })}
@@ -3973,6 +4016,11 @@ export default function Payments() {
                 onCommitSuccess={() => {
                     queryClient.invalidateQueries({ queryKey: ['payments'] });
                 }}
+            />
+            <PaymentExportModal
+                open={exportModalOpen}
+                onClose={() => setExportModalOpen(false)}
+                activeFilters={activeFilters}
             />
 
             {bundleDetailDialog.open ? (

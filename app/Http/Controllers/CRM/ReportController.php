@@ -9,9 +9,11 @@ use App\Models\Deal;
 use App\Models\IntegrationSetting;
 use App\Models\Lead;
 use App\Models\Payment;
+use App\Models\Platform;
 use App\Models\RenewalRun;
 use App\Services\MarketAuthorizationService;
 use App\Services\ReportingCurrencyService;
+use App\Services\ScorecardDataService;
 use App\Services\WpSyncService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
@@ -23,7 +25,8 @@ class ReportController extends Controller
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
-        private readonly ReportingCurrencyService $reportingCurrencyService
+        private readonly ReportingCurrencyService $reportingCurrencyService,
+        private readonly ScorecardDataService $scorecardDataService
     ) {
     }
 
@@ -256,63 +259,13 @@ class ReportController extends Controller
                 'value' => (int) $row->total,
             ]);
 
-        $packageRevenue = (clone $paymentsQuery)
-            ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
-            ->leftJoin('products as payment_products', 'payment_products.id', '=', 'payments.product_id')
-            ->leftJoin('products as deal_products', 'deal_products.id', '=', 'deals.product_id')
-            ->selectRaw("{$packageNameExpression} as package_name")
-            ->selectRaw("{$paymentDateExpression} as event_date")
-            ->selectRaw('payments.platform_id as platform_id')
-            ->selectRaw("{$platformCountryExpression} as platform_country")
-            ->selectRaw("{$platformNameExpression} as platform_name")
-            ->selectRaw("{$paymentCurrencyExpression} as currency")
-            ->selectRaw('SUM(payments.amount) as total')
-            ->groupByRaw($packageNameExpression)
-            ->groupByRaw($paymentDateExpression)
-            ->groupBy('payments.platform_id')
-            ->groupByRaw($platformCountryExpression)
-            ->groupByRaw($platformNameExpression)
-            ->groupByRaw($paymentCurrencyExpression)
-            ->get()
-            ->groupBy(fn ($row) => $row->package_name ?: 'Unknown package')
-            ->map(function ($rows, $label) use ($targetCurrency) {
-                $breakdown = [];
-                $eventRows = [];
-                foreach ($rows as $row) {
-                    $breakdown[$row->currency] = ($breakdown[$row->currency] ?? 0.0) + (float) $row->total;
-                    $eventRows[] = [
-                        'event_date' => (string) $row->event_date,
-                        'platform_id' => $row->platform_id,
-                        'platform_country' => $row->platform_country,
-                        'platform_name' => $row->platform_name,
-                        'currency' => $row->currency,
-                        'amount' => (float) $row->total,
-                    ];
-                }
-                ksort($breakdown);
-                $normalized = $this->reportingCurrencyService->normalizeEventRows($eventRows, $targetCurrency);
+        $packageRevenuePlatformIds = $platformIds === null
+            ? Platform::query()->orderBy('id')->pluck('id')->map(fn ($id) => (int) $id)->all()
+            : $platformIds;
 
-                return [
-                    'label' => $label,
-                    'value' => count($breakdown) === 1 ? array_values($breakdown)[0] : null,
-                    'revenue_breakdown' => $breakdown,
-                    'normalized_total' => $normalized['normalized_total'],
-                    'normalized_currency' => $normalized['normalized_currency'],
-                    'normalization_meta' => $normalized['normalization_meta'],
-                    'sort_value' => $normalized['normalized_total'] ?? array_sum($breakdown),
-                ];
-            })
-            ->sortByDesc('sort_value')
-            ->take(10)
-            ->map(fn ($row) => [
-                'label' => $row['label'],
-                'value' => $row['value'],
-                'revenue_breakdown' => $row['revenue_breakdown'],
-                'normalized_total' => $row['normalized_total'],
-                'normalized_currency' => $row['normalized_currency'],
-                'normalization_meta' => $row['normalization_meta'],
-            ])
-            ->values();
+        $packageRevenue = collect(
+            $this->scorecardDataService->packageRevenue($from, $to, $packageRevenuePlatformIds, $targetCurrency)
+        );
 
         $ownerPerformanceAll = (clone $paymentsQuery)
             ->leftJoin('deals', 'deals.id', '=', 'payments.deal_id')
