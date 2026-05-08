@@ -95,6 +95,8 @@ export default function Login() {
     const passwordEnabled = authConfig.password?.enabled !== false;
     const googleEnabled = Boolean(authConfig.google?.enabled);
     const googlePrimary = googleEnabled && Boolean(authConfig.google?.primary);
+    const passwordFallbackRequested = new URLSearchParams(window.location.search).get('password') === '1';
+    const showPasswordForm = passwordEnabled && (!googleEnabled || passwordFallbackRequested);
 
     return (
         <div className="relative min-h-screen overflow-hidden bg-slate-950">
@@ -151,7 +153,7 @@ export default function Login() {
                                 </button>
                             ) : null}
 
-                            {googleEnabled && passwordEnabled ? (
+                            {googleEnabled && showPasswordForm ? (
                                 <div className="flex items-center gap-3">
                                     <div className="h-px flex-1 bg-slate-200" />
                                     <span className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">or</span>
@@ -159,7 +161,7 @@ export default function Login() {
                                 </div>
                             ) : null}
 
-                            {passwordEnabled ? (
+                            {showPasswordForm ? (
                                 <form onSubmit={handleSubmit} className="space-y-5">
                             <div>
                                 <label htmlFor="email" className="block text-sm font-medium text-slate-700">
@@ -211,11 +213,11 @@ export default function Login() {
                                 {loading ? 'Signing in...' : 'Sign in'}
                             </button>
                                 </form>
-                            ) : (
+                            ) : !googleEnabled ? (
                                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
                                     Password login is disabled. Use Google SSO to access the CRM.
                                 </div>
-                            )}
+                            ) : null}
                         </div>
 
                         <p className="mt-5 text-xs text-slate-500">
