@@ -38,12 +38,20 @@ class SupportBoardSyncRunService
             return collect();
         }
 
+        $latestIds = SupportBoardSyncRun::query()
+            ->selectRaw('MAX(id) AS id')
+            ->whereIn('platform_id', $platformIds)
+            ->groupBy('platform_id')
+            ->pluck('id');
+
+        if ($latestIds->isEmpty()) {
+            return collect();
+        }
+
         return SupportBoardSyncRun::query()
             ->with('initiatedBy:id,name,email')
-            ->whereIn('platform_id', $platformIds)
-            ->orderByDesc('id')
+            ->whereIn('id', $latestIds)
             ->get()
-            ->unique('platform_id')
             ->keyBy('platform_id');
     }
 
