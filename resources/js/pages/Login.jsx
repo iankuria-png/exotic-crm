@@ -19,10 +19,8 @@ export default function Login() {
     const [loading, setLoading] = useState(false);
     const [googleLoading, setGoogleLoading] = useState(false);
     const [checkingSetup, setCheckingSetup] = useState(true);
-    const [authConfig, setAuthConfig] = useState({
-        password: { enabled: true, policy: 'enabled' },
-        google: { enabled: false, primary: false, configured: false },
-    });
+    const [authConfig, setAuthConfig] = useState(null);
+    const [authConfigError, setAuthConfigError] = useState('');
     const { login } = useAuth();
     const navigate = useNavigate();
 
@@ -37,15 +35,26 @@ export default function Login() {
                     setError(errorMessage);
                 }
 
-                const { data } = await api.get('/crm/setup/status');
-                if (!cancelled && data?.is_first_run) {
-                    navigate('/setup', { replace: true });
-                    return;
+                try {
+                    const { data } = await api.get('/crm/setup/status');
+                    if (!cancelled && data?.is_first_run) {
+                        navigate('/setup', { replace: true });
+                        return;
+                    }
+                } catch {
+                    // Fall through to auth config. Login options should not depend on setup status availability.
                 }
 
-                const configResponse = await api.get('/crm/auth/config');
-                if (!cancelled) {
-                    setAuthConfig(configResponse.data);
+                try {
+                    const configResponse = await api.get('/crm/auth/config');
+                    if (!cancelled) {
+                        setAuthConfig(configResponse.data);
+                        setAuthConfigError('');
+                    }
+                } catch {
+                    if (!cancelled) {
+                        setAuthConfigError('Unable to load login options. Refresh the page or contact an administrator.');
+                    }
                 }
 
                 if (params.get('google') === 'success') {
@@ -55,8 +64,6 @@ export default function Login() {
                         navigate('/', { replace: true });
                     }
                 }
-            } catch {
-                // Fall through to the login form if setup status cannot be determined.
             } finally {
                 if (!cancelled) {
                     setCheckingSetup(false);
@@ -92,8 +99,9 @@ export default function Login() {
         window.location.href = '/auth/google/redirect';
     };
 
-    const passwordEnabled = authConfig.password?.enabled !== false;
-    const googleEnabled = Boolean(authConfig.google?.enabled);
+    const authConfigReady = Boolean(authConfig);
+    const passwordEnabled = authConfigReady && authConfig.password?.enabled !== false;
+    const googleEnabled = authConfigReady && Boolean(authConfig.google?.enabled);
     const googlePrimary = googleEnabled && Boolean(authConfig.google?.primary);
     const passwordFallbackRequested = new URLSearchParams(window.location.search).get('password') === '1';
     const showPasswordForm = passwordEnabled && (!googleEnabled || passwordFallbackRequested);
@@ -138,6 +146,12 @@ export default function Login() {
                                     {error}
                                 </div>
                             )}
+
+                            {authConfigError ? (
+                                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                                    {authConfigError}
+                                </div>
+                            ) : null}
 
                             {googleEnabled ? (
                                 <button

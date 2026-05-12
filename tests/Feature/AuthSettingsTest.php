@@ -83,4 +83,24 @@ class AuthSettingsTest extends TestCase
             'password' => 'secret-password',
         ])->assertForbidden();
     }
+
+    public function test_crm_session_auth_can_resolve_user_on_api_requests(): void
+    {
+        $password = 'secret-password';
+        $user = User::factory()->create([
+            'email' => 'admin@example.com',
+            'password' => bcrypt($password),
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $this->postJson('/api/crm/login', [
+            'email' => $user->email,
+            'password' => $password,
+        ])->assertOk();
+
+        $this->getJson('/api/crm/me')
+            ->assertOk()
+            ->assertJsonPath('user.email', $user->email);
+    }
 }
