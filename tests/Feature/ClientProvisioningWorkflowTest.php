@@ -4,12 +4,15 @@ namespace Tests\Feature;
 
 use App\Models\Platform;
 use App\Models\User;
+use App\Http\Controllers\CRM\ClientController;
 use App\Services\DynamicDatabaseService;
 use App\Services\WpDirectProvisioningService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
+use ReflectionClass;
 use Tests\TestCase;
 
 class ClientProvisioningWorkflowTest extends TestCase
@@ -139,6 +142,37 @@ class ClientProvisioningWorkflowTest extends TestCase
         ])
             ->assertStatus(422)
             ->assertJsonPath('message', 'Email or phone is required when provisioning a WordPress profile.');
+    }
+
+    public function test_provisioned_profile_finalization_reuses_wordpress_update_endpoint_for_city(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://ghana.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+        $wpPostId = 258859;
+
+        Http::fake([
+            "{$baseUrl}/clients/{$wpPostId}/update" => Http::response(['success' => true], 200),
+        ]);
+
+        $controller = (new ReflectionClass(ClientController::class))->newInstanceWithoutConstructor();
+        $method = new \ReflectionMethod(ClientController::class, 'finalizeProvisionedWpProfile');
+
+        $status = $method->invoke($controller, $platform, $wpPostId, [
+            'city' => 'Accra City',
+            'bio' => 'A concise first profile bio.',
+        ]);
+
+        $this->assertSame('success', $status);
+        Http::assertSent(function ($request) use ($baseUrl, $wpPostId) {
+            return $request->url() === "{$baseUrl}/clients/{$wpPostId}/update"
+                && $request->method() === 'POST'
+                && data_get($request->data(), 'fields.city') === 'Accra City'
+                && data_get($request->data(), 'fields.content') === 'A concise first profile bio.';
+        });
     }
 
     private function createWordPressProvisioningFixture(): array

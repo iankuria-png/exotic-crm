@@ -2731,6 +2731,8 @@ class ClientController extends Controller
             throw new \RuntimeException('WordPress provisioning did not return valid profile IDs.');
         }
 
+        $profileFinalizeStatus = $this->finalizeProvisionedWpProfile($platform, $wpPostId, $payload);
+
         $client = Client::updateOrCreate(
             [
                 'platform_id' => $platformId,
@@ -2785,6 +2787,7 @@ class ClientController extends Controller
                 'wp_user_id' => $client->wp_user_id,
                 'linked_existing_user' => (bool) ($provisioningResult['linked_existing_user'] ?? false),
                 'placeholder_email_used' => (bool) ($provisioningResult['placeholder_email_used'] ?? false),
+                'profile_finalize_status' => $profileFinalizeStatus,
                 'sync_status' => $syncStatus,
             ],
             'created_at' => now(),
@@ -2817,6 +2820,50 @@ class ClientController extends Controller
         $client->load(['platform', 'assignedAgent']);
 
         return $client;
+    }
+
+    private function finalizeProvisionedWpProfile(Platform $platform, int $wpPostId, array $payload): string
+    {
+        $fields = [];
+        $city = !empty($payload['city']) ? trim((string) $payload['city']) : '';
+        $bio = !empty($payload['bio']) ? trim((string) $payload['bio']) : '';
+
+        if ($city !== '') {
+            $fields['city'] = $city;
+        }
+
+        if ($bio !== '') {
+            $fields['content'] = $bio;
+        }
+
+        if (empty($fields)) {
+            return 'skipped';
+        }
+
+        if (!$this->platformHasWpApiCredentials($platform)) {
+            Log::warning('Provisioned client profile finalization skipped because WordPress API credentials are incomplete', [
+                'platform_id' => $platform->id,
+                'wp_post_id' => $wpPostId,
+                'fields' => array_keys($fields),
+            ]);
+
+            return 'skipped_missing_api_credentials';
+        }
+
+        try {
+            (new WpSyncService($platform))->updateClientProfile($wpPostId, $fields);
+
+            return 'success';
+        } catch (\Throwable $exception) {
+            Log::warning('Provisioned client profile finalization failed', [
+                'platform_id' => $platform->id,
+                'wp_post_id' => $wpPostId,
+                'fields' => array_keys($fields),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return 'failed';
+        }
     }
 
     private function createManualClient(Request $request, array $payload, string $reason): Client
@@ -2945,6 +2992,13 @@ class ClientController extends Controller
             && !empty($platform->db_name)
             && !empty($platform->db_user)
             && !empty($platform->db_pass);
+    }
+
+    private function platformHasWpApiCredentials(Platform $platform): bool
+    {
+        return !empty($platform->wp_api_url)
+            && !empty($platform->wp_api_user)
+            && !empty($platform->wp_api_password);
     }
 
     private function handleWpReadRequestException(RequestException $exception, Client $client, string $failureMessage)
