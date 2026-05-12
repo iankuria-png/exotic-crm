@@ -52,6 +52,7 @@ class WpDirectProvisioningService
         $birthday = trim((string) ($payload['birthday'] ?? ''));
         $height = trim((string) ($payload['height'] ?? ''));
         $weight = trim((string) ($payload['weight'] ?? ''));
+        $bio = trim((string) ($payload['bio'] ?? $payload['content'] ?? ''));
         $website = trim((string) ($payload['website'] ?? ''));
         $personalPhone = trim((string) ($payload['personal_phone'] ?? ''));
 
@@ -77,7 +78,8 @@ class WpDirectProvisioningService
             $whatsapp,
             $birthday,
             $height,
-            $weight
+            $weight,
+            $bio
         ): array {
             $postType = $this->resolveProfilePostType();
 
@@ -99,7 +101,8 @@ class WpDirectProvisioningService
                 userId: $userId,
                 name: $name,
                 postType: $postType,
-                postStatus: $postStatus
+                postStatus: $postStatus,
+                content: $bio
             );
 
             $this->storeProfileMeta(
@@ -115,6 +118,7 @@ class WpDirectProvisioningService
                 personalPhone: $personalPhone,
                 postStatus: $postStatus
             );
+            $this->assignCityTaxonomy($postId, $city);
 
             $this->upsertOption('escortid' . $userId, $postType);
             $this->upsertOption('escortpostid' . $userId, (string) $postId);
@@ -226,7 +230,7 @@ class WpDirectProvisioningService
         return [$userId, $username, false, $placeholderEmailUsed, $resolvedEmail];
     }
 
-    private function createProfilePost(int $userId, string $name, string $postType, string $postStatus): int
+    private function createProfilePost(int $userId, string $name, string $postType, string $postStatus, string $content = ''): int
     {
         $posts = DB::connection($this->connectionName)->table('posts');
 
@@ -243,7 +247,7 @@ class WpDirectProvisioningService
             'post_author' => $userId,
             'post_date' => $nowLocal,
             'post_date_gmt' => $nowUtc,
-            'post_content' => '',
+            'post_content' => $content,
             'post_title' => $name,
             'post_excerpt' => '',
             'post_status' => $postStatus,
@@ -341,6 +345,90 @@ class WpDirectProvisioningService
             ['option_name' => $name],
             ['option_value' => $value, 'autoload' => 'yes']
         );
+    }
+
+    private function assignCityTaxonomy(int $postId, string $city): void
+    {
+        $cityName = trim($city);
+        if ($cityName === '') {
+            return;
+        }
+
+        $connection = DB::connection($this->connectionName);
+        $slug = Str::slug($cityName);
+        if ($slug === '') {
+            return;
+        }
+
+        $term = $connection->table('terms')
+            ->where('slug', $slug)
+            ->orWhere('name', $cityName)
+            ->orderByRaw('CASE WHEN slug = ? THEN 0 ELSE 1 END', [$slug])
+            ->first();
+
+        $termId = $term ? (int) $term->term_id : 0;
+        if ($termId <= 0) {
+            $termId = (int) $connection->table('terms')->insertGetId([
+                'name' => $cityName,
+                'slug' => $this->nextAvailableTermSlug($slug),
+                'term_group' => 0,
+            ]);
+        }
+
+        $taxonomy = $connection->table('term_taxonomy')
+            ->where('term_id', $termId)
+            ->where('taxonomy', 'city')
+            ->first();
+
+        $termTaxonomyId = $taxonomy ? (int) $taxonomy->term_taxonomy_id : 0;
+        if ($termTaxonomyId <= 0) {
+            $termTaxonomyId = (int) $connection->table('term_taxonomy')->insertGetId([
+                'term_id' => $termId,
+                'taxonomy' => 'city',
+                'description' => '',
+                'parent' => 0,
+                'count' => 0,
+            ]);
+        }
+
+        $connection->table('term_relationships')->updateOrInsert(
+            [
+                'object_id' => $postId,
+                'term_taxonomy_id' => $termTaxonomyId,
+            ],
+            ['term_order' => 0]
+        );
+
+        $count = $connection->table('term_relationships')
+            ->where('term_taxonomy_id', $termTaxonomyId)
+            ->count();
+
+        $connection->table('term_taxonomy')
+            ->where('term_taxonomy_id', $termTaxonomyId)
+            ->update(['count' => $count]);
+    }
+
+    private function nextAvailableTermSlug(string $base): string
+    {
+        $base = Str::limit($base, 190, '');
+        if ($base === '') {
+            $base = 'city';
+        }
+
+        $candidate = $base;
+        $suffix = 1;
+
+        while (
+            DB::connection($this->connectionName)->table('terms')
+                ->where('slug', $candidate)
+                ->exists()
+        ) {
+            $suffix++;
+            $tail = '-' . $suffix;
+            $candidate = Str::limit($base, max(1, 190 - strlen($tail)), '') . $tail;
+        }
+
+        return $candidate;
     }
 
     private function resolveProfilePostType(): string

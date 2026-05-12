@@ -42,6 +42,7 @@ class ClientProvisioningWorkflowTest extends TestCase
             'birthday' => '1998-06-15',
             'height' => '167',
             'weight' => '55',
+            'bio' => 'Warm, professional profile introduction for first publication.',
             'post_status' => 'private',
             'username' => 'nairobi.demo',
             'password' => 'password123',
@@ -58,6 +59,27 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame('1998-06-15', $meta['birthday'] ?? null);
         $this->assertSame('167', $meta['height'] ?? null);
         $this->assertSame('55', $meta['weight'] ?? null);
+
+        $post = DB::connection($connectionName)
+            ->table('posts')
+            ->where('ID', $result['wp_post_id'])
+            ->first();
+
+        $this->assertSame('Warm, professional profile introduction for first publication.', $post->post_content);
+
+        $taxonomy = DB::connection($connectionName)
+            ->table('term_relationships')
+            ->join('term_taxonomy', 'term_relationships.term_taxonomy_id', '=', 'term_taxonomy.term_taxonomy_id')
+            ->join('terms', 'term_taxonomy.term_id', '=', 'terms.term_id')
+            ->where('term_relationships.object_id', $result['wp_post_id'])
+            ->where('term_taxonomy.taxonomy', 'city')
+            ->select('terms.name', 'terms.slug', 'term_taxonomy.count')
+            ->first();
+
+        $this->assertNotNull($taxonomy);
+        $this->assertSame('Nairobi', $taxonomy->name);
+        $this->assertSame('nairobi', $taxonomy->slug);
+        $this->assertSame(1, (int) $taxonomy->count);
     }
 
     public function test_direct_provisioning_allows_profile_basics_to_be_omitted(): void
@@ -83,6 +105,14 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertArrayNotHasKey('birthday', $meta);
         $this->assertArrayNotHasKey('height', $meta);
         $this->assertArrayNotHasKey('weight', $meta);
+
+        $post = DB::connection($connectionName)
+            ->table('posts')
+            ->where('ID', $result['wp_post_id'])
+            ->first();
+
+        $this->assertSame('', $post->post_content);
+        $this->assertSame(0, DB::connection($connectionName)->table('term_relationships')->count());
     }
 
     public function test_wordpress_provisioning_requires_email_or_phone_before_database_work(): void
@@ -197,6 +227,29 @@ class ClientProvisioningWorkflowTest extends TestCase
             $table->unsignedInteger('post_id');
             $table->string('meta_key')->nullable();
             $table->text('meta_value')->nullable();
+        });
+
+        $schema->create('terms', function (Blueprint $table): void {
+            $table->increments('term_id');
+            $table->string('name');
+            $table->string('slug')->unique();
+            $table->integer('term_group')->default(0);
+        });
+
+        $schema->create('term_taxonomy', function (Blueprint $table): void {
+            $table->increments('term_taxonomy_id');
+            $table->unsignedInteger('term_id');
+            $table->string('taxonomy');
+            $table->longText('description')->nullable();
+            $table->unsignedInteger('parent')->default(0);
+            $table->integer('count')->default(0);
+        });
+
+        $schema->create('term_relationships', function (Blueprint $table): void {
+            $table->unsignedInteger('object_id');
+            $table->unsignedInteger('term_taxonomy_id');
+            $table->integer('term_order')->default(0);
+            $table->primary(['object_id', 'term_taxonomy_id']);
         });
 
         DB::connection($connectionName)->table('options')->insert([

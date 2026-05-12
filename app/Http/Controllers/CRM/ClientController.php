@@ -363,6 +363,7 @@ class ClientController extends Controller
             'birthday' => 'nullable|date_format:Y-m-d',
             'height' => 'nullable|string|max:50',
             'weight' => 'nullable|string|max:50',
+            'bio' => 'nullable|string|max:5000',
             'reason' => 'nullable|string|max:500',
         ]);
 
@@ -2718,6 +2719,7 @@ class ClientController extends Controller
             'birthday' => !empty($payload['birthday']) ? trim((string) $payload['birthday']) : '',
             'height' => !empty($payload['height']) ? trim((string) $payload['height']) : '',
             'weight' => !empty($payload['weight']) ? trim((string) $payload['weight']) : '',
+            'bio' => !empty($payload['bio']) ? trim((string) $payload['bio']) : '',
             'post_status' => $profileStatus,
             'username' => !empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
             'password' => !empty($payload['wp_password']) ? (string) $payload['wp_password'] : '',

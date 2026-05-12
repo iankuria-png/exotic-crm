@@ -49,6 +49,7 @@ function createDefaultClientForm(platformId = '') {
         birthday: '',
         height_cm: '',
         weight_kg: '',
+        bio: '',
         profile_images: [],
     };
 }
@@ -1914,6 +1915,7 @@ export default function Clients() {
                                             birthday: '',
                                             height_cm: '',
                                             weight_kg: '',
+                                            bio: '',
                                             profile_images: [],
                                         }))}
                                         className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
@@ -2099,6 +2101,19 @@ export default function Clients() {
                                         </div>
 
                                         <div className="mt-3">
+                                            <label htmlFor="client-bio" className="mb-1 block text-sm font-medium text-slate-700">Profile bio</label>
+                                            <textarea
+                                                id="client-bio"
+                                                value={createForm.bio}
+                                                onChange={(event) => setCreateForm((current) => ({ ...current, bio: event.target.value }))}
+                                                className="crm-input"
+                                                rows={3}
+                                                maxLength={5000}
+                                                placeholder="Short public profile introduction"
+                                            />
+                                        </div>
+
+                                        <div className="mt-3">
                                             <div className="flex flex-wrap items-center justify-between gap-2">
                                                 <label htmlFor="client-profile-images" className="block text-sm font-medium text-slate-700">Profile images</label>
                                                 <span className="text-xs text-slate-500">
@@ -2179,6 +2194,7 @@ export default function Clients() {
                                         birthday: createForm.onboarding_mode === 'wp_provision' ? (createForm.birthday || null) : null,
                                         height: createForm.onboarding_mode === 'wp_provision' ? (createForm.height_cm.trim() || null) : null,
                                         weight: createForm.onboarding_mode === 'wp_provision' ? (createForm.weight_kg.trim() || null) : null,
+                                        bio: createForm.onboarding_mode === 'wp_provision' ? (createForm.bio.trim() || null) : null,
                                         profile_images: createForm.onboarding_mode === 'wp_provision' ? [...createForm.profile_images] : [],
                                         reason: createForm.onboarding_mode === 'wp_provision'
                                             ? 'WordPress-provisioned client create from clients page'
