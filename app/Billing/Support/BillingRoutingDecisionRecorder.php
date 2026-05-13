@@ -154,17 +154,22 @@ class BillingRoutingDecisionRecorder
         $providerKey = strtolower(trim((string) ($context['provider_key'] ?? $payment->provider_key ?? '')));
         $providerTypeKey = strtolower(trim((string) ($providerConfig['wallet_provider_key'] ?? $providerKey)));
         $providerMode = strtolower(trim((string) ($providerConfig['mode'] ?? PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT)));
+        $surface = BillingSurface::tryFrom((string) ($providerConfig['billing_surface'] ?? '')) ?? BillingSurface::SelfCheckout;
         $environment = strtolower(trim((string) ($context['environment'] ?? $payment->provider_environment ?? 'production')));
-        $executionMode = $providerMode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
-            ? ExecutionMode::Proxy->value
-            : ExecutionMode::Direct->value;
+        $executionMode = strtolower(trim((string) ($providerConfig['execution_mode'] ?? '')));
+        $executionMode = $executionMode !== ''
+            ? $executionMode
+            : ($providerMode === PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT
+                ? ExecutionMode::Proxy->value
+                : ExecutionMode::Direct->value);
+        $isPush = $surface === BillingSurface::SubscriptionPush || $providerMode === BillingSurface::SubscriptionPush->value;
 
         return BillingRoutingDecision::query()->create([
             'payment_id' => (int) $payment->id,
             'market_id' => (int) $payment->platform_id,
-            'billing_surface' => BillingSurface::SelfCheckout->value,
-            'chosen_binding_id' => null,
-            'provider_profile_id' => null,
+            'billing_surface' => $surface->value,
+            'chosen_binding_id' => $context['chosen_binding_id'] ?? $providerConfig['chosen_binding_id'] ?? null,
+            'provider_profile_id' => $context['provider_profile_id'] ?? $providerConfig['provider_profile_id'] ?? null,
             'provider_type_key' => $providerTypeKey,
             'execution_mode' => $executionMode,
             'environment' => $environment,
@@ -175,16 +180,16 @@ class BillingRoutingDecisionRecorder
             'snapshot_json' => [
                 'payment_id' => (int) $payment->id,
                 'payment_purpose' => (string) ($payment->purpose ?: 'subscription'),
-                'billing_surface' => BillingSurface::SelfCheckout->value,
+                'billing_surface' => $surface->value,
                 'provider_key' => $providerKey,
                 'provider_type_key' => $providerTypeKey,
                 'provider_label' => (string) ($providerConfig['label'] ?? $providerKey),
-                'provider_family' => 'hosted_checkout',
-                'execution_family' => 'hosted_redirect',
+                'provider_family' => $isPush ? 'mobile_money_push' : 'hosted_checkout',
+                'execution_family' => $isPush ? 'stk_push' : 'hosted_redirect',
                 'environment' => $environment,
                 'execution_mode' => $executionMode,
                 'callback_contract' => [
-                    'type' => 'browser_completion',
+                    'type' => $isPush ? 'provider_webhook' : 'browser_completion',
                     'path' => $paymentUrl,
                 ],
                 'pricing' => [
@@ -202,6 +207,8 @@ class BillingRoutingDecisionRecorder
                 ],
                 'provider_mode' => $providerMode,
                 'provider_config_key' => $resolvedProvider['key'] ?? null,
+                'chosen_binding_id' => $context['chosen_binding_id'] ?? $providerConfig['chosen_binding_id'] ?? null,
+                'provider_profile_id' => $context['provider_profile_id'] ?? $providerConfig['provider_profile_id'] ?? null,
             ],
             'immutable_until_terminal_state' => true,
             'decision_json' => [

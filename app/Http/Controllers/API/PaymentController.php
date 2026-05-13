@@ -26,6 +26,7 @@ use App\Services\ManualPaymentSubmissionService;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentCompletionService;
 use App\Services\PaymentAttemptService;
+use App\Services\Routing\ProviderRoutingDispatcher;
 use App\Services\SelfServiceIncentiveService;
 use App\Services\WalletCheckoutService;
 use Illuminate\Support\Carbon;
@@ -49,7 +50,8 @@ class PaymentController extends Controller
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
         private readonly BillingProviderTransactionRecorder $billingProviderTransactionRecorder,
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
-        private readonly SelfServiceIncentiveService $selfServiceIncentiveService
+        private readonly SelfServiceIncentiveService $selfServiceIncentiveService,
+        private readonly ProviderRoutingDispatcher $providerRoutingDispatcher
     ) {
     }
 
@@ -2338,6 +2340,7 @@ class PaymentController extends Controller
             'phone' => 'required|string|max:30',
             'duration' => 'nullable|string|max:50',
             'currency' => 'nullable|string|size:3',
+            'provider' => 'nullable|string|max:80',
         ]);
 
         try {
@@ -2372,6 +2375,209 @@ class PaymentController extends Controller
                 (string) ($priceRow?->duration_key ?: $validated['duration']),
                 (string) ($validated['currency'] ?? ($priceRow?->currency ?? ''))
             );
+            $incentivePercent = $this->selfServiceIncentiveService->resolveForPlatform((int) $platform->id, 'self_checkout');
+            $incentive = $this->selfServiceIncentiveService->applyToAmount((float) $pricing['amount'], $incentivePercent);
+            if ($incentive) {
+                $pricing['original_amount'] = $incentive['original_amount'];
+                $pricing['amount'] = number_format($incentive['amount'], 2, '.', '');
+                $pricing['discount_percent'] = $incentive['percent'];
+            }
+
+            $requestedProvider = strtolower(trim((string) ($validated['provider'] ?? '')));
+            if ($requestedProvider === 'kopokopo') {
+                $providerKey = 'kopokopo';
+                $providerConfigKey = 'kopokopo_subscription_push';
+                $providerMode = 'subscription_push';
+                $attemptProvider = $providerKey;
+
+                $context = $this->billingModeService->providerContext(
+                    $platform,
+                    $providerKey,
+                    requireEnabled: false,
+                    environmentOverride: null,
+                    surface: 'subscription_push'
+                );
+
+                if (empty($context['chosen_binding_id']) || empty($context['provider_profile_id'])) {
+                    throw new \InvalidArgumentException('KopoKopo is not configured for self-service subscription checkout.');
+                }
+
+                $normalizedPhone = $this->normalizeSubscriptionCheckoutPhone(
+                    (string) $validated['phone'],
+                    $platform
+                );
+                $client = $this->resolveSubscriptionCheckoutClient(
+                    (int) $platform->id,
+                    (int) $validated['user_id'],
+                    $normalizedPhone
+                );
+
+                $resolvedProvider = [
+                    'key' => $providerConfigKey,
+                    'config' => [
+                        'label' => 'KopoKopo',
+                        'wallet_provider_key' => $providerKey,
+                        'mode' => $providerMode,
+                        'billing_surface' => 'subscription_push',
+                        'execution_mode' => 'direct',
+                        'environment' => $context['environment'] ?? null,
+                        'chosen_binding_id' => $context['chosen_binding_id'] ?? null,
+                        'provider_profile_id' => $context['provider_profile_id'] ?? null,
+                    ],
+                ];
+                $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider, $platform);
+                $attemptRequestMeta = $this->paymentAttemptService->requestMetaFromRequest($request, [
+                    'channel' => 'subscription_push',
+                    'billing_surface' => 'self_service_subscription',
+                    'requested_provider' => $attemptProvider,
+                    'provider_config_key' => $providerConfigKey,
+                    'duration' => (string) ($pricing['duration_key'] ?? $validated['duration']),
+                    'product_id' => (int) $product->id,
+                    'platform_id' => (int) $platform->id,
+                ]);
+                $attemptStartedAt = microtime(true);
+
+                $transactionUuid = (string) Str::uuid();
+                $referenceNumber = $this->subscriptionReference(
+                    (int) $platform->id,
+                    (int) $validated['user_id'],
+                    (int) $product->id,
+                    (string) $pricing['duration_key'],
+                    $transactionUuid
+                );
+
+                $payment = Payment::query()->create([
+                    'user_id' => (int) $validated['user_id'],
+                    'escort_post_id' => $client?->wp_post_id,
+                    'platform_id' => (int) $platform->id,
+                    'product_id' => (int) $product->id,
+                    'client_id' => $client?->id,
+                    'phone' => $normalizedPhone,
+                    'amount' => $chargePricing['amount'],
+                    'currency' => $chargePricing['currency'],
+                    'transaction_uuid' => $transactionUuid,
+                    'transaction_reference' => $referenceNumber,
+                    'reference_number' => $referenceNumber,
+                    'status' => 'initiated',
+                    'purpose' => 'subscription',
+                    'source' => 'self_checkout',
+                    'provider_key' => $providerKey,
+                    'provider_environment' => $context['environment'] ?? null,
+                    'duration' => $pricing['legacy_duration'],
+                    'raw_payload' => [
+                        'method' => 'subscription_push',
+                        'billing_surface' => 'self_service_subscription',
+                    ],
+                    'payment_data' => [
+                        'product_price_id' => $pricing['product_price_id'] ?? null,
+                        'duration_key' => $pricing['duration_key'],
+                        'duration_days' => $pricing['duration_days'],
+                        'duration_label' => $pricing['duration_label'],
+                        'provider' => $providerKey,
+                        'provider_config_key' => $providerConfigKey,
+                        'provider_mode' => $providerMode,
+                        'checkout_channel' => 'self_service',
+                        'quoted_pricing' => [
+                            'amount' => $chargePricing['quoted_amount'],
+                            'currency' => $chargePricing['quoted_currency'],
+                        ],
+                        'charge_pricing' => [
+                            'amount' => $chargePricing['amount'],
+                            'currency' => $chargePricing['currency'],
+                        ],
+                        'fx_override' => $chargePricing['fx_override'],
+                        'self_service_incentive' => !empty($pricing['discount_percent']) ? [
+                            'original_amount' => (float) $pricing['original_amount'],
+                            'percent' => (float) $pricing['discount_percent'],
+                            'source' => 'self_service_incentive',
+                        ] : null,
+                        'customer' => [
+                            'first_name' => trim((string) $validated['first_name']),
+                            'last_name' => trim((string) $validated['last_name']),
+                            'email' => trim((string) ($validated['email'] ?? '')),
+                            'phone' => $normalizedPhone,
+                        ],
+                        'product' => [
+                            'name' => (string) ($product->display_name ?: $product->name),
+                            'currency' => (string) $pricing['currency'],
+                        ],
+                    ],
+                ]);
+
+                $payment->loadMissing(['client', 'platform', 'product']);
+                $callbackUrl = $this->billingModeService->buildAbsoluteUrl(
+                    $platform,
+                    '/api/billing/mpesa/callback',
+                    [],
+                    $context['environment'] ?? null
+                );
+                $dispatchContext = array_merge($context, [
+                    'provider_key' => $providerKey,
+                ]);
+
+                $this->billingRoutingDecisionRecorder->recordSelfCheckout(
+                    $payment,
+                    $dispatchContext,
+                    $resolvedProvider,
+                    $chargePricing,
+                    $callbackUrl
+                );
+
+                $action = $this->providerRoutingDispatcher->dispatch($payment, $dispatchContext, [
+                    'phone' => $normalizedPhone,
+                    'request' => $request,
+                ]);
+
+                $attemptResponseMeta = [
+                    'billing_surface' => 'self_service_subscription',
+                    'provider_config_key' => $providerConfigKey,
+                    'provider_mode' => $providerMode,
+                    'provider_reference' => $action['provider_reference'] ?? null,
+                    'action_type' => $action['type'] ?? null,
+                    'pricing' => [
+                        'display_amount' => $chargePricing['quoted_amount'],
+                        'display_currency' => $chargePricing['quoted_currency'],
+                        'charge_amount' => $chargePricing['amount'],
+                        'charge_currency' => $chargePricing['currency'],
+                    ],
+                ];
+
+                $this->paymentAttemptService->record($payment, 'self_checkout_subscription_push', 'success', [
+                    'provider' => $attemptProvider,
+                    'latency_ms' => $attemptStartedAt !== null
+                        ? (int) round((microtime(true) - $attemptStartedAt) * 1000)
+                        : null,
+                    'request_meta' => $attemptRequestMeta,
+                    'response_meta' => $attemptResponseMeta,
+                ]);
+
+                unset($action['provider_payload']);
+
+                return response()->json([
+                    'status' => true,
+                    'message' => $action['message'] ?? 'STK push sent. Complete the prompt on your phone.',
+                    'payment_id' => $payment->id,
+                    'transaction_uuid' => $payment->transaction_uuid,
+                    'reference_number' => $payment->reference_number,
+                    'provider' => $providerKey,
+                    'provider_config_key' => $providerConfigKey,
+                    'provider_mode' => $providerMode,
+                    'action' => $action,
+                    'pricing' => [
+                        'amount' => (float) $chargePricing['quoted_amount'],
+                        'currency' => $chargePricing['quoted_currency'],
+                        'charge_amount' => (float) $chargePricing['amount'],
+                        'charge_currency' => $chargePricing['currency'],
+                        'duration' => $pricing['duration_key'],
+                        'duration_label' => $pricing['duration_label'],
+                        'original_amount' => !empty($pricing['original_amount']) ? (float) $pricing['original_amount'] : null,
+                        'discount_percent' => !empty($pricing['discount_percent']) ? (float) $pricing['discount_percent'] : null,
+                        'discount_source' => !empty($pricing['discount_percent']) ? 'self_service_incentive' : null,
+                    ],
+                    'billing_method_policy' => $this->marketBillingMethodPolicy->forPlatform((int) $platform->id),
+                ], 201);
+            }
+
             $resolvedProvider = $this->paymentLinkService->resolveProviderConfig($platform);
 
             if (!is_array($resolvedProvider)) {
@@ -2387,14 +2593,6 @@ class PaymentController extends Controller
             // so that providerContext() and the match expression below resolve correctly.
             if (str_starts_with($providerKey, 'pawapay')) {
                 $providerKey = 'pawapay';
-            }
-
-            $incentivePercent = $this->selfServiceIncentiveService->resolveForPlatform((int) $platform->id, 'self_checkout');
-            $incentive = $this->selfServiceIncentiveService->applyToAmount((float) $pricing['amount'], $incentivePercent);
-            if ($incentive) {
-                $pricing['original_amount'] = $incentive['original_amount'];
-                $pricing['amount'] = number_format($incentive['amount'], 2, '.', '');
-                $pricing['discount_percent'] = $incentive['percent'];
             }
 
             $chargePricing = $this->applySelfCheckoutFxOverride($pricing, $resolvedProvider, $platform);

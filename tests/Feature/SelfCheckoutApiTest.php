@@ -13,6 +13,7 @@ use App\Models\PaymentAttempt;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\ProductPrice;
+use App\Services\KopokopoService;
 use App\Services\WalletSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -331,6 +332,177 @@ class SelfCheckoutApiTest extends TestCase
         $this->assertSame('self_checkout_initial_initiation', data_get($providerTransaction->confirmation_state_json, 'reason_code'));
 
         Http::assertSentCount(1);
+    }
+
+    public function test_self_checkout_can_initiate_kopokopo_subscription_push(): void
+    {
+        config([
+            'app.url' => 'https://crm.example.test',
+        ]);
+
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'domain' => 'kenya.example.test',
+            'phone_prefix' => '254',
+            'currency_code' => 'KES',
+        ]);
+
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'wp_post_id' => 7701,
+            'wp_user_id' => 9922,
+            'name' => 'Kenya Kopo Client',
+            'phone_normalized' => '254748612016',
+            'email' => 'kenya-kopokopo@example.test',
+            'profile_status' => 'draft',
+        ]);
+
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Premium',
+            'display_name' => 'Premium',
+            'currency' => 'KES',
+            'monthly_price' => 3000,
+            'biweekly_price' => 1500,
+            'weekly_price' => 750,
+        ]);
+
+        ProductPrice::factory()->create([
+            'product_id' => $product->id,
+            'duration_key' => '1_month',
+            'duration_label' => '1 Month',
+            'duration_days' => 30,
+            'price' => 3000,
+            'currency' => 'KES',
+            'is_active' => true,
+            'sort_order' => 10,
+        ]);
+
+        $this->seedWalletBillingContext($platform);
+        $walletSettings = app(WalletSettingsService::class);
+        $walletSettings->saveSystemConfig([
+            'mode' => 'sandbox',
+        ]);
+        $walletSettings->savePlatformConfig($platform, [
+            'enabled' => true,
+            'mode_override' => 'sandbox',
+            'currency_code' => 'KES',
+            'providers' => [
+                'mpesa_stk' => [
+                    'enabled' => true,
+                    'min_amount' => '100.00',
+                    'max_amount' => '150000.00',
+                ],
+            ],
+        ]);
+
+        $profile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'KopoKopo Kenya Sandbox',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'sandbox',
+            'config_json' => [
+                'base_url' => 'https://sandbox.kopokopo.test',
+                'till_number' => 'K123456',
+                'callback_base_url' => 'https://billing-sandbox.example.test',
+            ],
+            'secrets_json' => [
+                'client_id' => 'kopokopo-client',
+                'client_secret' => 'kopokopo-secret',
+                'api_key' => 'kopokopo-api-key',
+            ],
+            'active' => true,
+        ]);
+
+        $binding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $profile->id,
+            'billing_surface' => 'subscription_push',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+            'restriction_json' => [],
+        ]);
+
+        $this->mock(KopokopoService::class, function ($mock) {
+            $mock->shouldReceive('initiateStkPush')
+                ->once()
+                ->with(
+                    '254748612016',
+                    3000.0,
+                    'https://billing-sandbox.example.test/api/billing/mpesa/callback',
+                    \Mockery::on(fn (array $metadata): bool => ($metadata['purpose'] ?? null) === 'subscription'
+                        && ($metadata['reference_number'] ?? '') !== ''),
+                    \Mockery::on(fn (array $config): bool => ($config['base_url'] ?? null) === 'https://sandbox.kopokopo.test'
+                        && ($config['till_number'] ?? null) === 'K123456'
+                        && ($config['client_id'] ?? null) === 'kopokopo-client')
+                )
+                ->andReturn([
+                    'status' => 'success',
+                    'location' => 'kopokopo-request-001',
+                ]);
+        });
+
+        $response = $this->postJson('/api/self-checkout', [
+            'product_id' => $product->id,
+            'platform_id' => $platform->id,
+            'user_id' => $client->wp_user_id,
+            'first_name' => 'Zuri',
+            'last_name' => 'User',
+            'phone' => '0748612016',
+            'email' => $client->email,
+            'duration' => 'monthly',
+            'provider' => 'kopokopo',
+        ], [
+            'Origin' => 'https://www.exotickenya.com',
+            'Referer' => 'https://www.exotickenya.com/escort/zuri-10/',
+            'User-Agent' => 'Mozilla/5.0 Chrome/136.0.0.0 Safari/537.36',
+            'X-Request-Id' => 'wp-self-checkout-kopokopo-req-001',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('status', true)
+            ->assertJsonPath('provider', 'kopokopo')
+            ->assertJsonPath('provider_mode', 'subscription_push')
+            ->assertJsonPath('action.type', 'stk_pending')
+            ->assertJsonPath('action.provider_reference', 'kopokopo-request-001');
+
+        $payment = Payment::query()->firstOrFail();
+        $decision = BillingRoutingDecision::query()->where('payment_id', $payment->id)->firstOrFail();
+        $stkAttempt = PaymentAttempt::query()
+            ->where('payment_id', $payment->id)
+            ->where('attempt_type', 'stk_initiate')
+            ->firstOrFail();
+        $checkoutAttempt = PaymentAttempt::query()
+            ->where('payment_id', $payment->id)
+            ->where('attempt_type', 'self_checkout_subscription_push')
+            ->firstOrFail();
+        $providerTransaction = BillingProviderTransaction::query()->where('payment_id', $payment->id)->firstOrFail();
+
+        $this->assertSame('pending', $payment->status);
+        $this->assertSame('kopokopo', $payment->provider_key);
+        $this->assertSame('sandbox', $payment->provider_environment);
+        $this->assertSame('254748612016', $payment->phone);
+        $this->assertSame('subscription_push', data_get($payment->payment_data, 'provider_mode'));
+        $this->assertNull(data_get($payment->payment_data, 'checkout_url'));
+        $this->assertSame('stk_pending', data_get($payment->payment_data, 'resume.type'));
+        $this->assertSame('subscription_push', $decision->billing_surface);
+        $this->assertSame($binding->id, $decision->chosen_binding_id);
+        $this->assertSame($profile->id, $decision->provider_profile_id);
+        $this->assertSame('kopokopo', $decision->provider_type_key);
+        $this->assertSame('direct', $decision->execution_mode);
+        $this->assertSame('mobile_money_push', data_get($decision->snapshot_json, 'provider_family'));
+        $this->assertSame('stk_push', data_get($decision->snapshot_json, 'execution_family'));
+        $this->assertSame('provider_webhook', data_get($decision->snapshot_json, 'callback_contract.type'));
+        $this->assertSame('success', $stkAttempt->status);
+        $this->assertSame('kopokopo_direct', $stkAttempt->provider);
+        $this->assertSame('subscription_push', data_get($checkoutAttempt->request_meta, 'channel'));
+        $this->assertSame('kopokopo', $checkoutAttempt->provider);
+        $this->assertSame('kopokopo', $providerTransaction->provider_type_key);
     }
 
     public function test_self_checkout_currently_rejects_non_card_proxy_wallet_provider_aliases(): void
