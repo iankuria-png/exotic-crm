@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Billing\Support\MarketBillingMethodPolicy;
 use App\Http\Controllers\Controller;
+use App\Models\BillingMarketProviderBinding;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use App\Models\Platform;
@@ -302,7 +303,58 @@ class PlatformController extends Controller
         $payload['billing_method_policy'] = $this->marketBillingMethodPolicy->contract($platform);
         $payload['effective_currencies'] = $platform->effectiveCurrencies();
         $payload['multi_currency_wallet_enabled'] = $platform->isMultiCurrencyWalletEnabled();
+        $payload['self_service_payment_options'] = $this->selfServicePaymentOptions($platform);
 
         return $payload;
+    }
+
+    private function selfServicePaymentOptions(Platform $platform): array
+    {
+        $subscriptionPushBindings = BillingMarketProviderBinding::query()
+            ->with('providerProfile')
+            ->where('market_id', (int) $platform->id)
+            ->where('billing_surface', 'subscription_push')
+            ->where('enabled', true)
+            ->where('self_service_enabled', true)
+            ->whereHas('providerProfile', function ($query): void {
+                $query->where('active', true)
+                    ->whereIn('provider_type_key', ['kopokopo', 'daraja']);
+            })
+            ->orderBy('priority')
+            ->orderBy('id')
+            ->get();
+
+        $subscriptionPushProviders = $subscriptionPushBindings
+            ->map(function (BillingMarketProviderBinding $binding): ?array {
+                $profile = $binding->providerProfile;
+                if (!$profile) {
+                    return null;
+                }
+
+                $providerKey = strtolower(trim((string) $profile->provider_type_key));
+
+                return [
+                    'provider' => $providerKey,
+                    'label' => (string) ($profile->profile_name ?: strtoupper($providerKey)),
+                    'mode' => 'subscription_push',
+                    'action_type' => 'stk_pending',
+                    'environment' => strtolower(trim((string) ($profile->environment ?: 'production'))),
+                    'country_code' => $profile->country_code,
+                    'binding_id' => (int) $binding->id,
+                    'profile_id' => (int) $profile->id,
+                    'priority' => (int) $binding->priority,
+                ];
+            })
+            ->filter()
+            ->values();
+
+        return [
+            'version' => '2026-05-13',
+            'subscription_push' => [
+                'enabled' => $subscriptionPushProviders->isNotEmpty(),
+                'default_provider' => (string) data_get($subscriptionPushProviders->first(), 'provider', ''),
+                'providers' => $subscriptionPushProviders->all(),
+            ],
+        ];
     }
 }
