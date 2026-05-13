@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import AppRouter from './router';
 import { ToastProvider } from './components/ToastProvider';
+import { MediaUploadProvider } from './components/MediaUploadProvider';
 import '../css/app.css';
 
 const queryClient = new QueryClient({
@@ -19,9 +20,11 @@ function App() {
     return (
         <QueryClientProvider client={queryClient}>
             <ToastProvider>
-                <BrowserRouter>
-                    <AppRouter />
-                </BrowserRouter>
+                <MediaUploadProvider>
+                    <BrowserRouter>
+                        <AppRouter />
+                    </BrowserRouter>
+                </MediaUploadProvider>
             </ToastProvider>
         </QueryClientProvider>
     );

@@ -6,11 +6,18 @@ import { useHeartbeat } from '../hooks/useHeartbeat';
 import HelpButton from '../components/faq/HelpButton';
 import FeedbackButton from '../components/faq/FeedbackButton';
 import Walkthrough from '../components/faq/Walkthrough';
+import { useMediaUploads } from '../components/MediaUploadProvider';
 
 export default function MainLayout() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
     const { user, impersonation, logout } = useAuth();
+    const { activeCount, failedCount, uploads, retryUpload, dismissUpload } = useMediaUploads();
     const isMarketing = user?.role === 'marketing';
+    const showUploadIndicator = activeCount > 0 || failedCount > 0;
+    const uploadIndicatorLabel = activeCount > 0
+        ? `${activeCount} upload${activeCount === 1 ? '' : 's'} active`
+        : `${failedCount} upload${failedCount === 1 ? '' : 's'} failed`;
 
     useHeartbeat(user);
 
@@ -50,6 +57,70 @@ export default function MainLayout() {
 
                     <div className="flex items-center gap-2">
                         <div className="hidden items-center gap-2 sm:flex">
+                            {showUploadIndicator ? (
+                                <div className="relative">
+                                    <button
+                                        type="button"
+                                        onClick={() => setUploadMenuOpen((open) => !open)}
+                                        className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
+                                            failedCount > 0 && activeCount === 0
+                                                ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                                                : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                        }`}
+                                        aria-expanded={uploadMenuOpen}
+                                    >
+                                        {uploadIndicatorLabel}
+                                    </button>
+                                    {uploadMenuOpen ? (
+                                        <div className="absolute right-0 z-50 mt-2 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Media uploads</p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setUploadMenuOpen(false)}
+                                                    className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                                                >
+                                                    Close
+                                                </button>
+                                            </div>
+                                            <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
+                                                {uploads.filter((upload) => ['uploading', 'failed'].includes(upload.status)).map((upload) => (
+                                                    <div key={upload.id} className="rounded-md bg-slate-50 px-3 py-2 text-xs">
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <div className="min-w-0">
+                                                                <p className="truncate font-semibold text-slate-800">{upload.label}</p>
+                                                                <p className="truncate text-slate-500">{upload.clientName || `Client #${upload.clientId}`}</p>
+                                                            </div>
+                                                            <span className={upload.status === 'failed' ? 'text-rose-700' : 'text-amber-700'}>
+                                                                {upload.status === 'failed' ? 'Failed' : 'Active'}
+                                                            </span>
+                                                        </div>
+                                                        <p className="mt-1 text-slate-500">{upload.message}</p>
+                                                        {upload.status === 'failed' ? (
+                                                            <div className="mt-2 flex justify-end gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => retryUpload(upload.id)}
+                                                                    className="rounded-md border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700 hover:bg-slate-100"
+                                                                >
+                                                                    Retry
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => dismissUpload(upload.id)}
+                                                                    className="rounded-md px-2 py-1 font-semibold text-slate-500 hover:bg-slate-100"
+                                                                >
+                                                                    Dismiss
+                                                                </button>
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : null}
                             <HelpButton />
                             <FeedbackButton />
                         </div>

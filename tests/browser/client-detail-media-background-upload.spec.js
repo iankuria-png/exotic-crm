@@ -68,13 +68,23 @@ async function stubClientDetail(page) {
     });
 }
 
+async function seedBrowserAuth(page) {
+    await page.addInitScript(() => {
+        window.localStorage.setItem('crm_token', 'browser-test-token');
+        window.localStorage.setItem('crm_user', JSON.stringify({ id: 1, role: 'sales', name: 'Sales User' }));
+        window.sessionStorage.setItem('crm_session_token', 'browser-test-session');
+    });
+}
+
+async function openMediaTab(page) {
+    await page.goto(`/clients/${CLIENT_ID}`, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Edit Profile' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
+}
+
 test.describe('client detail media background upload', () => {
     test('clears the picker and keeps the media tab usable while upload is pending', async ({ page }) => {
-        await page.addInitScript(() => {
-            window.localStorage.setItem('crm_token', 'browser-test-token');
-            window.localStorage.setItem('crm_user', JSON.stringify({ id: 1, role: 'sales', name: 'Sales User' }));
-            window.sessionStorage.setItem('crm_session_token', 'browser-test-session');
-        });
+        await seedBrowserAuth(page);
         await stubClientDetail(page);
 
         let mediaPostCount = 0;
@@ -108,9 +118,7 @@ test.describe('client detail media background upload', () => {
             await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: [] }) });
         });
 
-        await page.goto(`/clients/${CLIENT_ID}`, { waitUntil: 'domcontentloaded' });
-        await page.getByRole('button', { name: 'Edit Profile' }).click();
-        await page.getByRole('button', { name: 'Media' }).click();
+        await openMediaTab(page);
 
         const fileInput = page.locator('input[type="file"][accept*="image/jpeg"]');
         await fileInput.setInputFiles({
@@ -125,11 +133,88 @@ test.describe('client detail media background upload', () => {
         await uploadStarted;
 
         await expect(page.getByText('Uploading in the background', { exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '1 upload active' })).toBeVisible();
         await expect(uploadButton).toBeDisabled();
         await expect(fileInput).toBeEnabled();
         await expect(page.getByText('You can keep working while media finishes.')).toBeVisible();
         expect(mediaPostCount).toBe(1);
 
         await expect(page.getByRole('main').getByText('Media uploaded to WordPress.', { exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '1 upload active' })).toHaveCount(0);
+    });
+
+    test('failed upload shows manual retry and never retries automatically', async ({ page }) => {
+        await seedBrowserAuth(page);
+        await stubClientDetail(page);
+
+        let mediaPostCount = 0;
+        await page.route(`**/api/crm/clients/${CLIENT_ID}/media`, async (route) => {
+            if (route.request().method() === 'POST') {
+                mediaPostCount += 1;
+                if (mediaPostCount === 1) {
+                    await route.fulfill({
+                        status: 503,
+                        contentType: 'application/json',
+                        body: JSON.stringify({ message: 'WordPress upload temporarily unavailable.' }),
+                    });
+                    return;
+                }
+
+                await route.fulfill({
+                    contentType: 'application/json',
+                    body: JSON.stringify({ success: true, uploaded_count: 1 }),
+                });
+                return;
+            }
+
+            await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+        });
+
+        await openMediaTab(page);
+
+        const fileInput = page.locator('input[type="file"][accept*="image/jpeg"]');
+        await fileInput.setInputFiles({
+            name: 'retry-photo.jpeg',
+            mimeType: 'image/jpeg',
+            buffer: Buffer.from('fake image bytes'),
+        });
+        await page.getByRole('button', { name: 'Upload in background' }).click();
+
+        await expect(page.getByText('WordPress upload temporarily unavailable.').first()).toBeVisible();
+        await expect(page.getByRole('button', { name: '1 upload failed' })).toBeVisible();
+        expect(mediaPostCount).toBe(1);
+
+        await page.waitForTimeout(1000);
+        expect(mediaPostCount).toBe(1);
+
+        await page.getByRole('main').getByRole('button', { name: 'Retry' }).click();
+        await expect(page.getByRole('main').getByText('Media uploaded to WordPress.', { exact: true })).toBeVisible();
+        expect(mediaPostCount).toBe(2);
+    });
+
+    test('oversized files are blocked before posting to CRM', async ({ page }) => {
+        await seedBrowserAuth(page);
+        await stubClientDetail(page);
+
+        let mediaPostCount = 0;
+        await page.route(`**/api/crm/clients/${CLIENT_ID}/media`, async (route) => {
+            if (route.request().method() === 'POST') {
+                mediaPostCount += 1;
+            }
+            await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+        });
+
+        await openMediaTab(page);
+
+        const fileInput = page.locator('input[type="file"][accept*="image/jpeg"]');
+        await fileInput.setInputFiles({
+            name: 'too-large.jpeg',
+            mimeType: 'image/jpeg',
+            buffer: Buffer.alloc(6 * 1024 * 1024, 1),
+        });
+
+        await expect(page.getByText(/Images must be 5MB or smaller/)).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Upload in background' })).toBeDisabled();
+        expect(mediaPostCount).toBe(0);
     });
 });

@@ -16,6 +16,7 @@ import ClientHealthSection from '../components/ClientHealthSection';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
+import { getMediaUploadPreflight, useMediaUploads } from '../components/MediaUploadProvider';
 
 const mediaProxyAvailabilityCache = new Map();
 
@@ -699,6 +700,7 @@ export default function ClientDetail() {
     const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const toast = useToast();
+    const { startClientMediaUpload, uploadsForClient, retryUpload, dismissUpload } = useMediaUploads();
     const profileLinkPopoverRef = useRef(null);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
     const initialTab = ['overview', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
@@ -738,7 +740,6 @@ export default function ClientDetail() {
     const [profileConflict, setProfileConflict] = useState(null);
     const [mediaUploadFiles, setMediaUploadFiles] = useState([]);
     const [mediaUploadSetMain, setMediaUploadSetMain] = useState(false);
-    const [backgroundMediaUploads, setBackgroundMediaUploads] = useState([]);
     const mediaUploadInputRef = useRef(null);
     const [healthAction, setHealthAction] = useState('keep_primary');
     const [healthReason, setHealthReason] = useState('Duplicate resolution from CRM');
@@ -1336,66 +1337,6 @@ export default function ClientDetail() {
         },
     });
 
-    const startBackgroundMediaUpload = useCallback(({ files, setMain }) => {
-        const uploadFiles = Array.isArray(files) ? files.filter(Boolean) : [];
-        if (uploadFiles.length === 0) return;
-
-        const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const label = describeMediaUploadFiles(uploadFiles);
-
-        setBackgroundMediaUploads((current) => [
-            { id: uploadId, label, status: 'uploading', message: 'Uploading in the background' },
-            ...current,
-        ]);
-        setMediaUploadFiles([]);
-        setMediaUploadSetMain(false);
-        if (mediaUploadInputRef.current) {
-            mediaUploadInputRef.current.value = '';
-        }
-        toast.info(`${label} uploading in the background.`);
-
-        const formData = new FormData();
-        if (uploadFiles.length === 1) {
-            formData.append('file', uploadFiles[0]);
-        } else {
-            uploadFiles.forEach((file) => {
-                formData.append('files[]', file);
-            });
-        }
-        formData.append('set_main', setMain ? '1' : '0');
-        formData.append('reason', 'Background media upload from client detail');
-
-        void api.post(`/crm/clients/${id}/media`, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
-        }).then((response) => {
-            queryClient.invalidateQueries({ queryKey: ['client', id] });
-            queryClient.invalidateQueries({ queryKey: ['client-media', id] });
-            queryClient.invalidateQueries({ queryKey: ['clients'] });
-
-            const uploadedCount = Number(response?.data?.uploaded_count || 0);
-            const successMessage = uploadedCount > 1
-                ? `${uploadedCount} images uploaded to WordPress.`
-                : 'Media uploaded to WordPress.';
-
-            setBackgroundMediaUploads((current) => current.map((upload) => (
-                upload.id === uploadId
-                    ? { ...upload, status: 'success', message: successMessage }
-                    : upload
-            )));
-            toast.success(successMessage);
-        }).catch((error) => {
-            const failureMessage = error?.response?.data?.message || 'Upload failed. Retry from the Media tab.';
-            setBackgroundMediaUploads((current) => current.map((upload) => (
-                upload.id === uploadId
-                    ? { ...upload, status: 'failed', message: failureMessage }
-                    : upload
-            )));
-            toast.warning(failureMessage, { duration: 7000 });
-        });
-    }, [id, queryClient, toast]);
-
     const deleteMediaMutation = useMutation({
         mutationFn: (attachmentId) =>
             api.delete(`/crm/clients/${id}/media/${attachmentId}`, {
@@ -1708,8 +1649,12 @@ export default function ClientDetail() {
     const mediaUploadHasSelection = mediaUploadFiles.length > 0;
     const mediaUploadHasMultiple = mediaUploadFiles.length > 1;
     const mediaUploadIsVideo = mediaUploadFiles.length === 1 && isVideoUploadFile(mediaUploadFiles[0]);
-    const mediaUploadHasVideo = mediaUploadFiles.some((file) => isVideoUploadFile(file));
-    const mediaUploadHasInvalidBatch = mediaUploadHasMultiple && mediaUploadHasVideo;
+    const mediaUploadPreflight = getMediaUploadPreflight(
+        mediaUploadFiles,
+        mediaUploadHasMultiple || mediaUploadIsVideo ? false : mediaUploadSetMain
+    );
+    const mediaUploadHasInvalidBatch = mediaUploadHasSelection && !mediaUploadPreflight.ok;
+    const backgroundMediaUploads = uploadsForClient(id);
     const hasBackgroundMediaUploads = backgroundMediaUploads.length > 0;
     const mediaUploadSelectionLabel = mediaUploadHasSelection
         ? mediaUploadHasMultiple
@@ -4025,20 +3970,33 @@ export default function ClientDetail() {
                                         {mediaUploadHasSelection ? (
                                             <p className="mt-2 text-xs text-slate-500">{mediaUploadSelectionLabel}</p>
                                         ) : null}
-                                        {mediaUploadHasMultiple && mediaUploadHasVideo ? (
-                                            <p className="mt-2 text-xs text-amber-700">
-                                                Multiple uploads are available for images only. Upload videos one at a time.
-                                            </p>
-                                        ) : null}
+                                        <p className="mt-2 text-xs text-slate-500">
+                                            Images: JPG, PNG, or WEBP up to 5MB. Video: single MP4 up to 50MB.
+                                        </p>
+                                        {mediaUploadPreflight.errors.map((message) => (
+                                            <p key={message} className="mt-2 text-xs text-rose-700">{message}</p>
+                                        ))}
+                                        {mediaUploadPreflight.guidance.map((message) => (
+                                            <p key={message} className="mt-2 text-xs text-amber-700">{message}</p>
+                                        ))}
                                         <div className="mt-2 flex justify-end">
                                             <button
                                                 type="button"
                                                 onClick={() => {
                                                     if (!mediaUploadHasSelection) return;
-                                                    startBackgroundMediaUpload({
+                                                    const result = startClientMediaUpload({
+                                                        clientId: id,
+                                                        clientName: client?.name || '',
                                                         files: mediaUploadFiles,
                                                         setMain: mediaUploadHasMultiple || mediaUploadIsVideo ? false : mediaUploadSetMain,
                                                     });
+                                                    if (result?.queued) {
+                                                        setMediaUploadFiles([]);
+                                                        setMediaUploadSetMain(false);
+                                                        if (mediaUploadInputRef.current) {
+                                                            mediaUploadInputRef.current.value = '';
+                                                        }
+                                                    }
                                                 }}
                                                 disabled={!mediaUploadHasSelection || mediaUploadHasInvalidBatch}
                                                 className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -4057,16 +4015,36 @@ export default function ClientDetail() {
                                             <div className="mt-2 space-y-2">
                                                 {backgroundMediaUploads.map((upload) => (
                                                     <div key={upload.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
-                                                        <span className="font-medium text-slate-700">{upload.label}</span>
-                                                        <span className={
-                                                            upload.status === 'success'
-                                                                ? 'text-emerald-700'
-                                                                : upload.status === 'failed'
-                                                                    ? 'text-rose-700'
-                                                                    : 'text-amber-700'
-                                                        }>
-                                                            {upload.message}
-                                                        </span>
+                                                        <div className="min-w-0">
+                                                            <p className="font-medium text-slate-700">{upload.label}</p>
+                                                            <p className={
+                                                                upload.status === 'success'
+                                                                    ? 'text-emerald-700'
+                                                                    : upload.status === 'failed'
+                                                                        ? 'text-rose-700'
+                                                                        : 'text-amber-700'
+                                                            }>
+                                                                {upload.message}
+                                                            </p>
+                                                        </div>
+                                                        {upload.status === 'failed' ? (
+                                                            <div className="flex gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => retryUpload(upload.id)}
+                                                                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                                                                >
+                                                                    Retry
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => dismissUpload(upload.id)}
+                                                                    className="rounded-md px-2.5 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-100"
+                                                                >
+                                                                    Dismiss
+                                                                </button>
+                                                            </div>
+                                                        ) : null}
                                                     </div>
                                                 ))}
                                             </div>
@@ -4772,14 +4750,6 @@ function isVideoUploadFile(file) {
     }
 
     return /\.mp4$/i.test(String(file.name || ''));
-}
-
-function describeMediaUploadFiles(files) {
-    const list = Array.isArray(files) ? files : [];
-    if (list.length === 0) return 'Media upload';
-    if (list.length === 1) return list[0]?.name || '1 file';
-
-    return `${list.length} images`;
 }
 
 function ClientMediaCard({
