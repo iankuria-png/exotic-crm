@@ -481,8 +481,10 @@ class BillingGatewayService
         }
 
         $payment = Payment::query()->findOrFail($paymentId);
-        if ($payment->purpose !== 'wallet_topup' || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja', 'kopokopo'], true)) {
-            throw new InvalidArgumentException('M-Pesa callback does not target a wallet top-up payment.');
+        if (!in_array((string) $payment->purpose, ['wallet_topup', 'subscription'], true)
+            || !in_array($this->resolvedProviderType($payment), ['mpesa_stk', 'daraja', 'kopokopo'], true)
+        ) {
+            throw new InvalidArgumentException('M-Pesa callback does not target a supported payment.');
         }
 
         $topic = strtolower((string) ($payload['topic'] ?? $payload['eventType'] ?? ''));
@@ -506,7 +508,7 @@ class BillingGatewayService
             ];
         }
 
-        $completed = $this->completeTopupPayment($payment, $payload, [
+        $completed = $this->paymentCompletionService->complete($payment, $payload, [
             'transaction_reference' => $payload['reference'] ?? $payment->transaction_reference,
         ]);
         $this->recordBillingCallbackAttempt($completed['payment'], 'kopokopo_webhook', 'success', [

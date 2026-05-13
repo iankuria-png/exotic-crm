@@ -169,6 +169,112 @@ class BillingModeServiceDarajaTest extends TestCase
         $this->assertSame('PROFILE123', data_get($context, 'provider_direct_config.till_number'));
     }
 
+    public function test_provider_context_resolves_kopokopo_subscription_push_profile_binding(): void
+    {
+        IntegrationSetting::query()->create([
+            'key' => 'kopokopo_config',
+            'value' => [
+                'enabled' => true,
+                'base_url' => 'https://legacy.kopokopo.test',
+                'till_number' => 'LEGACY123',
+                'client_id' => 'legacy-client',
+                'client_secret' => 'legacy-secret',
+                'api_key' => 'legacy-api-key',
+            ],
+        ]);
+
+        $platform = Platform::factory()->create([
+            'currency_code' => 'KES',
+            'wallet_settings' => [
+                'mode_override' => 'production',
+                'providers' => [
+                    'mpesa_stk' => [
+                        'enabled' => true,
+                        'min_amount' => '100.00',
+                        'max_amount' => '120000.00',
+                    ],
+                ],
+            ],
+        ]);
+
+        $walletProfile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'KopoKopo Kenya Wallet',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => [
+                'base_url' => 'https://wallet.kopokopo.test',
+                'till_number' => 'WALLET123',
+            ],
+            'secrets_json' => [
+                'client_id' => 'wallet-client',
+                'client_secret' => 'wallet-secret',
+                'api_key' => 'wallet-api-key',
+            ],
+            'active' => true,
+        ]);
+
+        BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $walletProfile->id,
+            'billing_surface' => 'wallet_funding',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $subscriptionProfile = BillingProviderProfile::query()->create([
+            'provider_type_key' => 'kopokopo',
+            'profile_name' => 'KopoKopo Kenya Subscriptions',
+            'country_code' => 'KE',
+            'market_id' => $platform->id,
+            'environment' => 'production',
+            'config_json' => [
+                'base_url' => 'https://subscription.kopokopo.test',
+                'till_number' => 'SUBS123',
+                'callback_base_url' => 'https://crm.example.test',
+            ],
+            'secrets_json' => [
+                'client_id' => 'subscription-client',
+                'client_secret' => 'subscription-secret',
+                'api_key' => 'subscription-api-key',
+            ],
+            'active' => true,
+        ]);
+
+        $subscriptionBinding = BillingMarketProviderBinding::query()->create([
+            'market_id' => $platform->id,
+            'provider_profile_id' => $subscriptionProfile->id,
+            'billing_surface' => 'subscription_push',
+            'enabled' => true,
+            'operator_enabled' => true,
+            'self_service_enabled' => true,
+            'execution_mode' => 'direct',
+            'priority' => 1,
+        ]);
+
+        $context = app(BillingModeService::class)->providerContext(
+            $platform->fresh(),
+            'kopokopo',
+            false,
+            'production',
+            'subscription_push'
+        );
+
+        $this->assertSame('kopokopo', $context['provider']);
+        $this->assertSame('mpesa_stk', $context['provider_runtime_key']);
+        $this->assertSame('provider_profile', $context['provider_resolved_from']);
+        $this->assertSame($subscriptionProfile->id, $context['provider_profile_id']);
+        $this->assertSame($subscriptionBinding->id, $context['chosen_binding_id']);
+        $this->assertSame('direct_provider', data_get($context, 'provider_credentials.transport'));
+        $this->assertSame('https://subscription.kopokopo.test', data_get($context, 'provider_direct_config.base_url'));
+        $this->assertSame('SUBS123', data_get($context, 'provider_direct_config.till_number'));
+        $this->assertSame('subscription-client', data_get($context, 'provider_direct_config.client_id'));
+    }
+
     public function test_provider_context_resolves_pawapay_from_active_profile_binding(): void
     {
         $platform = Platform::factory()->create([

@@ -17,11 +17,13 @@ class KopoKopoRuntimeResolver
     /**
      * @return array{binding: mixed, profile: mixed, config: array<string, mixed>, resolved_from: string}
      */
-    public function resolveWalletFundingConfig(Platform $platform, string $environment): array
+    public function resolveConfig(Platform $platform, string $environment, string|BillingSurface $surface = BillingSurface::WalletFunding): array
     {
+        $surfaceValue = $surface instanceof BillingSurface ? $surface->value : $surface;
+
         $binding = $this->configurationRepository->firstActiveBindingForProvider(
             (int) $platform->id,
-            BillingSurface::WalletFunding->value,
+            $surfaceValue,
             'kopokopo',
             $environment
         );
@@ -46,5 +48,13 @@ class KopoKopoRuntimeResolver
             'config' => $this->kopokopoConfigService->currentConfig(masked: false),
             'resolved_from' => 'legacy_config',
         ];
+    }
+
+    /**
+     * @return array{binding: mixed, profile: mixed, config: array<string, mixed>, resolved_from: string}
+     */
+    public function resolveWalletFundingConfig(Platform $platform, string $environment): array
+    {
+        return $this->resolveConfig($platform, $environment, BillingSurface::WalletFunding);
     }
 }

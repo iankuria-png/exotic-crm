@@ -95,15 +95,20 @@ class BillingModeService
             }
         }
 
-        if (
-            $normalizedProvider === 'kopokopo'
-            && strtolower(trim((string) ($providerCredentials['transport'] ?? 'django_proxy'))) === 'direct_provider'
-        ) {
-            $resolved = $this->kopokopoRuntimeResolver->resolveWalletFundingConfig($platform, $environment);
+        if ($normalizedProvider === 'kopokopo') {
+            $resolved = $this->kopokopoRuntimeResolver->resolveConfig($platform, $environment, $resolvedSurface);
             $resolvedDirectConfig = $resolved['config'];
             $resolvedBinding = $resolved['binding'];
             $resolvedProfile = $resolved['profile'];
             $resolvedFrom = $resolved['resolved_from'];
+            $providerConfig = array_merge(
+                is_array($providerConfig) ? $providerConfig : [],
+                ['enabled' => $resolvedBinding !== null ? true : (bool) data_get($providerConfig, 'enabled', false)]
+            );
+            $providerCredentials = array_merge(
+                is_array($providerCredentials) ? $providerCredentials : [],
+                ['transport' => 'direct_provider']
+            );
         }
 
         if ($requireEnabled && !(bool) ($providerConfig['enabled'] ?? false)) {

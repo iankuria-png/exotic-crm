@@ -2109,6 +2109,79 @@ class WalletApiPhaseFiveTest extends TestCase
         ]);
     }
 
+    public function test_mpesa_callback_completes_subscription_payment_without_wallet_credit(): void
+    {
+        [
+            'platform' => $platform,
+            'product' => $product,
+            'client' => $client,
+        ] = $this->seedWalletContext([
+            'client_balance' => 350,
+        ]);
+
+        $payment = Payment::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'user_id' => $client->wp_user_id,
+            'product_id' => $product->id,
+            'purpose' => 'subscription',
+            'source' => 'self_checkout',
+            'provider_key' => 'kopokopo',
+            'provider_environment' => 'sandbox',
+            'amount' => 900,
+            'currency' => 'KES',
+            'reference_number' => 'SUB-KOPOKOPO-001',
+            'transaction_reference' => 'SUB-KOPOKOPO-001',
+            'status' => 'pending',
+            'completed_at' => null,
+            'duration' => 'weekly',
+            'payment_data' => [
+                'test_mode' => true,
+            ],
+        ]);
+
+        $this->mock(KopokopoService::class, function (MockInterface $mock) use ($payment, $platform, $client) {
+            $mock->shouldReceive('handleWebhook')
+                ->once()
+                ->with('{"topic":"buygoods_transaction_received"}', 'mock-signature')
+                ->andReturn([
+                    'status' => 'success',
+                    'data' => [
+                        'topic' => 'buygoods_transaction_received',
+                        'resourceStatus' => 'Success',
+                        'reference' => 'KPK-SUB-001',
+                        'metadata' => [
+                            'payment_id' => $payment->id,
+                            'platform_id' => $platform->id,
+                            'client_id' => $client->id,
+                        ],
+                    ],
+                ]);
+        });
+
+        $response = $this->call('POST', '/api/billing/mpesa/callback', [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_KOPOKOPO_SIGNATURE' => 'mock-signature',
+        ], '{"topic":"buygoods_transaction_received"}');
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'completed');
+
+        $payment->refresh();
+
+        $this->assertSame('completed', $payment->status);
+        $this->assertSame('suppressed_sandbox', data_get($payment->payment_data, 'canonical_state.provisioning_status'));
+        $this->assertSame('KPK-SUB-001', $payment->transaction_reference);
+        $this->assertSame('350.00', number_format((float) $client->fresh()->wallet_balance, 2, '.', ''));
+        $this->assertDatabaseCount('wallet_transactions', 0);
+        $this->assertDatabaseHas('payment_attempts', [
+            'payment_id' => $payment->id,
+            'attempt_type' => 'callback_update',
+            'provider' => 'kopokopo_webhook',
+            'status' => 'success',
+        ]);
+    }
+
     public function test_billing_complete_route_renders_completion_view_above_spa_catch_all(): void
     {
         ['platform' => $platform, 'client' => $client] = $this->seedWalletContext();
