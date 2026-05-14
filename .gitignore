@@ -50,3 +50,4 @@ auth.json
 *.swp
 *.swo
 *~
+.mcp.json
