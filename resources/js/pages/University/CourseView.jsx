@@ -131,7 +131,7 @@ export default function CourseView() {
 
             {/* CENTER — lesson reader */}
             <main ref={mainRef} className="min-w-0 rounded-2xl border border-slate-200 bg-white">
-                <div className="sticky top-0 z-10 h-1.5 overflow-hidden rounded-t-2xl bg-slate-100">
+                <div className="pointer-events-none sticky top-0 z-10 h-1 overflow-hidden rounded-t-2xl">
                     <div className={`h-full bg-gradient-to-r ${accentBar} transition-all`} style={{ width: `${scrollPct}%` }} />
                 </div>
                 <article className="px-5 py-8 lg:px-12 lg:py-10">
