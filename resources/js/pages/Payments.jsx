@@ -1579,7 +1579,6 @@ export default function Payments() {
             return (
                 <div>
                     <p className="mt-1.5 text-sm font-semibold text-slate-700">{formatCurrency(normalizedAmount, normalizedCurrency)}</p>
-                    <CurrencyAmount breakdown={breakdown} scalarAmount={scalarAmount} fallbackCurrency={resolveCurrency(null)} className="mt-1 text-xs font-medium text-slate-500" stackClassName="text-xs leading-snug font-medium text-slate-500" />
                     <FxNormalizationNotice meta={normalizationMeta} className="mt-2" />
                 </div>
             );
