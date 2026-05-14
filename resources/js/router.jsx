@@ -21,6 +21,16 @@ import FaqArticle from './pages/Faq/FaqArticle';
 import FeedbackHub from './pages/Faq/FeedbackHub';
 import FeedbackNew from './pages/Faq/FeedbackNew';
 import FeedbackDetail from './pages/Faq/FeedbackDetail';
+import UniversityHome from './pages/University/UniversityHome';
+import CourseView from './pages/University/CourseView';
+import CertificationLanding from './pages/University/CertificationLanding';
+import QuizRunner from './pages/University/QuizRunner';
+import AttemptResult from './pages/University/AttemptResult';
+import CertificateView from './pages/University/CertificateView';
+import CourseEditor from './pages/University/admin/CourseEditor';
+import LessonEditor from './pages/University/admin/LessonEditor';
+import QuestionBank from './pages/University/admin/QuestionBank';
+import UniversityAnalytics from './pages/University/admin/Analytics';
 import { useAuth } from './hooks/useAuth';
 
 function ProtectedRoute({ children }) {
@@ -45,7 +55,8 @@ function ProtectedRoute({ children }) {
             || path.startsWith('/clients')
             || path.startsWith('/push-campaigns')
             || path.startsWith('/team')
-            || path.startsWith('/faq');
+            || path.startsWith('/faq')
+            || path.startsWith('/university');
 
         if (!allowed) {
             return <Navigate to="/push-campaigns" replace />;
@@ -70,6 +81,7 @@ export default function AppRouter() {
         <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/setup" element={<Setup />} />
+            <Route path="/university/verify/:code" element={<CertificateView />} />
             <Route
                 path="/*"
                 element={
@@ -94,6 +106,15 @@ export default function AppRouter() {
                 <Route path="faq/feedback" element={<FeedbackHub />} />
                 <Route path="faq/feedback/new" element={<FeedbackNew />} />
                 <Route path="faq/feedback/:id" element={<FeedbackDetail />} />
+                <Route path="university" element={<UniversityHome />} />
+                <Route path="university/courses/:slug" element={<CourseView />} />
+                <Route path="university/certifications/:id" element={<CertificationLanding />} />
+                <Route path="university/quiz/:attemptId" element={<QuizRunner />} />
+                <Route path="university/results/:attemptId" element={<AttemptResult />} />
+                <Route path="university/manage" element={<CourseEditor />} />
+                <Route path="university/manage/lessons" element={<LessonEditor />} />
+                <Route path="university/manage/questions" element={<QuestionBank />} />
+                <Route path="university/manage/analytics" element={<UniversityAnalytics />} />
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />

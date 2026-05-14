@@ -51,7 +51,7 @@ class AuditService
             $entityType = (string) ($payload['entity_type'] ?? '');
             $action = $this->normalizeAction((string) ($payload['action'] ?? ''));
 
-            if ($entityId <= 0 || $entityType === '' || $action === '' || !preg_match('/^faq_/', $entityType)) {
+            if ($entityId <= 0 || $entityType === '' || $action === '' || !preg_match('/^(faq_|university_)/', $entityType)) {
                 Log::warning('AuditService skipped invalid system payload', ['payload' => $payload]);
                 return null;
             }

@@ -44,6 +44,14 @@ use App\Http\Controllers\CRM\Faq\WalkthroughController as FaqWalkthroughControll
 use App\Http\Controllers\CRM\Faq\FeedbackController as FaqFeedbackController;
 use App\Http\Controllers\CRM\Faq\FeedbackVoteController as FaqFeedbackVoteController;
 use App\Http\Controllers\CRM\Faq\FeedbackCommentController as FaqFeedbackCommentController;
+use App\Http\Controllers\CRM\University\AnalyticsController as UniversityAnalyticsController;
+use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCertSettingsController;
+use App\Http\Controllers\CRM\University\CertificateController as UniversityCertificateController;
+use App\Http\Controllers\CRM\University\CertificationController as UniversityCertificationController;
+use App\Http\Controllers\CRM\University\CourseController as UniversityCourseController;
+use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
+use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
+use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
@@ -56,6 +64,7 @@ Route::post('/crm/login', [CrmAuthController::class, 'login']);
 Route::get('/crm/auth/config', [AuthSettingsController::class, 'publicConfig']);
 Route::get('/billing/health', [BillingController::class, 'health']);
 Route::get('/payments/link/{token}', [PaymentLinkProxyController::class, 'handle']);
+Route::get('/crm/university/certificates/{code}/verify', [UniversityCertificateController::class, 'verify']);
 
 // Image proxy — public but rate-limited; domain allowlist enforced server-side
 Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:120,1');
@@ -334,6 +343,49 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
             Route::patch('/feedback/{feedback}', [FaqFeedbackController::class, 'update']);
             Route::delete('/feedback/{feedback}', [FaqFeedbackController::class, 'destroy']);
             Route::delete('/feedback/{feedback}/comments/{comment}', [FaqFeedbackCommentController::class, 'destroy']);
+        });
+    });
+
+    Route::prefix('university')->group(function () {
+        Route::get('/courses', [UniversityCourseController::class, 'index']);
+        Route::get('/courses/{slug}', [UniversityCourseController::class, 'show']);
+        Route::post('/lessons/{lesson}/progress', [UniversityProgressController::class, 'store']);
+
+        Route::get('/certifications', [UniversityCertificationController::class, 'index']);
+        Route::get('/certifications/{certification}', [UniversityCertificationController::class, 'show']);
+        Route::post('/certifications/{certification}/attempts', [UniversityCertificationController::class, 'startAttempt']);
+        Route::post('/attempts/{attempt}/submit', [UniversityCertificationController::class, 'submitAttempt']);
+        Route::get('/attempts/{attempt}/result', [UniversityCertificationController::class, 'result']);
+        Route::get('/certificates/{code}.pdf', [UniversityCertificateController::class, 'download']);
+
+        Route::middleware('role:admin,sub_admin')->group(function () {
+            Route::post('/courses', [UniversityCourseController::class, 'store']);
+            Route::patch('/courses/{course:id}', [UniversityCourseController::class, 'update']);
+            Route::delete('/courses/{course:id}', [UniversityCourseController::class, 'destroy']);
+
+            Route::post('/courses/{course:id}/modules', [UniversityModuleController::class, 'store']);
+            Route::patch('/modules/{module}', [UniversityModuleController::class, 'update']);
+            Route::delete('/modules/{module}', [UniversityModuleController::class, 'destroy']);
+
+            Route::post('/modules/{module}/lessons', [UniversityLessonController::class, 'store']);
+            Route::patch('/lessons/{lesson}', [UniversityLessonController::class, 'update']);
+            Route::delete('/lessons/{lesson}', [UniversityLessonController::class, 'destroy']);
+            Route::post('/lessons/{lesson}/media', [UniversityLessonController::class, 'uploadMedia']);
+            Route::delete('/lessons/{lesson}/media/{mediaId}', [UniversityLessonController::class, 'destroyMedia']);
+
+            Route::post('/certifications', [UniversityCertSettingsController::class, 'store']);
+            Route::patch('/certifications/{certification}/settings', [UniversityCertSettingsController::class, 'update']);
+            Route::get('/certifications/{certification}/questions', [UniversityCertSettingsController::class, 'questions']);
+            Route::post('/certifications/{certification}/questions', [UniversityCertSettingsController::class, 'storeQuestion']);
+            Route::patch('/questions/{question}', [UniversityCertSettingsController::class, 'updateQuestion']);
+            Route::delete('/questions/{question}', [UniversityCertSettingsController::class, 'destroyQuestion']);
+            Route::patch('/certificates/{certificate}/revoke', [UniversityCertificateController::class, 'revoke']);
+
+            Route::get('/analytics/team', [UniversityAnalyticsController::class, 'team']);
+            Route::get('/analytics/agents/{user}', [UniversityAnalyticsController::class, 'agent']);
+            Route::get('/analytics/certifications/{certification}', [UniversityAnalyticsController::class, 'certification']);
+            Route::get('/analytics/expiring', [UniversityAnalyticsController::class, 'expiring']);
+            Route::get('/analytics/live-attempts', [UniversityAnalyticsController::class, 'liveAttempts']);
         });
     });
 
