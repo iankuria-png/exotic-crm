@@ -49,9 +49,6 @@ use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCert
 use App\Http\Controllers\CRM\University\CertificateController as UniversityCertificateController;
 use App\Http\Controllers\CRM\University\CertificationController as UniversityCertificationController;
 use App\Http\Controllers\CRM\University\CourseController as UniversityCourseController;
-use App\Http\Controllers\CRM\University\DailyDrillController as UniversityDailyDrillController;
-use App\Http\Controllers\CRM\University\EngagementController as UniversityEngagementController;
-use App\Http\Controllers\CRM\University\GlossaryController as UniversityGlossaryController;
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
@@ -350,6 +347,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     });
 
     Route::prefix('university')->group(function () {
+        Route::get('/daily-quote', [UniversityDailyQuoteController::class, 'show']);
+        Route::post('/daily-quote/refresh', [UniversityDailyQuoteController::class, 'refresh']);
         Route::get('/courses', [UniversityCourseController::class, 'index']);
         Route::get('/courses/{slug}', [UniversityCourseController::class, 'show']);
         Route::post('/lessons/{lesson}/progress', [UniversityProgressController::class, 'store']);
@@ -395,10 +394,6 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
             Route::patch('/questions/{question}', [UniversityCertSettingsController::class, 'updateQuestion']);
             Route::delete('/questions/{question}', [UniversityCertSettingsController::class, 'destroyQuestion']);
             Route::patch('/certificates/{certificate}/revoke', [UniversityCertificateController::class, 'revoke']);
-
-            Route::post('/glossary', [UniversityGlossaryController::class, 'store']);
-            Route::patch('/glossary/{term:slug}', [UniversityGlossaryController::class, 'update']);
-            Route::delete('/glossary/{term:slug}', [UniversityGlossaryController::class, 'destroy']);
 
             Route::get('/analytics/team', [UniversityAnalyticsController::class, 'team']);
             Route::get('/analytics/agents/{user}', [UniversityAnalyticsController::class, 'agent']);

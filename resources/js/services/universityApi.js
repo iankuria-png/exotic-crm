@@ -12,6 +12,9 @@ const universityApi = {
         headers: { 'Content-Type': 'multipart/form-data' },
     }).then((response) => response.data),
     markProgress: (lessonId, payload) => api.post(`/crm/university/lessons/${lessonId}/progress`, payload).then((response) => response.data),
+    getDailyQuote: () => api.get('/crm/university/daily-quote').then((response) => response.data),
+    refreshDailyQuote: (payload = {}) => api.post('/crm/university/daily-quote/refresh', payload).then((response) => response.data),
+    submitNextDayQuote: (payload) => api.post('/crm/university/daily-quote/next-day', payload).then((response) => response.data),
 
     listCertifications: () => api.get('/crm/university/certifications').then((response) => response.data),
     getCertification: (id) => api.get(`/crm/university/certifications/${id}`).then((response) => response.data),
