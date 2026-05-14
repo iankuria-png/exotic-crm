@@ -2,6 +2,7 @@
 
 namespace App\Exceptions;
 
+use App\Services\ErrorLogRecorder;
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
 use Throwable;
 
@@ -42,7 +43,9 @@ class Handler extends ExceptionHandler
     public function register(): void
     {
         $this->reportable(function (Throwable $e) {
-            //
+            app(ErrorLogRecorder::class)->recordException($e, [
+                '__error_log_recorder_skip' => true,
+            ]);
         });
     }
 }

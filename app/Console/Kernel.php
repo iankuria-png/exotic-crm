@@ -164,6 +164,13 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
+        $schedule->command('crm:prune-error-logs')
+            ->name('crm_prune_error_logs')
+            ->dailyAt('02:40')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_prune_error_logs.log'));
+
         // Queue worker: processes push queue first (time-sensitive), then client sync queues, alert jobs, then default queue.
         // Runs for up to 55 seconds then exits; next schedule:run cycle starts a new one.
         // --queue=push,sync-clients,sync-clients-reconcile,alerts,default ensures market syncs are handled in the background without blocking alerts.

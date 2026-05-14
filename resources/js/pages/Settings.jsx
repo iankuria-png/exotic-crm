@@ -31,6 +31,7 @@ const baseTabs = [
     { id: 'faq', label: 'FAQ & Feedback' },
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
+    { id: 'error-logs', label: 'Error Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
     { id: 'security', label: 'Security' },
     { id: 'dashboard', label: 'Dashboard' },
@@ -6503,6 +6504,359 @@ function WebhookLogsWorkspace() {
     );
 }
 
+function errorLogLevelClasses(level) {
+    switch ((level || '').toLowerCase()) {
+        case 'emergency':
+        case 'alert':
+        case 'critical':
+            return 'bg-rose-50 text-rose-700 ring-rose-200';
+        case 'error':
+            return 'bg-amber-50 text-amber-700 ring-amber-200';
+        default:
+            return 'bg-slate-50 text-slate-700 ring-slate-200';
+    }
+}
+
+function errorLogSourceLabel(source) {
+    switch (source) {
+        case 'queue_job': return 'Queue job';
+        case 'log': return 'Log call';
+        case 'exception': return 'Exception';
+        default: return source || '—';
+    }
+}
+
+function ErrorLogsWorkspace() {
+    const queryClient = useQueryClient();
+    const [page, setPage] = useState(1);
+    const [searchInput, setSearchInput] = useState('');
+    const [search, setSearch] = useState('');
+    const [levelFilter, setLevelFilter] = useState('');
+    const [sourceFilter, setSourceFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState('unresolved');
+    const [selectedGroupId, setSelectedGroupId] = useState(null);
+
+    const listQuery = useQuery({
+        queryKey: ['settings-error-logs', page, search, levelFilter, sourceFilter, statusFilter],
+        queryFn: () => api.get('/crm/settings/error-logs', {
+            params: {
+                page,
+                per_page: 25,
+                ...(search ? { search } : {}),
+                ...(levelFilter ? { level: levelFilter } : {}),
+                ...(sourceFilter ? { source: sourceFilter } : {}),
+                ...(statusFilter ? { status: statusFilter } : {}),
+            },
+        }).then((response) => response.data),
+        refetchInterval: 30_000,
+    });
+
+    const detailQuery = useQuery({
+        queryKey: ['settings-error-logs', 'detail', selectedGroupId],
+        queryFn: () => api.get(`/crm/settings/error-logs/${selectedGroupId}`).then((response) => response.data?.data),
+        enabled: Boolean(selectedGroupId),
+    });
+
+    const resolveMutation = useMutation({
+        mutationFn: (groupId) => api.post(`/crm/settings/error-logs/${groupId}/resolve`).then((response) => response.data?.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['settings-error-logs'] });
+            setSelectedGroupId(null);
+        },
+    });
+
+    const reopenMutation = useMutation({
+        mutationFn: (groupId) => api.post(`/crm/settings/error-logs/${groupId}/reopen`).then((response) => response.data?.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['settings-error-logs'] });
+        },
+    });
+
+    const groups = listQuery.data?.data || [];
+    const summary = listQuery.data?.summary || {};
+
+    const columns = [
+        {
+            key: 'error',
+            label: 'Error',
+            render: (row) => (
+                <div className="max-w-[460px]">
+                    <p className="text-sm font-semibold text-slate-900">{row.exception_class ? row.exception_class.split('\\').pop() : 'Log entry'}</p>
+                    <p className="truncate text-xs text-slate-600">{row.message}</p>
+                    {row.file ? <p className="truncate text-[11px] text-slate-400">{row.file}{row.line ? `:${row.line}` : ''}</p> : null}
+                </div>
+            ),
+        },
+        {
+            key: 'occurrence_count',
+            label: 'Count',
+            render: (row) => (
+                <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+                    {Number(row.occurrence_count || 0).toLocaleString()}
+                </span>
+            ),
+        },
+        {
+            key: 'level',
+            label: 'Level',
+            render: (row) => (
+                <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${errorLogLevelClasses(row.level)}`}>
+                    {row.level || 'error'}
+                </span>
+            ),
+        },
+        {
+            key: 'source',
+            label: 'Source',
+            render: (row) => <span className="text-xs text-slate-700">{errorLogSourceLabel(row.source)}</span>,
+        },
+        {
+            key: 'first_seen',
+            label: 'First Seen',
+            render: (row) => <span className="text-xs text-slate-600">{row.first_seen_at ? new Date(row.first_seen_at).toLocaleString() : '—'}</span>,
+        },
+        {
+            key: 'last_seen',
+            label: 'Last Seen',
+            render: (row) => <span className="text-xs text-slate-600">{row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : '—'}</span>,
+        },
+        {
+            key: 'actions',
+            label: 'Actions',
+            render: (row) => (
+                <div className="flex gap-2">
+                    <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedGroupId(row.id);
+                    }}>
+                        Inspect
+                    </button>
+                    {row.resolved_at ? (
+                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={(event) => {
+                            event.stopPropagation();
+                            reopenMutation.mutate(row.id);
+                        }}>
+                            Reopen
+                        </button>
+                    ) : (
+                        <button type="button" className="crm-btn-secondary px-3 py-1.5 text-xs" onClick={(event) => {
+                            event.stopPropagation();
+                            resolveMutation.mutate(row.id);
+                        }}>
+                            Resolve
+                        </button>
+                    )}
+                </div>
+            ),
+        },
+    ];
+
+    const detail = detailQuery.data;
+
+    return (
+        <div className="space-y-4">
+            <section className="grid gap-4 md:grid-cols-4">
+                <MetricCard
+                    label="Unresolved Critical"
+                    value={Number(summary.unresolved_critical || 0).toLocaleString()}
+                    meta="critical / alert / emergency"
+                    tone={(summary.unresolved_critical || 0) > 0 ? 'danger' : 'success'}
+                />
+                <MetricCard
+                    label="Top Offender"
+                    value={summary.top_offender?.label || '—'}
+                    meta={summary.top_offender ? `${Number(summary.top_offender.count || 0).toLocaleString()} occurrences` : 'no unresolved issues'}
+                    tone={summary.top_offender ? 'warning' : 'success'}
+                />
+                <MetricCard
+                    label="Errors Today"
+                    value={Number(summary.occurrences_today || 0).toLocaleString()}
+                    meta="occurrence count sum"
+                    tone="default"
+                />
+                <MetricCard
+                    label="Resolved This Week"
+                    value={Number(summary.resolved_last_7_days || 0).toLocaleString()}
+                    meta="last 7 days"
+                    tone="success"
+                />
+            </section>
+
+            <section className="crm-filter-row">
+                <div className="flex flex-wrap items-center gap-3">
+                    <form
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            setSearch(searchInput.trim());
+                            setPage(1);
+                        }}
+                        className="min-w-[240px] flex-1"
+                    >
+                        <div className="relative">
+                            <input
+                                value={searchInput}
+                                onChange={(event) => setSearchInput(event.target.value)}
+                                placeholder="Search exception class, message, or file..."
+                                className="crm-input pr-10"
+                            />
+                            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 transition hover:text-slate-600">
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                            </button>
+                        </div>
+                    </form>
+                    <select
+                        value={levelFilter}
+                        onChange={(event) => { setLevelFilter(event.target.value); setPage(1); }}
+                        className="crm-input min-w-[140px]"
+                    >
+                        <option value="">All levels</option>
+                        <option value="error">Error</option>
+                        <option value="critical">Critical</option>
+                        <option value="alert">Alert</option>
+                        <option value="emergency">Emergency</option>
+                    </select>
+                    <select
+                        value={sourceFilter}
+                        onChange={(event) => { setSourceFilter(event.target.value); setPage(1); }}
+                        className="crm-input min-w-[140px]"
+                    >
+                        <option value="">All sources</option>
+                        <option value="exception">Exception</option>
+                        <option value="log">Log call</option>
+                        <option value="queue_job">Queue job</option>
+                    </select>
+                    <select
+                        value={statusFilter}
+                        onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}
+                        className="crm-input min-w-[140px]"
+                    >
+                        <option value="unresolved">Unresolved</option>
+                        <option value="resolved">Resolved</option>
+                        <option value="">All</option>
+                    </select>
+                    {(search || levelFilter || sourceFilter || statusFilter !== 'unresolved') ? (
+                        <button type="button" className="crm-btn-secondary px-3 py-2" onClick={() => {
+                            setSearch('');
+                            setSearchInput('');
+                            setLevelFilter('');
+                            setSourceFilter('');
+                            setStatusFilter('unresolved');
+                            setPage(1);
+                        }}>
+                            Reset
+                        </button>
+                    ) : null}
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Errors are deduplicated by signature. Click Inspect for the full stack trace and last 20 occurrences.</p>
+            </section>
+
+            <DataTable
+                columns={columns}
+                data={groups}
+                pagination={listQuery.data}
+                onPageChange={setPage}
+                onRowClick={(row) => setSelectedGroupId(row.id)}
+                isLoading={listQuery.isLoading}
+                compact
+                emptyMessage="No errors match the current filters."
+            />
+
+            {selectedGroupId ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setSelectedGroupId(null)}>
+                    <div className="w-full max-w-4xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">{detail?.exception_class || 'Log entry'}</h3>
+                                <p className="crm-panel-subtitle">
+                                    {detail?.file ? `${detail.file}${detail.line ? `:${detail.line}` : ''}` : 'No file/line'} • {Number(detail?.occurrence_count || 0).toLocaleString()} occurrences
+                                </p>
+                            </div>
+                        </header>
+
+                        <div className="max-h-[70vh] space-y-4 overflow-auto p-4">
+                            {detailQuery.isLoading ? (
+                                <p className="text-sm text-slate-500">Loading…</p>
+                            ) : detail ? (
+                                <>
+                                    <section className="grid gap-3 sm:grid-cols-3">
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Level</p>
+                                            <p className={`mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${errorLogLevelClasses(detail.level)}`}>
+                                                {detail.level || 'error'}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Source</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-800">{errorLogSourceLabel(detail.source)}</p>
+                                        </div>
+                                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Status</p>
+                                            <p className="mt-1 text-sm font-semibold text-slate-800">
+                                                {detail.resolved_at ? `Resolved ${new Date(detail.resolved_at).toLocaleString()}` : 'Unresolved'}
+                                            </p>
+                                        </div>
+                                    </section>
+
+                                    <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Message</h4>
+                                        <p className="mt-2 break-words text-sm text-slate-700">{detail.message}</p>
+                                    </section>
+
+                                    {detail.occurrences?.[0]?.trace ? (
+                                        <section className="rounded-md border border-slate-200 bg-white p-3">
+                                            <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Latest Stack Trace</h4>
+                                            <pre className="crm-mono mt-2 max-h-72 overflow-auto text-[11px] leading-relaxed text-slate-700">{detail.occurrences[0].trace}</pre>
+                                        </section>
+                                    ) : null}
+
+                                    <section className="rounded-md border border-slate-200 bg-white p-3">
+                                        <h4 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Recent Occurrences (last {detail.occurrences?.length || 0})</h4>
+                                        <ul className="mt-2 divide-y divide-slate-100">
+                                            {(detail.occurrences || []).map((occurrence) => (
+                                                <li key={occurrence.id} className="py-2 text-xs">
+                                                    <p className="font-semibold text-slate-700">{occurrence.occurred_at ? new Date(occurrence.occurred_at).toLocaleString() : '—'}</p>
+                                                    <p className="text-slate-600">
+                                                        {occurrence.method ? `${occurrence.method} ` : ''}{occurrence.url || (occurrence.context?.job ? `Job: ${occurrence.context.job}` : 'Console')}
+                                                    </p>
+                                                    {occurrence.user ? (
+                                                        <p className="text-slate-500">User: {occurrence.user.name} ({occurrence.user.email})</p>
+                                                    ) : null}
+                                                </li>
+                                            ))}
+                                            {(!detail.occurrences || detail.occurrences.length === 0) ? (
+                                                <li className="py-2 text-xs text-slate-500">No occurrences recorded.</li>
+                                            ) : null}
+                                        </ul>
+                                    </section>
+                                </>
+                            ) : (
+                                <p className="text-sm text-slate-500">Unable to load detail.</p>
+                            )}
+                        </div>
+
+                        <footer className="flex flex-wrap justify-end gap-2 border-t border-slate-100 p-4">
+                            {detail?.resolved_at ? (
+                                <button type="button" className="crm-btn-secondary" onClick={() => reopenMutation.mutate(detail.id)} disabled={reopenMutation.isPending}>
+                                    Reopen
+                                </button>
+                            ) : (
+                                <button type="button" className="crm-btn-primary" onClick={() => detail && resolveMutation.mutate(detail.id)} disabled={resolveMutation.isPending || !detail}>
+                                    {resolveMutation.isPending ? 'Resolving…' : 'Mark resolved'}
+                                </button>
+                            )}
+                            <button type="button" className="crm-btn-secondary" onClick={() => setSelectedGroupId(null)}>
+                                Close
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 function roleClasses(role) {
     if (role === 'admin') return 'bg-indigo-50 text-indigo-700 ring-indigo-200';
     if (role === 'sub_admin') return 'bg-sky-50 text-sky-700 ring-sky-200';
@@ -8001,13 +8355,17 @@ export default function Settings() {
                 return canManageSecurity;
             }
 
+            if (tab.id === 'error-logs') {
+                return (user?.role || '') === 'admin';
+            }
+
             if (tab.id === 'billing') {
                 return canAccessBillingWorkspace && billingWorkspaceEnabled;
             }
 
             return true;
         });
-    }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canManageSecurity, canViewRoles]);
+    }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canManageSecurity, canViewRoles, user?.role]);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -8062,6 +8420,7 @@ export default function Settings() {
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
+            {activeTab === 'error-logs' && (user?.role || '') === 'admin' ? <ErrorLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
             {activeTab === 'security' && canManageSecurity ? <SecuritySettingsWorkspace /> : null}
             {activeTab === 'dashboard' ? (

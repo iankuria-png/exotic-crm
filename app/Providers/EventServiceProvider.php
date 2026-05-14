@@ -2,9 +2,11 @@
 
 namespace App\Providers;
 
+use App\Services\ErrorLogRecorder;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Auth\Listeners\SendEmailVerificationNotification;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 
 class EventServiceProvider extends ServiceProvider
@@ -25,7 +27,18 @@ class EventServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Event::listen(function (JobFailed $event) {
+            app(ErrorLogRecorder::class)->recordException(
+                $event->exception,
+                [
+                    'job' => $event->job->resolveName(),
+                    'connection' => $event->connectionName,
+                    'queue' => $event->job->getQueue(),
+                    '__error_log_recorder_skip' => true,
+                ],
+                'queue_job'
+            );
+        });
     }
 
     /**

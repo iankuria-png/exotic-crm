@@ -22,6 +22,7 @@ use App\Http\Controllers\CRM\PaymentQueueController;
 use App\Http\Controllers\CRM\PaymentExportController;
 use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
+use App\Http\Controllers\CRM\ErrorLogController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
@@ -426,6 +427,12 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::patch('/settings/templates/{template}', [SettingsController::class, 'updateTemplate'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/templates/{template}', [SettingsController::class, 'destroyTemplate'])->middleware('role:admin,sub_admin');
     Route::get('/settings/webhook-logs', [SettingsController::class, 'webhookLogs']);
+    Route::middleware('role:admin')->group(function () {
+        Route::get('/settings/error-logs', [ErrorLogController::class, 'index']);
+        Route::get('/settings/error-logs/{group}', [ErrorLogController::class, 'show']);
+        Route::post('/settings/error-logs/{group}/resolve', [ErrorLogController::class, 'resolve']);
+        Route::post('/settings/error-logs/{group}/reopen', [ErrorLogController::class, 'reopen']);
+    });
     Route::get('/settings/roles', [SettingsController::class, 'roles'])->middleware('role:admin');
     Route::post('/settings/roles/users', [SettingsController::class, 'storeUser'])->middleware('role:admin');
     Route::patch('/settings/roles/{user}', [SettingsController::class, 'updateRole'])->middleware('role:admin');
