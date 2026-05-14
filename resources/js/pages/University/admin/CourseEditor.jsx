@@ -15,7 +15,7 @@ export default function CourseEditor() {
     const [moduleTitle, setModuleTitle] = useState('');
     const coursesQuery = useQuery({
         queryKey: ['university-admin-courses'],
-        queryFn: () => universityApi.listCourses({ status: 'all' }),
+        queryFn: () => universityApi.listCourses(),
     });
     const courses = coursesQuery.data?.courses || [];
     const selectedCourse = useMemo(() => courses.find((course) => Number(course.id) === Number(selectedCourseId)) || courses[0], [courses, selectedCourseId]);
@@ -80,6 +80,12 @@ export default function CourseEditor() {
                                 <p className="mt-1 text-sm text-slate-500">{course.modules?.length || 0} modules</p>
                             </button>
                         ))}
+                        {!coursesQuery.isLoading && courses.length === 0 ? (
+                            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+                                <p className="font-semibold text-slate-900">No draft courses found</p>
+                                <p className="mt-1 text-sm text-slate-500">Run the University seed migration or `php artisan crm:seed-university` to import the starter course and certification bank.</p>
+                            </div>
+                        ) : null}
                     </div>
 
                     {selectedCourse ? (

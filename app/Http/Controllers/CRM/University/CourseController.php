@@ -32,7 +32,7 @@ class CourseController extends Controller
                     ->orWhere('visibility', $role)
                     ->orWhereJsonContains('required_for_roles', $role);
             });
-        } elseif ($request->filled('status')) {
+        } elseif ($request->filled('status') && (string) $request->string('status') !== 'all') {
             $query->where('status', (string) $request->string('status'));
         }
 

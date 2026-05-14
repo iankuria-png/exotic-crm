@@ -24,7 +24,7 @@ class UniversityFeatureTest extends TestCase
         Sanctum::actingAs($admin);
 
         $courseResponse = $this->postJson('/api/crm/university/courses', [
-            'title' => 'Sales Fundamentals',
+            'title' => 'Advanced Sales Fundamentals',
             'summary' => 'Core training',
             'status' => 'published',
             'visibility' => 'all',
@@ -40,6 +40,10 @@ class UniversityFeatureTest extends TestCase
             'status' => 'published',
             'duration_minutes' => 8,
         ])->assertCreated();
+
+        $this->getJson('/api/crm/university/courses?status=all')
+            ->assertOk()
+            ->assertJsonFragment(['title' => 'Advanced Sales Fundamentals']);
 
         Sanctum::actingAs($sales);
         $this->postJson('/api/crm/university/lessons/' . $lessonResponse->json('lesson.id') . '/progress', [
