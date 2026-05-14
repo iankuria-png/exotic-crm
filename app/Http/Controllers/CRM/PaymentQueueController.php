@@ -163,18 +163,47 @@ class PaymentQueueController extends Controller
         // silently display a meaningless mixed-currency total.
         $pendingBreakdown   = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses));
         $confirmedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $confirmedStatsQuery);
-        $discountedConfirmedStatsQuery = (clone $confirmedStatsQuery)
-            ->whereIn('payments.deal_id', Deal::query()
-                ->select('id')
-                ->whereNotNull('discount_percentage'))
-            ->distinct();
-        $discountedBreakdown = CurrencyBreakdown::fromPaymentQuery(clone $discountedConfirmedStatsQuery);
+        // Discounted: count distinct deals (not payment rows) and compute foregone revenue
+        // (original_amount − amount per deal), grouped by platform currency for FX normalization.
+        $discountedDealIds = Deal::query()
+            ->whereNotNull('discount_percentage')
+            ->whereIn('id', (clone $confirmedStatsQuery)->whereNotNull('payments.deal_id')->select('payments.deal_id'))
+            ->pluck('id');
+
+        $foregoneRows = Deal::query()
+            ->from('deals')
+            ->whereIn('deals.id', $discountedDealIds)
+            ->whereNotNull('deals.original_amount')
+            ->where('deals.original_amount', '>', 0)
+            ->join('platforms', 'platforms.id', '=', 'deals.platform_id')
+            ->selectRaw('platforms.id as platform_id, platforms.currency_code as currency, platforms.country as platform_country, platforms.name as platform_name, SUM(deals.original_amount - deals.amount) as foregone')
+            ->groupBy('platforms.id', 'platforms.currency_code', 'platforms.country', 'platforms.name')
+            ->get();
+
+        $foregoneBreakdown = [];
+        $foregoneEventRows = collect();
+        foreach ($foregoneRows as $fRow) {
+            $fCurrency = $fRow->currency ?: 'USD';
+            $fAmount = max(0.0, round((float) $fRow->foregone, 2));
+            if ($fAmount > 0) {
+                $foregoneBreakdown[$fCurrency] = ($foregoneBreakdown[$fCurrency] ?? 0.0) + $fAmount;
+                $foregoneEventRows->push((object) [
+                    'currency' => $fCurrency,
+                    'amount' => $fAmount,
+                    'event_date' => $to ?: now()->toDateString(),
+                    'platform_id' => $fRow->platform_id,
+                    'platform_country' => $fRow->platform_country,
+                    'platform_name' => $fRow->platform_name,
+                ]);
+            }
+        }
+
+        $discountedNormalized = $this->reportingCurrencyService->normalizeEventRows($foregoneEventRows, $targetCurrency);
         $reversedBreakdown  = CurrencyBreakdown::fromPaymentQuery(clone $reversedStatsQuery);
         $failedBreakdown    = CurrencyBreakdown::fromPaymentQuery((clone $statsQuery)->where('status', 'failed'));
         $unmatchedBreakdown = CurrencyBreakdown::fromPaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'));
         $pendingNormalized   = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->whereIn('status', $awaitingStatuses), $targetCurrency);
         $confirmedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $confirmedStatsQuery, $targetCurrency);
-        $discountedNormalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $discountedConfirmedStatsQuery, $targetCurrency);
         $reversedNormalized  = $this->reportingCurrencyService->normalizePaymentQuery(clone $reversedStatsQuery, $targetCurrency);
         $failedNormalized    = $this->reportingCurrencyService->normalizePaymentQuery((clone $statsQuery)->where('status', 'failed'), $targetCurrency);
         $unmatchedNormalized = $this->reportingCurrencyService->normalizePaymentQuery((clone $confirmedStatsQuery)->whereNull('client_id'), $targetCurrency);
@@ -207,10 +236,10 @@ class PaymentQueueController extends Controller
             'confirmed_currency_count' => $confirmedBreakdown['currency_count'],
             'confirmed_normalized_amount' => $confirmedNormalized['normalized_total'],
             'confirmed_normalization_meta' => $confirmedNormalized['normalization_meta'],
-            'discounted' => (clone $discountedConfirmedStatsQuery)->count(),
-            'discounted_amount' => $discountedBreakdown['scalar_amount'],
-            'discounted_amount_breakdown' => $discountedBreakdown['breakdown'],
-            'discounted_currency_count' => $discountedBreakdown['currency_count'],
+            'discounted' => $discountedDealIds->count(),
+            'discounted_amount' => count($foregoneBreakdown) === 1 ? array_values($foregoneBreakdown)[0] : null,
+            'discounted_amount_breakdown' => $foregoneBreakdown,
+            'discounted_currency_count' => count($foregoneBreakdown),
             'discounted_normalized_amount' => $discountedNormalized['normalized_total'],
             'discounted_normalization_meta' => $discountedNormalized['normalization_meta'],
             'reversed' => (clone $reversedStatsQuery)->count(),

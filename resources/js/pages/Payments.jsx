@@ -1548,6 +1548,18 @@ export default function Payments() {
         const awaitingRows = rows.filter((row) => ['initiated', 'pending'].includes(row.status));
         const completedRows = rows.filter((row) => SUCCESSFUL_PAYMENT_STATUSES.includes(row.status));
         const discountedRows = completedRows.filter((row) => row.deal?.discount_percentage);
+        // Count unique deals (not payment rows) and sum foregone = original_amount × pct
+        const discountedDealMap = new Map();
+        for (const row of discountedRows) {
+            if (row.deal?.id != null && !discountedDealMap.has(row.deal.id)) {
+                discountedDealMap.set(row.deal.id, row.deal);
+            }
+        }
+        const discountedForgone = [...discountedDealMap.values()].reduce((sum, deal) => {
+            const orig = toAmount(deal.original_amount);
+            const pct = parseFloat(deal.discount_percentage) || 0;
+            return sum + (orig * pct / 100);
+        }, 0);
         const reversedRows = rows.filter((row) => row.status === 'reversed'
             || (SUCCESSFUL_PAYMENT_STATUSES.includes(row.status) && String(row.resolution_code || '').toLowerCase() === 'reversed'));
         const unmatchedRows = completedRows.filter((row) => !row.client_id);
@@ -1559,8 +1571,8 @@ export default function Payments() {
             awaitingAmount: sumAmount(awaitingRows),
             confirmedCount: completedRows.length,
             confirmedAmount: sumAmount(completedRows),
-            discountedCount: discountedRows.length,
-            discountedAmount: sumAmount(discountedRows),
+            discountedCount: discountedDealMap.size,
+            discountedAmount: discountedForgone,
             reversedCount: reversedRows.length,
             reversedAmount: sumAmount(reversedRows),
             reversedBreakdown: {},
@@ -2298,9 +2310,9 @@ export default function Payments() {
                         <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-violet-500" />
                         <p className="text-sm font-semibold text-slate-700">Discounted</p>
                     </div>
-                    <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.discountedCount.toLocaleString()}</p>
+                    <p className="mt-2 text-[1.7rem] leading-none font-semibold tracking-tight text-slate-900">{summary.discountedCount.toLocaleString()} <span className="text-base font-normal text-slate-400">deals</span></p>
                     {renderSummaryAmount(summary.discountedBreakdown, summary.discountedAmount, summary.discountedNormalized, summary.discountedNormalizationMeta)}
-                    <p className="mt-1 text-xs text-slate-500">Confirmed payments tied to discounted deals</p>
+                    <p className="mt-1 text-xs text-slate-500">Revenue foregone on discounted deals</p>
                 </button>
 
                 <button
