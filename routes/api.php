@@ -369,6 +369,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/daily-drill', [UniversityDailyDrillController::class, 'today']);
         Route::post('/daily-drill/{drill}/answer', [UniversityDailyDrillController::class, 'answer']);
         Route::get('/engagement/me', [UniversityEngagementController::class, 'me']);
+        Route::get('/quote-of-the-day', [UniversityEngagementController::class, 'quoteOfTheDay']);
         Route::get('/leaderboard', [UniversityEngagementController::class, 'leaderboard']);
         Route::post('/lessons/{lesson}/feedback', [UniversityEngagementController::class, 'lessonFeedback']);
 

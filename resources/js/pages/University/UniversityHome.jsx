@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import PageHeader from '../../components/PageHeader';
 import CourseCard from '../../components/University/CourseCard';
 import DailyDrillCard from '../../components/University/DailyDrillCard';
+import QuoteOfTheDay from '../../components/University/QuoteOfTheDay';
 import StreakFlame from '../../components/University/StreakFlame';
 import universityApi from '../../services/universityApi';
 import { useAuth } from '../../hooks/useAuth';
@@ -59,6 +60,9 @@ export default function UniversityHome() {
                     </div>
                 }
             />
+
+            {/* Quote of the Day — full width hero */}
+            <QuoteOfTheDay />
 
             {/* HERO row: streak + stats + daily drill */}
             <section className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
