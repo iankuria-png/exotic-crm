@@ -1621,7 +1621,7 @@ class PushCampaignController extends Controller
 
         $campaignIds = $campaignQuery->pluck('id');
         $platformScopeQuery = Platform::query();
-        $this->marketAuthorizationService->applyPlatformScope($platformScopeQuery, $request->user());
+        $this->marketAuthorizationService->applyPlatformScope($platformScopeQuery, $request->user(), 'id');
         $platformIds = $platformScopeQuery
             ->pluck('id')
             ->map(fn($id) => (int) $id)

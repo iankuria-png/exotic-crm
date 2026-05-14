@@ -1328,13 +1328,14 @@ class RenewalService
             ->with(['platform'])
             ->get()
             ->map(function ($client) {
-                // Return a Deal-like object (or the client itself with necessary fields)
-                $client->client = $client;
-                $client->client_id = $client->id;
-                $client->expires_at = $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
-                $client->product = null;
-                // deal_id is null, signaling virtual
-                return $client;
+                $virtualDeal = new Deal();
+                $virtualDeal->id = null;
+                $virtualDeal->client_id = (int) $client->id;
+                $virtualDeal->platform_id = (int) $client->platform_id;
+                $virtualDeal->setRelation('client', $client);
+                $virtualDeal->setRelation('product', null);
+                $virtualDeal->expires_at = $this->resolveExpiryDate(null, $client->escort_expire, $client->premium_expire, $client->featured_expire);
+                return $virtualDeal;
             });
 
         return $deals->concat($virtuals);
