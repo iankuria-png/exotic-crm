@@ -159,8 +159,18 @@ class CurrencyCanonicalizer
 
     private function normalizeHint(mixed $value): string
     {
-        $hint = strtoupper(trim((string) $value));
+        $hint = mb_strtoupper(trim((string) $value), 'UTF-8');
         $hint = str_replace(['’', '`', '.', ','], ["'", "'", '', ''], $hint);
+
+        // Strip diacritics so accented country names match the ASCII list entries.
+        // NFD decomposition separates base letters from combining marks; we then drop the marks.
+        if (class_exists('Normalizer')) {
+            $nfd = \Normalizer::normalize($hint, \Normalizer::FORM_D);
+            if ($nfd !== false) {
+                $hint = (string) preg_replace('/\p{Mn}/u', '', $nfd);
+            }
+        }
+
         $hint = preg_replace('/\s+/', ' ', $hint) ?: '';
 
         return $hint;

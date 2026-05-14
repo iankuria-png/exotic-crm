@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class ReportingCurrencyService
 {
@@ -475,12 +476,26 @@ class ReportingCurrencyService
                 ->get($endpoint, $params);
 
             if (!$response->successful()) {
+                Log::warning('reporting_fx.live_fetch_failed', [
+                    'source' => $sourceCurrency,
+                    'target' => $targetCurrency,
+                    'date' => $date,
+                    'http_status' => $response->status(),
+                    'body' => substr($response->body(), 0, 300),
+                ]);
                 return null;
             }
 
             $rateValue = (float) ($response->json("data.{$targetCurrency}.value") ?? 0.0);
 
             if ($rateValue <= 0.0) {
+                Log::warning('reporting_fx.live_fetch_failed', [
+                    'source' => $sourceCurrency,
+                    'target' => $targetCurrency,
+                    'date' => $date,
+                    'reason' => 'rate_value_zero_or_missing',
+                    'body' => substr($response->body(), 0, 300),
+                ]);
                 return null;
             }
 
@@ -497,7 +512,14 @@ class ReportingCurrencyService
                     'metadata' => ['source' => 'live_fetch', 'fetched_at' => now()->toIso8601String()],
                 ]
             );
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            Log::warning('reporting_fx.live_fetch_failed', [
+                'source' => $sourceCurrency,
+                'target' => $targetCurrency,
+                'date' => $date,
+                'reason' => 'exception',
+                'error' => $e->getMessage(),
+            ]);
             return null;
         }
     }
