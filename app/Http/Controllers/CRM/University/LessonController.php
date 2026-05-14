@@ -125,8 +125,12 @@ class LessonController extends Controller
         return $request->validate([
             'slug' => [$partial ? 'sometimes' : 'nullable', 'string', 'max:180'],
             'title' => [$partial ? 'sometimes' : 'required', 'string', 'max:255'],
+            'subtitle' => ['sometimes', 'nullable', 'string', 'max:255'],
             'body' => ['nullable', 'string'],
             'body_draft' => ['nullable', 'string'],
+            'playbook_url' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'quick_reference' => ['sometimes', 'nullable', 'string'],
+            'kind' => ['sometimes', 'nullable', 'in:lesson,reference_card'],
             'duration_minutes' => ['sometimes', 'integer', 'min:0'],
             'order' => ['sometimes', 'integer', 'min:0'],
             'status' => ['sometimes', 'in:draft,published,archived'],

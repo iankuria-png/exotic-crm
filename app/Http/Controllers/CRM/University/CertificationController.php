@@ -7,6 +7,7 @@ use App\Models\University\Attempt;
 use App\Models\University\Certification;
 use App\Services\AuditService;
 use App\Services\University\CertificateService;
+use App\Services\University\GamificationService;
 use App\Services\University\QuizService;
 use Illuminate\Http\Request;
 
@@ -17,7 +18,8 @@ class CertificationController extends Controller
     public function __construct(
         private readonly QuizService $quizService,
         private readonly CertificateService $certificateService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly GamificationService $gamification
     ) {
     }
 
@@ -85,6 +87,7 @@ class CertificationController extends Controller
 
         if ($certificate) {
             $this->auditService->fromSystemRequest($request, 'university_certificate_issued', 'university_certificate', (int) $certificate->id, null, $certificate->toArray(), 'Issued university certificate');
+            $this->gamification->onCertificateIssued((int) $request->user()->id, $certificate);
         }
 
         return response()->json([

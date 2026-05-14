@@ -49,6 +49,9 @@ use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCert
 use App\Http\Controllers\CRM\University\CertificateController as UniversityCertificateController;
 use App\Http\Controllers\CRM\University\CertificationController as UniversityCertificationController;
 use App\Http\Controllers\CRM\University\CourseController as UniversityCourseController;
+use App\Http\Controllers\CRM\University\DailyDrillController as UniversityDailyDrillController;
+use App\Http\Controllers\CRM\University\EngagementController as UniversityEngagementController;
+use App\Http\Controllers\CRM\University\GlossaryController as UniversityGlossaryController;
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
@@ -358,6 +361,17 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/attempts/{attempt}/result', [UniversityCertificationController::class, 'result']);
         Route::get('/certificates/{code}.pdf', [UniversityCertificateController::class, 'download']);
 
+        // Glossary (read for all roles)
+        Route::get('/glossary', [UniversityGlossaryController::class, 'index']);
+        Route::get('/glossary/{term:slug}', [UniversityGlossaryController::class, 'show']);
+
+        // Daily drill + engagement
+        Route::get('/daily-drill', [UniversityDailyDrillController::class, 'today']);
+        Route::post('/daily-drill/{drill}/answer', [UniversityDailyDrillController::class, 'answer']);
+        Route::get('/engagement/me', [UniversityEngagementController::class, 'me']);
+        Route::get('/leaderboard', [UniversityEngagementController::class, 'leaderboard']);
+        Route::post('/lessons/{lesson}/feedback', [UniversityEngagementController::class, 'lessonFeedback']);
+
         Route::middleware('role:admin,sub_admin')->group(function () {
             Route::post('/courses', [UniversityCourseController::class, 'store']);
             Route::patch('/courses/{course:id}', [UniversityCourseController::class, 'update']);
@@ -380,6 +394,10 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
             Route::patch('/questions/{question}', [UniversityCertSettingsController::class, 'updateQuestion']);
             Route::delete('/questions/{question}', [UniversityCertSettingsController::class, 'destroyQuestion']);
             Route::patch('/certificates/{certificate}/revoke', [UniversityCertificateController::class, 'revoke']);
+
+            Route::post('/glossary', [UniversityGlossaryController::class, 'store']);
+            Route::patch('/glossary/{term:slug}', [UniversityGlossaryController::class, 'update']);
+            Route::delete('/glossary/{term:slug}', [UniversityGlossaryController::class, 'destroy']);
 
             Route::get('/analytics/team', [UniversityAnalyticsController::class, 'team']);
             Route::get('/analytics/agents/{user}', [UniversityAnalyticsController::class, 'agent']);

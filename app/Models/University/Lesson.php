@@ -15,12 +15,21 @@ class Lesson extends Model
         'module_id',
         'slug',
         'title',
+        'subtitle',
         'body',
         'body_draft',
+        'playbook_url',
+        'quick_reference',
+        'kind',
         'duration_minutes',
         'order',
         'status',
     ];
+
+    public function feedback()
+    {
+        return $this->hasMany(LessonFeedback::class, 'lesson_id');
+    }
 
     public function module()
     {

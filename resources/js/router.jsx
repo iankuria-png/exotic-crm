@@ -27,6 +27,8 @@ import CertificationLanding from './pages/University/CertificationLanding';
 import QuizRunner from './pages/University/QuizRunner';
 import AttemptResult from './pages/University/AttemptResult';
 import CertificateView from './pages/University/CertificateView';
+import UniversityGlossary from './pages/University/Glossary';
+import UniversityLeaderboard from './pages/University/Leaderboard';
 import CourseEditor from './pages/University/admin/CourseEditor';
 import LessonEditor from './pages/University/admin/LessonEditor';
 import QuestionBank from './pages/University/admin/QuestionBank';
@@ -107,6 +109,8 @@ export default function AppRouter() {
                 <Route path="faq/feedback/new" element={<FeedbackNew />} />
                 <Route path="faq/feedback/:id" element={<FeedbackDetail />} />
                 <Route path="university" element={<UniversityHome />} />
+                <Route path="university/glossary" element={<UniversityGlossary />} />
+                <Route path="university/leaderboard" element={<UniversityLeaderboard />} />
                 <Route path="university/courses/:slug" element={<CourseView />} />
                 <Route path="university/certifications/:id" element={<CertificationLanding />} />
                 <Route path="university/quiz/:attemptId" element={<QuizRunner />} />

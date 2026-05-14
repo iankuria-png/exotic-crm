@@ -29,6 +29,15 @@ const universityApi = {
     certificationAnalytics: (certificationId) => api.get(`/crm/university/analytics/certifications/${certificationId}`).then((response) => response.data),
     expiringCertificates: () => api.get('/crm/university/analytics/expiring').then((response) => response.data),
     liveAttempts: () => api.get('/crm/university/analytics/live-attempts').then((response) => response.data),
+
+    // Phase 2
+    listGlossary: () => api.get('/crm/university/glossary').then((r) => r.data),
+    getGlossaryTerm: (slug) => api.get(`/crm/university/glossary/${slug}`).then((r) => r.data),
+    todayDrill: () => api.get('/crm/university/daily-drill').then((r) => r.data),
+    answerDrill: (drillId, selectedIndex) => api.post(`/crm/university/daily-drill/${drillId}/answer`, { selected_index: selectedIndex }).then((r) => r.data),
+    engagementMe: () => api.get('/crm/university/engagement/me').then((r) => r.data),
+    leaderboard: () => api.get('/crm/university/leaderboard').then((r) => r.data),
+    submitLessonFeedback: (lessonId, payload) => api.post(`/crm/university/lessons/${lessonId}/feedback`, payload).then((r) => r.data),
 };
 
 export default universityApi;

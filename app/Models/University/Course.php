@@ -19,6 +19,11 @@ class Course extends Model
         'slug',
         'title',
         'summary',
+        'difficulty',
+        'learning_outcomes',
+        'instructor_name',
+        'accent_color',
+        'estimated_minutes',
         'cover_image_path',
         'status',
         'visibility',
@@ -31,6 +36,7 @@ class Course extends Model
 
     protected $casts = [
         'required_for_roles' => 'array',
+        'learning_outcomes' => 'array',
         'published_at' => 'datetime',
     ];
 

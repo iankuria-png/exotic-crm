@@ -44,6 +44,8 @@ const resourcesGroup = {
     title: 'Resources',
     items: [
         { to: '/university', label: 'University', icon: 'M4.5 5.25A2.25 2.25 0 0 1 6.75 3h10.5a2.25 2.25 0 0 1 2.25 2.25v13.5A2.25 2.25 0 0 1 17.25 21H6.75A2.25 2.25 0 0 1 4.5 18.75V5.25Zm3 1.5h9m-9 3h9m-9 3h5.25' },
+        { to: '/university/glossary', label: 'Glossary', icon: 'M5.121 17.804A13.937 13.937 0 0 1 12 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
+        { to: 'https://exoticonline.mintlify.app/', label: 'Playbook', icon: 'M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25', external: true },
         { to: '/faq', label: 'FAQ', icon: 'M11.25 4.5c-3.071 0-5.625 2.112-5.625 4.875 0 1.62.866 2.86 2.138 3.744.437.304.862.76.862 1.31v.321a.75.75 0 0 0 1.5 0v-.321c0-1.276-.673-2.269-1.506-2.847-1.036-.72-1.494-1.476-1.494-2.207 0-1.73 1.642-3.375 4.125-3.375 2.263 0 3.75 1.272 3.75 3 0 1.363-.787 2.29-2.25 3.218-.85.54-1.5 1.513-1.5 2.532v.75a.75.75 0 0 0 1.5 0v-.75c0-.424.283-.968.804-1.3 1.73-1.097 2.946-2.497 2.946-4.45 0-2.682-2.26-4.5-5.25-4.5ZM12 18.75a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25Z' },
         { to: '/faq/feedback', label: 'Feedback', icon: 'M3.75 6.75h16.5v8.25H9.75l-3.75 3v-3h-2.25V6.75Z' },
     ],
@@ -123,6 +125,26 @@ export default function Sidebar({ onClose }) {
                         <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{group.title}</p>
                         <div className="mt-2 space-y-1.5">
                             {group.items.map((item) => (
+                                item.external ? (
+                                    <a
+                                        key={item.to}
+                                        href={item.to}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={onClose}
+                                        className="group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white"
+                                    >
+                                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-400 transition group-hover:border-white/20 group-hover:text-slate-200" aria-hidden="true">
+                                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.9} d={item.icon} />
+                                            </svg>
+                                        </span>
+                                        <span className="truncate">{item.label}</span>
+                                        <svg className="ml-auto h-3.5 w-3.5 text-slate-500 group-hover:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 6h2.25a.75.75 0 0 1 .75.75v2.25M21 3l-9 9m6.75 4.5v3a.75.75 0 0 1-.75.75H4.5a.75.75 0 0 1-.75-.75V6.75A.75.75 0 0 1 4.5 6h3" />
+                                        </svg>
+                                    </a>
+                                ) : (
                                 <NavLink
                                     key={item.to}
                                     to={item.to}
@@ -157,6 +179,7 @@ export default function Sidebar({ onClose }) {
                                         </>
                                     )}
                                 </NavLink>
+                                )
                             ))}
                         </div>
                     </div>
