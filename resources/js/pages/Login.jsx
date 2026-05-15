@@ -60,7 +60,7 @@ export default function Login() {
                 if (params.get('google') === 'success') {
                     const meResponse = await api.get('/crm/me');
                     if (!cancelled) {
-                        storeAuthSnapshot('', meResponse.data.user);
+                        storeAuthSnapshot(meResponse.data.token || '', meResponse.data.user);
                         navigate('/', { replace: true });
                     }
                 }

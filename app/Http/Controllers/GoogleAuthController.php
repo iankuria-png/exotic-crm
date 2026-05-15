@@ -113,6 +113,7 @@ class GoogleAuthController extends Controller
 
             Auth::guard('web')->login($user);
             $request->session()->regenerate();
+            $request->session()->put('crm_pending_login_token', $user->createToken('crm-google-session')->plainTextToken);
 
             return redirect('/login?google=success');
         } catch (ValidationException $exception) {

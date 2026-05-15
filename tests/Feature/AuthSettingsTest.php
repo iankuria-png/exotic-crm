@@ -103,4 +103,27 @@ class AuthSettingsTest extends TestCase
             ->assertOk()
             ->assertJsonPath('user.email', $user->email);
     }
+
+    public function test_crm_me_returns_pending_google_login_token_once(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'google-admin@example.com',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $response = $this->actingAs($user)
+            ->withSession(['crm_pending_login_token' => 'google-token'])
+            ->getJson('/api/crm/me');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('token', 'google-token')
+            ->assertJsonPath('user.email', $user->email);
+
+        $this->actingAs($user)
+            ->getJson('/api/crm/me')
+            ->assertOk()
+            ->assertJsonPath('token', null);
+    }
 }

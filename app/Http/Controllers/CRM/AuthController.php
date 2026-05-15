@@ -62,6 +62,7 @@ class AuthController extends Controller
         $user = $request->user();
 
         return response()->json([
+            'token' => $request->session()->pull('crm_pending_login_token'),
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
