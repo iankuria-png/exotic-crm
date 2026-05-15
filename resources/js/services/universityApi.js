@@ -39,7 +39,6 @@ const universityApi = {
     todayDrill: () => api.get('/crm/university/daily-drill').then((r) => r.data),
     answerDrill: (drillId, selectedIndex) => api.post(`/crm/university/daily-drill/${drillId}/answer`, { selected_index: selectedIndex }).then((r) => r.data),
     engagementMe: () => api.get('/crm/university/engagement/me').then((r) => r.data),
-    quoteOfTheDay: () => api.get('/crm/university/quote-of-the-day').then((r) => r.data),
     leaderboard: () => api.get('/crm/university/leaderboard').then((r) => r.data),
     submitLessonFeedback: (lessonId, payload) => api.post(`/crm/university/lessons/${lessonId}/feedback`, payload).then((r) => r.data),
 };

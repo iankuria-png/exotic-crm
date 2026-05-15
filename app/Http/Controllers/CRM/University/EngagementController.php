@@ -10,21 +10,12 @@ use App\Models\University\UserBadge;
 use App\Models\University\LessonProgress;
 use App\Models\University\Certificate;
 use App\Models\User;
-use App\Services\University\QuoteService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class EngagementController extends Controller
 {
     use SerializesUniversityPayloads;
-
-    public function quoteOfTheDay(QuoteService $quotes)
-    {
-        return response()->json([
-            'quote' => $quotes->today(),
-            'date' => now()->toDateString(),
-        ]);
-    }
 
     public function leaderboard(Request $request)
     {

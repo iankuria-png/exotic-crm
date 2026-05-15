@@ -49,6 +49,7 @@ use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCert
 use App\Http\Controllers\CRM\University\CertificateController as UniversityCertificateController;
 use App\Http\Controllers\CRM\University\CertificationController as UniversityCertificationController;
 use App\Http\Controllers\CRM\University\CourseController as UniversityCourseController;
+use App\Http\Controllers\CRM\University\DailyQuoteController as UniversityDailyQuoteController;
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
@@ -368,11 +369,12 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/daily-drill', [UniversityDailyDrillController::class, 'today']);
         Route::post('/daily-drill/{drill}/answer', [UniversityDailyDrillController::class, 'answer']);
         Route::get('/engagement/me', [UniversityEngagementController::class, 'me']);
-        Route::get('/quote-of-the-day', [UniversityEngagementController::class, 'quoteOfTheDay']);
         Route::get('/leaderboard', [UniversityEngagementController::class, 'leaderboard']);
         Route::post('/lessons/{lesson}/feedback', [UniversityEngagementController::class, 'lessonFeedback']);
 
         Route::middleware('role:admin,sub_admin')->group(function () {
+            Route::post('/daily-quote/next-day', [UniversityDailyQuoteController::class, 'submitNextDay']);
+
             Route::post('/courses', [UniversityCourseController::class, 'store']);
             Route::patch('/courses/{course:id}', [UniversityCourseController::class, 'update']);
             Route::delete('/courses/{course:id}', [UniversityCourseController::class, 'destroy']);
