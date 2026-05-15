@@ -6,6 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\University\Attempt;
 use App\Models\University\Certificate;
 use App\Models\University\Certification;
+use App\Models\University\DrillCompletion;
+use App\Models\University\LessonProgress;
+use App\Models\University\Lesson;
+use App\Models\University\Module;
+use App\Models\University\Course;
 use App\Models\User;
 use App\Services\AuditService;
 use Illuminate\Http\Request;
@@ -123,6 +128,135 @@ class AnalyticsController extends Controller
                 'user' => $certificate->user,
                 'certification' => $certificate->certification,
             ])->values(),
+        ]);
+    }
+
+    public function managementDashboard()
+    {
+        $eligibleRoles = ['admin', 'sub_admin', 'sales', 'marketing'];
+        $totalStaff = User::query()->whereIn('role', $eligibleRoles)->count();
+
+        $publishedLessonIds = Lesson::query()
+            ->where('status', 'published')
+            ->pluck('id');
+        $totalLessons = $publishedLessonIds->count();
+
+        $completedPerUser = DB::table('university_lesson_progress')
+            ->whereNotNull('completed_at')
+            ->whereIn('lesson_id', $publishedLessonIds)
+            ->select('user_id', DB::raw('COUNT(*) as completed'))
+            ->groupBy('user_id')
+            ->pluck('completed', 'user_id');
+
+        $teamCompletionPct = $totalStaff > 0 && $totalLessons > 0
+            ? round(($completedPerUser->sum() / ($totalStaff * $totalLessons)) * 100, 1)
+            : 0;
+
+        $certifiedUserIds = Certificate::query()
+            ->whereNull('revoked_at')
+            ->where(function ($q) { $q->whereNull('expires_at')->orWhere('expires_at', '>', now()); })
+            ->pluck('user_id')
+            ->unique();
+        $expiredCertUserIds = Certificate::query()
+            ->whereNull('revoked_at')
+            ->where('expires_at', '<=', now())
+            ->pluck('user_id')
+            ->unique();
+
+        // Weakest topics across all submitted attempts
+        $attempts = Attempt::query()->whereNotNull('submitted_at')->get();
+        $topicAcc = [];
+        foreach ($attempts as $attempt) {
+            foreach (($attempt->per_topic_breakdown ?: []) as $topic => $row) {
+                $topicAcc[$topic] ??= ['sum' => 0, 'count' => 0];
+                $topicAcc[$topic]['sum'] += (float) ($row['score_pct'] ?? 0);
+                $topicAcc[$topic]['count']++;
+            }
+        }
+        $weakestTopics = collect($topicAcc)
+            ->map(fn ($v, $topic) => ['topic' => $topic, 'average_score_pct' => $v['count'] > 0 ? round($v['sum'] / $v['count'], 1) : 0, 'attempts' => $v['count']])
+            ->sortBy('average_score_pct')
+            ->values()
+            ->take(5);
+
+        // Failed modules — lessons with the most thumbs-down feedback (joined with module/course)
+        $failedModules = DB::table('university_lesson_feedback')
+            ->join('university_lessons', 'university_lessons.id', '=', 'university_lesson_feedback.lesson_id')
+            ->join('university_modules', 'university_modules.id', '=', 'university_lessons.module_id')
+            ->join('university_courses', 'university_courses.id', '=', 'university_modules.course_id')
+            ->select(
+                'university_lessons.id as lesson_id',
+                'university_lessons.title as lesson_title',
+                'university_courses.title as course_title',
+                DB::raw('SUM(CASE WHEN rating < 0 THEN 1 ELSE 0 END) as down'),
+                DB::raw('SUM(CASE WHEN rating > 0 THEN 1 ELSE 0 END) as up')
+            )
+            ->groupBy('university_lessons.id', 'university_lessons.title', 'university_courses.title')
+            ->orderByDesc('down')
+            ->limit(8)
+            ->get();
+
+        // Daily drill accuracy (last 30 days)
+        $drills = DrillCompletion::query()->where('completed_on', '>=', now()->subDays(30))->get();
+        $drillAccuracy = $drills->count() > 0 ? round(($drills->where('correct', true)->count() / $drills->count()) * 100, 1) : 0;
+
+        // Department readiness — group by role
+        $readiness = collect($eligibleRoles)->map(function (string $role) use ($completedPerUser, $totalLessons, $certifiedUserIds) {
+            $users = User::query()->where('role', $role)->get(['id', 'name']);
+            $userCount = $users->count();
+            if (! $userCount || ! $totalLessons) {
+                return ['role' => $role, 'staff' => $userCount, 'avg_completion_pct' => 0, 'certified_pct' => 0];
+            }
+            $completionSum = $users->sum(fn ($u) => (int) ($completedPerUser[$u->id] ?? 0));
+            $certifiedCount = $users->filter(fn ($u) => $certifiedUserIds->contains($u->id))->count();
+            return [
+                'role' => $role,
+                'staff' => $userCount,
+                'avg_completion_pct' => round(($completionSum / ($userCount * $totalLessons)) * 100, 1),
+                'certified_pct' => round(($certifiedCount / $userCount) * 100, 1),
+            ];
+        })->values();
+
+        // Staff who have not started
+        $startedUserIds = LessonProgress::query()->distinct()->pluck('user_id')->unique();
+        $notStarted = User::query()
+            ->whereIn('role', $eligibleRoles)
+            ->whereNotIn('id', $startedUserIds)
+            ->orderBy('name')
+            ->get(['id', 'name', 'email', 'role']);
+
+        // Staff with expired certs
+        $expiredStaff = User::query()
+            ->whereIn('id', $expiredCertUserIds)
+            ->orderBy('name')
+            ->get(['id', 'name', 'email', 'role'])
+            ->map(function ($u) {
+                $latestExpired = Certificate::query()
+                    ->where('user_id', $u->id)
+                    ->whereNull('revoked_at')
+                    ->where('expires_at', '<=', now())
+                    ->orderByDesc('expires_at')
+                    ->first();
+                return [
+                    'id' => $u->id, 'name' => $u->name, 'email' => $u->email, 'role' => $u->role,
+                    'expired_on' => optional($latestExpired?->expires_at)->toDateString(),
+                ];
+            });
+
+        return response()->json([
+            'totals' => [
+                'staff' => $totalStaff,
+                'team_completion_pct' => $teamCompletionPct,
+                'certified_staff' => $certifiedUserIds->count(),
+                'certified_pct' => $totalStaff > 0 ? round(($certifiedUserIds->count() / $totalStaff) * 100, 1) : 0,
+                'expired_staff' => $expiredCertUserIds->count(),
+                'daily_drill_accuracy_pct' => $drillAccuracy,
+            ],
+            'weakest_topics' => $weakestTopics,
+            'failed_modules' => $failedModules,
+            'department_readiness' => $readiness,
+            'staff_not_started' => $notStarted,
+            'staff_expired' => $expiredStaff,
         ]);
     }
 

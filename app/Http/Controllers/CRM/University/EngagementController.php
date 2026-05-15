@@ -89,11 +89,15 @@ class EngagementController extends Controller
         $allBadges = Badge::query()->orderBy('points')->get();
 
         $lessonsCompleted = LessonProgress::query()->where('user_id', $userId)->whereNotNull('completed_at')->count();
-        $activeCertificates = Certificate::query()
+        $certificates = Certificate::query()
+            ->with('certification.course')
             ->where('user_id', $userId)
-            ->whereNull('revoked_at')
-            ->where(function ($q) { $q->whereNull('expires_at')->orWhere('expires_at', '>', now()); })
-            ->count();
+            ->orderByDesc('issued_at')
+            ->get();
+        $activeCertificates = $certificates->filter(function ($cert) {
+            if ($cert->revoked_at) return false;
+            return !$cert->expires_at || $cert->expires_at->isFuture();
+        })->count();
 
         return response()->json([
             'streak' => [
@@ -124,6 +128,16 @@ class EngagementController extends Controller
                 'color' => $b->color,
                 'points' => (int) $b->points,
                 'earned' => $badges->contains(fn ($ub) => $ub->badge_id === $b->id),
+            ])->values(),
+            'certificates' => $certificates->map(fn ($c) => [
+                'code' => $c->certificate_code,
+                'title' => optional($c->certification)->title,
+                'course' => optional(optional($c->certification)->course)->title,
+                'issued_at' => optional($c->issued_at)->toIso8601String(),
+                'expires_at' => optional($c->expires_at)->toIso8601String(),
+                'revoked' => (bool) $c->revoked_at,
+                'expired' => $c->expires_at && $c->expires_at->isPast(),
+                'pdf_url' => $c->pdf_url,
             ])->values(),
         ]);
     }

@@ -33,6 +33,7 @@ import CourseEditor from './pages/University/admin/CourseEditor';
 import LessonEditor from './pages/University/admin/LessonEditor';
 import QuestionBank from './pages/University/admin/QuestionBank';
 import UniversityAnalytics from './pages/University/admin/Analytics';
+import UniversityManagement from './pages/University/admin/Management';
 import { useAuth } from './hooks/useAuth';
 
 function ProtectedRoute({ children }) {
@@ -119,6 +120,7 @@ export default function AppRouter() {
                 <Route path="university/manage/lessons" element={<LessonEditor />} />
                 <Route path="university/manage/questions" element={<QuestionBank />} />
                 <Route path="university/manage/analytics" element={<UniversityAnalytics />} />
+                <Route path="university/manage/dashboard" element={<UniversityManagement />} />
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />

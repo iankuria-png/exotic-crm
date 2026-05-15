@@ -134,9 +134,9 @@ export default function Sidebar({ onClose }) {
                                         onClick={onClose}
                                         className="group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white"
                                     >
-                                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-400 transition group-hover:border-white/20 group-hover:text-slate-200" aria-hidden="true">
+                                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-gradient-to-br from-white/5 to-white/[0.02] text-slate-400 transition group-hover:border-teal-300/30 group-hover:from-teal-400/10 group-hover:to-cyan-400/5 group-hover:text-teal-100" aria-hidden="true">
                                             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.9} d={item.icon} />
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.icon} />
                                             </svg>
                                         </span>
                                         <span className="truncate">{item.label}</span>
@@ -150,9 +150,9 @@ export default function Sidebar({ onClose }) {
                                     to={item.to}
                                     end={item.to === '/'}
                                     className={({ isActive }) =>
-                                        `group flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                                        `group relative flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                                             isActive
-                                                ? 'bg-white/10 text-white shadow-[inset_0_0_0_1px_rgba(45,212,191,0.45)]'
+                                                ? 'bg-gradient-to-r from-teal-500/15 via-white/5 to-transparent text-white shadow-[inset_0_0_0_1px_rgba(45,212,191,0.45)]'
                                                 : 'text-slate-300 hover:bg-white/5 hover:text-white'
                                         }`
                                     }
@@ -160,16 +160,17 @@ export default function Sidebar({ onClose }) {
                                 >
                                     {({ isActive }) => (
                                         <>
+                                            {isActive ? <span className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-teal-300 to-cyan-400 shadow-[0_0_8px_rgba(45,212,191,0.65)]" aria-hidden="true" /> : null}
                                             <span
                                                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition ${
                                                     isActive
-                                                        ? 'border-teal-300/50 bg-teal-400/15 text-teal-100'
-                                                        : 'border-white/10 bg-white/5 text-slate-400 group-hover:border-white/20 group-hover:text-slate-200'
+                                                        ? 'border-teal-300/40 bg-gradient-to-br from-teal-400/30 via-cyan-400/15 to-teal-500/10 text-teal-50 shadow-[0_0_12px_rgba(45,212,191,0.35)]'
+                                                        : 'border-white/10 bg-gradient-to-br from-white/5 to-white/[0.02] text-slate-400 group-hover:border-teal-300/30 group-hover:from-teal-400/10 group-hover:to-cyan-400/5 group-hover:text-teal-100'
                                                 }`}
                                                 aria-hidden="true"
                                             >
                                                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.9} d={item.icon} />
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.icon} />
                                                 </svg>
                                             </span>
                                             <span className="truncate">{item.label}</span>

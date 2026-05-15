@@ -17,6 +17,27 @@ import remarkGfm from 'remark-gfm';
  * are auto-assigned (h2/h3 → kebab-case) so the TOC can deep-link.
  */
 
+const OWNER_ACCENT = {
+    'Customer Service': { bg: 'bg-teal-100', text: 'text-teal-800', ring: 'ring-teal-200' },
+    'Head of Markets': { bg: 'bg-indigo-100', text: 'text-indigo-800', ring: 'ring-indigo-200' },
+    Finance: { bg: 'bg-emerald-100', text: 'text-emerald-800', ring: 'ring-emerald-200' },
+    'R&D / Product': { bg: 'bg-violet-100', text: 'text-violet-800', ring: 'ring-violet-200' },
+    'R&D/Product': { bg: 'bg-violet-100', text: 'text-violet-800', ring: 'ring-violet-200' },
+    IT: { bg: 'bg-amber-100', text: 'text-amber-800', ring: 'ring-amber-200' },
+    Management: { bg: 'bg-rose-100', text: 'text-rose-800', ring: 'ring-rose-200' },
+};
+
+function ownerStyle(owner) {
+    if (!owner) return { bg: 'bg-slate-100', text: 'text-slate-700', ring: 'ring-slate-200' };
+    const exact = OWNER_ACCENT[owner.trim()];
+    if (exact) return exact;
+    const lower = owner.toLowerCase();
+    for (const key of Object.keys(OWNER_ACCENT)) {
+        if (lower.includes(key.toLowerCase())) return OWNER_ACCENT[key];
+    }
+    return { bg: 'bg-slate-100', text: 'text-slate-700', ring: 'ring-slate-200' };
+}
+
 const CALLOUT_STYLES = {
     script: {
         label: 'Script',
@@ -140,6 +161,45 @@ function Callout({ kind, title, content }) {
     );
 }
 
+function EscalationMatrix({ content }) {
+    const rows = String(content || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && line.includes('|'))
+        .map((line) => {
+            const [problem, owner] = line.split('|').map((s) => s.trim());
+            return { problem, owner };
+        });
+
+    if (!rows.length) return null;
+
+    return (
+        <aside className="my-6 overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white shadow-sm ring-1 ring-inset ring-black/[0.03]">
+            <header className="flex items-center gap-2 border-b border-slate-200 bg-slate-900 px-5 py-3 text-white">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-rose-500 text-white">
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M3.75 6.75 7.5 3m0 0 3.75 3.75M7.5 3v18m13.5-4.5L17.25 21m0 0L13.5 17.25M17.25 21V3" /></svg>
+                </span>
+                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-300">Escalation matrix</span>
+                <span className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-slate-500">Who owns what</span>
+            </header>
+            <div className="grid divide-y divide-slate-200">
+                {rows.map((row, idx) => {
+                    const style = ownerStyle(row.owner);
+                    return (
+                        <div key={idx} className="grid grid-cols-[1fr_auto] items-center gap-4 px-5 py-3 transition hover:bg-slate-50">
+                            <p className="text-sm font-semibold text-slate-900">{row.problem}</p>
+                            <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider ring-1 ring-inset ${style.bg} ${style.text} ${style.ring}`}>
+                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" /></svg>
+                                {row.owner}
+                            </span>
+                        </div>
+                    );
+                })}
+            </div>
+        </aside>
+    );
+}
+
 export default function LessonBody({ body }) {
     const segments = useMemo(() => parseBody(body), [body]);
 
@@ -149,10 +209,15 @@ export default function LessonBody({ body }) {
 
     return (
         <div className="max-w-[70ch]">
-            {segments.map((segment, idx) => segment.type === 'callout'
-                ? <Callout key={idx} kind={segment.kind} title={segment.title} content={segment.content} />
-                : <MarkdownBlock key={idx} content={segment.content} />
-            )}
+            {segments.map((segment, idx) => {
+                if (segment.type === 'callout') {
+                    if (segment.kind === 'escalation') {
+                        return <EscalationMatrix key={idx} content={segment.content} />;
+                    }
+                    return <Callout key={idx} kind={segment.kind} title={segment.title} content={segment.content} />;
+                }
+                return <MarkdownBlock key={idx} content={segment.content} />;
+            })}
         </div>
     );
 }

@@ -4,8 +4,10 @@ import { useQuery } from '@tanstack/react-query';
 import PageHeader from '../../components/PageHeader';
 import CourseCard from '../../components/University/CourseCard';
 import DailyDrillCard from '../../components/University/DailyDrillCard';
+import MyCertificates from '../../components/University/MyCertificates';
 import QuoteOfTheDay from '../../components/University/QuoteOfTheDay';
 import StreakFlame from '../../components/University/StreakFlame';
+import WhatToDoNext from '../../components/University/WhatToDoNext';
 import universityApi from '../../services/universityApi';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -13,6 +15,7 @@ export default function UniversityHome() {
     const { user } = useAuth();
     const [search, setSearch] = useState('');
     const [filter, setFilter] = useState('all');
+    const [showCatalog, setShowCatalog] = useState(false);
     const isAdmin = ['admin', 'sub_admin'].includes(user?.role);
 
     const coursesQuery = useQuery({
@@ -29,6 +32,11 @@ export default function UniversityHome() {
         queryFn: () => universityApi.leaderboard(),
         staleTime: 60_000,
     });
+    const drillQuery = useQuery({
+        queryKey: ['university-daily-drill'],
+        queryFn: () => universityApi.todayDrill(),
+        staleTime: 60_000,
+    });
 
     const courses = useMemo(() => {
         const term = search.trim().toLowerCase();
@@ -43,6 +51,10 @@ export default function UniversityHome() {
     const engagement = engagementQuery.data || {};
     const leaderboard = leaderboardQuery.data?.leaderboard || [];
     const stats = engagement.stats || { lessons_completed: 0, active_certificates: 0, badges_earned: 0, badge_points: 0 };
+    const certificates = engagement.certificates || [];
+
+    const totalLessons = (coursesQuery.data?.courses || []).reduce((sum, c) => sum + (c.lesson_count || 0), 0);
+    const overallPct = totalLessons > 0 ? Math.round((stats.lessons_completed / totalLessons) * 100) : 0;
 
     return (
         <div className="space-y-6">
@@ -55,34 +67,67 @@ export default function UniversityHome() {
                             Playbook
                             <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 6h2.25a.75.75 0 0 1 .75.75v2.25M21 3l-9 9m6.75 4.5v3a.75.75 0 0 1-.75.75H4.5a.75.75 0 0 1-.75-.75V6.75A.75.75 0 0 1 4.5 6h3" /></svg>
                         </a>
+                        {isAdmin ? <Link to="/university/manage/dashboard" className="crm-btn-secondary px-3 py-2 text-sm">Management dashboard</Link> : null}
                         {isAdmin ? <Link to="/university/manage" className="crm-btn-primary px-3 py-2 text-sm">Manage content</Link> : null}
                     </div>
                 }
             />
 
-            {/* Quote of the Day — full width hero */}
-            <QuoteOfTheDay />
+            {/* 1. WELCOME / PROGRESS CARD */}
+            <section className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+                <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-teal-700 via-slate-900 to-slate-950 p-6 text-white shadow-sm">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-teal-200">Welcome back, {user?.name?.split(' ')[0] || 'there'}</p>
+                    <h2 className="mt-1 text-2xl font-bold leading-tight">You're {overallPct}% through the operating playbook.</h2>
+                    <p className="mt-1.5 text-sm text-slate-300">Lessons, certifications, glossary, daily drills — everything you need to sell and support is right here.</p>
 
-            {/* HERO row: streak + stats + daily drill */}
-            <section className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
-                <div className="space-y-3">
-                    <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-teal-700 via-slate-900 to-slate-950 p-6 text-white shadow-sm">
-                        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-teal-200">Welcome back, {user?.name?.split(' ')[0] || 'there'}</p>
-                        <h2 className="mt-1 text-2xl font-bold leading-tight">The CRM is the front door to every Exotic Online play.</h2>
-                        <p className="mt-2 text-sm text-slate-300">Lessons, certifications, glossary, daily drills — everything you need to sell and support is right here.</p>
-                        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-                            <Stat label="Lessons" value={stats.lessons_completed} />
-                            <Stat label="Certificates" value={stats.active_certificates} />
-                            <Stat label="Badges" value={stats.badges_earned} />
-                            <Stat label="Points" value={stats.badge_points} />
+                    {/* Overall progress bar */}
+                    <div className="mt-4">
+                        <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+                            <span>Overall progress</span>
+                            <span>{stats.lessons_completed}/{totalLessons} lessons</span>
+                        </div>
+                        <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-white/10">
+                            <div className="h-full rounded-full bg-gradient-to-r from-teal-400 to-emerald-400 transition-all" style={{ width: `${overallPct}%` }} />
                         </div>
                     </div>
-                    <StreakFlame current={engagement.streak?.current || 0} longest={engagement.streak?.longest || 0} />
+
+                    <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                        <Stat label="Lessons" value={stats.lessons_completed} />
+                        <Stat label="Certificates" value={stats.active_certificates} />
+                        <Stat label="Badges" value={stats.badges_earned} />
+                        <Stat label="Points" value={stats.badge_points} />
+                    </div>
+
+                    {continueCourses[0] ? (
+                        <Link to={`/university/courses/${continueCourses[0].slug}`} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-slate-900 shadow-md transition hover:shadow-lg">
+                            Continue training
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" /></svg>
+                        </Link>
+                    ) : null}
                 </div>
+                <StreakFlame current={engagement.streak?.current || 0} longest={engagement.streak?.longest || 0} />
+            </section>
+
+            {/* 2. WHAT TO DO NEXT */}
+            <WhatToDoNext engagement={engagement} courses={courses} drill={drillQuery.data} />
+
+            {/* 3. DAILY DRILL */}
+            <section id="daily-drill" className="space-y-2 scroll-mt-24">
+                <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Today's daily drill</h3>
                 <DailyDrillCard />
             </section>
 
-            {/* Catalog header */}
+            {/* 4. CURRENT COURSE IN PROGRESS */}
+            {continueCourses.length ? (
+                <section className="space-y-3">
+                    <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Continue learning</h3>
+                    <div className="grid gap-3 lg:grid-cols-3">
+                        {continueCourses.map((course) => <CourseCard key={course.id} course={course} compact />)}
+                    </div>
+                </section>
+            ) : null}
+
+            {/* Catalog toggle */}
             <section className="rounded-2xl border border-slate-200 bg-white px-5 py-5">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
@@ -96,27 +141,29 @@ export default function UniversityHome() {
                             </button>
                         ))}
                         <input value={search} onChange={(event) => setSearch(event.target.value)} className="crm-input min-w-[220px]" placeholder="Search courses" />
+                        <button type="button" onClick={() => setShowCatalog((v) => !v)} className="crm-btn-secondary px-3 py-2 text-sm">
+                            {showCatalog ? 'Hide catalog' : 'Show all courses'}
+                        </button>
                     </div>
                 </div>
-            </section>
-
-            {/* Continue learning rail */}
-            {continueCourses.length ? (
-                <section className="space-y-3">
-                    <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Continue learning</h3>
-                    <div className="grid gap-3 lg:grid-cols-3">
-                        {continueCourses.map((course) => <CourseCard key={course.id} course={course} compact />)}
+                {showCatalog ? (
+                    <div className="mt-5 grid gap-4 xl:grid-cols-3">
+                        {coursesQuery.isLoading ? <p className="text-sm text-slate-500">Loading courses…</p> : null}
+                        {courses.map((course) => <CourseCard key={course.id} course={course} />)}
                     </div>
-                </section>
-            ) : null}
-
-            {/* Course grid */}
-            <section className="grid gap-4 xl:grid-cols-3">
-                {coursesQuery.isLoading ? <p className="text-sm text-slate-500">Loading courses…</p> : null}
-                {courses.map((course) => <CourseCard key={course.id} course={course} />)}
+                ) : null}
             </section>
 
-            {/* Two-up bottom row: trophy case + leaderboard preview */}
+            {/* 5. CERTIFICATES */}
+            <section className="space-y-3">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Certificates</h3>
+                    {certificates.length > 0 ? <span className="text-xs text-slate-500">{certificates.length} earned</span> : null}
+                </div>
+                <MyCertificates certificates={certificates} />
+            </section>
+
+            {/* 6 + 7. TROPHY CASE + LEADERBOARD */}
             <section className="grid gap-4 lg:grid-cols-[1fr_1fr]">
                 {engagement.badges_catalog?.length ? (
                     <div className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -155,6 +202,9 @@ export default function UniversityHome() {
                     </ol>
                 </div>
             </section>
+
+            {/* 8. QUOTE OF THE DAY (footer) */}
+            <QuoteOfTheDay />
         </div>
     );
 }

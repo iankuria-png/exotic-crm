@@ -397,6 +397,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
             Route::delete('/questions/{question}', [UniversityCertSettingsController::class, 'destroyQuestion']);
             Route::patch('/certificates/{certificate}/revoke', [UniversityCertificateController::class, 'revoke']);
 
+            Route::get('/analytics/management-dashboard', [UniversityAnalyticsController::class, 'managementDashboard']);
             Route::get('/analytics/team', [UniversityAnalyticsController::class, 'team']);
             Route::get('/analytics/agents/{user}', [UniversityAnalyticsController::class, 'agent']);
             Route::get('/analytics/certifications/{certification}', [UniversityAnalyticsController::class, 'certification']);

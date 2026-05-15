@@ -225,10 +225,121 @@ class UniversityPhase2Seeder
     private function courses(): array
     {
         return [
+            $this->courseEscalationTree(),
             $this->courseSalesFundamentals(),
             $this->courseProductMastery(),
             $this->courseObjectionHandling(),
             $this->courseFailureRecovery(),
+        ];
+    }
+
+    private function courseEscalationTree(): array
+    {
+        return [
+            'slug' => 'escalation-tree',
+            'title' => 'Escalation Tree',
+            'summary' => 'Who owns what when something breaks. The single most important map in the company — memorise it before you take your first call.',
+            'difficulty' => 'beginner',
+            'accent_color' => 'rose',
+            'order' => 0,
+            'learning_outcomes' => [
+                'Identify the owner of any problem within 10 seconds',
+                'Stop solo-rescues that should have been escalated',
+                'Use the right escalation language so other teams take action quickly',
+            ],
+            'modules' => [
+                [
+                    'slug' => 'who-owns-what',
+                    'title' => 'Who Owns What',
+                    'summary' => 'The complete ownership matrix and the playbook for escalating each kind of problem.',
+                    'lessons' => [$this->lessonEscalationTree()],
+                ],
+            ],
+        ];
+    }
+
+    private function lessonEscalationTree(): array
+    {
+        return [
+            'slug' => 'who-owns-what-guide',
+            'title' => 'The Escalation Tree',
+            'subtitle' => 'The single most important map in the company',
+            'duration' => 9,
+            'playbook_url' => 'https://exoticonline.mintlify.app/support/roles-permissions',
+            'quick_reference' => "RULE OF THUMB:\n\nIf you're the agent on the call, you OWN getting it resolved — even if you don't own the FIX.\n\nEscalate when:\n- You don't know the owner.\n- You know the owner but they're unreachable.\n- The fix needs above-threshold authority (discount, refund, free trial).\n\nDON'T:\n- Promise something another team has to deliver without checking with them.\n- Sit on a problem because \"I'll figure it out\". 10 minutes is the limit.",
+            'body' => <<<'MD'
+## Why this matters
+
+Most failed deals at Exotic Online are not failures of effort. They are **failures of routing**. An agent tries to solve a problem owned by another team, burns 40 minutes, and the customer walks away. The agent who knows the escalation tree resolves the same issue in 5 minutes by sending it to the right desk with the right framing.
+
+This lesson is the single most important map in the company. Memorise it.
+
+## The ownership matrix
+
+:::escalation
+Customer communication | Customer Service
+Receipt confirmation | Head of Markets
+Weekly payment review | Finance
+CRM sync, callback, status issue | R&D / Product
+Server, WordPress access, internet | IT
+Policy approval (discounts above threshold, free trials, refunds) | Management
+:::
+
+## How to escalate well
+
+:::checklist Always include these four things in an escalation
+- [ ] **What happened** (specific, no opinion). "Customer paid Ksh 2,500 for Ksh 3,000 package via M-Pesa at 14:02."
+- [ ] **What you've tried** (so the next person doesn't repeat your steps).
+- [ ] **What you need** (action, not just attention). "Need Finance to confirm the payment is on the bank statement."
+- [ ] **By when** (sets the urgency). "Customer is on hold — within 5 minutes if possible."
+:::
+
+## The "is this me?" decision tree
+
+:::scenario A 30-second self-check before you escalate
+1. **Is the problem about the conversation itself?** (tone, expectations, customer emotion) → That's CS. You probably handle it directly.
+2. **Is the problem about a number on a receipt or statement?** → Finance, via Head of Markets.
+3. **Is the problem about the CRM showing wrong data, missing webhooks, or a button not working?** → R&D / Product.
+4. **Is the WordPress site or your computer not loading?** → IT.
+5. **Does the fix require breaking the standard policy (a 40% discount, an overdue refund)?** → Management.
+
+If none of the above, the default is: stay with it for 10 minutes, then escalate to your supervisor with the four-item checklist above.
+:::
+
+## When to NOT escalate
+
+:::warning Things that look like escalations but aren't
+- **Customer is upset.** Not an escalation by itself. CS-trained agents handle emotion in the call.
+- **You don't know the answer to a product question.** Look it up first (Glossary, Playbook). Escalation is a last resort, not a first one.
+- **The fix is slow but routine** (waiting for an STK Push to arrive, payment matching to complete). Don't escalate timing — manage expectations with the customer.
+:::
+
+## What "good" looks like
+
+Three calls from real shifts, condensed:
+
+:::scenario Good escalation
+*Agent (in Slack to Finance):* "F8: customer Jane Mwangi paid via bank transfer Ksh 5,000 to account ending 4421 on 2026-05-12. Uploaded proof in CRM. Auto-match flagged amount mismatch — package is Ksh 4,500. Need verification this week so I can credit the Ksh 500 to wallet. Customer expecting confirmation by Friday."
+
+*Finance:* (replies within an hour, confirms, agent processes wallet credit.)
+
+**Why it worked:** Specific, dated, included next action, and respected Finance's review cadence (weekly).
+:::
+
+:::scenario Bad escalation
+*Agent (in Slack to everyone):* "Hey can someone help, payment not going through, customer angry."
+
+*Result:* Six people ask clarifying questions, 90 minutes pass, customer hangs up.
+
+**Why it failed:** No specifics, no owner identified, no action requested. Escalation became a help-me-please broadcast.
+:::
+
+## Knowledge check
+
+1. Who owns "receipt confirmation"?
+2. The CRM is showing the wrong package tier after activation. Who owns the fix?
+3. List the four things every good escalation contains.
+MD,
         ];
     }
 

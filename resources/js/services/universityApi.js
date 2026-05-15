@@ -29,6 +29,7 @@ const universityApi = {
     createQuestion: (certificationId, payload) => api.post(`/crm/university/certifications/${certificationId}/questions`, payload).then((response) => response.data),
 
     teamAnalytics: () => api.get('/crm/university/analytics/team').then((response) => response.data),
+    managementDashboard: () => api.get('/crm/university/analytics/management-dashboard').then((response) => response.data),
     certificationAnalytics: (certificationId) => api.get(`/crm/university/analytics/certifications/${certificationId}`).then((response) => response.data),
     expiringCertificates: () => api.get('/crm/university/analytics/expiring').then((response) => response.data),
     liveAttempts: () => api.get('/crm/university/analytics/live-attempts').then((response) => response.data),
