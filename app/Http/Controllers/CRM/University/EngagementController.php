@@ -41,30 +41,39 @@ class EngagementController extends Controller
 
         $streaks = Streak::query()->get()->keyBy('user_id');
 
+        // Cast every user_id key to int up front — DB::table()->pluck() returns string keys
+        // by default which silently miss matches against Eloquent's int-keyed collection.
+        $badgePointsInt = collect($badgePoints)->mapWithKeys(fn ($v, $k) => [(int) $k => (int) $v]);
+        $lessonCountsInt = collect($lessonCounts)->mapWithKeys(fn ($v, $k) => [(int) $k => (int) $v]);
+        $certCountsInt = collect($certCounts)->mapWithKeys(fn ($v, $k) => [(int) $k => (int) $v]);
+        $streaksInt = $streaks->mapWithKeys(fn ($v, $k) => [(int) $k => $v]);
+
         $userIds = collect()
-            ->merge($badgePoints->keys())
-            ->merge($lessonCounts->keys())
-            ->merge($certCounts->keys())
-            ->merge($streaks->keys())
-            ->unique();
+            ->merge($badgePointsInt->keys())
+            ->merge($lessonCountsInt->keys())
+            ->merge($certCountsInt->keys())
+            ->merge($streaksInt->keys())
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
 
         $users = User::query()->whereIn('id', $userIds)->get()->keyBy('id');
 
-        $rows = $userIds->map(function ($userId) use ($users, $badgePoints, $lessonCounts, $certCounts, $streaks) {
+        $rows = $userIds->map(function ($userId) use ($users, $badgePointsInt, $lessonCountsInt, $certCountsInt, $streaksInt) {
             $user = $users->get($userId);
             if (! $user) return null;
-            $score = (int) ($badgePoints[$userId] ?? 0)
-                + 5 * (int) ($lessonCounts[$userId] ?? 0)
-                + 50 * (int) ($certCounts[$userId] ?? 0);
+            $score = (int) ($badgePointsInt[$userId] ?? 0)
+                + 5 * (int) ($lessonCountsInt[$userId] ?? 0)
+                + 50 * (int) ($certCountsInt[$userId] ?? 0);
             return [
-                'user_id' => (int) $userId,
+                'user_id' => $userId,
                 'name' => $user->name,
                 'role' => $user->role,
-                'lessons_completed' => (int) ($lessonCounts[$userId] ?? 0),
-                'certificates' => (int) ($certCounts[$userId] ?? 0),
-                'badge_points' => (int) ($badgePoints[$userId] ?? 0),
-                'current_streak' => (int) optional($streaks->get($userId))->current_streak,
-                'longest_streak' => (int) optional($streaks->get($userId))->longest_streak,
+                'lessons_completed' => (int) ($lessonCountsInt[$userId] ?? 0),
+                'certificates' => (int) ($certCountsInt[$userId] ?? 0),
+                'badge_points' => (int) ($badgePointsInt[$userId] ?? 0),
+                'current_streak' => (int) optional($streaksInt->get($userId))->current_streak,
+                'longest_streak' => (int) optional($streaksInt->get($userId))->longest_streak,
                 'score' => $score,
             ];
         })

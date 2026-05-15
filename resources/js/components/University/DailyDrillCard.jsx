@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import universityApi from '../../services/universityApi';
 import { useToast } from '../ToastProvider';
 
-export default function DailyDrillCard() {
+export default function DailyDrillCard({ hero = false }) {
     const toast = useToast();
     const queryClient = useQueryClient();
     const [picked, setPicked] = useState(null);
@@ -31,12 +31,18 @@ export default function DailyDrillCard() {
     }
     const data = drillQuery.data;
     if (!data?.drill) {
-        return <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">No daily drill available.</div>;
+        return (
+            <div className={`rounded-2xl border border-slate-200 bg-white ${hero ? 'p-6' : 'p-5'} shadow-sm`}>
+                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-amber-700">Today's daily drill</p>
+                <h3 className="mt-2 text-lg font-bold text-slate-950">The drill bank is being prepared.</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-600">Daily drills appear here once the University content seed has finished. Refresh in a moment if this page was just deployed.</p>
+            </div>
+        );
     }
     const { drill, completed, completion } = data;
 
     return (
-        <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-orange-50 p-5 shadow-sm">
+        <div className={`h-full rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-orange-50 ${hero ? 'p-6' : 'p-5'} shadow-sm`}>
             <div className="flex items-center justify-between">
                 <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-amber-700">Daily drill · {drill.topic_tag}</p>

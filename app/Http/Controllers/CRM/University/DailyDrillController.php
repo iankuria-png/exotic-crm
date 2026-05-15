@@ -6,11 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\University\DailyDrill;
 use App\Models\University\DrillCompletion;
 use App\Services\University\GamificationService;
+use App\Services\University\UniversityPhase2Seeder;
 use Illuminate\Http\Request;
 
 class DailyDrillController extends Controller
 {
-    public function __construct(private readonly GamificationService $gamification)
+    public function __construct(
+        private readonly GamificationService $gamification,
+        private readonly UniversityPhase2Seeder $phase2Seeder,
+    )
     {
     }
 
@@ -43,6 +47,11 @@ class DailyDrillController extends Controller
 
         // Pick a deterministic drill for today × user (cycles through the pool)
         $drills = DailyDrill::query()->where('is_active', true)->orderBy('id')->get();
+        if ($drills->isEmpty()) {
+            $this->phase2Seeder->seedDailyDrills();
+            $drills = DailyDrill::query()->where('is_active', true)->orderBy('id')->get();
+        }
+
         if ($drills->isEmpty()) {
             return response()->json(['completed' => false, 'drill' => null]);
         }

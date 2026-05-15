@@ -1,11 +1,26 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 
-export default function MyCertificates({ certificates = [] }) {
+export default function MyCertificates({ certificates = [], nextCourse = null }) {
     if (!certificates.length) {
         return (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-center">
-                <p className="text-sm font-semibold text-slate-700">No certificates yet.</p>
-                <p className="mt-1 text-xs text-slate-500">Complete a course and pass the certification to earn one.</p>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                            <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 9.5 7.5 4 8.5l4.5 4-1 6L12 15.5 16.5 18.5l-1-6L20 8.5l-5.5-1L12 2Z" /></svg>
+                        </span>
+                        <div>
+                            <p className="text-sm font-bold text-slate-950">No certificates earned yet</p>
+                            <p className="mt-1 max-w-xl text-sm text-slate-600">Finish the core lessons, then pass the certification to unlock your first credential and appear in the team ranking.</p>
+                        </div>
+                    </div>
+                    {nextCourse ? (
+                        <Link to={`/university/courses/${nextCourse.slug}`} className="crm-btn-secondary shrink-0 px-3 py-2 text-sm">
+                            Start {nextCourse.title}
+                        </Link>
+                    ) : null}
+                </div>
             </div>
         );
     }

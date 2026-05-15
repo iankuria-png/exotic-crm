@@ -49,7 +49,10 @@ use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCert
 use App\Http\Controllers\CRM\University\CertificateController as UniversityCertificateController;
 use App\Http\Controllers\CRM\University\CertificationController as UniversityCertificationController;
 use App\Http\Controllers\CRM\University\CourseController as UniversityCourseController;
+use App\Http\Controllers\CRM\University\DailyDrillController as UniversityDailyDrillController;
 use App\Http\Controllers\CRM\University\DailyQuoteController as UniversityDailyQuoteController;
+use App\Http\Controllers\CRM\University\EngagementController as UniversityEngagementController;
+use App\Http\Controllers\CRM\University\GlossaryController as UniversityGlossaryController;
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;

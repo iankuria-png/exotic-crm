@@ -57,7 +57,17 @@ export default function Leaderboard() {
                                 <td className="px-4 py-3 text-right font-bold text-teal-700">{r.score}</td>
                             </tr>
                         ))}
-                        {!rows.length ? <tr><td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">No activity yet.</td></tr> : null}
+                        {!rows.length ? (
+                            <tr>
+                                <td colSpan={8} className="px-4 py-10">
+                                    <div className="mx-auto max-w-lg text-center">
+                                        <p className="text-sm font-semibold text-slate-900">No scored activity yet</p>
+                                        <p className="mt-1 text-sm text-slate-600">The first completed drill, lesson, or active certificate will start the leaderboard.</p>
+                                        <Link to="/university" className="crm-btn-secondary mt-4 px-3 py-2 text-sm">Back to training</Link>
+                                    </div>
+                                </td>
+                            </tr>
+                        ) : null}
                     </tbody>
                 </table>
             </section>

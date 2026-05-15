@@ -6,7 +6,10 @@ use App\Models\AuditLog;
 use App\Models\University\Attempt;
 use App\Models\University\Certification;
 use App\Models\University\Course;
+use App\Models\University\DailyDrill;
+use App\Models\University\LessonProgress;
 use App\Models\University\Question;
+use App\Models\University\Streak;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
@@ -171,6 +174,73 @@ class UniversityFeatureTest extends TestCase
             ->where('entity_id', $sales->id)
             ->where('action', 'university_agent_quiz_viewed')
             ->exists());
+    }
+
+    public function test_daily_drill_endpoint_repairs_missing_seed_data_and_updates_streak(): void
+    {
+        $sales = $this->userForRole('sales');
+        DailyDrill::query()->delete();
+        Sanctum::actingAs($sales);
+
+        $today = $this->getJson('/api/crm/university/daily-drill')
+            ->assertOk()
+            ->assertJsonPath('completed', false);
+
+        $drillId = $today->json('drill.id');
+        $this->assertNotNull($drillId);
+        $this->assertGreaterThan(0, DailyDrill::query()->count());
+
+        $drill = DailyDrill::query()->findOrFail($drillId);
+        $this->postJson('/api/crm/university/daily-drill/' . $drill->id . '/answer', [
+            'selected_index' => $drill->correct_index,
+        ])->assertOk()
+            ->assertJsonPath('completion.correct', true);
+
+        $this->assertDatabaseHas('university_streaks', [
+            'user_id' => $sales->id,
+            'current_streak' => 1,
+        ]);
+    }
+
+    public function test_university_leaderboard_keeps_rows_from_aggregate_activity_maps(): void
+    {
+        $sales = $this->userForRole('sales');
+        $course = Course::create([
+            'slug' => 'leaderboard-course-' . uniqid(),
+            'title' => 'Leaderboard Course',
+            'status' => 'published',
+            'visibility' => 'all',
+        ]);
+        $module = $course->modules()->create([
+            'slug' => 'leaderboard-module',
+            'title' => 'Leaderboard Module',
+        ]);
+        $lesson = $module->lessons()->create([
+            'slug' => 'leaderboard-lesson',
+            'title' => 'Leaderboard Lesson',
+            'status' => 'published',
+        ]);
+        LessonProgress::create([
+            'user_id' => $sales->id,
+            'lesson_id' => $lesson->id,
+            'completed_at' => now(),
+        ]);
+        Streak::create([
+            'user_id' => $sales->id,
+            'current_streak' => 3,
+            'longest_streak' => 3,
+            'last_active_on' => today(),
+        ]);
+
+        Sanctum::actingAs($sales);
+        $this->getJson('/api/crm/university/leaderboard')
+            ->assertOk()
+            ->assertJsonFragment([
+                'user_id' => $sales->id,
+                'lessons_completed' => 1,
+                'current_streak' => 3,
+                'score' => 5,
+            ]);
     }
 
     private function certificationWithQuestions(array $correctFlags, array $overrides = []): Certification

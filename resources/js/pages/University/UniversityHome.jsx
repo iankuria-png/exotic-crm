@@ -15,7 +15,6 @@ export default function UniversityHome() {
     const { user } = useAuth();
     const [search, setSearch] = useState('');
     const [filter, setFilter] = useState('all');
-    const [showCatalog, setShowCatalog] = useState(false);
     const isAdmin = ['admin', 'sub_admin'].includes(user?.role);
 
     const coursesQuery = useQuery({
@@ -38,22 +37,27 @@ export default function UniversityHome() {
         staleTime: 60_000,
     });
 
+    const allCourses = coursesQuery.data?.courses || [];
     const courses = useMemo(() => {
         const term = search.trim().toLowerCase();
-        return (coursesQuery.data?.courses || []).filter((course) => {
+        return allCourses.filter((course) => {
             const matchesSearch = !term || `${course.title} ${course.summary || ''}`.toLowerCase().includes(term);
             const matchesFilter = filter === 'all' || course.visibility === filter || (course.required_for_roles || []).includes(filter);
             return matchesSearch && matchesFilter;
         });
-    }, [coursesQuery.data, filter, search]);
+    }, [allCourses, filter, search]);
 
-    const continueCourses = courses.filter((course) => Number(course.progress_pct || 0) > 0 && Number(course.progress_pct || 0) < 100);
+    const continueCourses = allCourses.filter((course) => Number(course.progress_pct || 0) > 0 && Number(course.progress_pct || 0) < 100);
     const engagement = engagementQuery.data || {};
     const leaderboard = leaderboardQuery.data?.leaderboard || [];
     const stats = engagement.stats || { lessons_completed: 0, active_certificates: 0, badges_earned: 0, badge_points: 0 };
     const certificates = engagement.certificates || [];
+    const nextCourse = continueCourses[0]
+        || allCourses.find((course) => course.slug === 'escalation-tree')
+        || allCourses[0]
+        || null;
 
-    const totalLessons = (coursesQuery.data?.courses || []).reduce((sum, c) => sum + (c.lesson_count || 0), 0);
+    const totalLessons = allCourses.reduce((sum, c) => sum + (c.lesson_count || 0), 0);
     const overallPct = totalLessons > 0 ? Math.round((stats.lessons_completed / totalLessons) * 100) : 0;
 
     return (
@@ -74,7 +78,7 @@ export default function UniversityHome() {
             />
 
             {/* 1. WELCOME / PROGRESS CARD */}
-            <section className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+            <section className="grid gap-4 xl:grid-cols-[minmax(0,1.18fr)_minmax(420px,0.82fr)]">
                 <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-teal-700 via-slate-900 to-slate-950 p-6 text-white shadow-sm">
                     <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-teal-200">Welcome back, {user?.name?.split(' ')[0] || 'there'}</p>
                     <h2 className="mt-1 text-2xl font-bold leading-tight">You're {overallPct}% through the operating playbook.</h2>
@@ -105,16 +109,15 @@ export default function UniversityHome() {
                         </Link>
                     ) : null}
                 </div>
-                <StreakFlame current={engagement.streak?.current || 0} longest={engagement.streak?.longest || 0} />
+                <div id="daily-drill" className="scroll-mt-24">
+                    <DailyDrillCard hero />
+                </div>
             </section>
 
-            {/* 2. WHAT TO DO NEXT */}
-            <WhatToDoNext engagement={engagement} courses={courses} drill={drillQuery.data} />
-
-            {/* 3. DAILY DRILL */}
-            <section id="daily-drill" className="space-y-2 scroll-mt-24">
-                <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Today's daily drill</h3>
-                <DailyDrillCard />
+            {/* 2. WHAT TO DO NEXT + STREAK */}
+            <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                <WhatToDoNext engagement={engagement} courses={allCourses} drill={drillQuery.data} />
+                <StreakFlame current={engagement.streak?.current || 0} longest={engagement.streak?.longest || 0} compact />
             </section>
 
             {/* 4. CURRENT COURSE IN PROGRESS */}
@@ -127,30 +130,36 @@ export default function UniversityHome() {
                 </section>
             ) : null}
 
-            {/* Catalog toggle */}
-            <section className="rounded-2xl border border-slate-200 bg-white px-5 py-5">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            {/* Learning catalog */}
+            <section className="space-y-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                     <div>
-                        <h3 className="text-lg font-semibold text-slate-950">Learning catalog</h3>
-                        <p className="text-sm text-slate-500">{courses.length} courses · grounded in real Exotic Online plays</p>
+                        <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Learning catalog</h3>
+                        <p className="mt-1 text-lg font-semibold text-slate-950">{allCourses.length} courses grounded in real Exotic Online plays</p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                         {['all', 'sales', 'cs'].map((item) => (
                             <button key={item} type="button" onClick={() => setFilter(item)} className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${filter === item ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
                                 {item === 'all' ? 'All' : item.toUpperCase()}
                             </button>
                         ))}
-                        <input value={search} onChange={(event) => setSearch(event.target.value)} className="crm-input min-w-[220px]" placeholder="Search courses" />
-                        <button type="button" onClick={() => setShowCatalog((v) => !v)} className="crm-btn-secondary px-3 py-2 text-sm">
-                            {showCatalog ? 'Hide catalog' : 'Show all courses'}
-                        </button>
+                        <input value={search} onChange={(event) => setSearch(event.target.value)} className="crm-input min-w-[240px]" placeholder="Search courses" />
                     </div>
                 </div>
-                {showCatalog ? (
-                    <div className="mt-5 grid gap-4 xl:grid-cols-3">
-                        {coursesQuery.isLoading ? <p className="text-sm text-slate-500">Loading courses…</p> : null}
+                {coursesQuery.isLoading ? <p className="text-sm text-slate-500">Loading courses…</p> : null}
+                {!coursesQuery.isLoading && courses.length ? (
+                    <div className="grid gap-4 xl:grid-cols-3">
                         {courses.map((course) => <CourseCard key={course.id} course={course} />)}
                     </div>
+                ) : null}
+                {!coursesQuery.isLoading && !courses.length ? (
+                    <CatalogEmptyState
+                        hasCourses={allCourses.length > 0}
+                        onReset={() => {
+                            setFilter('all');
+                            setSearch('');
+                        }}
+                    />
                 ) : null}
             </section>
 
@@ -160,7 +169,7 @@ export default function UniversityHome() {
                     <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Certificates</h3>
                     {certificates.length > 0 ? <span className="text-xs text-slate-500">{certificates.length} earned</span> : null}
                 </div>
-                <MyCertificates certificates={certificates} />
+                <MyCertificates certificates={certificates} nextCourse={nextCourse} />
             </section>
 
             {/* 6 + 7. TROPHY CASE + LEADERBOARD */}
@@ -184,23 +193,7 @@ export default function UniversityHome() {
                     </div>
                 ) : null}
 
-                <div className="rounded-2xl border border-slate-200 bg-white p-5">
-                    <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Leaderboard</h3>
-                        <Link to="/university/leaderboard" className="text-xs font-semibold text-teal-700 hover:text-teal-800">View all →</Link>
-                    </div>
-                    <ol className="mt-3 space-y-1.5">
-                        {leaderboard.slice(0, 6).map((row, idx) => (
-                            <li key={row.user_id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
-                                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-500 text-white' : idx === 1 ? 'bg-slate-400 text-white' : idx === 2 ? 'bg-orange-400 text-white' : 'bg-slate-100 text-slate-600'}`}>{idx + 1}</span>
-                                <span className="flex-1 truncate text-slate-700">{row.name}</span>
-                                <span className="text-xs text-slate-500">{row.lessons_completed}L · {row.certificates}C</span>
-                                <span className="w-12 text-right font-semibold text-teal-700">{row.score}</span>
-                            </li>
-                        ))}
-                        {!leaderboard.length ? <li className="text-sm text-slate-500">No activity yet — be the first.</li> : null}
-                    </ol>
-                </div>
+                <LeaderboardPreview rows={leaderboard} />
             </section>
 
             {/* 8. QUOTE OF THE DAY (footer) */}
@@ -214,6 +207,53 @@ function Stat({ label, value }) {
         <div className="rounded-xl bg-white/5 px-3 py-2 ring-1 ring-inset ring-white/10">
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</p>
             <p className="mt-0.5 text-xl font-bold text-white">{value}</p>
+        </div>
+    );
+}
+
+function CatalogEmptyState({ hasCourses, onReset }) {
+    return (
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8">
+            <p className="text-sm font-bold text-slate-950">{hasCourses ? 'No courses match these filters' : 'No published courses yet'}</p>
+            <p className="mt-1 max-w-2xl text-sm text-slate-600">
+                {hasCourses
+                    ? 'Try clearing the role filter or search term to bring the full catalog back.'
+                    : 'The University seed has not published courses yet. Run the University content migration or seed command before sending learners here.'}
+            </p>
+            {hasCourses ? (
+                <button type="button" onClick={onReset} className="crm-btn-secondary mt-4 px-3 py-2 text-sm">
+                    Reset filters
+                </button>
+            ) : null}
+        </div>
+    );
+}
+
+function LeaderboardPreview({ rows }) {
+    return (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">Leaderboard</h3>
+                <Link to="/university/leaderboard" className="text-xs font-semibold text-teal-700 hover:text-teal-800">View all →</Link>
+            </div>
+            {rows.length ? (
+                <ol className="mt-3 space-y-1.5">
+                    {rows.slice(0, 6).map((row, idx) => (
+                        <li key={row.user_id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
+                            <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-500 text-white' : idx === 1 ? 'bg-slate-400 text-white' : idx === 2 ? 'bg-orange-400 text-white' : 'bg-slate-100 text-slate-600'}`}>{idx + 1}</span>
+                            <span className="flex-1 truncate text-slate-700">{row.name}</span>
+                            <span className="text-xs text-slate-500">{row.lessons_completed}L · {row.certificates}C</span>
+                            <span className="w-12 text-right font-semibold text-teal-700">{row.score}</span>
+                        </li>
+                    ))}
+                </ol>
+            ) : (
+                <div className="mt-4 rounded-xl bg-slate-50 p-4">
+                    <p className="text-sm font-semibold text-slate-900">No scored activity yet</p>
+                    <p className="mt-1 text-sm text-slate-600">Complete a drill, finish lessons, or earn a certificate to start the first ranking.</p>
+                    <Link to="/university/leaderboard" className="mt-3 inline-flex text-sm font-semibold text-teal-700 hover:text-teal-800">Open leaderboard →</Link>
+                </div>
+            )}
         </div>
     );
 }

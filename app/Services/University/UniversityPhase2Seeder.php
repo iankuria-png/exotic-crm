@@ -47,6 +47,16 @@ class UniversityPhase2Seeder
         });
     }
 
+    public function seedDailyDrills(): int
+    {
+        return DB::transaction(function () {
+            $stats = ['drills' => 0];
+            $this->upsertDailyDrills($stats);
+
+            return $stats['drills'];
+        });
+    }
+
     private function upsertCourse(array $spec, array &$stats): Course
     {
         $course = Course::firstOrNew(['slug' => $spec['slug']]);
@@ -2082,4 +2092,3 @@ MD,
         ];
     }
 }
-

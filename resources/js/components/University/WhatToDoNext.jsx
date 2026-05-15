@@ -114,10 +114,17 @@ export default function WhatToDoNext({ engagement, courses, drill }) {
                         <span className="text-slate-600">{action.why}</span>
                     </div>
                 </div>
-                <Link to={action.href.startsWith('#') ? '#' : action.href} className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl ${ACCENT.chip} px-4 py-2.5 text-sm font-bold text-white shadow-md transition hover:brightness-110`}>
-                    {action.cta}
-                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" /></svg>
-                </Link>
+                {action.href.startsWith('#') ? (
+                    <a href={action.href} className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl ${ACCENT.chip} px-4 py-2.5 text-sm font-bold text-white shadow-md transition hover:brightness-110`}>
+                        {action.cta}
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" /></svg>
+                    </a>
+                ) : (
+                    <Link to={action.href} className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl ${ACCENT.chip} px-4 py-2.5 text-sm font-bold text-white shadow-md transition hover:brightness-110`}>
+                        {action.cta}
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" /></svg>
+                    </Link>
+                )}
             </div>
         </section>
     );
