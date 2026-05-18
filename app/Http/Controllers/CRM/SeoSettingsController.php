@@ -27,7 +27,7 @@ class SeoSettingsController extends Controller
     private const DEFAULT_MODELS = [
         'claude'   => 'claude-3-5-sonnet-20241022',
         'openai'   => 'gpt-4o-mini',
-        'gemini'   => 'gemini-1.5-flash',
+        'gemini'   => 'gemini-2.5-flash',
         'deepseek' => 'deepseek-chat',
     ];
 
@@ -89,7 +89,7 @@ class SeoSettingsController extends Controller
 
             $providers[$name] = [
                 'api_key' => $apiKey,
-                'model'   => $model,
+                'model'   => $this->normalizeProviderModel($name, $model),
             ];
         }
 
@@ -189,7 +189,7 @@ class SeoSettingsController extends Controller
         foreach (self::SUPPORTED_PROVIDERS as $name) {
             $providers[$name] = [
                 'api_key' => (string) ($stored['providers'][$name]['api_key'] ?? ''),
-                'model'   => (string) ($stored['providers'][$name]['model'] ?? self::DEFAULT_MODELS[$name]),
+                'model'   => $this->normalizeProviderModel($name, (string) ($stored['providers'][$name]['model'] ?? self::DEFAULT_MODELS[$name])),
             ];
         }
 
@@ -219,6 +219,17 @@ class SeoSettingsController extends Controller
             }
         }
         return $providers;
+    }
+
+    private function normalizeProviderModel(string $provider, string $model): string
+    {
+        $model = trim($model);
+
+        if ($provider === 'gemini' && in_array($model, ['gemini-1.5-flash', 'gemini-1.5-pro'], true)) {
+            return self::DEFAULT_MODELS['gemini'];
+        }
+
+        return $model;
     }
 
     /**

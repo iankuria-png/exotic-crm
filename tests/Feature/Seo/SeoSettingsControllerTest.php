@@ -21,7 +21,8 @@ class SeoSettingsControllerTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('config.enabled', false)
             ->assertJsonPath('config.providers.claude.has_key', false)
-            ->assertJsonPath('config.providers.gemini.has_key', false);
+            ->assertJsonPath('config.providers.gemini.has_key', false)
+            ->assertJsonPath('config.providers.gemini.model', 'gemini-2.5-flash');
 
         $this->assertSame(['claude', 'openai', 'gemini', 'deepseek'], $response->json('available_providers'));
     }
@@ -44,7 +45,8 @@ class SeoSettingsControllerTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('config.providers.gemini.has_key', true)
-            ->assertJsonPath('config.providers.gemini.api_key', '__keep__');
+            ->assertJsonPath('config.providers.gemini.api_key', '__keep__')
+            ->assertJsonPath('config.providers.gemini.model', 'gemini-2.5-flash');
 
         // Real key never leaks in any field
         $this->assertStringNotContainsString('real-secret-key-xyz789', $response->getContent());
@@ -70,6 +72,7 @@ class SeoSettingsControllerTest extends TestCase
         $this->assertTrue($stored['enabled']);
         $this->assertSame([1, 2], $stored['platform_allowlist']);
         $this->assertSame('my-gemini-key', $stored['providers']['gemini']['api_key']);
+        $this->assertSame('gemini-2.5-flash', $stored['providers']['gemini']['model']);
     }
 
     public function test_update_keep_sentinel_preserves_existing_key(): void
@@ -96,7 +99,7 @@ class SeoSettingsControllerTest extends TestCase
 
         $stored = IntegrationSetting::where('key', 'seo_engine')->first()->value;
         $this->assertSame('original-key', $stored['providers']['gemini']['api_key']);
-        $this->assertSame('gemini-1.5-pro', $stored['providers']['gemini']['model']);
+        $this->assertSame('gemini-2.5-flash', $stored['providers']['gemini']['model']);
     }
 
     public function test_non_admin_cannot_update(): void

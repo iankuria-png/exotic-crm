@@ -28,7 +28,7 @@ class SeoController extends Controller
     public function generateBio(Request $request): JsonResponse
     {
         if (!config('services.seo_engine.enabled', false)) {
-            return response()->json(['error' => 'SEO Engine is disabled.'], 403);
+            return response()->json(['message' => 'SEO Engine is disabled. Enable it under Settings → SEO Engine and save the settings.'], 403);
         }
 
         $data = $request->validate([

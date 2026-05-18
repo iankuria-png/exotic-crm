@@ -20,7 +20,7 @@ class WpSeoController extends Controller
     public function generateBio(Request $request): JsonResponse
     {
         if (!config('services.seo_engine.enabled', false)) {
-            return response()->json(['error' => 'SEO Engine is disabled.'], 403);
+            return response()->json(['message' => 'SEO Engine is disabled in CRM settings.'], 403);
         }
 
         // Platform identity is enforced by WpServiceAuth; header takes precedence.

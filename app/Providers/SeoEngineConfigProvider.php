@@ -58,8 +58,19 @@ class SeoEngineConfigProvider extends ServiceProvider
                 config(["services.seo_engine.{$provider}.api_key" => (string) $cfg['api_key']]);
             }
             if (!empty($cfg['model'])) {
-                config(["services.seo_engine.{$provider}.model" => (string) $cfg['model']]);
+                config(["services.seo_engine.{$provider}.model" => $this->normalizeProviderModel($provider, (string) $cfg['model'])]);
             }
         }
+    }
+
+    private function normalizeProviderModel(string $provider, string $model): string
+    {
+        $model = trim($model);
+
+        if ($provider === 'gemini' && in_array($model, ['gemini-1.5-flash', 'gemini-1.5-pro'], true)) {
+            return 'gemini-2.5-flash';
+        }
+
+        return $model;
     }
 }

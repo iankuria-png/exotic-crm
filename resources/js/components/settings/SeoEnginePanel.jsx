@@ -12,6 +12,17 @@ const PROVIDER_DISPLAY = {
 
 const SENTINEL = '__keep__';
 
+
+function hydrateProvider(provider = {}) {
+    const incomingKey = provider?.api_key || '';
+    return {
+        apiKey: incomingKey === SENTINEL ? '' : incomingKey,
+        model: provider?.model || '',
+        hasKey: !!provider?.has_key,
+        preview: provider?.key_preview || '',
+    };
+}
+
 /**
  * SEO Engine settings panel.
  * Lives in Settings → SEO Engine tab. Admin-only writes.
@@ -38,10 +49,10 @@ export default function SeoEnginePanel() {
                 platformAllowlist: cfg.platform_allowlist || [],
                 providersOrder: cfg.providers_order || ['gemini', 'claude', 'openai', 'deepseek'],
                 providers: {
-                    claude:   { apiKey: cfg.providers?.claude?.api_key   || '', model: cfg.providers?.claude?.model   || '', hasKey: !!cfg.providers?.claude?.has_key,   preview: cfg.providers?.claude?.key_preview   || '' },
-                    openai:   { apiKey: cfg.providers?.openai?.api_key   || '', model: cfg.providers?.openai?.model   || '', hasKey: !!cfg.providers?.openai?.has_key,   preview: cfg.providers?.openai?.key_preview   || '' },
-                    gemini:   { apiKey: cfg.providers?.gemini?.api_key   || '', model: cfg.providers?.gemini?.model   || '', hasKey: !!cfg.providers?.gemini?.has_key,   preview: cfg.providers?.gemini?.key_preview   || '' },
-                    deepseek: { apiKey: cfg.providers?.deepseek?.api_key || '', model: cfg.providers?.deepseek?.model || '', hasKey: !!cfg.providers?.deepseek?.has_key, preview: cfg.providers?.deepseek?.key_preview || '' },
+                    claude:   hydrateProvider(cfg.providers?.claude),
+                    openai:   hydrateProvider(cfg.providers?.openai),
+                    gemini:   hydrateProvider(cfg.providers?.gemini),
+                    deepseek: hydrateProvider(cfg.providers?.deepseek),
                 },
             });
         }

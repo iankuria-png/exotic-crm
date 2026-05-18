@@ -505,12 +505,13 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/queue', [KycQueueController::class, 'index'])->middleware('role:admin,sub_admin,sales,marketing');
         Route::get('/queue-count', [KycQueueController::class, 'count'])->middleware('role:admin,sub_admin,sales,marketing');
         Route::get('/subjects/{subject}', [KycReviewController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
-        Route::post('/subjects/{subject}/approve', [KycReviewController::class, 'approve'])->middleware('role:admin,sub_admin,sales,marketing');
-        Route::post('/subjects/{subject}/reject', [KycReviewController::class, 'reject'])->middleware('role:admin,sub_admin,sales,marketing');
-        Route::post('/subjects/{subject}/request-info', [KycReviewController::class, 'requestInfo'])->middleware('role:admin,sub_admin,sales,marketing');
-        Route::post('/subjects/{subject}/re-request', [KycReviewController::class, 'reRequest'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::post('/subjects/{subject}/approve', [KycReviewController::class, 'approve'])->middleware('role:admin,sub_admin,sales');
+        Route::post('/subjects/{subject}/reject', [KycReviewController::class, 'reject'])->middleware('role:admin,sub_admin,sales');
+        Route::post('/subjects/{subject}/request-info', [KycReviewController::class, 'requestInfo'])->middleware('role:admin,sub_admin,sales');
+        Route::post('/subjects/{subject}/re-request', [KycReviewController::class, 'reRequest'])->middleware('role:admin,sub_admin,sales');
+        Route::post('/subjects/{subject}/documents', [KycReviewController::class, 'uploadDocument'])->middleware('role:admin,sub_admin,sales');
         Route::post('/subjects/bulk-re-request', [KycReviewController::class, 'bulkReRequest'])->middleware('role:admin');
-        Route::delete('/subjects/{subject}/documents/{document}', [KycReviewController::class, 'deleteDocument'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::delete('/subjects/{subject}/documents/{document}', [KycReviewController::class, 'deleteDocument'])->middleware('role:admin,sub_admin,sales');
         Route::get('/documents/{document}/blob', [DocumentBlobController::class, 'show'])
             ->middleware(['role:admin,sub_admin,sales,marketing', 'signed'])
             ->name('api.crm.kyc.documents.blob');

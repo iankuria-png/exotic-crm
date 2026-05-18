@@ -11,12 +11,16 @@ class KycDocument extends Model
 
     protected $fillable = [
         'subject_id',
+        'uploaded_by_user_id',
         'kind',
         'storage_driver',
         'mime',
         'byte_size',
         'sha256',
         'original_filename',
+        'upload_origin',
+        'upload_source_channel',
+        'upload_note',
         's3_disk',
         's3_key',
         'uploaded_at',
@@ -35,5 +39,10 @@ class KycDocument extends Model
     public function blob()
     {
         return $this->hasOne(KycDocumentBlob::class, 'document_id');
+    }
+
+    public function uploadedBy()
+    {
+        return $this->belongsTo(User::class, 'uploaded_by_user_id');
     }
 }

@@ -12,20 +12,34 @@ class ProviderWaterfall
 
     public function generate(string $system, string $user, array $opts = []): LlmResponse
     {
+        $failures = [];
+
         foreach ($this->adapters as $adapter) {
             try {
                 $resp           = $adapter->generate($system, $user, $opts);
                 $resp->provider = $adapter->name();
                 return $resp;
             } catch (\Throwable $e) {
+                $provider = $adapter->name();
+                $message = $this->summarizeProviderError($e->getMessage());
+                $failures[$provider] = $message;
+
                 Log::warning('seo.provider_failed', [
-                    'provider' => $adapter->name(),
+                    'provider' => $provider,
                     'error'    => $e->getMessage(),
                 ]);
             }
         }
 
-        throw new AllProvidersFailedException();
+        if ($failures !== []) {
+            $summary = collect($failures)
+                ->map(fn (string $error, string $provider) => "{$provider}: {$error}")
+                ->implode(' | ');
+
+            throw new AllProvidersFailedException("All LLM providers failed. {$summary}");
+        }
+
+        throw new AllProvidersFailedException('No configured LLM providers were available. Add a provider API key and model, or rely on template fallback during bio generation.');
     }
 
     /**
@@ -56,7 +70,7 @@ class ProviderWaterfall
                 continue;
             }
 
-            /** @var \App\Services\Seo\Llm\Adapters\ClaudeAdapter $instance */
+            /** @var \App\Services\Seo\Llm\LlmClient $instance */
             $instance = app($adapterMap[$name]);
 
             // Skip adapters that aren't configured — avoids unnecessary failures in dev
@@ -68,5 +82,27 @@ class ProviderWaterfall
         }
 
         return new self($adapters);
+    }
+
+    private function summarizeProviderError(string $message): string
+    {
+        $message = trim($message);
+
+        if ($message === '') {
+            return 'Unknown provider error.';
+        }
+
+        $decoded = null;
+        if (preg_match('/\{.*\}\s*$/s', $message, $matches)) {
+            $decoded = json_decode($matches[0], true);
+        }
+
+        $apiMessage = is_array($decoded) ? data_get($decoded, 'error.message') : null;
+        if (is_string($apiMessage) && trim($apiMessage) !== '') {
+            $status = data_get($decoded, 'error.status');
+            return trim($apiMessage) . ($status ? " ({$status})" : '');
+        }
+
+        return mb_substr($message, 0, 500);
     }
 }

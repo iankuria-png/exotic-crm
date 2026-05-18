@@ -36,6 +36,18 @@ const kyc = {
         }).then((response) => response.data);
     },
 
+    uploadDocument(subjectId, payload) {
+        const formData = new FormData();
+        formData.append('kind', payload.kind);
+        formData.append('upload_source_channel', payload.upload_source_channel);
+        formData.append('upload_note', payload.upload_note);
+        formData.append('file', payload.file);
+
+        return api.post(`/crm/kyc/subjects/${subjectId}/documents`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        }).then((response) => response.data);
+    },
+
     deleteDocument(subjectId, documentId) {
         return api.delete(`/crm/kyc/subjects/${subjectId}/documents/${documentId}`).then((response) => response.data);
     },

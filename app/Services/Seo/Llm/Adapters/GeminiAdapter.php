@@ -15,7 +15,8 @@ class GeminiAdapter implements LlmClient
     public function __construct()
     {
         $this->apiKey = (string) config('services.seo_engine.gemini.api_key', '');
-        $this->model  = (string) config('services.seo_engine.gemini.model', '');
+        $model = trim((string) config('services.seo_engine.gemini.model', ''));
+        $this->model = in_array($model, ['gemini-1.5-flash', 'gemini-1.5-pro'], true) ? 'gemini-2.5-flash' : $model;
     }
 
     public function name(): string
@@ -34,7 +35,7 @@ class GeminiAdapter implements LlmClient
             throw new RuntimeException('Gemini adapter not configured (missing API key or model).');
         }
 
-        $url = "https://generativelanguage.googleapis.com/v1beta/models/{$this->model}:generateContent?key={$this->apiKey}";
+        $url = "https://generativelanguage.googleapis.com/v1beta/models/" . rawurlencode($this->model) . ":generateContent?key=" . rawurlencode($this->apiKey);
 
         $payload = [
             'contents' => [

@@ -1,30 +1,16 @@
 import React, { useState } from 'react';
 import BioPreviewModal from './BioPreviewModal';
 
-/**
- * "Generate Bio" button with preview modal.
- *
- * Props:
- *   clientId      — int | null    (present on Edit Profile)
- *   platformId    — int           (always required for preview-only mode)
- *   snapshot      — object        (current unsaved form state — overlaid on persisted data)
- *   mode          — 'preview' | 'preview-and-save'
- *                   'preview'          → never persists (Add Client, WP edit-profile)
- *                   'preview-and-save' → can send save=true (CRM Edit Profile accept)
- *   forceProvider — string | null
- *   onAccept      — fn(bioHtml) — called when user accepts the preview
- */
 export default function GenerateBioButton({
     clientId = null,
     platformId,
     snapshot = {},
-    mode = 'preview',
     forceProvider = null,
     onAccept,
 }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [preview, setPreview] = useState(null); // { bioHtml, score, breakdown, providerUsed }
+    const [preview, setPreview] = useState(null);
 
     const handleGenerate = async () => {
         setLoading(true);
@@ -51,10 +37,10 @@ export default function GenerateBioButton({
                 body: JSON.stringify(body),
             });
 
-            const data = await resp.json();
+            const data = await resp.json().catch(() => ({}));
 
             if (!resp.ok) {
-                throw new Error(data.message || `Server error ${resp.status}`);
+                throw new Error(data.message || data.error || data.detail || `Server error ${resp.status}`);
             }
 
             setPreview(data);
@@ -67,28 +53,29 @@ export default function GenerateBioButton({
 
     const handleAccept = (bioHtml) => {
         setPreview(null);
-        if (onAccept) {
-            onAccept(bioHtml);
-        }
+        onAccept?.(bioHtml);
     };
 
     return (
         <>
-            <button
-                type="button"
-                className="btn btn--sm btn--outline-primary generate-bio-btn"
-                onClick={handleGenerate}
-                disabled={loading}
-                title="Generate an SEO-optimised bio from this profile's data"
-            >
-                {loading ? 'Generating…' : '✨ Generate Bio'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+                <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={handleGenerate}
+                    disabled={loading}
+                    title="Generate an SEO-optimised bio from this profile's data"
+                >
+                    <span aria-hidden="true">✨</span>
+                    <span>{loading ? 'Generating bio…' : 'Generate SEO Bio'}</span>
+                </button>
 
-            {error && (
-                <span className="generate-bio-btn__error" role="alert">
-                    {error}
-                </span>
-            )}
+                {error ? (
+                    <span className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-sm font-medium text-rose-700" role="alert">
+                        {error}
+                    </span>
+                ) : null}
+            </div>
 
             <BioPreviewModal
                 open={preview !== null}
@@ -104,7 +91,6 @@ export default function GenerateBioButton({
 }
 
 function getCsrfToken() {
-    // Laravel Sanctum SPA: read the XSRF-TOKEN cookie
     const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : '';
 }

@@ -2627,7 +2627,7 @@ export default function ClientDetail() {
             </section>
 
             {activeTab === 'kyc' ? (
-                <KycPanel client={client} canReview={['admin', 'sub_admin', 'sales', 'marketing'].includes(String(currentUser?.role || ''))} />
+                <KycPanel client={client} canReview={['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''))} />
             ) : null}
 
             {activeTab === 'overview' ? (

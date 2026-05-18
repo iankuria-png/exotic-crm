@@ -52,6 +52,17 @@ This is for rare operational exceptions only. Admin must record a concrete reaso
 ### Exempt plans
 If `kyc_required=false`, the client stays out of the queue and should not receive nudges.
 
+### Staff-assisted uploads
+Admins, sub-admins, and sales can upload documents from the client KYC tab when the advertiser sends files through WhatsApp, support chat, email, or another assisted channel.
+
+When using the CRM uploader:
+- choose the correct document type
+- record the real source channel
+- add a reviewer note describing how the file was received
+- prefer original files over compressed WhatsApp gallery images when possible
+
+These uploads are stored as staff-assisted provenance, not as advertiser self-upload.
+
 ## What to check after each action
 - Queue status changed correctly.
 - Client timeline reflects the action.
