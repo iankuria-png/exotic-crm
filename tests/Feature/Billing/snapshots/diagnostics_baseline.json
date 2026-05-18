@@ -4,15 +4,15 @@
         "phone": "254700000222",
         "amount": 1500,
         "currency": "KES",
-        "transaction_uuid": "03a8773c-98a4-3129-b004-0dc589f1bd11",
-        "transaction_reference": "TXN-7988VN",
+        "transaction_uuid": "cbbba10b-5d5f-3769-9c46-61606e070343",
+        "transaction_reference": "TXN-5480ZI",
         "status": "pending",
-        "duration": "weekly",
-        "start_date": "2026-04-04T17:46:02.000000Z",
-        "end_date": "2026-05-04T17:46:02.000000Z",
+        "duration": "biweekly",
+        "start_date": "2026-05-18T22:48:05.000000Z",
+        "end_date": "2026-06-18T22:48:05.000000Z",
         "raw_payload": [],
-        "created_at": "2026-04-04T17:46:02.000000Z",
-        "updated_at": "2026-04-04T17:46:02.000000Z",
+        "created_at": "2026-05-18T22:48:05.000000Z",
+        "updated_at": "2026-05-18T22:48:05.000000Z",
         "escort_post_id": null,
         "deal_id": null,
         "match_confidence": null,
@@ -23,29 +23,45 @@
         "import_legacy_hash": null,
         "reconciliation_confidence": "low",
         "reconciliation_state": "open",
-        "completed_at": "2026-04-04T17:46:02.000000Z",
+        "completed_at": "2026-05-18T22:48:05.000000Z",
         "failure_reason": null,
         "reference_number": "CRM-BASELINE-REF-001",
         "payment_data": {
             "link_proxy": {
-                "token_hash": "d96d71913d7a3aa0ed9609258bcf5a5677af2545d3e8dcf761dfc8a6d6bd4110",
-                "token_expires_at": "2026-04-05T17:46:02+00:00",
+                "token_hash": "fbec1d8a921af7df88db69c203c2fc870a6fdcf656af6950f3b5f9d5d0f9784b",
+                "token_expires_at": "2026-05-19T22:48:05+00:00",
                 "provider_key": "paystack",
                 "provider_config_key": "paystack_checkout",
                 "mode": "proxy_hosted_checkout",
+                "chosen_binding_id": null,
+                "billing_surface": null,
                 "environment": "sandbox",
                 "redirect_url": "https:\/\/checkout.paystack.test\/redirect",
                 "provider_reference": "PSTK-BASELINE-001",
                 "initialized_at": "2026-04-03T10:01:00Z",
                 "opened_at": "2026-04-03T10:00:00Z",
                 "open_count": 1,
-                "sent_at": "2026-04-04T17:46:02+00:00"
+                "sent_at": "2026-05-18T22:48:05+00:00"
             }
         },
         "purpose": "subscription",
         "wallet_transaction_id": null,
         "provider_key": "paystack",
         "provider_environment": "sandbox",
+        "record_classification": "live",
+        "test_reason": null,
+        "test_marked_at": null,
+        "test_marked_by": null,
+        "resolution_code": null,
+        "resolution_meta_json": null,
+        "manual_payment_bundle_id": null,
+        "reference_root": null,
+        "reference_sequence": null,
+        "subscription_lifecycle": null,
+        "subscription_lifecycle_source": null,
+        "subscription_lifecycle_reason": null,
+        "provider_transaction_id": null,
+        "provider_reported_phone": null,
         "platform": {
             "id": 1,
             "product_id": null,
@@ -54,11 +70,11 @@
             "country": "Kenya",
             "is_active": true,
             "db_host": "127.0.0.1",
-            "db_name": "wp_marketmurb",
+            "db_name": "wp_marketsiuf",
             "db_user": "root",
             "db_prefix": "wp_",
-            "created_at": "2026-04-04T17:46:02.000000Z",
-            "updated_at": "2026-04-04T17:46:02.000000Z",
+            "created_at": "2026-05-18T22:48:05.000000Z",
+            "updated_at": "2026-05-18T22:48:05.000000Z",
             "wp_api_url": "https:\/\/baseline-market.example.test\/wp-json\/exotic-crm-sync\/v1",
             "wp_api_user": "crm-user",
             "phone_prefix": "254",
@@ -85,24 +101,38 @@
             "support_chat_url": null,
             "wallet_settings": null,
             "support_board_api_url": "https:\/\/cloud.board.support\/script\/include\/api.php",
-            "support_board_sender_id": null
+            "support_board_sender_id": null,
+            "supported_currencies": [
+                "KES"
+            ],
+            "multi_currency_wallet_enabled": false,
+            "client_sync_checkpoint_at": null,
+            "client_sync_checkpoint_post_id": null,
+            "client_sync_tombstone_checkpoint_at": null,
+            "client_sync_tombstone_checkpoint_post_id": null,
+            "client_sync_protocol": null,
+            "client_sync_contract_version": null,
+            "client_sync_capability_checked_at": null,
+            "client_sync_capability_status": null,
+            "client_sync_last_reconciled_at": null
         },
         "product": {
             "id": 1,
-            "name": "Premium 734",
-            "monthly_price": 4262.48,
-            "biweekly_price": 4718.09,
+            "name": "VIP 346",
+            "monthly_price": 9880.61,
+            "biweekly_price": 2979.03,
             "currency": "KES",
             "is_active": true,
-            "created_at": "2026-04-04T17:46:02.000000Z",
-            "updated_at": "2026-04-04T17:46:02.000000Z",
-            "weekly_price": 1837.43,
+            "created_at": "2026-05-18T22:48:05.000000Z",
+            "updated_at": "2026-05-18T22:48:05.000000Z",
+            "weekly_price": 1082.25,
             "platform_id": 1,
-            "display_name": "Premium 734",
-            "slug": "premium-734",
+            "display_name": "VIP 346",
+            "slug": "vip-346",
             "tier": "custom",
             "is_archived": false,
-            "sort_order": 0
+            "sort_order": 0,
+            "is_public": true
         },
         "client": {
             "id": 1,
@@ -113,7 +143,7 @@
             "name": "Baseline Client",
             "phone_normalized": "254700000222",
             "email": "baseline-client@example.test",
-            "city": "North Laurentown",
+            "city": "Hickleton",
             "profile_status": "publish",
             "premium": false,
             "premium_expire": null,
@@ -121,11 +151,11 @@
             "featured_expire": null,
             "escort_expire": null,
             "verified": false,
-            "main_image_url": "https:\/\/via.placeholder.com\/640x800.png\/0077dd?text=tempora",
+            "main_image_url": "https:\/\/via.placeholder.com\/640x800.png\/0011cc?text=quia",
             "assigned_to": null,
-            "last_synced_at": "2026-04-04T17:46:02.000000Z",
-            "created_at": "2026-04-04T17:46:02.000000Z",
-            "updated_at": "2026-04-04T17:46:02.000000Z",
+            "last_synced_at": "2026-05-18T22:48:05.000000Z",
+            "created_at": "2026-05-18T22:48:05.000000Z",
+            "updated_at": "2026-05-18T22:48:05.000000Z",
             "last_online_at": null,
             "duplicate_of": null,
             "wallet_balance": "0.00",
@@ -135,7 +165,33 @@
             "sb_matched_by": null,
             "signup_source": null,
             "wp_modified_at": null,
+            "is_high_risk": false,
+            "risk_reason_code": null,
+            "risk_marked_at": null,
+            "risk_marked_by": null,
+            "needs_payment": false,
+            "notactive": false,
+            "display_image_url": null,
+            "display_image_source": null,
+            "display_image_checked_at": null,
+            "force_new": false,
+            "new_badge_mode": "auto",
+            "source_presence_status": "present",
+            "source_missing_at": null,
+            "source_missing_count": 0,
+            "last_seen_in_reconcile_at": null,
+            "wp_profile_permalink": null,
+            "wp_profile_slug": null,
+            "seo_score": null,
+            "seo_score_breakdown": null,
+            "seo_score_updated_at": null,
+            "kyc_required": true,
+            "verified_source": null,
+            "verified_source_at": null,
+            "verified_source_actor_id": null,
+            "verified_source_reason": null,
             "wp_profile_url": "https:\/\/baseline-market.example.test\/?p=5511",
+            "plan_key": "basic",
             "plan_label": "Basic",
             "platform": {
                 "id": 1,
@@ -145,11 +201,11 @@
                 "country": "Kenya",
                 "is_active": true,
                 "db_host": "127.0.0.1",
-                "db_name": "wp_marketmurb",
+                "db_name": "wp_marketsiuf",
                 "db_user": "root",
                 "db_prefix": "wp_",
-                "created_at": "2026-04-04T17:46:02.000000Z",
-                "updated_at": "2026-04-04T17:46:02.000000Z",
+                "created_at": "2026-05-18T22:48:05.000000Z",
+                "updated_at": "2026-05-18T22:48:05.000000Z",
                 "wp_api_url": "https:\/\/baseline-market.example.test\/wp-json\/exotic-crm-sync\/v1",
                 "wp_api_user": "crm-user",
                 "phone_prefix": "254",
@@ -176,10 +232,24 @@
                 "support_chat_url": null,
                 "wallet_settings": null,
                 "support_board_api_url": "https:\/\/cloud.board.support\/script\/include\/api.php",
-                "support_board_sender_id": null
+                "support_board_sender_id": null,
+                "supported_currencies": [
+                    "KES"
+                ],
+                "multi_currency_wallet_enabled": false,
+                "client_sync_checkpoint_at": null,
+                "client_sync_checkpoint_post_id": null,
+                "client_sync_tombstone_checkpoint_at": null,
+                "client_sync_tombstone_checkpoint_post_id": null,
+                "client_sync_protocol": null,
+                "client_sync_contract_version": null,
+                "client_sync_capability_checked_at": null,
+                "client_sync_capability_status": null,
+                "client_sync_last_reconciled_at": null
             }
         },
-        "deal": null
+        "deal": null,
+        "manual_submission": null
     },
     "failure": {
         "status": "pending",
@@ -191,18 +261,19 @@
     },
     "performance": {
         "attempt_count": 1,
-        "avg_latency_ms": 7,
-        "p95_latency_ms": 7,
-        "last_latency_ms": 7
+        "avg_latency_ms": 1,
+        "p95_latency_ms": 1,
+        "last_latency_ms": 1
     },
     "browser_meta": {
         "context_type": null,
-        "origin_url": null,
-        "referrer": null,
         "user_agent_family": null,
         "device_type": null,
+        "origin_url": null,
+        "referrer": null,
         "ip_hash": null,
-        "request_id": null
+        "request_id": null,
+        "redacted": true
     },
     "recommendations": [
         {
@@ -218,21 +289,26 @@
             "recommended": false
         }
     ],
+    "action_capabilities": {
+        "check_provider_status": true,
+        "sandbox_reconcile": true
+    },
+    "manual_submission": null,
     "link_proxy": {
         "mode": "proxy_hosted_checkout",
         "provider_key": "paystack",
         "provider_config_key": "paystack_checkout",
         "environment": "sandbox",
         "token_status": "active",
-        "token_expires_at": "2026-04-05 17:46:02",
+        "token_expires_at": "2026-05-19 22:48:05",
         "rotation_count": 0,
-        "sent_at": "2026-04-04 17:46:02",
+        "sent_at": "2026-05-18 22:48:05",
         "opened_at": "2026-04-03 10:00:00",
         "open_count": 1,
         "initialized_at": "2026-04-03 10:01:00",
         "redirect_url": "https:\/\/checkout.paystack.test\/redirect",
         "provider_reference": "PSTK-BASELINE-001",
-        "callback_at": "2026-04-04 17:46:02",
+        "callback_at": "2026-05-18 22:48:05",
         "session_status": "checkout_initialized",
         "last_provider_check": null
     },
@@ -245,23 +321,25 @@
             "error_code": null,
             "error_message": null,
             "http_status": null,
-            "latency_ms": 7,
+            "latency_ms": 1,
             "request_meta": {
-                "channel": "sms",
-                "requested_provider": "paystack_checkout",
-                "phone": "254700000222"
+                "provider_environment": null,
+                "context_type": null,
+                "request_id": null,
+                "redacted": true
             },
             "response_meta": {
-                "sms_status": "disabled",
-                "provider_response": "SMS dispatch disabled (SMS_ENABLED=false)",
-                "payment_url": "https:\/\/billing-sandbox.example.test\/api\/payments\/link\/O0HpfXi8MOf4uy7FQOj0NU5gIhD7jJuvHSHYMSPeqAYsYomTIWnnLMPwDNxfGF80"
+                "provider_status": null,
+                "provider_message": null,
+                "provider_payload": "[redacted]",
+                "redacted": true
             },
             "actor": {
                 "id": 1,
                 "name": "Sales Baseline",
-                "email": "nc9vTAmd@example.test"
+                "email": "0zXJc75Z@example.test"
             },
-            "created_at": "2026-04-04 17:46:02"
+            "created_at": "2026-05-18 22:48:05"
         }
     ],
     "audit_trail": [
@@ -270,22 +348,285 @@
             "action": "payment_send_link",
             "reason": "Baseline snapshot",
             "before_state": {
-                "channel": "sms",
-                "phone": "254700000222",
-                "provider": "paystack_checkout"
+                "redacted": true
             },
             "after_state": {
-                "sms_success": true,
-                "sms_status": "disabled",
-                "provider": "paystack_checkout",
-                "mode": "proxy_hosted_checkout"
+                "redacted": true
             },
             "actor": {
                 "id": 1,
                 "name": "Sales Baseline"
             },
-            "created_at": "2026-04-04 17:46:02"
+            "created_at": "2026-05-18 22:48:05"
         }
     ],
-    "timeline": []
+    "timeline": [],
+    "provider_transactions": [],
+    "legacy_operations": [
+        {
+            "key": "auto_match",
+            "label": "Auto-match payment",
+            "surface": "payments_workspace",
+            "disposition": "preserved",
+            "handler": "payment_matching_service",
+            "replacement": null,
+            "summary": "Keep queue auto-match as an operator accelerator while matching remains a human-assisted workflow."
+        },
+        {
+            "key": "manual_match",
+            "label": "Manual match payment",
+            "surface": "payments_workspace",
+            "disposition": "preserved",
+            "handler": "payment_matching_service",
+            "replacement": null,
+            "summary": "Keep manual client confirmation for low-confidence matches and imported payments."
+        },
+        {
+            "key": "retry_stk",
+            "label": "Retry STK push",
+            "surface": "payments_workspace",
+            "disposition": "preserved",
+            "handler": "legacy_stk_compatibility",
+            "replacement": "provider adapter retry path",
+            "summary": "Preserve STK retry behind the compatibility bridge until Daraja\/KopoKopo adapter retries are live."
+        },
+        {
+            "key": "send_link",
+            "label": "Send payment link",
+            "surface": "payments_workspace",
+            "disposition": "migrated",
+            "handler": "payment_link_service",
+            "replacement": "routing and proxy lifecycle bridge",
+            "summary": "Payment-link recovery stays available, but now runs through the routing engine and proxy lifecycle bridge."
+        },
+        {
+            "key": "create_subscription",
+            "label": "Create subscription",
+            "surface": "payments_workspace",
+            "disposition": "preserved",
+            "handler": "subscription_provisioning_service",
+            "replacement": null,
+            "summary": "Keep matched-payment subscription creation as a controlled back-office recovery action."
+        },
+        {
+            "key": "manual_close",
+            "label": "Manual close payment",
+            "surface": "payments_workspace",
+            "disposition": "preserved",
+            "handler": "payment_queue_manual_close",
+            "replacement": null,
+            "summary": "Keep explicit manual closure for timeout, cancellation, fraud, and duplicate request resolution."
+        },
+        {
+            "key": "review_state",
+            "label": "Manual review state",
+            "surface": "payments_workspace",
+            "disposition": "preserved",
+            "handler": "payment_queue_review_state",
+            "replacement": null,
+            "summary": "Keep operator review-state transitions until diagnostics and settlement tooling fully automate triage."
+        },
+        {
+            "key": "batch_match",
+            "label": "Batch auto-match queue",
+            "surface": "payments_workspace",
+            "disposition": "preserved",
+            "handler": "payment_matching_service",
+            "replacement": null,
+            "summary": "Keep batch queue matching for import-heavy markets where payments arrive before structured checkout data."
+        },
+        {
+            "key": "direct_operator_provider_override",
+            "label": "Direct operator provider override",
+            "surface": "deal_and_client_payment_link_flows",
+            "disposition": "retired",
+            "handler": null,
+            "replacement": "market billing policy plus audited admin override",
+            "summary": "Normal operators no longer choose payment-link providers directly. Billing policy is the default; admins can override with audit."
+        },
+        {
+            "key": "direct_proxy_token_handling",
+            "label": "Direct proxy token handling",
+            "surface": "proxy_checkout",
+            "disposition": "retired",
+            "handler": null,
+            "replacement": "billing proxy lifecycle service and diagnostics",
+            "summary": "Proxy lifecycle is now durable and observable through billing proxy sessions instead of ad hoc token state only in payment_data."
+        }
+    ],
+    "legacy_operations_summary": {
+        "preserved": 7,
+        "migrated": 1,
+        "retired": 2
+    },
+    "structured_diagnostics": {
+        "payment_id": 1,
+        "source": "shared_diagnostics_backend_v1",
+        "sections": [
+            {
+                "key": "routing",
+                "title": "Routing",
+                "status": "healthy",
+                "summary": "Proxy route via Paystack (SANDBOX).",
+                "entries": [
+                    {
+                        "label": "Provider profile",
+                        "value": "Legacy \/ unavailable"
+                    },
+                    {
+                        "label": "Provider key",
+                        "value": "paystack"
+                    },
+                    {
+                        "label": "Route mode",
+                        "value": "proxy"
+                    },
+                    {
+                        "label": "Environment",
+                        "value": "SANDBOX"
+                    },
+                    {
+                        "label": "Fallback taken",
+                        "value": "No"
+                    }
+                ]
+            },
+            {
+                "key": "provider_transactions",
+                "title": "Provider Transaction",
+                "status": "unavailable",
+                "summary": "No structured provider transactions are linked to this payment yet.",
+                "entries": [
+                    {
+                        "label": "CRM phone",
+                        "value": "254700000222"
+                    },
+                    {
+                        "label": "Deposit ID",
+                        "value": "TXN-5480ZI"
+                    },
+                    {
+                        "label": "Provider Transaction ID",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Failure reason",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Latest provider profile",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Latest state",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Attempt sequence",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Compatibility ref",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Last status at",
+                        "value": "\u2014"
+                    }
+                ],
+                "items": []
+            },
+            {
+                "key": "webhooks",
+                "title": "Webhook State",
+                "status": "unavailable",
+                "summary": "No webhook inbox records are linked to this payment.",
+                "entries": [
+                    {
+                        "label": "Latest status",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Signature status",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Retry count",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Received at",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Processed at",
+                        "value": "\u2014"
+                    }
+                ]
+            },
+            {
+                "key": "wallet",
+                "title": "Wallet Ledger",
+                "status": "neutral",
+                "summary": "This payment is not linked to a wallet ledger movement.",
+                "entries": [
+                    {
+                        "label": "Origin",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Wallet transaction",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Reference type",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Balance after",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Synced to WP",
+                        "value": "No"
+                    }
+                ]
+            },
+            {
+                "key": "provisioning",
+                "title": "Provisioning State",
+                "status": "neutral",
+                "summary": "No structured provisioning state has been recorded yet.",
+                "entries": [
+                    {
+                        "label": "Provisioning status",
+                        "value": "unknown"
+                    },
+                    {
+                        "label": "Linked deal",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Deal status",
+                        "value": "\u2014"
+                    },
+                    {
+                        "label": "Deal expiry",
+                        "value": "\u2014"
+                    }
+                ],
+                "items": []
+            }
+        ],
+        "meta": {
+            "generated_at": "2026-05-18 22:48:05",
+            "legacy_composed": false,
+            "redacted": true,
+            "viewer_role": "sales",
+            "redaction_profile": "operator"
+        }
+    },
+    "permissions": {
+        "view_raw_payloads": false
+    }
 }

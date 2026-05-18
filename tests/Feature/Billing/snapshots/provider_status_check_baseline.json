@@ -1,10 +1,10 @@
 {
     "provider": "paystack",
     "provider_environment": "sandbox",
-    "provider_reference": "TXN-8673YG",
+    "provider_reference": "TXN-2544SD",
     "status": "completed",
     "message": "Approved",
-    "checked_at": "2026-04-04 17:46:02",
+    "checked_at": "2026-05-18 22:48:07",
     "data": {
         "status": "success",
         "gateway_response": "Approved",

@@ -4,13 +4,34 @@
     "config": {
         "market": {
             "platform_id": 1,
-            "currency": "KES"
+            "currency": "KES",
+            "effective_currencies": [
+                "KES"
+            ],
+            "multi_currency_wallet_enabled": false
         },
         "topup_presets": [
             "500.00",
             "1000.00",
             "2000.00",
             "5000.00"
+        ],
+        "topup_presets_by_currency": {
+            "KES": [
+                "500.00",
+                "1000.00",
+                "2000.00",
+                "5000.00"
+            ]
+        },
+        "limits_by_currency": {
+            "KES": {
+                "max_single_topup": "50000.00",
+                "max_wallet_balance": "200000.00"
+            }
+        },
+        "supported_currencies": [
+            "KES"
         ],
         "providers": [],
         "show_refresh_button": true,
@@ -64,8 +85,8 @@
             "enabled": true,
             "percent": 10,
             "label": "Self-service special",
-            "starts_at": "2026-04-28T02:53:29+00:00",
-            "expires_at": "2026-04-29T03:53:29+00:00",
+            "starts_at": "2026-05-18T21:48:08+00:00",
+            "expires_at": "2026-05-19T22:48:08+00:00",
             "sources": [
                 "wallet",
                 "self_checkout",
