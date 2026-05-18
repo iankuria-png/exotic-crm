@@ -78,6 +78,9 @@ class Client extends Model
         'source_missing_at',
         'source_missing_count',
         'last_seen_in_reconcile_at',
+        'seo_score',
+        'seo_score_breakdown',
+        'seo_score_updated_at',
     ];
 
     protected $casts = [
@@ -104,6 +107,9 @@ class Client extends Model
         'risk_marked_at' => 'datetime',
         'display_image_checked_at' => 'datetime',
         'verified_source_at' => 'datetime',
+        'seo_score' => 'integer',
+        'seo_score_breakdown' => 'array',
+        'seo_score_updated_at' => 'datetime',
     ];
 
     protected $appends = [

@@ -108,6 +108,40 @@ return [
         'auto_match_min_margin' => (int) env('PUSH_CAMPAIGNS_AUTO_MATCH_MIN_MARGIN', 15),
     ],
 
+    'seo_engine' => [
+        'enabled' => filter_var(env('SEO_ENGINE_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'providers' => array_filter(array_map(
+            'trim',
+            explode(',', env('SEO_PROVIDERS', 'claude,openai,gemini,deepseek'))
+        )),
+        'platform_allowlist' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', env('SEO_ENGINE_PLATFORM_ALLOWLIST', ''))
+        ))),
+        'claude' => [
+            'api_key' => env('ANTHROPIC_API_KEY'),
+            'model'   => env('SEO_CLAUDE_MODEL'),
+        ],
+        'openai' => [
+            'api_key' => env('OPENAI_API_KEY'),
+            'model'   => env('SEO_OPENAI_MODEL'),
+        ],
+        'gemini' => [
+            'api_key' => env('GEMINI_API_KEY'),
+            'model'   => env('SEO_GEMINI_MODEL'),
+        ],
+        'deepseek' => [
+            'api_key' => env('DEEPSEEK_API_KEY'),
+            'model'   => env('SEO_DEEPSEEK_MODEL'),
+        ],
+        'scorer_weights' => [
+            'word_count'   => (int) env('SEO_WEIGHT_WORD_COUNT', 25),
+            'links'        => (int) env('SEO_WEIGHT_LINKS', 25),
+            'completeness' => (int) env('SEO_WEIGHT_COMPLETENESS', 25),
+            'media'        => (int) env('SEO_WEIGHT_MEDIA', 25),
+        ],
+    ],
+
     'reporting_fx' => [
         'enabled' => filter_var(env('REPORTING_FX_ENABLED', false), FILTER_VALIDATE_BOOL),
         'default_currency' => env('REPORTING_CURRENCY', 'USD'),

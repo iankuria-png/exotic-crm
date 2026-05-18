@@ -18,6 +18,7 @@ import PushRoutingPanel from '../components/settings/PushRoutingPanel';
 import ScraperConfigPanel from '../components/settings/ScraperConfigPanel';
 import ScraperCreateModal from '../components/settings/ScraperCreateModal';
 import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
+import SeoEnginePanel from '../components/settings/SeoEnginePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
@@ -31,6 +32,7 @@ const baseTabs = [
     { id: 'integrations', label: 'Integrations' },
     { id: 'kyc', label: 'KYC' },
     { id: 'billing', label: 'Billing' },
+    { id: 'seo-engine', label: 'SEO Engine' },
     { id: 'faq', label: 'FAQ & Feedback' },
     { id: 'templates', label: 'Templates' },
     { id: 'logs', label: 'Webhook Logs' },
@@ -8403,6 +8405,10 @@ export default function Settings() {
                 return canAccessBillingWorkspace && billingWorkspaceEnabled;
             }
 
+            if (tab.id === 'seo-engine') {
+                return ['admin', 'sub_admin'].includes(user?.role || '');
+            }
+
             return true;
         });
     }, [billingWorkspaceEnabled, canAccessBillingWorkspace, canManageSecurity, canViewRoles, user?.role]);
@@ -8469,6 +8475,7 @@ export default function Settings() {
             ) : null}
 
             {activeTab === 'billing' && canAccessBillingWorkspace && billingWorkspaceEnabled ? <BillingWorkspace /> : null}
+            {activeTab === 'seo-engine' ? <SeoEnginePanel /> : null}
             {activeTab === 'faq' ? <FaqWorkspace /> : null}
             {activeTab === 'templates' ? <TemplatesWorkspace canManageTemplates={canManageTemplates} /> : null}
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}

@@ -163,6 +163,26 @@ class WpSyncService
         ]);
     }
 
+    /**
+     * Write SEO score and breakdown postmeta to WordPress.
+     * Clears the seo_quality_score_stale flag on the WP side.
+     */
+    public function writeSeoScore(int $postId, int $score, array $breakdown): array
+    {
+        return $this->post("/clients/{$postId}/seo-score", [
+            'score'     => $score,
+            'breakdown' => $breakdown,
+        ]);
+    }
+
+    /**
+     * Fetch the link catalog (city/neighborhood terms + curated attribute pages) for this platform.
+     */
+    public function getLinkCatalog(): array
+    {
+        return $this->get('/seo/link-catalog');
+    }
+
     public function pushKycSubjectStatus(int $postId, array $payload): array
     {
         $path = "/wp-json/exotic-kyc/v1/subjects/{$postId}/status";

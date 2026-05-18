@@ -75,6 +75,7 @@ class Kernel extends HttpKernel
         'wallet.auth' => \App\Http\Middleware\AuthenticateWalletRequest::class,
         'verify.wordpress.shared_key' => \App\Http\Middleware\VerifyWordPressSharedKey::class,
         'verify.kyc.upload' => \App\Http\Middleware\VerifyKycUploadToken::class,
+        'wp.service.auth' => \App\Http\Middleware\WpServiceAuth::class,
     ];
     
     protected function schedule(Schedule $schedule)

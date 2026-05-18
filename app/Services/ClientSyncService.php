@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\RecomputeSeoScoreJob;
 use App\Models\Client;
 use App\Models\KycSubject;
 use App\Models\ClientSyncRun;
@@ -543,11 +544,17 @@ class ClientSyncService
                         'source_missing_at',
                         'source_missing_count',
                         'last_seen_in_reconcile_at',
+                        'seo_score',
+                        'seo_score_breakdown',
+                        'seo_score_updated_at',
                         'updated_at',
                     ]
                 );
             });
         }
+
+        // Dispatch recompute jobs for any clients whose WP bio was edited directly
+        $this->dispatchStaleRecomputes($wpClients, (int) $this->platform->id);
 
         return [
             'created' => $created,
@@ -555,6 +562,34 @@ class ClientSyncService
             'skipped' => $skipped,
             'processed' => $created + $updated + $skipped,
         ];
+    }
+
+    private function dispatchStaleRecomputes(array $wpClients, int $platformId): void
+    {
+        $stalePostIds = [];
+        foreach ($wpClients as $wpClient) {
+            if (!empty($wpClient['seo_quality_score_stale'])) {
+                $postId = (int) ($wpClient['wp_post_id'] ?? 0);
+                if ($postId > 0) {
+                    $stalePostIds[] = $postId;
+                }
+            }
+        }
+
+        if (empty($stalePostIds)) {
+            return;
+        }
+
+        $clientIds = Client::query()
+            ->where('platform_id', $platformId)
+            ->whereIn('wp_post_id', $stalePostIds)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        foreach ($clientIds as $clientId) {
+            RecomputeSeoScoreJob::dispatch($clientId)->onQueue('default');
+        }
     }
 
     private function buildBulkClientRow(array $wpClient, ?Client $existing, string $mode, Carbon $now): array
@@ -606,6 +641,18 @@ class ClientSyncService
             'source_missing_at' => null,
             'source_missing_count' => 0,
             'last_seen_in_reconcile_at' => $mode === 'reconcile' ? $now : $existing?->last_seen_in_reconcile_at,
+            // SEO score: preserve '' as null, preserve valid 0 score
+            'seo_score' => (function () use ($wpClient, $existing) {
+                $raw = $wpClient['seo_quality_score'] ?? null;
+                if ($raw === null) {
+                    return $existing?->seo_score;
+                }
+                return $raw === '' ? null : (int) $raw;
+            })(),
+            'seo_score_breakdown' => isset($wpClient['seo_quality_score_breakdown'])
+                ? json_encode($wpClient['seo_quality_score_breakdown'])
+                : ($existing?->seo_score_breakdown !== null ? json_encode($existing->seo_score_breakdown) : null),
+            'seo_score_updated_at' => isset($wpClient['seo_quality_score']) ? $now : $existing?->seo_score_updated_at,
             'created_at' => $existing?->created_at ?: $now,
             'updated_at' => $now,
         ];

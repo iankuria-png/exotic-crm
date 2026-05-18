@@ -1,0 +1,17 @@
+[
+  {
+    "intro": "Meet {name}, a distinguished {age}-year-old {ethnicity} companion based in {city}.",
+    "middle": "Specialising in {top_service} and available for {availability_text} bookings, {name} stands {height} with a {build} build and {hair_color} hair.",
+    "closer": "Reach out to {name} for an unforgettable experience in {neighborhood_or_city}."
+  },
+  {
+    "intro": "{name} is a charismatic {ethnicity} companion in {city}, offering premium {top_service} services to those who appreciate quality.",
+    "middle": "At {age} years old, {name} combines physical appeal — {build}, {hair_color} hair, {height} — with genuine charm and discretion.",
+    "closer": "Connect with {name} in {neighborhood_or_city} — available {availability_text}."
+  },
+  {
+    "intro": "Discover {name}, a refined {age}-year-old {ethnicity} escort offering exclusive {top_service} services across {city}.",
+    "middle": "Standing {height} with a {build} physique and {hair_color} hair, {name} is the ideal companion for sophisticated encounters.",
+    "closer": "Book {name} in {neighborhood_or_city} today."
+  }
+]

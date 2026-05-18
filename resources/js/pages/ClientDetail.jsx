@@ -13,6 +13,8 @@ import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
 import { DEAL_DEACTIVATION_REASON_OPTIONS, LINKED_PAYMENT_ACTION_OPTIONS, defaultLinkedPaymentAction } from '../utils/deactivationOptions';
 import ClientHealthSection from '../components/ClientHealthSection';
+import GenerateBioButton from '../components/seo/GenerateBioButton';
+import SeoQualityPanel from '../components/seo/SeoQualityPanel';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
 import KycPanel from '../components/kyc/KycPanel';
 import { proxyImageUrl } from '../utils/imageProxy';
@@ -3639,7 +3641,23 @@ export default function ClientDetail() {
                                                 rows={4}
                                                 placeholder="Public profile description"
                                             />
+                                            <div className="flex items-center gap-3 mt-1">
+                                                <GenerateBioButton
+                                                    clientId={client?.id ?? null}
+                                                    platformId={client?.platform_id ?? null}
+                                                    snapshot={profileForm ?? {}}
+                                                    mode="preview"
+                                                    onAccept={(bioHtml) => setProfileForm((current) => ({ ...current, bio: bioHtml }))}
+                                                />
+                                            </div>
                                         </label>
+                                        <div className="md:col-span-2">
+                                            <SeoQualityPanel
+                                                score={client?.seo_score ?? null}
+                                                breakdown={client?.seo_score_breakdown ?? null}
+                                                stale={client?.seo_score_stale ?? false}
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             ) : null}

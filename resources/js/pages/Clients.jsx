@@ -13,6 +13,7 @@ import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { deriveClientProfileState, isClientPubliclyActive } from '../utils/clientProfileState';
 import { normalizePhone } from '../utils/phone';
+import GenerateBioButton from '../components/seo/GenerateBioButton';
 import { useAuth } from '../hooks/useAuth';
 import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
 import { proxyImageUrl } from '../utils/imageProxy';
@@ -2111,6 +2112,14 @@ export default function Clients() {
                                                 maxLength={5000}
                                                 placeholder="Short public profile introduction"
                                             />
+                                            <div className="mt-1">
+                                                <GenerateBioButton
+                                                    platformId={createForm.platform_id ? Number(createForm.platform_id) : null}
+                                                    snapshot={createForm}
+                                                    mode="preview"
+                                                    onAccept={(bioHtml) => setCreateForm((current) => ({ ...current, bio: bioHtml }))}
+                                                />
+                                            </div>
                                         </div>
 
                                         <div className="mt-3">

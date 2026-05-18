@@ -24,6 +24,7 @@ use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ErrorLogController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
+use App\Http\Controllers\CRM\SeoSettingsController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
 use App\Http\Controllers\CRM\ImageProxyController;
@@ -63,9 +64,17 @@ use App\Http\Controllers\CRM\University\GlossaryController as UniversityGlossary
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
+use App\Http\Controllers\CRM\SeoController;
+use App\Http\Controllers\Wp\WpSeoController;
+use App\Http\Middleware\WpServiceAuth;
 
 Route::get('/ping', function () {
     return response()->json(['message' => 'API is working!']);
+});
+
+// ==================== SEO ENGINE — WP service routes (HMAC auth) ====================
+Route::middleware(['wp.service.auth'])->prefix('wp-svc/seo')->group(function () {
+    Route::post('/generate-bio', [WpSeoController::class, 'generateBio']);
 });
 
 // ==================== CRM ROUTES ====================
@@ -111,6 +120,11 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/logout', [CrmAuthController::class, 'logout']);
     Route::post('/heartbeat', [TeamController::class, 'heartbeat']);
     Route::get('/team/me', [TeamController::class, 'myStats']);
+
+    // SEO Profile Optimization Engine
+    Route::prefix('seo')->group(function () {
+        Route::post('/generate-bio', [SeoController::class, 'generateBio']);
+    });
 
     // Dashboard
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
@@ -439,6 +453,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/reporting-fx-rates', [SettingsController::class, 'createReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::patch('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'updateReportingFxRate'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/reporting-fx-rates/{reportingFxRate}', [SettingsController::class, 'deleteReportingFxRate'])->middleware('role:admin,sub_admin');
+    Route::get('/settings/seo-engine', [SeoSettingsController::class, 'show'])->middleware('role:admin,sub_admin');
+    Route::patch('/settings/seo-engine', [SeoSettingsController::class, 'update'])->middleware('role:admin');
+    Route::post('/settings/seo-engine/test', [SeoSettingsController::class, 'test'])->middleware('role:admin');
     Route::get('/settings/sales-dashboard-widgets', [SettingsController::class, 'getSalesDashboardWidgets']);
     Route::patch('/settings/sales-dashboard-widgets', [SettingsController::class, 'updateSalesDashboardWidgets'])->middleware('role:admin,sub_admin');
     Route::get('/settings/billing/overview', [SettingsController::class, 'billingOverview']);
