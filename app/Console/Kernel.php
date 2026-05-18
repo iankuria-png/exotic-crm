@@ -164,6 +164,27 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
+        $schedule->command('crm:kyc-reverify-sweep')
+            ->name('crm_kyc_reverify_sweep')
+            ->dailyAt('02:25')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_kyc_reverify_sweep.log'));
+
+        $schedule->command('crm:kyc-escalate-overdue')
+            ->name('crm_kyc_escalate_overdue')
+            ->dailyAt('02:30')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_kyc_escalate_overdue.log'));
+
+        $schedule->command('crm:kyc-recompute-exemptions')
+            ->name('crm_kyc_recompute_exemptions')
+            ->hourly()
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_kyc_recompute_exemptions.log'));
+
         $schedule->command('crm:prune-error-logs')
             ->name('crm_prune_error_logs')
             ->dailyAt('02:40')

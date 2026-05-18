@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Client;
+use App\Models\KycSubject;
 use App\Models\ClientSyncRun;
 use App\Models\ClientSyncExclusion;
 use App\Models\Platform;
@@ -154,8 +155,12 @@ class ClientSyncService
             'platform_id' => $this->platform->id,
             'wp_post_id'  => $wpPostId,
         ]);
+        $wasRecentlyCreated = !$client->exists;
+        $previousVerified = (bool) ($client->verified ?? false);
+        $previousVerifiedSource = (string) ($client->verified_source ?? '');
 
         $newBadgeMode = $this->resolveNewBadgeMode($wpClient);
+        $incomingVerified = (bool) ($wpClient['verified'] ?? false);
 
         $syncData = [
             'wp_user_id'      => $wpClient['wp_user_id'] ?? null,
@@ -172,7 +177,7 @@ class ClientSyncService
             'featured'        => (bool) ($wpClient['featured'] ?? false),
             'featured_expire' => $featuredExpire,
             'escort_expire'   => $escortExpire,
-            'verified'        => (bool) ($wpClient['verified'] ?? false),
+            'verified'        => $incomingVerified,
             'force_new'       => $newBadgeMode === 'force_on',
             'new_badge_mode'  => $newBadgeMode,
             'last_online_at'  => $this->ensureUnixTimestamp($wpClient['last_online'] ?? null),
@@ -198,7 +203,72 @@ class ClientSyncService
         $client->fill($syncData);
         $client->save();
 
-        return $client->wasRecentlyCreated ? 'created' : 'updated';
+        if ($incomingVerified && ($client->verified_source === null || $client->verified_source === '')) {
+            $client->forceFill([
+                'verified_source' => 'manual_wp',
+                'verified_source_at' => now(),
+                'verified_source_actor_id' => null,
+                'verified_source_reason' => $client->verified_source_reason ?: 'Imported verified state from WordPress.',
+            ])->save();
+
+            $this->markSubjectApprovedFromWp($client);
+        } elseif ($previousVerifiedSource === 'kyc' && $previousVerified !== $incomingVerified) {
+            app(AuditService::class)->record([
+                'platform_id' => (int) $client->platform_id,
+                'actor_id' => null,
+                'action' => 'client.verified_conflict',
+                'entity_type' => 'client',
+                'entity_id' => (int) $client->id,
+                'before_state' => [
+                    'verified' => $previousVerified,
+                    'verified_source' => $previousVerifiedSource,
+                ],
+                'after_state' => [
+                    'verified' => $incomingVerified,
+                    'verified_source' => 'manual_wp',
+                ],
+                'reason' => 'WordPress verified state overrode a KYC-derived verified state during sync.',
+            ]);
+
+            $client->forceFill([
+                'verified_source' => 'manual_wp',
+                'verified_source_at' => now(),
+                'verified_source_actor_id' => null,
+                'verified_source_reason' => 'WordPress verified state overrode a prior KYC-derived verified state.',
+            ])->save();
+
+            if ($incomingVerified) {
+                $this->markSubjectApprovedFromWp($client);
+            }
+        }
+
+        return $wasRecentlyCreated ? 'created' : 'updated';
+    }
+
+    private function markSubjectApprovedFromWp(Client $client): void
+    {
+        $subject = KycSubject::query()->firstOrCreate(
+            ['client_id' => (int) $client->id],
+            ['status' => KycSubject::STATUS_UNVERIFIED, 'grace_started_at' => now()]
+        );
+
+        $subject->forceFill([
+            'status' => KycSubject::STATUS_APPROVED,
+            'verified_at' => now(),
+            'expires_at' => now()->addDays((int) config('kyc.reverify_interval_days', 365)),
+            'last_reason_user' => 'Approved via WordPress manual verified status.',
+        ])->save();
+
+        \App\Models\KycSubjectSite::query()->updateOrCreate(
+            [
+                'subject_id' => (int) $subject->id,
+                'platform_id' => (int) $client->platform_id,
+                'wp_post_id' => (int) $client->wp_post_id,
+            ],
+            [
+                'wp_user_id' => (int) ($client->wp_user_id ?? 0) ?: null,
+            ]
+        );
     }
 
     private function runLegacyBulkSync(ClientSyncRun $run, int $perPage, array $capability): array

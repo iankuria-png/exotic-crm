@@ -14,6 +14,7 @@ import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from
 import { DEAL_DEACTIVATION_REASON_OPTIONS, LINKED_PAYMENT_ACTION_OPTIONS, defaultLinkedPaymentAction } from '../utils/deactivationOptions';
 import ClientHealthSection from '../components/ClientHealthSection';
 import ClientAnalyticsTab from '../components/ClientAnalyticsTab';
+import KycPanel from '../components/kyc/KycPanel';
 import { proxyImageUrl } from '../utils/imageProxy';
 import { deriveClientProfileState, isClientTrueForeverPlan } from '../utils/clientProfileState';
 import { getMediaUploadPreflight, useMediaUploads } from '../components/MediaUploadProvider';
@@ -772,7 +773,6 @@ export default function ClientDetail() {
     const [dealDiscountPayableAmount, setDealDiscountPayableAmount] = useState('');
     const [dealDiscountPin, setDealDiscountPin] = useState('');
     const [notifyClient, setNotifyClient] = useState(false);
-    const [showVerifiedDialog, setShowVerifiedDialog] = useState(false);
     const [showNewBadgeDialog, setShowNewBadgeDialog] = useState(false);
     const [showTourModal, setShowTourModal] = useState(false);
     const [tourForm, setTourForm] = useState({ city: '', start: '', end: '', phone: '' });
@@ -1144,21 +1144,6 @@ export default function ClientDetail() {
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Profile subscription deactivation failed.');
-        },
-    });
-
-    // ── Verified Status ──────────────────────────────────────────────────────
-    const updateVerifiedStatusMutation = useMutation({
-        mutationFn: (verified) =>
-            api.post(`/crm/clients/${id}/verified-status`, { verified }).then((r) => r.data),
-        onSuccess: (data) => {
-            queryClient.setQueryData(['client', id], data);
-            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
-            setShowVerifiedDialog(false);
-            toast.success(data.verified ? 'Verified badge applied.' : 'Verified badge removed.');
-        },
-        onError: (err) => {
-            toast.error(err?.response?.data?.message || 'Failed to update verified status.');
         },
     });
 
@@ -2304,29 +2289,6 @@ export default function ClientDetail() {
                                     Add tour
                                 </button>
 
-                                {/* Verified pill toggle */}
-                                <button
-                                    type="button"
-                                    onClick={() => setShowVerifiedDialog(true)}
-                                    title={client.verified ? 'Click to remove verified badge' : 'Click to mark as verified'}
-                                    className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                                        client.verified
-                                            ? 'border-teal-300 bg-teal-50 text-teal-700 hover:bg-teal-100'
-                                            : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-                                    }`}
-                                >
-                                    {client.verified ? (
-                                        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
-                                            <path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clipRule="evenodd" />
-                                        </svg>
-                                    ) : (
-                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                        </svg>
-                                    )}
-                                    {client.verified ? 'Verified' : 'Mark verified'}
-                                </button>
-
                                 {/* NEW badge pin toggle */}
                                 <button
                                     type="button"
@@ -2391,6 +2353,8 @@ export default function ClientDetail() {
                     </div>
                 </div>
             </section>
+
+            <KycPanel client={client} canReview={['admin', 'sub_admin', 'sales', 'marketing'].includes(String(currentUser?.role || ''))} />
 
             <section className="grid gap-4 lg:grid-cols-3">
                 <ProfileInfoCard title="Contact Info">
@@ -4551,23 +4515,6 @@ export default function ClientDetail() {
                         queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
                         queryClient.invalidateQueries({ queryKey: ['client', id] });
                     }}
-                />
-            ) : null}
-
-            {/* ── Verified Status Dialog ───────────────────────────────────── */}
-            {!isReadOnly ? (
-                <ConfirmDialog
-                    open={showVerifiedDialog}
-                    title={client?.verified ? 'Remove verified badge?' : 'Mark client as verified?'}
-                    message={client?.verified
-                        ? 'This will remove the verified badge from their public profile on WordPress.'
-                        : 'This will display a verified badge on their public profile on WordPress.'}
-                    confirmLabel={updateVerifiedStatusMutation.isPending ? 'Updating…' : (client?.verified ? 'Remove badge' : 'Mark verified')}
-                    confirmDisabled={updateVerifiedStatusMutation.isPending}
-                    isPending={updateVerifiedStatusMutation.isPending}
-                    tone={client?.verified ? 'warning' : 'default'}
-                    onConfirm={() => updateVerifiedStatusMutation.mutate(!client.verified)}
-                    onCancel={() => setShowVerifiedDialog(false)}
                 />
             ) : null}
 

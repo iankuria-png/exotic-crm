@@ -55,6 +55,11 @@ class Client extends Model
         'featured_expire',
         'escort_expire',
         'verified',
+        'kyc_required',
+        'verified_source',
+        'verified_source_at',
+        'verified_source_actor_id',
+        'verified_source_reason',
         'force_new',
         'new_badge_mode',
         'main_image_url',
@@ -82,6 +87,7 @@ class Client extends Model
         'is_high_risk' => 'boolean',
         'featured' => 'boolean',
         'verified' => 'boolean',
+        'kyc_required' => 'boolean',
         'force_new' => 'boolean',
         'wallet_balance' => 'decimal:2',
         'premium_expire' => 'integer',
@@ -97,6 +103,7 @@ class Client extends Model
         'last_seen_in_reconcile_at' => 'datetime',
         'risk_marked_at' => 'datetime',
         'display_image_checked_at' => 'datetime',
+        'verified_source_at' => 'datetime',
     ];
 
     protected $appends = [
@@ -123,6 +130,11 @@ class Client extends Model
     public function deals()
     {
         return $this->hasMany(Deal::class);
+    }
+
+    public function kycSubject()
+    {
+        return $this->hasOne(KycSubject::class);
     }
 
     public function leads()

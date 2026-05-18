@@ -491,6 +491,11 @@ class ClientController extends Controller
     {
         $this->authorizeClientAccess($request, $client);
 
+        if ((bool) $client->kyc_required && !$client->kycSubject) {
+            app(\App\Services\Kyc\KycSubjectService::class)->resolveOrCreateForClient($client);
+            $client->refresh();
+        }
+
         $client->load([
             'platform',
             'assignedAgent',
@@ -498,6 +503,7 @@ class ClientController extends Controller
             'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
             'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
             'activeDeal.product',
+            'kycSubject.sites',
         ]);
         $this->hydrateBillingPlatformState($client);
         $this->appendSubscriptionActionMetadata($client);
@@ -1012,6 +1018,7 @@ class ClientController extends Controller
                 'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
                 'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
                 'activeDeal.product',
+                'kycSubject.sites',
             ]);
             $this->hydrateBillingPlatformState($client);
             $this->appendSubscriptionActionMetadata($client);
@@ -1036,10 +1043,28 @@ class ClientController extends Controller
             ], 422);
         }
 
-        $validated = $request->validate(['verified' => 'required|boolean']);
+        $validated = $request->validate([
+            'verified' => 'required|boolean',
+            'source' => 'nullable|string',
+            'reason' => 'nullable|string|max:2000',
+        ]);
         $verified  = (bool) $validated['verified'];
 
-        $before = ['verified' => (bool) $client->verified];
+        if ($verified) {
+            $source = (string) ($validated['source'] ?? '');
+            $reason = trim((string) ($validated['reason'] ?? ''));
+
+            if (($request->user()->role ?? '') !== 'admin' || $source !== 'manual_crm_emergency' || $reason === '') {
+                return response()->json([
+                    'message' => 'Setting verified=true requires the admin-only manual_crm_emergency path with an explicit reason.',
+                ], 422);
+            }
+        }
+
+        $before = [
+            'verified' => (bool) $client->verified,
+            'verified_source' => $client->verified_source,
+        ];
 
         try {
             $wpSync = WpSyncService::forPlatform((int) $client->platform_id);
@@ -1059,17 +1084,34 @@ class ClientController extends Controller
             return response()->json(['message' => 'WordPress update failed: ' . $e->getMessage()], 502);
         }
 
-        $client->update(['verified' => $verified]);
+        if ($verified) {
+            $subject = app(\App\Services\Kyc\KycSubjectService::class)->resolveOrCreateForClient($client);
+            app(\App\Services\Kyc\KycSubjectService::class)->markApprovedFromSource(
+                $subject,
+                'manual_crm_emergency',
+                $request->user(),
+                trim((string) $validated['reason'])
+            );
+        } else {
+            $client->forceFill([
+                'verified' => false,
+                'verified_source' => null,
+                'verified_source_at' => null,
+                'verified_source_actor_id' => null,
+                'verified_source_reason' => null,
+            ])->save();
 
-        $this->auditService->fromRequest(
-            $request,
-            (int) $client->platform_id,
-            CrmAuditAction::CLIENT_VERIFIED_STATUS_UPDATE,
-            'client',
-            (int) $client->id,
-            $before,
-            ['verified' => $verified]
-        );
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::CLIENT_VERIFIED_STATUS_UPDATE,
+                'client',
+                (int) $client->id,
+                $before,
+                ['verified' => false, 'verified_source' => null],
+                'Manual verified badge removal'
+            );
+        }
 
         $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
         (new ClientSyncService($platform))->syncOne((int) $client->wp_post_id);
@@ -1082,6 +1124,7 @@ class ClientController extends Controller
             'notes'      => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
             'payments'   => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
             'activeDeal.product',
+            'kycSubject.sites',
         ]);
         $this->hydrateBillingPlatformState($client);
         $this->appendSubscriptionActionMetadata($client);

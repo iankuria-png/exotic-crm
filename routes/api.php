@@ -44,6 +44,13 @@ use App\Http\Controllers\CRM\Faq\WalkthroughController as FaqWalkthroughControll
 use App\Http\Controllers\CRM\Faq\FeedbackController as FaqFeedbackController;
 use App\Http\Controllers\CRM\Faq\FeedbackVoteController as FaqFeedbackVoteController;
 use App\Http\Controllers\CRM\Faq\FeedbackCommentController as FaqFeedbackCommentController;
+use App\Http\Controllers\API\Kyc\BlobUploadController;
+use App\Http\Controllers\API\Kyc\SiteAnnounceController;
+use App\Http\Controllers\API\Kyc\UploadController as KycUploadController;
+use App\Http\Controllers\CRM\Kyc\DocumentBlobController;
+use App\Http\Controllers\CRM\Kyc\QueueController as KycQueueController;
+use App\Http\Controllers\CRM\Kyc\ReviewController as KycReviewController;
+use App\Http\Controllers\CRM\Kyc\SettingsController as KycSettingsController;
 use App\Http\Controllers\CRM\University\AnalyticsController as UniversityAnalyticsController;
 use App\Http\Controllers\CRM\University\CertSettingsController as UniversityCertSettingsController;
 use App\Http\Controllers\CRM\University\CertificateController as UniversityCertificateController;
@@ -69,6 +76,15 @@ Route::get('/crm/auth/config', [AuthSettingsController::class, 'publicConfig']);
 Route::get('/billing/health', [BillingController::class, 'health']);
 Route::get('/payments/link/{token}', [PaymentLinkProxyController::class, 'handle']);
 Route::get('/crm/university/certificates/{code}/verify', [UniversityCertificateController::class, 'verify']);
+Route::middleware(['verify.wordpress.shared_key'])->prefix('kyc')->group(function () {
+    Route::post('/uploads/initiate', [KycUploadController::class, 'initiate']);
+    Route::post('/uploads/complete', [KycUploadController::class, 'complete']);
+    Route::get('/subjects/by-wp/{platformId}/{wpUserId}', [KycUploadController::class, 'statusByWp']);
+    Route::post('/site-announce', [SiteAnnounceController::class, 'announce']);
+});
+Route::middleware(['verify.kyc.upload'])->prefix('kyc')->group(function () {
+    Route::post('/uploads/blob', [BlobUploadController::class, 'store']);
+});
 
 // Image proxy — public but rate-limited; domain allowlist enforced server-side
 Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:120,1');
@@ -467,6 +483,24 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/wallet/test-domain', [SettingsController::class, 'testWalletDomain'])->middleware('role:admin');
     Route::post('/settings/wallet/test-app', [SettingsController::class, 'testWalletApp'])->middleware('role:admin');
     Route::post('/settings/wallet/test-ssl', [SettingsController::class, 'testWalletSsl'])->middleware('role:admin');
+
+    Route::prefix('kyc')->group(function () {
+        Route::get('/queue', [KycQueueController::class, 'index'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::get('/queue-count', [KycQueueController::class, 'count'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::get('/subjects/{subject}', [KycReviewController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::post('/subjects/{subject}/approve', [KycReviewController::class, 'approve'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::post('/subjects/{subject}/reject', [KycReviewController::class, 'reject'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::post('/subjects/{subject}/request-info', [KycReviewController::class, 'requestInfo'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::post('/subjects/{subject}/re-request', [KycReviewController::class, 'reRequest'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::post('/subjects/bulk-re-request', [KycReviewController::class, 'bulkReRequest'])->middleware('role:admin');
+        Route::delete('/subjects/{subject}/documents/{document}', [KycReviewController::class, 'deleteDocument'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::get('/documents/{document}/blob', [DocumentBlobController::class, 'show'])
+            ->middleware(['role:admin,sub_admin,sales,marketing', 'signed'])
+            ->name('api.crm.kyc.documents.blob');
+        Route::get('/settings', [KycSettingsController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
+        Route::put('/settings', [KycSettingsController::class, 'update'])->middleware('role:admin,sub_admin');
+        Route::post('/settings/test-s3', [KycSettingsController::class, 'testS3Connectivity'])->middleware('role:admin,sub_admin');
+    });
     Route::get('/settings/integrations/push-provider', [SettingsController::class, 'pushProviderConfig']);
     Route::patch('/settings/integrations/push-provider', [SettingsController::class, 'updatePushProvider'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/push-provider/test', [SettingsController::class, 'testPushProvider'])->middleware('role:admin,sub_admin');

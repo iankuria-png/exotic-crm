@@ -163,6 +163,16 @@ class WpSyncService
         ]);
     }
 
+    public function pushKycSubjectStatus(int $postId, array $payload): array
+    {
+        $path = "/wp-json/exotic-kyc/v1/subjects/{$postId}/status";
+        $response = Http::withHeaders($this->headers())
+            ->timeout($this->defaultTimeout)
+            ->post($this->apiRoot() . $path, $payload);
+
+        return $this->decodeResponse($response, 'POST', $path);
+    }
+
     /**
      * Generate a short-lived client session link for WordPress impersonation.
      */
@@ -426,6 +436,11 @@ class WpSyncService
         }
 
         return $sharedKey;
+    }
+
+    private function apiRoot(): string
+    {
+        return preg_replace('#/wp-json/.*$#', '', $this->baseUrl) ?: $this->baseUrl;
     }
 
     private function configuredSharedKeyPlatformIds(): array

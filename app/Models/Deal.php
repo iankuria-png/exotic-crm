@@ -14,10 +14,22 @@ class Deal extends Model
     {
         static::saved(function (Deal $deal): void {
             ClientRetentionInsightService::scheduleRefreshForClientId($deal->client_id ? (int) $deal->client_id : null);
+            if ($deal->client_id) {
+                $client = $deal->client()->with(['activeDeal.product', 'kycSubject'])->first();
+                if ($client) {
+                    app(\App\Services\Kyc\KycSettingsService::class)->recomputeClientRequirement($client);
+                }
+            }
         });
 
         static::deleted(function (Deal $deal): void {
             ClientRetentionInsightService::scheduleRefreshForClientId($deal->client_id ? (int) $deal->client_id : null);
+            if ($deal->client_id) {
+                $client = $deal->client()->with(['activeDeal.product', 'kycSubject'])->first();
+                if ($client) {
+                    app(\App\Services\Kyc\KycSettingsService::class)->recomputeClientRequirement($client);
+                }
+            }
         });
     }
 

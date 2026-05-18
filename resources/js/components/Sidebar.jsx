@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
 import faqApi from '../services/faqApi';
+import kyc from '../services/kyc';
 
 const brandLogo = '/Exotic%20Online%20Adv%20Logo-01-ChOpI09X.png';
 
@@ -13,6 +14,7 @@ const navGroups = [
             { to: '/', label: 'Dashboard', icon: 'M3.75 4.5h7.5v6.75h-7.5V4.5Zm0 8.25h7.5V19.5h-7.5v-6.75Zm9 0h7.5V19.5h-7.5v-6.75Zm0-8.25h7.5v6.75h-7.5V4.5Z' },
             { to: '/team', label: 'Team', icon: 'M16.5 18.75a3.75 3.75 0 0 0-7.5 0m7.5 0H21m-4.5 0H7.5m0 0H3m4.5 0a3.75 3.75 0 0 1 7.5 0m-6-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm12 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm-6-1.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z' },
             { to: '/clients', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
+            { to: '/kyc', label: 'KYC queue', icon: 'M9 12.75 11.25 15 15 9.75m5.25 2.25a8.25 8.25 0 1 1-16.5 0 8.25 8.25 0 0 1 16.5 0Z' },
             { to: '/leads', label: 'Leads', icon: 'M3.75 6.75h16.5v10.5H3.75V6.75Zm0 0L12 13.125 20.25 6.75' },
             { to: '/conversations', label: 'Conversations', icon: 'M8.25 9.75h7.5m-7.5 3.75h4.5m-8.25-7.5h15A1.5 1.5 0 0 1 21 7.5v7.5a1.5 1.5 0 0 1-1.5 1.5H12l-4.5 3v-3H4.5A1.5 1.5 0 0 1 3 15V7.5A1.5 1.5 0 0 1 4.5 6Z' },
         ],
@@ -64,6 +66,16 @@ export default function Sidebar({ onClose }) {
     const showFeedbackDot = role === 'admin' || role === 'sub_admin'
         ? Number(feedbackMeta.admin_new_count || 0) > 0
         : Number(feedbackMeta.submitter_update_count || 0) > 0;
+    const queueCountQuery = useQuery({
+        queryKey: ['kyc-queue-count'],
+        queryFn: () => kyc.getQueueCount(),
+        enabled: Boolean(user) && ['admin', 'sub_admin', 'sales', 'marketing'].includes(role),
+        staleTime: 30_000,
+        refetchInterval: 30_000,
+    });
+    const queueCount = role === 'sales'
+        ? Number(queueCountQuery.data?.mine_count || 0)
+        : Number(queueCountQuery.data?.in_review_count || 0);
 
     const filteredNavGroups = role === 'marketing'
         ? [
@@ -73,6 +85,7 @@ export default function Sidebar({ onClose }) {
                     { to: '/', label: 'Dashboard', icon: 'M3.75 4.5h7.5v6.75h-7.5V4.5Zm0 8.25h7.5V19.5h-7.5v-6.75Zm9 0h7.5V19.5h-7.5v-6.75Zm0-8.25h7.5v6.75h-7.5V4.5Z' },
                     { to: '/team', label: 'Team', icon: 'M16.5 18.75a3.75 3.75 0 0 0-7.5 0m7.5 0H21m-4.5 0H7.5m0 0H3m4.5 0a3.75 3.75 0 0 1 7.5 0m-6-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm12 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm-6-1.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z' },
                     { to: '/clients', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
+                    { to: '/kyc', label: 'KYC queue', icon: 'M9 12.75 11.25 15 15 9.75m5.25 2.25a8.25 8.25 0 1 1-16.5 0 8.25 8.25 0 0 1 16.5 0Z' },
                 ],
             },
             {
@@ -174,6 +187,11 @@ export default function Sidebar({ onClose }) {
                                                 </svg>
                                             </span>
                                             <span className="truncate">{item.label}</span>
+                                            {item.to === '/kyc' && queueCount > 0 ? (
+                                                <span className="ml-auto inline-flex min-w-[1.4rem] items-center justify-center rounded-full bg-teal-400/20 px-2 py-0.5 text-[11px] font-semibold text-teal-100 ring-1 ring-inset ring-teal-300/30">
+                                                    {queueCount > 99 ? '99+' : queueCount}
+                                                </span>
+                                            ) : null}
                                             {item.to === '/faq/feedback' && showFeedbackDot ? (
                                                 <span className="ml-auto inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" aria-label="Unread feedback updates" />
                                             ) : null}

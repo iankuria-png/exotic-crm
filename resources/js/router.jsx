@@ -15,6 +15,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
 import Team from './pages/Team';
+import Kyc from './pages/Kyc';
 import FaqHome from './pages/Faq/FaqHome';
 import FaqCategory from './pages/Faq/FaqCategory';
 import FaqArticle from './pages/Faq/FaqArticle';
@@ -56,6 +57,7 @@ function ProtectedRoute({ children }) {
         const path = location.pathname || '/';
         const allowed = path === '/'
             || path.startsWith('/clients')
+            || path.startsWith('/kyc')
             || path.startsWith('/push-campaigns')
             || path.startsWith('/team')
             || path.startsWith('/faq')
@@ -101,6 +103,7 @@ export default function AppRouter() {
                 <Route path="leads" element={<Leads />} />
                 <Route path="conversations" element={<Conversations />} />
                 <Route path="campaigns" element={<Campaigns />} />
+                <Route path="kyc" element={<Kyc />} />
                 <Route path="push-campaigns" element={<PushCampaigns />} />
                 <Route path="team" element={<Team />} />
                 <Route path="faq" element={<FaqHome />} />

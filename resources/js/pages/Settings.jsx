@@ -21,12 +21,15 @@ import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSe
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
+import KycSetupWizard from '../components/kyc/KycSetupWizard';
 import { useAuth } from '../hooks/useAuth';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import { useToast } from '../components/ToastProvider';
+import kyc from '../services/kyc';
 
 const baseTabs = [
     { id: 'integrations', label: 'Integrations' },
+    { id: 'kyc', label: 'KYC' },
     { id: 'billing', label: 'Billing' },
     { id: 'faq', label: 'FAQ & Feedback' },
     { id: 'templates', label: 'Templates' },
@@ -8320,6 +8323,8 @@ function SecuritySettingsWorkspace() {
 
 export default function Settings() {
     const { user } = useAuth();
+    const toast = useToast();
+    const queryClient = useQueryClient();
     const isSales = (user?.role || '') === 'sales';
     const [activeTab, setActiveTab] = useState('integrations');
     const canManageTemplates = ['admin', 'sub_admin'].includes(user?.role || '');
@@ -8344,6 +8349,41 @@ export default function Settings() {
     const billingWorkspaceEnabled = Boolean(
         billingAvailabilityQuery.data?.features?.workspace ?? billingAvailabilityQuery.data?.enabled
     );
+    const kycSettingsQuery = useQuery({
+        queryKey: ['settings-kyc'],
+        queryFn: () => kyc.getSettings(),
+        enabled: activeTab === 'kyc',
+        staleTime: 60_000,
+    });
+    const kycPlatformsQuery = useQuery({
+        queryKey: ['settings-kyc-platforms'],
+        queryFn: () => api.get('/platforms').then((response) => response.data?.platforms || []),
+        enabled: activeTab === 'kyc',
+        staleTime: 60_000,
+    });
+    const saveKycSettingsMutation = useMutation({
+        mutationFn: (payload) => kyc.updateSettings(payload),
+        onSuccess: () => {
+            toast.success('KYC settings saved.');
+            queryClient.invalidateQueries({ queryKey: ['settings-kyc'] });
+            queryClient.invalidateQueries({ queryKey: ['kyc-settings-summary'] });
+            queryClient.invalidateQueries({ queryKey: ['kyc-queue'] });
+            queryClient.invalidateQueries({ queryKey: ['kyc-queue-count'] });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Could not save KYC settings.');
+        },
+    });
+    const testS3Mutation = useMutation({
+        mutationFn: (payload) => kyc.testS3Connectivity(payload),
+        onSuccess: () => {
+            toast.success('S3 connectivity probe passed.');
+            queryClient.invalidateQueries({ queryKey: ['settings-kyc'] });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'S3 connectivity test failed.');
+        },
+    });
 
     const tabs = useMemo(() => {
         return baseTabs.filter((tab) => {
@@ -8413,6 +8453,18 @@ export default function Settings() {
                     canManageWalletSystem={canManageWalletSystem}
                     canManageWalletPlatforms={canManageWalletPlatforms}
                     currentUserEmail={user?.email || ''}
+                />
+            ) : null}
+            {activeTab === 'kyc' ? (
+                <KycSetupWizard
+                    settings={kycSettingsQuery.data?.settings}
+                    platforms={kycPlatformsQuery.data || []}
+                    totalBlobBytes={kycSettingsQuery.data?.total_blob_bytes || 0}
+                    s3Health={testS3Mutation.data || kycSettingsQuery.data?.s3_health || null}
+                    isSaving={saveKycSettingsMutation.isPending}
+                    isTestingS3={testS3Mutation.isPending}
+                    onSave={(payload) => saveKycSettingsMutation.mutate(payload)}
+                    onTestS3={(payload) => testS3Mutation.mutate(payload)}
                 />
             ) : null}
 
