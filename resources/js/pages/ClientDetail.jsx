@@ -706,7 +706,7 @@ export default function ClientDetail() {
     const { startClientMediaUpload, uploadsForClient, retryUpload, dismissUpload } = useMediaUploads();
     const profileLinkPopoverRef = useRef(null);
     const requestedTab = (searchParams.get('tab') || '').toLowerCase();
-    const initialTab = ['overview', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
+    const initialTab = ['overview', 'kyc', 'deals', 'notes', 'timeline', 'chat', 'wallet', 'payments', 'edit_profile', 'profile_health']
         .includes(requestedTab)
         ? requestedTab
         : 'overview';
@@ -1421,8 +1421,34 @@ export default function ClientDetail() {
     });
 
     const tabLinks = useMemo(() => {
+        const kycStatus = String(client?.kycSubject?.status || client?.kyc_subject?.status || (client?.verified ? 'approved' : 'unverified'));
+        const kycRequired = client?.kyc_required !== false;
+        const kycBadge = !kycRequired
+            ? { text: 'Exempt', className: 'bg-slate-100 text-slate-600 ring-slate-200' }
+            : ['in_review', 'info_requested', 'expired', 'rejected'].includes(kycStatus)
+                ? {
+                    text: kycStatus === 'in_review'
+                        ? 'Review'
+                        : kycStatus === 'info_requested'
+                            ? 'Info'
+                            : kycStatus === 'expired'
+                                ? 'Reverify'
+                                : 'Rejected',
+                    className: kycStatus === 'in_review'
+                        ? 'bg-sky-50 text-sky-700 ring-sky-200'
+                        : kycStatus === 'info_requested'
+                            ? 'bg-amber-50 text-amber-700 ring-amber-200'
+                            : kycStatus === 'expired'
+                                ? 'bg-violet-50 text-violet-700 ring-violet-200'
+                                : 'bg-rose-50 text-rose-700 ring-rose-200',
+                }
+                : client?.verified
+                    ? { text: 'Verified', className: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
+                    : null;
+
         const links = [
             { key: 'overview', label: 'Overview' },
+            { key: 'kyc', label: 'KYC', badge: kycBadge },
             { key: 'analytics', label: 'Analytics' },
             { key: 'deals', label: `Subscriptions (${client?.deals?.length || 0})` },
             { key: 'notes', label: `Notes (${client?.notes?.length || 0})` },
@@ -2356,8 +2382,6 @@ export default function ClientDetail() {
                 </div>
             </section>
 
-            <KycPanel client={client} canReview={['admin', 'sub_admin', 'sales', 'marketing'].includes(String(currentUser?.role || ''))} />
-
             <section className="grid gap-4 lg:grid-cols-3">
                 <ProfileInfoCard title="Contact Info">
                     <dl className="space-y-2.5">
@@ -2589,11 +2613,22 @@ export default function ClientDetail() {
                             }}
                             className={`rounded-md px-3 py-2 text-sm font-medium transition ${activeTab === tab.key ? 'bg-white text-slate-900 ring-1 ring-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
                         >
-                            {tab.label}
+                            <span className="inline-flex items-center gap-2">
+                                <span>{tab.label}</span>
+                                {tab.badge ? (
+                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${tab.badge.className}`}>
+                                        {tab.badge.text}
+                                    </span>
+                                ) : null}
+                            </span>
                         </button>
                     ))}
                 </nav>
             </section>
+
+            {activeTab === 'kyc' ? (
+                <KycPanel client={client} canReview={['admin', 'sub_admin', 'sales', 'marketing'].includes(String(currentUser?.role || ''))} />
+            ) : null}
 
             {activeTab === 'overview' ? (
                 <>
