@@ -519,6 +519,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::put('/settings', [KycSettingsController::class, 'update'])->middleware('role:admin,sub_admin');
         Route::post('/settings/test-s3', [KycSettingsController::class, 'testS3Connectivity'])->middleware('role:admin,sub_admin');
     });
+    Route::get('/settings/integrations/wp-shared-key', [SettingsController::class, 'showWpSharedKey'])->middleware('role:admin,sub_admin');
+    Route::post('/settings/integrations/wp-shared-key/rotate', [SettingsController::class, 'rotateWpSharedKey'])->middleware('role:admin,sub_admin');
+    Route::delete('/settings/integrations/wp-shared-key', [SettingsController::class, 'clearWpSharedKey'])->middleware('role:admin,sub_admin');
     Route::get('/settings/integrations/push-provider', [SettingsController::class, 'pushProviderConfig']);
     Route::patch('/settings/integrations/push-provider', [SettingsController::class, 'updatePushProvider'])->middleware('role:admin,sub_admin');
     Route::post('/settings/integrations/push-provider/test', [SettingsController::class, 'testPushProvider'])->middleware('role:admin,sub_admin');

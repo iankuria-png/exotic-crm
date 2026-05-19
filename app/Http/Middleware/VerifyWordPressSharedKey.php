@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\Platform;
+use App\Services\WordPressSyncKeyService;
 use Closure;
 use Illuminate\Http\Request;
 
@@ -19,10 +20,19 @@ class VerifyWordPressSharedKey
 
     private function hasValidSharedKey(Request $request): bool
     {
-        $expected = trim((string) config('services.exotic_crm_sync.shared_key'));
         $provided = trim((string) $request->header(config('kyc.shared_key_header', 'X-Exotic-CRM-Sync-Key')));
+        if ($provided === '') {
+            return false;
+        }
 
-        return $expected !== '' && $provided !== '' && hash_equals($expected, $provided);
+        $dbKey = app(WordPressSyncKeyService::class)->currentRaw();
+        if ($dbKey !== null && hash_equals($dbKey, $provided)) {
+            return true;
+        }
+
+        $envKey = trim((string) config('services.exotic_crm_sync.shared_key'));
+
+        return $envKey !== '' && hash_equals($envKey, $provided);
     }
 
     private function hasValidBasicCredentials(Request $request): bool

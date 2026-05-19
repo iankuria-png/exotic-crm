@@ -48,6 +48,7 @@ use App\Services\SupportBoardSyncRunService;
 use App\Services\SupportBoardService;
 use App\Services\WalletSyncService;
 use App\Services\WalletSettingsService;
+use App\Services\WordPressSyncKeyService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
 use App\Support\MarketTimezone;
@@ -5890,5 +5891,41 @@ class SettingsController extends Controller
 
         $fallback = Platform::query()->orderBy('id')->value('id');
         return $fallback ? (int) $fallback : null;
+    }
+
+    public function showWpSharedKey(Request $request, WordPressSyncKeyService $service)
+    {
+        $this->assertSharedKeyAdmin($request);
+
+        return response()->json($service->status());
+    }
+
+    public function rotateWpSharedKey(Request $request, WordPressSyncKeyService $service)
+    {
+        $this->assertSharedKeyAdmin($request);
+
+        $result = $service->rotate($request->user()?->id);
+
+        return response()->json([
+            'plain' => $result['plain'],
+            'status' => $result['status'],
+            'message' => 'A new WordPress sync key has been generated. Copy it now — it will not be shown in full again.',
+        ]);
+    }
+
+    public function clearWpSharedKey(Request $request, WordPressSyncKeyService $service)
+    {
+        $this->assertSharedKeyAdmin($request);
+
+        return response()->json([
+            'status' => $service->clear($request->user()?->id),
+            'message' => 'WordPress sync key cleared. The .env fallback (if set) is now active.',
+        ]);
+    }
+
+    private function assertSharedKeyAdmin(Request $request): void
+    {
+        $role = (string) ($request->user()->role ?? '');
+        abort_unless(in_array($role, ['admin', 'sub_admin'], true), 403, 'Unauthorized');
     }
 }

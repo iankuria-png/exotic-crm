@@ -20,6 +20,7 @@ import ScraperCreateModal from '../components/settings/ScraperCreateModal';
 import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
 import SeoEnginePanel from '../components/settings/SeoEnginePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
+import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
 import SystemHealthWorkspace from '../components/SystemHealthWorkspace';
 import FaqWorkspace from '../components/settings/FaqPanel/Workspace';
 import KycSetupWizard from '../components/kyc/KycSetupWizard';
@@ -3146,10 +3147,13 @@ function IntegrationsWorkspace({
             />
 
             {integrationArea === 'overview' ? (
-                <IntegrationsOverviewPanel
-                    isLoading={isLoading}
-                    serviceRows={serviceRows}
-                />
+                <div className="space-y-4">
+                    <IntegrationsOverviewPanel
+                        isLoading={isLoading}
+                        serviceRows={serviceRows}
+                    />
+                    <WordPressSyncKeyCard />
+                </div>
             ) : null}
 
             {integrationArea === 'sms' ? (
