@@ -79,6 +79,7 @@ class BioGenerationService
 
         // Wrap in paragraphs
         $bioHtml = $this->textToHtml($rawText);
+        $bioHtml = $this->linkContactNumbers($bioHtml, $overlay ?? [], $generationOptions);
 
         // Inject internal links. Link injection is an SEO enhancement, not a hard
         // dependency for generation; if the WP catalog or DOM parser fails in prod,
@@ -189,6 +190,10 @@ PROMPT;
             'Availability' => $snapshot->availabilityText(),
         ];
 
+        if (trim($snapshot->existingBio) !== '') {
+            $data['Previous bio context'] = mb_substr(strip_tags($snapshot->existingBio), 0, 500) . ' — use only for continuity and uniqueness; do not copy phrasing.';
+        }
+
         if ($options['include_location']) {
             $data['City'] = $snapshot->city ?: '(not provided)';
             $data['Neighborhood'] = $snapshot->neighborhood ?? '(not specified)';
@@ -278,6 +283,29 @@ PROMPT;
         $lastStop = max(mb_strrpos($cut, '.') ?: 0, mb_strrpos($cut, '!') ?: 0, mb_strrpos($cut, '?') ?: 0);
 
         return trim($lastStop > 120 ? mb_substr($cut, 0, $lastStop + 1) : $cut);
+    }
+
+
+    private function linkContactNumbers(string $html, array $overlay, array $options): string
+    {
+        if (!$options['include_contact'] || $options['contact_channel'] === 'none') {
+            return $html;
+        }
+
+        $phone = $this->firstString($overlay, ['whatsapp', 'whatsapp_number', 'whatsappnumber', 'phone', 'phone_normalized']);
+        $digits = preg_replace('/\D+/', '', $phone);
+        if ($digits === '' || strlen($digits) < 7) {
+            return $html;
+        }
+
+        $href = in_array($options['contact_channel'], ['phone'], true)
+            ? 'tel:+' . $digits
+            : 'https://wa.me/' . $digits;
+
+        $escaped = htmlspecialchars($phone, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $linked = '<a href="' . htmlspecialchars($href, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">' . $escaped . '</a>';
+
+        return preg_replace('/(?<![\d>])' . preg_quote($escaped, '/') . '(?![\d<])/', $linked, $html, 1) ?? $html;
     }
 
     private function withCostEstimate(string $provider, array $usage): array

@@ -55,20 +55,22 @@ class SeoScorer
         $text  = strip_tags($html);
         $words = str_word_count($text);
 
-        if ($words < 50 || $words > 600) {
+        if ($words < 20 || $words > 600) {
             return 0;
         }
 
-        if ($words >= 120 && $words <= 300) {
+        // The generator is now intentionally concise. Reward useful classified-style
+        // bios instead of forcing long, repetitive copy.
+        if ($words >= 45 && $words <= 180) {
             return $maxPoints;
         }
 
-        if ($words < 120) {
-            return (int) round($maxPoints * (($words - 50) / 70));
+        if ($words < 45) {
+            return (int) round($maxPoints * (($words - 20) / 25));
         }
 
-        // words 301–600: linear penalty
-        return (int) round($maxPoints * ((600 - $words) / 300));
+        // words 181–600: linear penalty
+        return (int) round($maxPoints * ((600 - $words) / 420));
     }
 
     private function scoreLinks(string $html, int $maxPoints): int

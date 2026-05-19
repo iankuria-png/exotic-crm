@@ -15,6 +15,15 @@ use App\Services\WpSyncService;
  */
 class ProfileSnapshotBuilder
 {
+    private const ENUM_LABELS = [
+        'gender' => ['1' => 'Female', '2' => 'Male', '3' => 'Couple', '4' => 'Gay', '5' => 'Transsexual'],
+        'ethnicity' => ['1' => 'Latin', '2' => 'Caucasian', '3' => 'Black', '4' => 'White', '5' => 'Middle Eastern', '6' => 'Asian', '7' => 'Indian', '8' => 'Aborigine', '9' => 'Native American', '10' => 'Other'],
+        'build' => ['1' => 'skinny', '2' => 'slim', '3' => 'regular', '4' => 'curvy', '5' => 'full figured'],
+        'hair_color' => ['1' => 'black', '2' => 'blonde', '3' => 'brown', '4' => 'brunette', '5' => 'chestnut', '6' => 'auburn', '7' => 'dark blonde', '8' => 'golden', '9' => 'red', '10' => 'grey', '11' => 'silver', '12' => 'white', '13' => 'other'],
+        'services' => ['1' => 'BDSM', '2' => 'Couples', '3' => 'Domination', '4' => 'Escort', '5' => 'Massage', '6' => 'Fetish', '7' => 'Mature', '8' => 'GFE'],
+        'availability' => ['1' => 'Incall', '2' => 'Outcall'],
+    ];
+
     public function fromRequest(
         ?int   $clientId,
         ?int   $wpPostId,
@@ -152,13 +161,13 @@ class ProfileSnapshotBuilder
         $fields = [
             'name', 'age', 'city', 'neighborhood', 'gender', 'ethnicity',
             'build', 'height', 'hair_color', 'services', 'languages', 'rates',
-            'availability', 'existing_bio', 'media_summary',
+            'availability', 'existing_bio', 'bio', 'media_summary',
         ];
 
         foreach ($fields as $field) {
             $key = $field;
             if (array_key_exists($key, $overlay) && $overlay[$key] !== null && $overlay[$key] !== '') {
-                $base[$key] = $overlay[$key];
+                $base[$key === 'bio' ? 'existing_bio' : $key] = $overlay[$key];
             }
         }
 
@@ -175,12 +184,12 @@ class ProfileSnapshotBuilder
             age:          $this->intOrNull($data['age'] ?? null),
             city:         $this->stringValue($data['city'] ?? ''),
             neighborhood: $this->nullableString($data['neighborhood'] ?? null),
-            gender:       $this->stringValue($data['gender'] ?? 'female'),
-            ethnicity:    $this->nullableString($data['ethnicity'] ?? null),
-            build:        $this->nullableString($data['build'] ?? null),
+            gender:       $this->enumLabel('gender', $data['gender'] ?? 'female') ?: 'Female',
+            ethnicity:    $this->enumLabel('ethnicity', $data['ethnicity'] ?? null),
+            build:        $this->enumLabel('build', $data['build'] ?? null),
             height:       $this->nullableString($data['height'] ?? null),
-            hairColor:    $this->nullableString($data['hair_color'] ?? null),
-            services:     $this->stringList($data['services'] ?? []),
+            hairColor:    $this->enumLabel('hair_color', $data['hair_color'] ?? null),
+            services:     $this->enumList('services', $data['services'] ?? []),
             languages:    $this->stringList($data['languages'] ?? []),
             rates:        is_array($data['rates'] ?? null) ? $data['rates'] : [],
             availability: $this->normalizeAvailability($data['availability'] ?? null),
@@ -237,18 +246,31 @@ class ProfileSnapshotBuilder
 
     private function normalizeAvailability(mixed $value): ?string
     {
-        if (is_array($value)) {
-            $map = ['1' => 'Incall', '2' => 'Outcall'];
-            $items = array_map(
-                fn (mixed $item): string => $map[$this->stringValue($item)] ?? $this->stringValue($item),
-                $value,
-            );
+        $items = $this->enumList('availability', $value);
 
-            $items = array_values(array_unique(array_filter($items)));
+        return $items !== [] ? implode(' & ', $items) : null;
+    }
 
-            return $items !== [] ? implode(' & ', $items) : null;
+    private function enumLabel(string $field, mixed $value): ?string
+    {
+        $value = $this->stringValue($value);
+        if ($value === '') {
+            return null;
         }
 
-        return $this->nullableString($value);
+        return self::ENUM_LABELS[$field][$value] ?? $value;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function enumList(string $field, mixed $value): array
+    {
+        $items = is_array($value) ? $value : [$value];
+
+        return array_values(array_unique(array_filter(array_map(
+            fn (mixed $item): string => $this->enumLabel($field, $item) ?? '',
+            $items,
+        ))));
     }
 }

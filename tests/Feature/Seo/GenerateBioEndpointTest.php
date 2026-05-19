@@ -55,5 +55,9 @@ class GenerateBioEndpointTest extends TestCase
         $response->assertOk()
             ->assertJsonStructure(['bio_html', 'score', 'breakdown', 'provider_used'])
             ->assertJsonPath('provider_used', 'template_fallback');
+
+        $this->assertStringNotContainsString('build type', $response->json('bio_html'));
+        $this->assertStringNotContainsString('type 4', $response->json('bio_html'));
+        $this->assertStringContainsString('curvy', strtolower($response->json('bio_html')));
     }
 }

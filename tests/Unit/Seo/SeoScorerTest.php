@@ -19,14 +19,14 @@ class SeoScorerTest extends TestCase
         $this->scorer = new SeoScorer();
     }
 
-    public function test_word_count_band_full_credit_120_to_300(): void
+    public function test_word_count_band_full_credit_45_to_180(): void
     {
-        $words = str_repeat('word ', 150);
+        $words = str_repeat('word ', 70);
         $result = $this->scorer->score("<p>{$words}</p>", $this->emptyProfile());
         $this->assertSame(25, $result['breakdown']['word_count']);
     }
 
-    public function test_word_count_zero_below_50(): void
+    public function test_word_count_zero_below_20(): void
     {
         $words = str_repeat('word ', 20);
         $result = $this->scorer->score("<p>{$words}</p>", $this->emptyProfile());
@@ -42,7 +42,7 @@ class SeoScorerTest extends TestCase
 
     public function test_links_full_credit_3_to_6(): void
     {
-        $bio = '<p>' . str_repeat('word ', 150) . '</p>'
+        $bio = '<p>' . str_repeat('word ', 70) . '</p>'
             . '<a href="/a">a</a><a href="/b">b</a><a href="/c">c</a><a href="/d">d</a>';
         $result = $this->scorer->score($bio, $this->emptyProfile());
         $this->assertSame(25, $result['breakdown']['links']);
@@ -50,7 +50,7 @@ class SeoScorerTest extends TestCase
 
     public function test_links_partial_credit_for_one_or_two(): void
     {
-        $bio = '<p>' . str_repeat('word ', 150) . '</p><a href="/a">a</a><a href="/b">b</a>';
+        $bio = '<p>' . str_repeat('word ', 70) . '</p><a href="/a">a</a><a href="/b">b</a>';
         $result = $this->scorer->score($bio, $this->emptyProfile());
         // 25 * 0.48 = 12
         $this->assertSame(12, $result['breakdown']['links']);
@@ -112,7 +112,7 @@ class SeoScorerTest extends TestCase
 
     public function test_total_is_capped_at_100(): void
     {
-        $words = str_repeat('word ', 150);
+        $words = str_repeat('word ', 70);
         $bio = '<p>' . $words . '</p>'
             . '<a href="/a">a</a><a href="/b">b</a><a href="/c">c</a><a href="/d">d</a>';
         $profile = $this->makeSnapshot(
