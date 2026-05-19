@@ -14,6 +14,23 @@ class LinkCatalogService
 {
     private const CACHE_TTL_MINUTES = 60;
 
+    /**
+     * Canonical service landing pages available on every market.
+     *
+     * Use market-relative URLs so the same generated bio works on Exotic Kenya,
+     * Exotic Uganda, and future platform domains without baking one host into CRM.
+     */
+    private const SERVICE_PAGES = [
+        'BDSM'       => 'bdsm',
+        'Couples'    => 'couples',
+        'Domination' => 'domination',
+        'Escort'     => 'escort',
+        'Massage'    => 'massage',
+        'Fetish'     => 'fetish',
+        'Mature'     => 'mature',
+        'GFE'        => 'gfe',
+    ];
+
     public function forPlatform(int $platformId): array
     {
         return Cache::remember(
@@ -34,6 +51,11 @@ class LinkCatalogService
     {
         $catalog = [];
 
+        // Standard service pages are market-relative, e.g. /bdsm/, /couples/.
+        // Give each service its own category so the per-category cap does not
+        // prevent multiple selected services from being linked in a concise bio.
+        $catalog = array_merge($catalog, $this->servicePageEntries());
+
         // City/neighborhood terms fetched from WP
         $catalog = array_merge($catalog, $this->fetchLocationEntries($platformId));
 
@@ -41,6 +63,23 @@ class LinkCatalogService
         $catalog = array_merge($catalog, $this->fetchAttributeEntries($platformId));
 
         return $catalog;
+    }
+
+
+    private function servicePageEntries(): array
+    {
+        $entries = [];
+
+        foreach (self::SERVICE_PAGES as $keyword => $slug) {
+            $entries[] = [
+                'keyword'  => $keyword,
+                'url'      => "/{$slug}/",
+                'category' => "service:{$slug}",
+                'priority' => 8,
+            ];
+        }
+
+        return $entries;
     }
 
     private function fetchLocationEntries(int $platformId): array
