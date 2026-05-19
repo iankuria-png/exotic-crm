@@ -12,6 +12,20 @@ const PROVIDER_DISPLAY = {
 
 const SENTINEL = '__keep__';
 
+const DEFAULT_GENERATION = {
+    tone: 'simple, direct, local classified profile copy',
+    temperament: 'confident but not exaggerated',
+    min_words: 55,
+    max_words: 95,
+    max_characters: 750,
+    max_services: 5,
+    include_location: true,
+    include_services: true,
+    include_contact: true,
+    contact_channel: 'whatsapp',
+    custom_prompt: '',
+};
+
 
 function hydrateProvider(provider = {}) {
     const incomingKey = provider?.api_key || '';
@@ -54,6 +68,7 @@ export default function SeoEnginePanel() {
                     gemini:   hydrateProvider(cfg.providers?.gemini),
                     deepseek: hydrateProvider(cfg.providers?.deepseek),
                 },
+                generation: { ...DEFAULT_GENERATION, ...(cfg.generation || {}) },
             });
         }
     }, [settingsQuery.data, form]);
@@ -112,6 +127,7 @@ export default function SeoEnginePanel() {
                 gemini:   { api_key: form.providers.gemini.apiKey   || SENTINEL, model: form.providers.gemini.model },
                 deepseek: { api_key: form.providers.deepseek.apiKey || SENTINEL, model: form.providers.deepseek.model },
             },
+            generation: form.generation,
         };
         // If user typed a key, send it raw; otherwise send sentinel so backend keeps existing.
         Object.keys(payload.providers).forEach((p) => {
@@ -149,6 +165,13 @@ export default function SeoEnginePanel() {
                 ...f.providers,
                 [provider]: { ...f.providers[provider], [field]: value },
             },
+        }));
+    };
+
+    const updateGeneration = (field, value) => {
+        setForm((f) => ({
+            ...f,
+            generation: { ...f.generation, [field]: value },
         }));
     };
 
@@ -292,6 +315,62 @@ export default function SeoEnginePanel() {
                         );
                     })}
                 </div>
+            </section>
+
+
+            {/* === Editorial defaults === */}
+            <section className="crm-surface p-6">
+                <h3 className="text-base font-semibold text-slate-900">Bio generation defaults</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                    These defaults guide every generated bio. Agents can still override the main style options when generating a single draft.
+                </p>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-700">Tone</span>
+                        <input type="text" value={form.generation.tone} onChange={(e) => updateGeneration('tone', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-700">Temperament</span>
+                        <input type="text" value={form.generation.temperament} onChange={(e) => updateGeneration('temperament', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-700">Min words</span>
+                        <input type="number" min="25" max="500" value={form.generation.min_words} onChange={(e) => updateGeneration('min_words', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-700">Max words</span>
+                        <input type="number" min="40" max="700" value={form.generation.max_words} onChange={(e) => updateGeneration('max_words', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-700">Character limit</span>
+                        <input type="number" min="200" max="5000" value={form.generation.max_characters} onChange={(e) => updateGeneration('max_characters', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
+                    </label>
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-700">Max services to mention</span>
+                        <input type="number" min="0" max="20" value={form.generation.max_services} onChange={(e) => updateGeneration('max_services', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
+                    </label>
+                </div>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {[['include_location', 'Mention location'], ['include_services', 'Mention services'], ['include_contact', 'Mention contact option']].map(([field, label]) => (
+                        <label key={field} className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2">
+                            <input type="checkbox" checked={!!form.generation[field]} onChange={(e) => updateGeneration(field, e.target.checked)} className="h-4 w-4 rounded text-teal-600 focus:ring-teal-500 border-slate-300" />
+                            <span className="text-sm text-slate-800">{label}</span>
+                        </label>
+                    ))}
+                    <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-700">Contact channel</span>
+                        <select value={form.generation.contact_channel} onChange={(e) => updateGeneration('contact_channel', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500">
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="phone">Phone</option>
+                            <option value="both">Phone & WhatsApp</option>
+                            <option value="none">None</option>
+                        </select>
+                    </label>
+                </div>
+                <label className="mt-4 block space-y-1">
+                    <span className="text-xs font-medium text-slate-700">Custom prompt guardrail</span>
+                    <textarea rows={3} value={form.generation.custom_prompt} onChange={(e) => updateGeneration('custom_prompt', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" placeholder="Example: Avoid luxury wording. Mention Nairobi naturally. Keep it simple and direct." />
+                </label>
             </section>
 
             {/* === Save bar === */}

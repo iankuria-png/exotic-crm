@@ -7,6 +7,7 @@ export default function BioPreviewModal({
     score,
     breakdown,
     providerUsed,
+    usage = null,
     onAccept,
     onDiscard,
 }) {
@@ -32,12 +33,19 @@ export default function BioPreviewModal({
                         <div className="flex items-center gap-2">
                             <SeoScoreBadge score={score} />
                             {providerUsed ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{providerUsed}</span> : null}
+                            {usage?.estimated_cost_label ? <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">{usage.estimated_cost_label}</span> : null}
                         </div>
                     </div>
                 </header>
 
                 <div className="max-h-[65vh] overflow-y-auto p-5">
                     <div className="prose prose-sm max-w-none rounded-xl border border-slate-200 bg-slate-50/70 p-4 text-slate-800" dangerouslySetInnerHTML={{ __html: bioHtml }} />
+
+                    {usage ? (
+                        <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                            Estimated cost: <strong>{usage.estimated_cost_label}</strong> · Tokens: {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out
+                        </div>
+                    ) : null}
 
                     {breakdown ? (
                         <div className="mt-4 grid gap-2 sm:grid-cols-4">

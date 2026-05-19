@@ -31,6 +31,20 @@ class SeoSettingsController extends Controller
         'deepseek' => 'deepseek-chat',
     ];
 
+    private const DEFAULT_GENERATION = [
+        'tone' => 'simple, direct, local classified profile copy',
+        'temperament' => 'confident but not exaggerated',
+        'min_words' => 55,
+        'max_words' => 95,
+        'max_characters' => 750,
+        'max_services' => 5,
+        'include_location' => true,
+        'include_services' => true,
+        'include_contact' => true,
+        'contact_channel' => 'whatsapp',
+        'custom_prompt' => '',
+    ];
+
     /**
      * GET /api/crm/settings/seo-engine
      * Returns current config with API keys masked.
@@ -68,6 +82,18 @@ class SeoSettingsController extends Controller
             'providers' => 'array',
             'providers.*.api_key' => 'nullable|string',
             'providers.*.model'   => 'nullable|string|max:100',
+            'generation' => 'nullable|array',
+            'generation.tone' => 'nullable|string|max:180',
+            'generation.temperament' => 'nullable|string|max:180',
+            'generation.min_words' => 'nullable|integer|min:25|max:500',
+            'generation.max_words' => 'nullable|integer|min:40|max:700',
+            'generation.max_characters' => 'nullable|integer|min:200|max:5000',
+            'generation.max_services' => 'nullable|integer|min:0|max:20',
+            'generation.include_location' => 'nullable|boolean',
+            'generation.include_services' => 'nullable|boolean',
+            'generation.include_contact' => 'nullable|boolean',
+            'generation.contact_channel' => 'nullable|string|in:none,phone,whatsapp,both',
+            'generation.custom_prompt' => 'nullable|string|max:2000',
         ]);
 
         $previous = $this->loadStored();
@@ -103,6 +129,7 @@ class SeoSettingsController extends Controller
             'platform_allowlist' => array_values(array_unique(array_map('intval', $data['platform_allowlist'] ?? []))),
             'providers_order' => array_values(array_unique($providersOrder)),
             'providers' => $providers,
+            'generation' => $this->normalizeGeneration($data['generation'] ?? $previous['generation'] ?? []),
         ];
 
         IntegrationSetting::query()->updateOrCreate(
@@ -198,7 +225,29 @@ class SeoSettingsController extends Controller
             'platform_allowlist' => array_values(array_map('intval', $stored['platform_allowlist'] ?? [])),
             'providers_order' => array_values(array_unique($stored['providers_order'] ?? self::SUPPORTED_PROVIDERS)),
             'providers' => $providers,
+            'generation' => $this->normalizeGeneration($stored['generation'] ?? []),
         ];
+    }
+
+
+    private function normalizeGeneration(array $incoming): array
+    {
+        $generation = array_merge(self::DEFAULT_GENERATION, array_intersect_key($incoming, self::DEFAULT_GENERATION));
+        $generation['tone'] = trim((string) $generation['tone']) ?: self::DEFAULT_GENERATION['tone'];
+        $generation['temperament'] = trim((string) $generation['temperament']) ?: self::DEFAULT_GENERATION['temperament'];
+        $generation['min_words'] = max(25, min(500, (int) $generation['min_words']));
+        $generation['max_words'] = max($generation['min_words'], min(700, (int) $generation['max_words']));
+        $generation['max_characters'] = max(200, min(5000, (int) $generation['max_characters']));
+        $generation['max_services'] = max(0, min(20, (int) $generation['max_services']));
+        $generation['include_location'] = (bool) $generation['include_location'];
+        $generation['include_services'] = (bool) $generation['include_services'];
+        $generation['include_contact'] = (bool) $generation['include_contact'];
+        $generation['contact_channel'] = in_array($generation['contact_channel'], ['none', 'phone', 'whatsapp', 'both'], true)
+            ? $generation['contact_channel']
+            : self::DEFAULT_GENERATION['contact_channel'];
+        $generation['custom_prompt'] = trim((string) $generation['custom_prompt']);
+
+        return $generation;
     }
 
     /**
@@ -260,6 +309,8 @@ class SeoSettingsController extends Controller
         if (!empty($stored['providers_order'])) {
             config(['services.seo_engine.providers' => $stored['providers_order']]);
         }
+        config(['services.seo_engine.generation' => $this->normalizeGeneration($stored['generation'] ?? [])]);
+
         foreach (self::SUPPORTED_PROVIDERS as $name) {
             $key = $stored['providers'][$name]['api_key'] ?? '';
             $model = $stored['providers'][$name]['model'] ?? '';

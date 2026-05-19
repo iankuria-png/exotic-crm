@@ -49,6 +49,10 @@ class SeoEngineConfigProvider extends ServiceProvider
             config(['services.seo_engine.providers' => array_values($stored['providers_order'])]);
         }
 
+        if (!empty($stored['generation']) && is_array($stored['generation'])) {
+            config(['services.seo_engine.generation' => $stored['generation']]);
+        }
+
         foreach (['claude', 'openai', 'gemini', 'deepseek'] as $provider) {
             $cfg = $stored['providers'][$provider] ?? null;
             if (!is_array($cfg)) {

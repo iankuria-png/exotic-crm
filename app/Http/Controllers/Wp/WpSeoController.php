@@ -34,6 +34,18 @@ class WpSeoController extends Controller
             'profile_snapshot' => 'nullable|array',
             'save'             => 'nullable|boolean',
             'force_provider'   => 'nullable|string|in:claude,openai,gemini,deepseek',
+            'generation_options' => 'nullable|array',
+            'generation_options.tone' => 'nullable|string|max:180',
+            'generation_options.temperament' => 'nullable|string|max:180',
+            'generation_options.min_words' => 'nullable|integer|min:25|max:500',
+            'generation_options.max_words' => 'nullable|integer|min:40|max:700',
+            'generation_options.max_characters' => 'nullable|integer|min:200|max:5000',
+            'generation_options.max_services' => 'nullable|integer|min:0|max:20',
+            'generation_options.include_location' => 'nullable|boolean',
+            'generation_options.include_services' => 'nullable|boolean',
+            'generation_options.include_contact' => 'nullable|boolean',
+            'generation_options.contact_channel' => 'nullable|string|in:none,phone,whatsapp,both',
+            'generation_options.custom_prompt' => 'nullable|string|max:2000',
         ]);
 
         // Header platform always wins over body platform_id
