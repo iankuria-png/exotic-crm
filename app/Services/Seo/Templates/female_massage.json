@@ -1,17 +1,17 @@
 [
   {
-    "intro": "Meet {name}, a skilled {age}-year-old {ethnicity} masseuse offering professional body-to-body massage services in {city}.",
-    "middle": "With a {build} figure standing {height} and {hair_color} hair, {name} creates a relaxing, sensual atmosphere for every session.",
-    "closer": "Book your private massage session with {name} in {neighborhood_or_city} and melt the stress away."
+    "intro": "{name}, {age}, offers massage services in {city}.",
+    "middle": "She is a {ethnicity}, {build} escort available for {availability_text} bookings.",
+    "closer": "Contact {name} to arrange a discreet massage booking in {neighborhood_or_city}."
   },
   {
-    "intro": "{name} is a {age}-year-old {ethnicity} massage specialist in {city}, offering an exclusive range of therapeutic and sensual massage treatments.",
-    "middle": "Her {build} build, {hair_color} hair, and calming presence make every session with {name} deeply relaxing and rejuvenating.",
-    "closer": "Contact {name} for a discreet massage appointment in {neighborhood_or_city} — {availability_text}."
+    "intro": "Book massage in {city} with {name}, a {age}-year-old {ethnicity} companion.",
+    "middle": "Her profile is direct: {build}, available for {availability_text}, and ready for genuine enquiries.",
+    "closer": "Reach out to {name} for massage bookings around {neighborhood_or_city}."
   },
   {
-    "intro": "Indulge in the healing touch of {name}, an experienced {age}-year-old masseuse based in {city}.",
-    "middle": "{name} offers bespoke massage experiences tailored to your needs. Standing {height} with a {build} physique and {hair_color} hair, she combines professionalism with sensuality.",
-    "closer": "Reach out to {name} in {neighborhood_or_city} for an unforgettable massage experience."
+    "intro": "{name} provides private massage bookings in {city}.",
+    "middle": "She is {age}, {ethnicity}, {build}, and available for {availability_text} appointments.",
+    "closer": "Message {name} to arrange a session in {neighborhood_or_city}."
   }
 ]

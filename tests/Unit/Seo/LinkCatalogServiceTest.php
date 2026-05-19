@@ -26,4 +26,17 @@ class LinkCatalogServiceTest extends TestCase
         $this->assertSame('/couples/', $couples['url'] ?? null);
         $this->assertSame('service:couples', $couples['category'] ?? null);
     }
+
+    public function test_includes_conservative_market_relative_attribute_pages(): void
+    {
+        $catalog = app(LinkCatalogService::class)->forPlatform(999998);
+
+        $black = collect($catalog)->firstWhere('keyword', 'Black');
+        $curvy = collect($catalog)->firstWhere('keyword', 'Curvy');
+
+        $this->assertSame('/black/', $black['url'] ?? null);
+        $this->assertSame('attribute:black', $black['category'] ?? null);
+        $this->assertSame('/curvy/', $curvy['url'] ?? null);
+        $this->assertSame('attribute:curvy', $curvy['category'] ?? null);
+    }
 }

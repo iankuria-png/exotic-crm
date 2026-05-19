@@ -64,6 +64,8 @@ class BioGenerationServiceTest extends TestCase
         $this->assertArrayHasKey('breakdown', $result);
         $this->assertSame('template_fallback', $result['provider_used']);
         $this->assertStringContainsString('Anna', $result['bio_html']);
+        $this->assertStringNotContainsString('170cm', $result['bio_html']);
+        $this->assertStringNotContainsString('height', strtolower($result['bio_html']));
     }
 
     public function test_generation_continues_when_link_injection_fails(): void

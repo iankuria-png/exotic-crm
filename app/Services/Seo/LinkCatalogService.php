@@ -31,6 +31,15 @@ class LinkCatalogService
         'GFE'        => 'gfe',
     ];
 
+    /**
+     * Attribute landing pages that follow the same per-market root slug pattern.
+     * Keep this list conservative: only include attributes that have canonical pages.
+     */
+    private const ATTRIBUTE_PAGES = [
+        'Black' => 'black',
+        'Curvy' => 'curvy',
+    ];
+
     public function forPlatform(int $platformId): array
     {
         return Cache::remember(
@@ -56,6 +65,9 @@ class LinkCatalogService
         // prevent multiple selected services from being linked in a concise bio.
         $catalog = array_merge($catalog, $this->servicePageEntries());
 
+        // Canonical attribute pages, e.g. /black/, /curvy/.
+        $catalog = array_merge($catalog, $this->attributePageEntries());
+
         // City/neighborhood terms fetched from WP
         $catalog = array_merge($catalog, $this->fetchLocationEntries($platformId));
 
@@ -76,6 +88,22 @@ class LinkCatalogService
                 'url'      => "/{$slug}/",
                 'category' => "service:{$slug}",
                 'priority' => 8,
+            ];
+        }
+
+        return $entries;
+    }
+
+    private function attributePageEntries(): array
+    {
+        $entries = [];
+
+        foreach (self::ATTRIBUTE_PAGES as $keyword => $slug) {
+            $entries[] = [
+                'keyword'  => $keyword,
+                'url'      => "/{$slug}/",
+                'category' => "attribute:{$slug}",
+                'priority' => 7,
             ];
         }
 

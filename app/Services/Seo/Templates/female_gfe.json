@@ -1,27 +1,17 @@
 [
   {
-    "intro": "Meet {name}, a captivating {age}-year-old {ethnicity} companion based in {city}.",
-    "middle": "Known for her warm {build} figure standing at {height}, {name} specialises in the Girlfriend Experience and is available for {availability_text} encounters.",
-    "closer": "Contact {name} today and enjoy an unforgettable time in {neighborhood_or_city}."
+    "intro": "{name}, {age}, offers GFE-style companionship in {city}.",
+    "middle": "She is {ethnicity}, {build}, and available for {availability_text} bookings with a warm, relaxed approach.",
+    "closer": "Contact {name} for a discreet GFE booking in {neighborhood_or_city}."
   },
   {
-    "intro": "{name} is a charming {ethnicity} escort in {city} who brings warmth, elegance, and genuine connection to every meeting.",
-    "middle": "At {age} years old, {name} offers the ultimate Girlfriend Experience, combining {build} beauty with {hair_color} hair and {height} of graceful poise.",
-    "closer": "Reach out to {name} for a private, discreet {top_service} experience in {neighborhood_or_city}."
+    "intro": "For GFE in {city}, {name} keeps things friendly, direct, and easy to arrange.",
+    "middle": "She is a {age}-year-old {ethnicity} companion with a {build} look and {availability_text} availability.",
+    "closer": "Reach out to {name} for serious bookings around {neighborhood_or_city}."
   },
   {
-    "intro": "Discover the allure of {name}, a {age}-year-old {ethnicity} beauty offering premium companionship services in {city}.",
-    "middle": "{name} brings an authentic Girlfriend Experience to every encounter — expect warmth, spontaneity, and absolute discretion. She is {build} with {hair_color} hair.",
-    "closer": "Book {name} in {neighborhood_or_city} for a truly memorable experience."
-  },
-  {
-    "intro": "{name} is an elegant {age}-year-old companion of {ethnicity} heritage, based in the heart of {city}.",
-    "middle": "Standing {height} with a {build} build and {hair_color} hair, {name} is the perfect partner for sophisticated, intimate GFE encounters whenever {availability_text}.",
-    "closer": "Enquire now to spend quality time with {name} in {neighborhood_or_city}."
-  },
-  {
-    "intro": "Looking for genuine connection in {city}? {name}, a {age}-year-old {ethnicity} escort, offers the perfect Girlfriend Experience.",
-    "middle": "{name} combines natural {ethnicity} beauty with a {build} figure and {hair_color} hair, ensuring every meeting feels personal and special.",
-    "closer": "Let {name} make your time in {neighborhood_or_city} extraordinary — get in touch today."
+    "intro": "{name} is a {age}-year-old {ethnicity} escort offering GFE in {city}.",
+    "middle": "She is {build}, offers simple communication and {availability_text} options, with a profile focused on real bookings.",
+    "closer": "Message {name} to arrange a private meeting in {neighborhood_or_city}."
   }
 ]

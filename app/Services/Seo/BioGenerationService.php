@@ -170,7 +170,8 @@ Tone: {$tone}. Temperament: {$temperament}.
 Style rules:
 - Write like a concise local classified/profile listing, not a luxury brochure.
 - Be specific and factual. Prefer short sentences.
-- Do not invent services, locations, contact details, nationality, or claims.
+- Do not invent services, locations, contact details, nationality, measurements, or claims.
+- Do not mention height or body measurements in the bio; these already appear in profile facts.
 - Avoid generic AI phrases like "sophisticated presence", "natural elegance", "commands attention", "unforgettable experience", "mutual respect", "quality over quantity", "bustling city", "ideal companion", "captivating presence".
 - No markdown, no headings, no lists, no emoji.
 - Return clean prose only.{$customLine}
@@ -185,7 +186,6 @@ PROMPT;
             'Gender' => $snapshot->gender ?: 'female',
             'Ethnicity' => $snapshot->ethnicity ?? '(not specified)',
             'Build' => $snapshot->build ?? '(not specified)',
-            'Height' => $snapshot->height ?? '(not specified)',
             'Languages' => !empty($snapshot->languages) ? implode(', ', $snapshot->languages) : 'English',
             'Availability' => $snapshot->availabilityText(),
         ];

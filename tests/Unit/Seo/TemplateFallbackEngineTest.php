@@ -81,7 +81,7 @@ class TemplateFallbackEngineTest extends TestCase
         $engine = new TemplateFallbackEngine($this->tempDir . '/nope');
         $profile = $this->makeSnapshot();
         $result = $engine->generate($profile);
-        $this->assertStringContainsString('professional companion', $result);
+        $this->assertStringContainsString('companion based in', $result);
     }
 
     public function test_handles_negative_crc32_on_32bit_systems(): void

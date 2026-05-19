@@ -125,9 +125,9 @@ class TemplateFallbackEngine
     private function builtInFallback(): array
     {
         return [
-            'intro'  => '{name} is a professional companion based in {city}.',
-            'middle' => 'Specialising in {top_service} and available for {availability_text} bookings.',
-            'closer' => 'Contact {name} for an unforgettable experience in {neighborhood_or_city}.',
+            'intro'  => '{name} is a companion based in {city}.',
+            'middle' => 'Available for {availability_text} bookings and offering {top_service}.',
+            'closer' => 'Contact {name} for serious enquiries in {neighborhood_or_city}.',
         ];
     }
 }
