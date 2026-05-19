@@ -11,6 +11,7 @@ use App\Services\WpSyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class SeoController extends Controller
@@ -44,9 +45,26 @@ class SeoController extends Controller
 
         $platformId = $this->resolvePlatformId($data);
 
-        $result = $this->generator->generate(array_merge($data, [
-            'platform_id' => $platformId,
-        ]));
+        try {
+            $result = $this->generator->generate(array_merge($data, [
+                'platform_id' => $platformId,
+            ]));
+        } catch (\Throwable $e) {
+            $eventId = (string) Str::uuid();
+
+            Log::error('seo.generate_bio_failed', [
+                'event_id' => $eventId,
+                'client_id' => $data['client_id'] ?? null,
+                'wp_post_id' => $data['wp_post_id'] ?? null,
+                'platform_id' => $platformId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(array_filter([
+                'message' => "Bio generation failed. Reference {$eventId}.",
+                'detail' => config('app.debug') ? $e->getMessage() : null,
+            ]), 500);
+        }
 
         if (!empty($data['save'])) {
             $this->persistResult($data, $result);

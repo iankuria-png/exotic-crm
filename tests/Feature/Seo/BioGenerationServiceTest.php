@@ -5,6 +5,7 @@ namespace Tests\Feature\Seo;
 use App\Models\Platform;
 use App\Services\Seo\BioGenerationService;
 use App\Services\Seo\LinkCatalogService;
+use App\Services\Seo\LinkInjector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -63,6 +64,32 @@ class BioGenerationServiceTest extends TestCase
         $this->assertArrayHasKey('breakdown', $result);
         $this->assertSame('template_fallback', $result['provider_used']);
         $this->assertStringContainsString('Anna', $result['bio_html']);
+    }
+
+    public function test_generation_continues_when_link_injection_fails(): void
+    {
+        $platform = Platform::factory()->create();
+
+        $catalog = \Mockery::mock(LinkCatalogService::class);
+        $catalog->shouldReceive('forPlatform')->andReturn([
+            ['keyword' => 'Nairobi', 'url' => '/escorts/nairobi', 'category' => 'location', 'priority' => 10],
+        ]);
+        $this->app->instance(LinkCatalogService::class, $catalog);
+
+        $injector = \Mockery::mock(LinkInjector::class);
+        $injector->shouldReceive('inject')->andThrow(new \Error('Class "DOMDocument" not found'));
+        $this->app->instance(LinkInjector::class, $injector);
+
+        $service = app(BioGenerationService::class);
+
+        $result = $service->generate([
+            'platform_id' => $platform->id,
+            'profile_snapshot' => ['name' => 'Nia', 'city' => 'Nairobi'],
+        ]);
+
+        $this->assertArrayHasKey('bio_html', $result);
+        $this->assertSame('template_fallback', $result['provider_used']);
+        $this->assertStringContainsString('Nia', $result['bio_html']);
     }
 
     public function test_returns_breakdown_with_four_components(): void

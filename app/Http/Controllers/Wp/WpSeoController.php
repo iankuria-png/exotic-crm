@@ -7,6 +7,7 @@ use App\Services\Seo\BioGenerationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class WpSeoController extends Controller
@@ -60,7 +61,23 @@ class WpSeoController extends Controller
             ]);
         }
 
-        $result = $this->generator->generate($data);
+        try {
+            $result = $this->generator->generate($data);
+        } catch (\Throwable $e) {
+            $eventId = (string) Str::uuid();
+
+            Log::error('seo.wp_generate_bio_failed', [
+                'event_id' => $eventId,
+                'platform_id' => $data['platform_id'],
+                'wp_post_id' => $data['wp_post_id'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(array_filter([
+                'message' => "Bio generation failed. Reference {$eventId}.",
+                'detail' => config('app.debug') ? $e->getMessage() : null,
+            ]), 500);
+        }
 
         Log::info('wp-svc.seo.bio_generated', [
             'platform_id'   => $data['platform_id'],

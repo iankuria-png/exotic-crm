@@ -55,9 +55,20 @@ class BioGenerationService
         // Wrap in paragraphs
         $bioHtml = $this->textToHtml($rawText);
 
-        // Inject internal links
-        $catalog = $this->catalogService->forPlatform($snapshot->platformId);
-        $bioHtml = $this->injector->inject($bioHtml, $catalog);
+        // Inject internal links. Link injection is an SEO enhancement, not a hard
+        // dependency for generation; if the WP catalog or DOM parser fails in prod,
+        // still return a generated bio and log the skipped enhancement.
+        try {
+            $catalog = $this->catalogService->forPlatform($snapshot->platformId);
+            $bioHtml = $this->injector->inject($bioHtml, $catalog);
+        } catch (\Throwable $e) {
+            Log::warning('seo.link_injection_failed', [
+                'client_id' => $clientId,
+                'wp_post_id' => $wpPostId,
+                'platform_id' => $snapshot->platformId,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         // Score
         $scoreResult = $this->scorer->score($bioHtml, $snapshot);
