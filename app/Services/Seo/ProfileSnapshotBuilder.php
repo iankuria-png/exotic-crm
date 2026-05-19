@@ -171,25 +171,84 @@ class ProfileSnapshotBuilder
             clientId:     $clientId,
             wpPostId:     $wpPostId,
             platformId:   $platformId,
-            name:         (string) ($data['name'] ?? ''),
-            age:          isset($data['age']) && $data['age'] !== '' ? (int) $data['age'] : null,
-            city:         (string) ($data['city'] ?? ''),
-            neighborhood: ($data['neighborhood'] ?? '') !== '' ? (string) $data['neighborhood'] : null,
-            gender:       (string) ($data['gender'] ?? 'female'),
-            ethnicity:    ($data['ethnicity'] ?? '') !== '' ? (string) $data['ethnicity'] : null,
-            build:        ($data['build'] ?? '') !== '' ? (string) $data['build'] : null,
-            height:       ($data['height'] ?? '') !== '' ? (string) $data['height'] : null,
-            hairColor:    ($data['hair_color'] ?? '') !== '' ? (string) $data['hair_color'] : null,
-            services:     is_array($data['services'] ?? null) ? $data['services'] : [],
-            languages:    is_array($data['languages'] ?? null) ? $data['languages'] : [],
+            name:         $this->stringValue($data['name'] ?? ''),
+            age:          $this->intOrNull($data['age'] ?? null),
+            city:         $this->stringValue($data['city'] ?? ''),
+            neighborhood: $this->nullableString($data['neighborhood'] ?? null),
+            gender:       $this->stringValue($data['gender'] ?? 'female'),
+            ethnicity:    $this->nullableString($data['ethnicity'] ?? null),
+            build:        $this->nullableString($data['build'] ?? null),
+            height:       $this->nullableString($data['height'] ?? null),
+            hairColor:    $this->nullableString($data['hair_color'] ?? null),
+            services:     $this->stringList($data['services'] ?? []),
+            languages:    $this->stringList($data['languages'] ?? []),
             rates:        is_array($data['rates'] ?? null) ? $data['rates'] : [],
-            availability: ($data['availability'] ?? '') !== '' ? (string) $data['availability'] : null,
-            existingBio:  (string) ($data['existing_bio'] ?? ''),
+            availability: $this->normalizeAvailability($data['availability'] ?? null),
+            existingBio:  $this->stringValue($data['existing_bio'] ?? ''),
             mediaSummary: is_array($data['media_summary'] ?? null) ? $data['media_summary'] : [
                 'image_count'    => 0,
                 'video_count'    => 0,
                 'has_main_image' => false,
             ],
         );
+    }
+
+    private function stringValue(mixed $value): string
+    {
+        if ($value === null || is_array($value)) {
+            return '';
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        return trim((string) $value);
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        $value = $this->stringValue($value);
+
+        return $value !== '' ? $value : null;
+    }
+
+    private function intOrNull(mixed $value): ?int
+    {
+        if ($value === null || is_array($value) || $value === '') {
+            return null;
+        }
+
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function stringList(mixed $value): array
+    {
+        $items = is_array($value) ? $value : [$value];
+
+        return array_values(array_unique(array_filter(
+            array_map(fn (mixed $item): string => $this->stringValue($item), $items),
+            fn (string $item): bool => $item !== '',
+        )));
+    }
+
+    private function normalizeAvailability(mixed $value): ?string
+    {
+        if (is_array($value)) {
+            $map = ['1' => 'Incall', '2' => 'Outcall'];
+            $items = array_map(
+                fn (mixed $item): string => $map[$this->stringValue($item)] ?? $this->stringValue($item),
+                $value,
+            );
+
+            $items = array_values(array_unique(array_filter($items)));
+
+            return $items !== [] ? implode(' & ', $items) : null;
+        }
+
+        return $this->nullableString($value);
     }
 }
