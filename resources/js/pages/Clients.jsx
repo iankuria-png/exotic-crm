@@ -1471,7 +1471,7 @@ export default function Clients() {
                     subtitle="New signups, failed payments, and stalled contacts — triage the queue."
                 />
                 {tabStrip}
-                <ConversionQueueView />
+                <ConversionQueueView platformId={platformFilter} />
             </div>
         );
     }

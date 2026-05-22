@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Deal;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
@@ -241,6 +242,127 @@ class ClientIndexListingTest extends TestCase
             ['Alice Client', 'Brenda Client', 'Charlie Client'],
             collect($createdResponse->json('data'))->pluck('name')->all()
         );
+    }
+
+    public function test_conversion_queue_respects_requested_platform_filter(): void
+    {
+        $kenya = $this->createPlatform();
+        $ghana = Platform::factory()->create([
+            'name' => 'Ghana Market',
+            'country' => 'Ghana',
+            'phone_prefix' => '233',
+            'currency_code' => 'GHS',
+            'timezone' => 'Africa/Accra',
+        ]);
+        $admin = $this->createAdminUser();
+        $timezone = config('app.timezone');
+        Carbon::setTestNow(Carbon::create(2026, 5, 22, 12, 0, 0, $timezone));
+
+        try {
+            $kenyaClient = Client::factory()->create([
+                'platform_id' => $kenya->id,
+                'name' => 'Kenya Queue Client',
+                'first_contact_at' => null,
+                'created_at' => now()->subMinutes(10),
+                'updated_at' => now()->subMinutes(10),
+            ]);
+            Client::factory()->create([
+                'platform_id' => $ghana->id,
+                'name' => 'Ghana Queue Client',
+                'first_contact_at' => null,
+                'created_at' => now()->subMinutes(10),
+                'updated_at' => now()->subMinutes(10),
+            ]);
+
+            $kenyaFailedClient = Client::factory()->create([
+                'platform_id' => $kenya->id,
+                'name' => 'Kenya Failed Payment Client',
+                'first_contact_at' => now()->subHours(2),
+                'last_contact_at' => now()->subHours(2),
+            ]);
+            $ghanaFailedClient = Client::factory()->create([
+                'platform_id' => $ghana->id,
+                'name' => 'Ghana Failed Payment Client',
+                'first_contact_at' => now()->subHours(2),
+                'last_contact_at' => now()->subHours(2),
+            ]);
+            $kenyaPayment = Payment::factory()->create([
+                'platform_id' => $kenya->id,
+                'client_id' => $kenyaFailedClient->id,
+                'status' => 'failed',
+                'reconciliation_state' => 'open',
+                'created_at' => now()->subMinutes(20),
+                'updated_at' => now()->subMinutes(20),
+            ]);
+            Payment::factory()->create([
+                'platform_id' => $ghana->id,
+                'client_id' => $ghanaFailedClient->id,
+                'status' => 'failed',
+                'reconciliation_state' => 'open',
+                'created_at' => now()->subMinutes(20),
+                'updated_at' => now()->subMinutes(20),
+            ]);
+
+            Sanctum::actingAs($admin);
+
+            $response = $this->getJson("/api/crm/clients/conversion-queue?platform_id={$kenya->id}");
+            $response->assertOk()
+                ->assertJsonPath('counts.new_signups', 1)
+                ->assertJsonPath('counts.failed_payments', 1)
+                ->assertJsonPath('new_signups.0.id', $kenyaClient->id)
+                ->assertJsonPath('new_signups.0.platform.id', $kenya->id)
+                ->assertJsonPath('failed_payments.0.id', $kenyaPayment->id)
+                ->assertJsonPath('failed_payments.0.client.platform.id', $kenya->id);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_conversion_queue_respects_sales_assigned_market_scope(): void
+    {
+        $kenya = $this->createPlatform();
+        $ghana = Platform::factory()->create([
+            'name' => 'Ghana Market',
+            'country' => 'Ghana',
+            'phone_prefix' => '233',
+            'currency_code' => 'GHS',
+            'timezone' => 'Africa/Accra',
+        ]);
+        $sales = User::factory()->create([
+            'role' => 'sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$kenya->id],
+            'email' => 'client-queue-sales-' . uniqid('', true) . '@example.test',
+        ]);
+        $timezone = config('app.timezone');
+        Carbon::setTestNow(Carbon::create(2026, 5, 22, 12, 0, 0, $timezone));
+
+        try {
+            $kenyaClient = Client::factory()->create([
+                'platform_id' => $kenya->id,
+                'name' => 'Assigned Market Client',
+                'first_contact_at' => null,
+                'created_at' => now()->subMinutes(10),
+                'updated_at' => now()->subMinutes(10),
+            ]);
+            Client::factory()->create([
+                'platform_id' => $ghana->id,
+                'name' => 'Out Of Scope Market Client',
+                'first_contact_at' => null,
+                'created_at' => now()->subMinutes(10),
+                'updated_at' => now()->subMinutes(10),
+            ]);
+
+            Sanctum::actingAs($sales);
+
+            $response = $this->getJson('/api/crm/clients/conversion-queue');
+            $response->assertOk()
+                ->assertJsonPath('counts.new_signups', 1)
+                ->assertJsonPath('new_signups.0.id', $kenyaClient->id)
+                ->assertJsonPath('new_signups.0.platform.id', $kenya->id);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     private function createPlatform(): Platform

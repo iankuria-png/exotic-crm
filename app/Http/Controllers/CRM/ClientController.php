@@ -3910,8 +3910,14 @@ class ClientController extends Controller
 
     public function conversionQueue(Request $request)
     {
-        $platformScope = function ($query) use ($request) {
+        $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible($request);
+
+        $platformScope = function ($query) use ($request, $requestedPlatformId) {
             $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+
+            if ($requestedPlatformId !== null) {
+                $query->where('platform_id', $requestedPlatformId);
+            }
         };
 
         $newSignups = Client::query()

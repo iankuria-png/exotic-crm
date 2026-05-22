@@ -139,7 +139,7 @@ function StalledCard({ row, onMarkContacted, onCloseCase, onOpenClient }) {
     );
 }
 
-export default function ConversionQueueView() {
+export default function ConversionQueueView({ platformId = '' }) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -148,8 +148,10 @@ export default function ConversionQueueView() {
     const [closeError, setCloseError] = useState(null);
 
     const queueQuery = useQuery({
-        queryKey: ['clients-conversion-queue'],
-        queryFn: () => api.get('/crm/clients/conversion-queue').then((r) => r.data),
+        queryKey: ['clients-conversion-queue', platformId || 'all'],
+        queryFn: () => api.get('/crm/clients/conversion-queue', {
+            params: platformId ? { platform_id: Number(platformId) } : {},
+        }).then((r) => r.data),
         refetchInterval: 60_000,
         staleTime: 30_000,
     });
