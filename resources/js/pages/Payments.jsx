@@ -789,8 +789,8 @@ export default function Payments() {
     const [manualCloseDialog, setManualCloseDialog] = useState({
         open: false,
         payment: null,
-        category: 'timeout',
-        reason: '',
+        reason_code: '',
+        reason_note: '',
     });
     const [manualRejectDialog, setManualRejectDialog] = useState({
         open: false,
@@ -1091,12 +1091,16 @@ export default function Payments() {
     });
 
     const manualCloseMutation = useMutation({
-        mutationFn: ({ paymentId, category, reason }) =>
-            api.post(`/crm/payments/${paymentId}/manual-close`, { category, reason }).then((response) => response.data),
+        mutationFn: ({ paymentId, reasonCode, reasonNote }) =>
+            api.post(`/crm/payments/${paymentId}/manual-close`, {
+                reason_code: reasonCode,
+                reason_note: reasonNote,
+            }).then((response) => response.data),
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
-            setManualCloseDialog({ open: false, payment: null, category: 'timeout', reason: '' });
+            queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
+            setManualCloseDialog({ open: false, payment: null, reason_code: '', reason_note: '' });
             toast.success('Payment closed manually.');
         },
         onError: (error) => {
@@ -1476,7 +1480,7 @@ export default function Payments() {
 
         if (actionKey === 'manual_close') {
             closeDiagnostics();
-            setManualCloseDialog({ open: true, payment: paymentRow, category: 'timeout', reason: '' });
+            setManualCloseDialog({ open: true, payment: paymentRow, reason_code: '', reason_note: '' });
             return;
         }
 
@@ -3367,7 +3371,7 @@ export default function Payments() {
                                     type="button"
                                     onClick={() => {
                                         closeDiagnostics();
-                                        setManualCloseDialog({ open: true, payment: diagnosticsPayment, category: 'timeout', reason: '' });
+                                        setManualCloseDialog({ open: true, payment: diagnosticsPayment, reason_code: '', reason_note: '' });
                                     }}
                                     className="crm-btn-danger"
                                 >
@@ -3972,49 +3976,60 @@ export default function Payments() {
 
             <ConfirmDialog
                 open={manualCloseDialog.open && !!manualCloseDialog.payment}
-                title="Close pending payment manually"
+                title="Close payment manually"
                 message={manualCloseDialog.payment
-                    ? `Close payment #${manualCloseDialog.payment.id} (${formatCurrency(manualCloseDialog.payment.amount, resolveCurrency(manualCloseDialog.payment.currency))}) and move it out of pending queue.`
+                    ? `Close payment #${manualCloseDialog.payment.id} (${formatCurrency(manualCloseDialog.payment.amount, resolveCurrency(manualCloseDialog.payment.currency))}) and mark it as resolved.`
                     : ''}
                 confirmLabel="Close payment"
-                onCancel={() => setManualCloseDialog({ open: false, payment: null, category: 'timeout', reason: '' })}
+                onCancel={() => setManualCloseDialog({ open: false, payment: null, reason_code: '', reason_note: '' })}
                 onConfirm={() => {
                     if (manualCloseDialog.payment) {
                         manualCloseMutation.mutate({
                             paymentId: manualCloseDialog.payment.id,
-                            category: manualCloseDialog.category,
-                            reason: manualCloseDialog.reason.trim(),
+                            reasonCode: manualCloseDialog.reason_code,
+                            reasonNote: manualCloseDialog.reason_note.trim() || null,
                         });
                     }
                 }}
-                confirmDisabled={manualCloseMutation.isPending || !manualCloseDialog.reason.trim()}
+                confirmDisabled={
+                    manualCloseMutation.isPending
+                    || !manualCloseDialog.reason_code
+                    || (manualCloseDialog.reason_code === 'other' && !manualCloseDialog.reason_note.trim())
+                }
                 isPending={manualCloseMutation.isPending}
             >
                 <div className="space-y-3">
                     <div>
-                        <label htmlFor="manual-close-category" className="mb-1 block text-sm font-medium text-slate-700">Closure category</label>
+                        <label htmlFor="manual-close-reason-code" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
                         <select
-                            id="manual-close-category"
-                            value={manualCloseDialog.category}
-                            onChange={(event) => setManualCloseDialog((current) => ({ ...current, category: event.target.value }))}
+                            id="manual-close-reason-code"
+                            value={manualCloseDialog.reason_code}
+                            onChange={(event) => setManualCloseDialog((current) => ({ ...current, reason_code: event.target.value }))}
                             className="crm-select"
                         >
-                            <option value="timeout">Timeout / no callback</option>
-                            <option value="customer_cancelled">Customer cancelled</option>
-                            <option value="duplicate_request">Duplicate request</option>
-                            <option value="fraud_suspected">Fraud suspected</option>
+                            <option value="">Select a reason…</option>
+                            <option value="payment_issue">Payment Issue Not Resolved</option>
+                            <option value="no_response">No Response</option>
+                            <option value="declined">Declined to Proceed</option>
+                            <option value="invalid_contact">Invalid Contact Details</option>
+                            <option value="inappropriate">Inappropriate Behaviour</option>
+                            <option value="not_serious">Not Serious</option>
+                            <option value="duplicate">Duplicate Contact</option>
                             <option value="other">Other</option>
                         </select>
                     </div>
                     <div>
-                        <label htmlFor="manual-close-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                        <label htmlFor="manual-close-reason-note" className="mb-1 block text-sm font-medium text-slate-700">
+                            Note {manualCloseDialog.reason_code === 'other' ? <span className="text-rose-600">*</span> : <span className="font-normal text-slate-400">(optional)</span>}
+                        </label>
                         <textarea
-                            id="manual-close-reason"
+                            id="manual-close-reason-note"
                             rows={3}
-                            value={manualCloseDialog.reason}
-                            onChange={(event) => setManualCloseDialog((current) => ({ ...current, reason: event.target.value }))}
+                            value={manualCloseDialog.reason_note}
+                            onChange={(event) => setManualCloseDialog((current) => ({ ...current, reason_note: event.target.value }))}
                             className="crm-input"
-                            placeholder="Explain why this pending payment is being closed manually."
+                            placeholder={manualCloseDialog.reason_code === 'other' ? 'Required — what happened?' : 'Add context (attempts made, response received, etc.).'}
+                            maxLength={1000}
                         />
                     </div>
                 </div>

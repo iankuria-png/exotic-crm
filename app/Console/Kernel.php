@@ -50,6 +50,13 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_snapshot_active_clients.log'));
 
+        $schedule->command('crm:purge-closed-clients')
+            ->name('crm_purge_closed_clients')
+            ->dailyAt('03:00')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_purge_closed_clients.log'));
+
         $schedule->command('crm:close-stale-sessions')
             ->name('crm_close_stale_sessions')
             ->everyMinute()

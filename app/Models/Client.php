@@ -71,6 +71,13 @@ class Client extends Model
         'wallet_last_synced_at',
         'assigned_to',
         'duplicate_of',
+        'closed_at',
+        'close_reason_code',
+        'close_reason_note',
+        'closed_by',
+        'purge_after',
+        'first_contact_at',
+        'last_contact_at',
         'last_online_at',
         'last_synced_at',
         'wp_modified_at',
@@ -110,6 +117,10 @@ class Client extends Model
         'seo_score' => 'integer',
         'seo_score_breakdown' => 'array',
         'seo_score_updated_at' => 'datetime',
+        'closed_at' => 'datetime',
+        'purge_after' => 'datetime',
+        'first_contact_at' => 'datetime',
+        'last_contact_at' => 'datetime',
     ];
 
     protected $appends = [
@@ -131,6 +142,11 @@ class Client extends Model
     public function riskMarkedBy()
     {
         return $this->belongsTo(User::class, 'risk_marked_by');
+    }
+
+    public function closedBy()
+    {
+        return $this->belongsTo(User::class, 'closed_by');
     }
 
     public function deals()
@@ -256,6 +272,23 @@ class Client extends Model
     {
         return $query->whereDoesntHave('deals')
             ->whereDoesntHave('payments');
+    }
+
+    public function scopeNotClosed($query)
+    {
+        return $query->whereNull('closed_at');
+    }
+
+    public function scopeClosed($query)
+    {
+        return $query->whereNotNull('closed_at');
+    }
+
+    public function scopeReadyForPurge($query)
+    {
+        return $query->whereNotNull('closed_at')
+            ->whereNotNull('purge_after')
+            ->where('purge_after', '<=', now());
     }
 
     public function getWpProfileUrlAttribute(): ?string
