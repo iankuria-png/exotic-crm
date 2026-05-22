@@ -3914,7 +3914,12 @@ class ClientController extends Controller
             $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
         };
 
-        $newSignups = Client::query()
+        // Resolve range window. Accepts either `range_hours` (preset chips) or
+        // `from`/`to` ISO dates (custom range). Defaults to last 48h to match
+        // the customer-service intake cadence.
+        [$rangeStart, $rangeEnd, $rangeLabel] = $this->resolveConversionQueueRange($request);
+
+        $newSignupsQuery = Client::query()
             ->with(['platform:id,name'])
             ->tap($platformScope)
             ->notClosed()
@@ -3925,23 +3930,25 @@ class ClientController extends Controller
             ->whereDoesntHave('payments', function ($q) {
                 $q->whereIn('status', ['completed', 'activated']);
             })
-            ->where('created_at', '>=', now()->subHours(24))
-            ->orderBy('created_at', 'desc')
-            ->limit(50)
-            ->get();
+            ->where('created_at', '>=', $rangeStart);
+        if ($rangeEnd !== null) {
+            $newSignupsQuery->where('created_at', '<=', $rangeEnd);
+        }
+        $newSignups = $newSignupsQuery->orderBy('created_at', 'desc')->limit(50)->get();
 
-        $failedPayments = Payment::query()
+        $failedPaymentsQuery = Payment::query()
             ->with(['client:id,name,phone_normalized,city,platform_id,closed_at', 'client.platform:id,name', 'product:id,name,display_name'])
             ->where('status', 'failed')
             ->where('reconciliation_state', 'open')
-            ->where('created_at', '>=', now()->subDays(14))
+            ->where('created_at', '>=', $rangeStart)
             ->whereHas('client', function ($q) use ($platformScope) {
                 $q->whereNull('closed_at');
                 $platformScope($q);
-            })
-            ->orderBy('created_at', 'desc')
-            ->limit(50)
-            ->get();
+            });
+        if ($rangeEnd !== null) {
+            $failedPaymentsQuery->where('created_at', '<=', $rangeEnd);
+        }
+        $failedPayments = $failedPaymentsQuery->orderBy('created_at', 'desc')->limit(50)->get();
 
         $stalled = Client::query()
             ->with(['platform:id,name', 'assignedAgent:id,name'])
@@ -4018,7 +4025,67 @@ class ClientController extends Controller
                 'yellow_max_minutes' => 30,
                 'orange_max_minutes' => 120,
             ],
+            'range' => [
+                'start' => $rangeStart->toIso8601String(),
+                'end' => $rangeEnd?->toIso8601String(),
+                'label' => $rangeLabel,
+                'hours' => $rangeEnd === null ? (int) round(now()->diffInMinutes($rangeStart) / 60) : null,
+                'applies_to' => ['new_signups', 'failed_payments'],
+                'note' => 'Stalled contacted bucket uses its own >72h cutoff and is unaffected by this range.',
+            ],
         ]);
+    }
+
+    /**
+     * Resolve the conversion queue's filter window from request params.
+     *
+     * Accepts:
+     *   - range_hours: integer preset (24, 48, 168, 720) — default 48
+     *   - from / to: ISO date strings for a custom range (override range_hours)
+     *
+     * Returns [start Carbon, end Carbon|null, label string].
+     */
+    private function resolveConversionQueueRange(Request $request): array
+    {
+        $now = now();
+
+        $from = trim((string) $request->input('from', ''));
+        $to = trim((string) $request->input('to', ''));
+
+        if ($from !== '' || $to !== '') {
+            try {
+                $start = $from !== '' ? Carbon::parse($from)->startOfDay() : $now->copy()->subDays(30)->startOfDay();
+                $end = $to !== '' ? Carbon::parse($to)->endOfDay() : null;
+
+                // Clamp absurd ranges to a max of 90 days.
+                $cap = $now->copy()->subDays(90);
+                if ($start->lessThan($cap)) {
+                    $start = $cap;
+                }
+
+                $label = sprintf('Custom · %s%s', $start->format('M j'), $end ? ' → ' . $end->format('M j') : ' → now');
+                return [$start, $end, $label];
+            } catch (\Throwable) {
+                // Fall through to the preset path on parse error.
+            }
+        }
+
+        $rangeHours = (int) $request->input('range_hours', 48);
+        $allowed = [24, 48, 168, 720]; // 1d, 2d, 7d, 30d
+        if (!in_array($rangeHours, $allowed, true)) {
+            $rangeHours = 48;
+        }
+
+        $start = $now->copy()->subHours($rangeHours);
+        $label = match ($rangeHours) {
+            24 => 'Last 24 hours',
+            48 => 'Last 48 hours',
+            168 => 'Last 7 days',
+            720 => 'Last 30 days',
+            default => sprintf('Last %d hours', $rangeHours),
+        };
+
+        return [$start, null, $label];
     }
 
     private function conversionSlaBucket(\DateTimeInterface $reference): string
