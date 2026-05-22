@@ -215,6 +215,36 @@ function paymentResolutionBadge(resolutionCode) {
     return { label: titleize(normalized), className: 'bg-slate-100 text-slate-600 ring-slate-200' };
 }
 
+const PAYMENT_CLOSE_REASONS = [
+    { code: 'customer_converted', label: 'Customer Converted' },
+    { code: 'payment_failed', label: 'Payment Failed' },
+    { code: 'customer_testing', label: 'Customer Was Testing' },
+    { code: 'systems_down', label: 'Systems Were Down' },
+    { code: 'duplicate_attempt', label: 'Duplicate Attempt' },
+    { code: 'customer_abandoned', label: 'Customer Abandoned' },
+    { code: 'other', label: 'Other' },
+];
+
+function inferPaymentCloseReason(payment) {
+    const text = [
+        payment?.failure_reason,
+        payment?.raw_payload?.manual_close?.reason_note,
+        payment?.raw_payload?.error_message,
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    if (/(converted|completed|paid|success)/.test(text)) return 'customer_converted';
+    if (/(test|sandbox|demo)/.test(text)) return 'customer_testing';
+    if (/(system|down|outage|timeout|timed out|network|provider|service unavailable)/.test(text)) return 'systems_down';
+    if (/(duplicate|already|repeat)/.test(text)) return 'duplicate_attempt';
+    if (/(cancel|abandon|no response|declined|not interested)/.test(text)) return 'customer_abandoned';
+
+    return 'payment_failed';
+}
+
+function defaultPaymentCloseNote(payment) {
+    return payment?.failure_reason ? String(payment.failure_reason).slice(0, 1000) : '';
+}
+
 function isSandboxPayment(payment) {
     return String(payment?.provider_environment || '').toLowerCase() === 'sandbox'
         || Boolean(payment?.payment_data?.test_mode);
@@ -791,6 +821,7 @@ export default function Payments() {
         payment: null,
         reason_code: '',
         reason_note: '',
+        converted_payment_id: '',
     });
     const [manualRejectDialog, setManualRejectDialog] = useState({
         open: false,
@@ -1091,16 +1122,17 @@ export default function Payments() {
     });
 
     const manualCloseMutation = useMutation({
-        mutationFn: ({ paymentId, reasonCode, reasonNote }) =>
+        mutationFn: ({ paymentId, reasonCode, reasonNote, convertedPaymentId }) =>
             api.post(`/crm/payments/${paymentId}/manual-close`, {
                 reason_code: reasonCode,
                 reason_note: reasonNote,
+                ...(convertedPaymentId ? { converted_payment_id: Number(convertedPaymentId) } : {}),
             }).then((response) => response.data),
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
             queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
-            setManualCloseDialog({ open: false, payment: null, reason_code: '', reason_note: '' });
+            setManualCloseDialog({ open: false, payment: null, reason_code: '', reason_note: '', converted_payment_id: '' });
             toast.success('Payment closed manually.');
         },
         onError: (error) => {
@@ -1413,6 +1445,16 @@ export default function Payments() {
         setCandidateSearchInput('');
     };
 
+    const openManualCloseDialog = (paymentRow) => {
+        setManualCloseDialog({
+            open: true,
+            payment: paymentRow,
+            reason_code: inferPaymentCloseReason(paymentRow),
+            reason_note: defaultPaymentCloseNote(paymentRow),
+            converted_payment_id: '',
+        });
+    };
+
     const openDiagnostics = (paymentRow) => {
         setDiagnosticsDrawer({ open: true, payment: paymentRow });
     };
@@ -1480,7 +1522,7 @@ export default function Payments() {
 
         if (actionKey === 'manual_close') {
             closeDiagnostics();
-            setManualCloseDialog({ open: true, payment: paymentRow, reason_code: '', reason_note: '' });
+            openManualCloseDialog(paymentRow);
             return;
         }
 
@@ -3371,7 +3413,7 @@ export default function Payments() {
                                     type="button"
                                     onClick={() => {
                                         closeDiagnostics();
-                                        setManualCloseDialog({ open: true, payment: diagnosticsPayment, reason_code: '', reason_note: '' });
+                                        openManualCloseDialog(diagnosticsPayment);
                                     }}
                                     className="crm-btn-danger"
                                 >
@@ -3981,13 +4023,14 @@ export default function Payments() {
                     ? `Close payment #${manualCloseDialog.payment.id} (${formatCurrency(manualCloseDialog.payment.amount, resolveCurrency(manualCloseDialog.payment.currency))}) and mark it as resolved.`
                     : ''}
                 confirmLabel="Close payment"
-                onCancel={() => setManualCloseDialog({ open: false, payment: null, reason_code: '', reason_note: '' })}
+                onCancel={() => setManualCloseDialog({ open: false, payment: null, reason_code: '', reason_note: '', converted_payment_id: '' })}
                 onConfirm={() => {
                     if (manualCloseDialog.payment) {
                         manualCloseMutation.mutate({
                             paymentId: manualCloseDialog.payment.id,
                             reasonCode: manualCloseDialog.reason_code,
                             reasonNote: manualCloseDialog.reason_note.trim() || null,
+                            convertedPaymentId: manualCloseDialog.converted_payment_id,
                         });
                     }
                 }}
@@ -4008,16 +4051,28 @@ export default function Payments() {
                             className="crm-select"
                         >
                             <option value="">Select a reason…</option>
-                            <option value="payment_issue">Payment Issue Not Resolved</option>
-                            <option value="no_response">No Response</option>
-                            <option value="declined">Declined to Proceed</option>
-                            <option value="invalid_contact">Invalid Contact Details</option>
-                            <option value="inappropriate">Inappropriate Behaviour</option>
-                            <option value="not_serious">Not Serious</option>
-                            <option value="duplicate">Duplicate Contact</option>
-                            <option value="other">Other</option>
+                            {PAYMENT_CLOSE_REASONS.map((reason) => (
+                                <option key={reason.code} value={reason.code}>{reason.label}</option>
+                            ))}
                         </select>
                     </div>
+                    {manualCloseDialog.reason_code === 'customer_converted' ? (
+                        <div>
+                            <label htmlFor="manual-close-converted-payment" className="mb-1 block text-sm font-medium text-slate-700">
+                                Converted payment ID <span className="font-normal text-slate-400">(optional)</span>
+                            </label>
+                            <input
+                                id="manual-close-converted-payment"
+                                type="number"
+                                min="1"
+                                value={manualCloseDialog.converted_payment_id}
+                                onChange={(event) => setManualCloseDialog((current) => ({ ...current, converted_payment_id: event.target.value }))}
+                                className="crm-input"
+                                placeholder="Leave blank to auto-link the matching completed payment"
+                            />
+                            <p className="mt-1 text-xs text-slate-500">When left blank, CRM looks for a completed payment from the same client or phone and stores that link in the resolution metadata.</p>
+                        </div>
+                    ) : null}
                     <div>
                         <label htmlFor="manual-close-reason-note" className="mb-1 block text-sm font-medium text-slate-700">
                             Note {manualCloseDialog.reason_code === 'other' ? <span className="text-rose-600">*</span> : <span className="font-normal text-slate-400">(optional)</span>}

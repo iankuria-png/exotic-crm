@@ -39,6 +39,7 @@ use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
 use App\Support\CrmClientCloseReason;
+use App\Support\CrmPaymentCloseReason;
 use App\Support\DeactivationRequest;
 use App\Support\DealDeactivationReason;
 use App\Support\LinkedPaymentAction;
@@ -1510,14 +1511,15 @@ class PaymentQueueController extends Controller
 
         $validated = $request->validate([
             'category' => 'nullable|in:timeout,customer_cancelled,duplicate_request,fraud_suspected,other',
-            'reason_code' => 'nullable|string|in:' . implode(',', CrmClientCloseReason::ALL),
+            'reason_code' => 'nullable|string|in:' . implode(',', array_unique(array_merge(CrmPaymentCloseReason::ALL, CrmClientCloseReason::ALL))),
             'reason' => 'nullable|string|max:500',
             'reason_note' => 'nullable|string|max:1000',
+            'converted_payment_id' => 'nullable|integer|exists:payments,id',
         ]);
 
         // Resolve canonical reason code: prefer new contract, fall back to legacy category mapping.
         $reasonCode = $validated['reason_code']
-            ?? CrmClientCloseReason::fromLegacyPaymentCategory($validated['category'] ?? null);
+            ?? CrmPaymentCloseReason::fromLegacyPaymentCategory($validated['category'] ?? null);
 
         if ($reasonCode === null) {
             return response()->json([
@@ -1534,7 +1536,7 @@ class PaymentQueueController extends Controller
             }
         }
 
-        if (CrmClientCloseReason::requiresNote($reasonCode) && $reasonNote === null) {
+        if ($this->paymentCloseReasonRequiresNote($reasonCode) && $reasonNote === null) {
             return response()->json([
                 'message' => 'A note is required when the reason is "Other".',
                 'error_code' => 'note_required',
@@ -1547,15 +1549,34 @@ class PaymentQueueController extends Controller
             ], 422);
         }
 
-        $reasonLabel = CrmClientCloseReason::label($reasonCode);
+        $reasonLabel = $this->paymentCloseReasonLabel($reasonCode);
         $reasonText = $reasonNote !== null ? ($reasonLabel . ' — ' . $reasonNote) : $reasonLabel;
+        $convertedPayment = $reasonCode === CrmPaymentCloseReason::CUSTOMER_CONVERTED
+            ? $this->resolveConvertedPaymentForClose($payment, isset($validated['converted_payment_id']) ? (int) $validated['converted_payment_id'] : null)
+            : null;
 
         $beforeState = [
             'status' => $payment->status,
             'reconciliation_state' => $payment->reconciliation_state,
             'resolution_code' => $payment->resolution_code,
+            'client_id' => $payment->client_id,
+            'match_confidence' => $payment->match_confidence,
+            'confirmed_by' => $payment->confirmed_by,
+            'confirmed_at' => optional($payment->confirmed_at)->toDateTimeString(),
             'raw_payload' => $payment->raw_payload,
         ];
+
+        $convertedPaymentMeta = $convertedPayment ? [
+            'payment_id' => (int) $convertedPayment->id,
+            'client_id' => $convertedPayment->client_id ? (int) $convertedPayment->client_id : null,
+            'deal_id' => $convertedPayment->deal_id ? (int) $convertedPayment->deal_id : null,
+            'reference_number' => $convertedPayment->reference_number,
+            'transaction_reference' => $convertedPayment->transaction_reference,
+            'amount' => $convertedPayment->amount,
+            'currency' => $convertedPayment->currency,
+            'status' => $convertedPayment->status,
+            'completed_at' => optional($convertedPayment->completed_at)->toDateTimeString(),
+        ] : null;
 
         $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
         $rawPayload['manual_close'] = [
@@ -1563,6 +1584,8 @@ class PaymentQueueController extends Controller
             'reason_label' => $reasonLabel,
             'reason_note' => $reasonNote,
             'legacy_category' => $validated['category'] ?? null,
+            'converted_payment' => $convertedPaymentMeta,
+            'converted_payment_linked' => $convertedPaymentMeta !== null,
             'closed_by' => optional($request->user())->id,
             'closed_at' => now()->toDateTimeString(),
         ];
@@ -1570,14 +1593,24 @@ class PaymentQueueController extends Controller
         $resolutionMeta = is_array($payment->resolution_meta_json) ? $payment->resolution_meta_json : [];
         $resolutionMeta['manual_close'] = $rawPayload['manual_close'];
 
-        $payment->forceFill([
+        $paymentUpdates = [
             // For initiated/pending the status flips to failed; for failed it stays as-is.
             'status' => $payment->status === 'failed' ? 'failed' : 'failed',
             'reconciliation_state' => 'resolved',
             'resolution_code' => $reasonCode,
             'resolution_meta_json' => $resolutionMeta,
             'raw_payload' => $rawPayload,
-        ])->save();
+        ];
+
+        if ($convertedPayment && !$payment->client_id && $convertedPayment->client_id) {
+            $paymentUpdates['client_id'] = (int) $convertedPayment->client_id;
+            $paymentUpdates['match_confidence'] = 'manual';
+            $paymentUpdates['confirmed_by'] = optional($request->user())->id;
+            $paymentUpdates['confirmed_at'] = now();
+            $paymentUpdates['reconciliation_confidence'] = 'high';
+        }
+
+        $payment->forceFill($paymentUpdates)->save();
 
         $this->paymentAttemptService->record($payment, 'manual_close', 'closed', [
             'provider' => 'crm_operator',
@@ -1586,10 +1619,12 @@ class PaymentQueueController extends Controller
             'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
                 'reason_code' => $reasonCode,
                 'legacy_category' => $validated['category'] ?? null,
+                'converted_payment_id' => $convertedPayment?->id,
             ]),
             'response_meta' => [
                 'reason_code' => $reasonCode,
                 'reason_label' => $reasonLabel,
+                'converted_payment' => $convertedPaymentMeta,
             ],
             'created_by' => optional($request->user())->id,
         ]);
@@ -1605,6 +1640,8 @@ class PaymentQueueController extends Controller
                 'status' => $payment->status,
                 'reconciliation_state' => 'resolved',
                 'resolution_code' => $reasonCode,
+                'client_id' => $payment->client_id,
+                'match_confidence' => $payment->match_confidence,
                 'manual_close' => $rawPayload['manual_close'],
             ],
             $reasonText
@@ -1614,6 +1651,92 @@ class PaymentQueueController extends Controller
             'message' => 'Payment closed manually.',
             'payment' => $payment->fresh(['platform', 'product', 'client']),
         ]);
+    }
+
+    private function paymentCloseReasonLabel(string $reasonCode): string
+    {
+        if (CrmPaymentCloseReason::isValid($reasonCode)) {
+            return CrmPaymentCloseReason::label($reasonCode);
+        }
+
+        return CrmClientCloseReason::label($reasonCode);
+    }
+
+    private function paymentCloseReasonRequiresNote(string $reasonCode): bool
+    {
+        if (CrmPaymentCloseReason::isValid($reasonCode)) {
+            return CrmPaymentCloseReason::requiresNote($reasonCode);
+        }
+
+        return CrmClientCloseReason::requiresNote($reasonCode);
+    }
+
+    private function resolveConvertedPaymentForClose(Payment $payment, ?int $requestedPaymentId = null): ?Payment
+    {
+        $successfulStatuses = array_values(array_unique(array_merge(Payment::ACTIVE_SUBSCRIPTION_STATUSES, ['completed', 'activated'])));
+
+        if ($requestedPaymentId !== null) {
+            return Payment::query()
+                ->with(['client:id,name,phone_normalized', 'deal:id,client_id'])
+                ->whereKey($requestedPaymentId)
+                ->where('id', '!=', $payment->id)
+                ->where('platform_id', (int) $payment->platform_id)
+                ->whereIn('status', $successfulStatuses)
+                ->where(function ($query) {
+                    $query->whereNull('resolution_code')
+                        ->orWhereNotIn('resolution_code', [Payment::RESOLUTION_REVERSED, Payment::RESOLUTION_INVALID_REFERENCE]);
+                })
+                ->first();
+        }
+
+        $payment->loadMissing(['platform:id,phone_prefix', 'client:id,phone_normalized']);
+        $phonePrefix = (string) ($payment->platform?->phone_prefix ?: '254');
+        $normalizedPhone = PhoneNormalizer::normalize($payment->phone, $phonePrefix);
+        $clientId = $payment->client_id ? (int) $payment->client_id : null;
+
+        if (!$clientId && $normalizedPhone) {
+            $clientId = Client::query()
+                ->where('platform_id', (int) $payment->platform_id)
+                ->where('phone_normalized', $normalizedPhone)
+                ->orderByDesc('updated_at')
+                ->value('id');
+            $clientId = $clientId ? (int) $clientId : null;
+        }
+
+        $candidates = Payment::query()
+            ->with(['client:id,name,phone_normalized', 'deal:id,client_id'])
+            ->where('id', '!=', $payment->id)
+            ->where('platform_id', (int) $payment->platform_id)
+            ->whereIn('status', $successfulStatuses)
+            ->where(function ($query) {
+                $query->whereNull('resolution_code')
+                    ->orWhereNotIn('resolution_code', [Payment::RESOLUTION_REVERSED, Payment::RESOLUTION_INVALID_REFERENCE]);
+            })
+            ->when($payment->created_at, function ($query) use ($payment) {
+                $query->where('created_at', '>=', $payment->created_at->copy()->subDays(7));
+            })
+            ->orderByRaw('COALESCE(completed_at, created_at) DESC')
+            ->limit(100)
+            ->get();
+
+        if ($clientId) {
+            $byClient = $candidates->first(fn (Payment $candidate) => (int) ($candidate->client_id ?: $candidate->deal?->client_id) === $clientId);
+            if ($byClient) {
+                return $byClient;
+            }
+        }
+
+        if (!$normalizedPhone) {
+            return null;
+        }
+
+        return $candidates->first(function (Payment $candidate) use ($normalizedPhone, $phonePrefix) {
+            if ($candidate->client?->phone_normalized && $candidate->client->phone_normalized === $normalizedPhone) {
+                return true;
+            }
+
+            return PhoneNormalizer::normalize($candidate->phone, $phonePrefix) === $normalizedPhone;
+        });
     }
 
     public function manualSubmissionProof(Request $request, PaymentManualSubmission $submission)

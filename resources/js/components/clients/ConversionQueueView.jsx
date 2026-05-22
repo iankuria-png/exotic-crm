@@ -5,6 +5,27 @@ import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import SlaPill, { BUCKET_BORDER } from './SlaPill';
 import CloseCaseDialog from '../CloseCaseDialog';
+import ConfirmDialog from '../ConfirmDialog';
+
+const PAYMENT_CLOSE_REASONS = [
+    { code: 'customer_converted', label: 'Customer Converted' },
+    { code: 'payment_failed', label: 'Payment Failed' },
+    { code: 'customer_testing', label: 'Customer Was Testing' },
+    { code: 'systems_down', label: 'Systems Were Down' },
+    { code: 'duplicate_attempt', label: 'Duplicate Attempt' },
+    { code: 'customer_abandoned', label: 'Customer Abandoned' },
+    { code: 'other', label: 'Other' },
+];
+
+function inferPaymentCloseReason(row) {
+    const text = String(row?.failure_reason || '').toLowerCase();
+    if (/(converted|completed|paid|success)/.test(text)) return 'customer_converted';
+    if (/(test|sandbox|demo)/.test(text)) return 'customer_testing';
+    if (/(system|down|outage|timeout|timed out|network|provider|service unavailable)/.test(text)) return 'systems_down';
+    if (/(duplicate|already|repeat)/.test(text)) return 'duplicate_attempt';
+    if (/(cancel|abandon|no response|declined|not interested)/.test(text)) return 'customer_abandoned';
+    return 'payment_failed';
+}
 
 function SectionHeader({ title, count, refreshedAgo, onToggle, collapsed, emptyHint }) {
     return (
@@ -146,6 +167,7 @@ export default function ConversionQueueView({ platformId = '' }) {
     const [collapsed, setCollapsed] = useState({ new_signups: false, failed_payments: false, stalled_contacted: false });
     const [closeDialog, setCloseDialog] = useState({ open: false, client: null });
     const [closeError, setCloseError] = useState(null);
+    const [closePaymentDialog, setClosePaymentDialog] = useState({ open: false, payment: null, reason_code: 'payment_failed', reason_note: '', converted_payment_id: '' });
 
     const queueQuery = useQuery({
         queryKey: ['clients-conversion-queue', platformId || 'all'],
@@ -186,11 +208,16 @@ export default function ConversionQueueView({ platformId = '' }) {
     });
 
     const closePaymentMutation = useMutation({
-        mutationFn: ({ paymentId, reason_code, reason_note }) =>
-            api.post(`/crm/payments/${paymentId}/manual-close`, { reason_code, reason_note }).then((r) => r.data),
+        mutationFn: ({ paymentId, reason_code, reason_note, converted_payment_id }) =>
+            api.post(`/crm/payments/${paymentId}/manual-close`, {
+                reason_code,
+                reason_note,
+                ...(converted_payment_id ? { converted_payment_id: Number(converted_payment_id) } : {}),
+            }).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
             toast?.success?.('Payment closed.');
+            setClosePaymentDialog({ open: false, payment: null, reason_code: 'payment_failed', reason_note: '', converted_payment_id: '' });
         },
         onError: (err) => toast?.error?.(err?.response?.data?.message || 'Close failed.'),
     });
@@ -275,7 +302,13 @@ export default function ConversionQueueView({ platformId = '' }) {
                                 onRetryStk={() => retryStkMutation.mutate(row.id)}
                                 onSendLink={() => sendLinkMutation.mutate(row.id)}
                                 onOpenClient={() => row.client?.id && navigate(`/clients/${row.client.id}`)}
-                                onClosePayment={() => closePaymentMutation.mutate({ paymentId: row.id, reason_code: 'payment_issue', reason_note: row.failure_reason || null })}
+                                onClosePayment={() => setClosePaymentDialog({
+                                    open: true,
+                                    payment: row,
+                                    reason_code: inferPaymentCloseReason(row),
+                                    reason_note: row.failure_reason || '',
+                                    converted_payment_id: '',
+                                })}
                             />
                         ))}
                     </div>
@@ -314,6 +347,75 @@ export default function ConversionQueueView({ platformId = '' }) {
                 onCancel={() => { if (!closeCaseMutation.isPending) { setCloseDialog({ open: false, client: null }); setCloseError(null); } }}
                 onConfirm={(payload) => closeCaseMutation.mutate({ clientId: closeDialog.client.id, payload })}
             />
+
+            <ConfirmDialog
+                open={closePaymentDialog.open && !!closePaymentDialog.payment}
+                title="Close failed payment"
+                message={closePaymentDialog.payment ? `Mark payment #${closePaymentDialog.payment.id} as resolved.` : ''}
+                confirmLabel="Close payment"
+                isPending={closePaymentMutation.isPending}
+                confirmDisabled={
+                    closePaymentMutation.isPending
+                    || !closePaymentDialog.reason_code
+                    || (closePaymentDialog.reason_code === 'other' && !closePaymentDialog.reason_note.trim())
+                }
+                onCancel={() => {
+                    if (!closePaymentMutation.isPending) {
+                        setClosePaymentDialog({ open: false, payment: null, reason_code: 'payment_failed', reason_note: '', converted_payment_id: '' });
+                    }
+                }}
+                onConfirm={() => closePaymentMutation.mutate({
+                    paymentId: closePaymentDialog.payment.id,
+                    reason_code: closePaymentDialog.reason_code,
+                    reason_note: closePaymentDialog.reason_note.trim() || null,
+                    converted_payment_id: closePaymentDialog.converted_payment_id,
+                })}
+            >
+                <div className="space-y-3">
+                    <div>
+                        <label htmlFor="queue-close-payment-reason" className="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+                        <select
+                            id="queue-close-payment-reason"
+                            value={closePaymentDialog.reason_code}
+                            onChange={(event) => setClosePaymentDialog((current) => ({ ...current, reason_code: event.target.value }))}
+                            className="crm-select"
+                        >
+                            {PAYMENT_CLOSE_REASONS.map((reason) => (
+                                <option key={reason.code} value={reason.code}>{reason.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                    {closePaymentDialog.reason_code === 'customer_converted' ? (
+                        <div>
+                            <label htmlFor="queue-close-payment-converted-id" className="mb-1 block text-sm font-medium text-slate-700">
+                                Converted payment ID <span className="font-normal text-slate-400">(optional)</span>
+                            </label>
+                            <input
+                                id="queue-close-payment-converted-id"
+                                type="number"
+                                min="1"
+                                value={closePaymentDialog.converted_payment_id}
+                                onChange={(event) => setClosePaymentDialog((current) => ({ ...current, converted_payment_id: event.target.value }))}
+                                className="crm-input"
+                                placeholder="Auto-link if blank"
+                            />
+                        </div>
+                    ) : null}
+                    <div>
+                        <label htmlFor="queue-close-payment-note" className="mb-1 block text-sm font-medium text-slate-700">
+                            Note {closePaymentDialog.reason_code === 'other' ? <span className="text-rose-600">*</span> : <span className="font-normal text-slate-400">(optional)</span>}
+                        </label>
+                        <textarea
+                            id="queue-close-payment-note"
+                            rows={3}
+                            value={closePaymentDialog.reason_note}
+                            onChange={(event) => setClosePaymentDialog((current) => ({ ...current, reason_note: event.target.value }))}
+                            className="crm-input"
+                            maxLength={1000}
+                        />
+                    </div>
+                </div>
+            </ConfirmDialog>
         </section>
     );
 }
