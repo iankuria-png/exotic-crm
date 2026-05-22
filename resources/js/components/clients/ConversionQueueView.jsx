@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
 import SlaPill, { BUCKET_BORDER } from './SlaPill';
 import CloseCaseDialog from '../CloseCaseDialog';
 import ConfirmDialog from '../ConfirmDialog';
+import QueueRangeSelector from './QueueRangeSelector';
 
 const PAYMENT_CLOSE_REASONS = [
     { code: 'customer_converted', label: 'Customer Converted' },
@@ -16,6 +17,19 @@ const PAYMENT_CLOSE_REASONS = [
     { code: 'customer_abandoned', label: 'Customer Abandoned' },
     { code: 'other', label: 'Other' },
 ];
+
+const ALLOWED_PRESET_HOURS = new Set([24, 48, 168, 720]);
+
+function readRangeFromUrl(searchParams) {
+    const from = searchParams.get('from') || '';
+    const to = searchParams.get('to') || '';
+    if (from || to) {
+        return { mode: 'custom', from, to };
+    }
+    const hoursRaw = parseInt(searchParams.get('range_hours') || '', 10);
+    const hours = ALLOWED_PRESET_HOURS.has(hoursRaw) ? hoursRaw : 48;
+    return { mode: 'preset', hours };
+}
 
 function inferPaymentCloseReason(row) {
     const text = String(row?.failure_reason || '').toLowerCase();
@@ -164,18 +178,48 @@ export default function ConversionQueueView({ platformId = '' }) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [collapsed, setCollapsed] = useState({ new_signups: false, failed_payments: false, stalled_contacted: false });
     const [closeDialog, setCloseDialog] = useState({ open: false, client: null });
     const [closeError, setCloseError] = useState(null);
     const [closePaymentDialog, setClosePaymentDialog] = useState({ open: false, payment: null, reason_code: 'payment_failed', reason_note: '', converted_payment_id: '' });
 
+    const range = useMemo(() => readRangeFromUrl(searchParams), [searchParams]);
+
+    const queryParams = useMemo(() => {
+        if (range.mode === 'custom') {
+            return { from: range.from || undefined, to: range.to || undefined };
+        }
+        return { range_hours: range.hours };
+    }, [range]);
+
+    const handleRangeChange = (next) => {
+        const params = new URLSearchParams(searchParams);
+        // Preserve `tab=conversion` etc.
+        params.delete('range_hours');
+        params.delete('from');
+        params.delete('to');
+        if (next.mode === 'custom') {
+            if (next.from) params.set('from', next.from);
+            if (next.to) params.set('to', next.to);
+        } else if (next.hours && next.hours !== 48) {
+            // Keep default (48h) out of the URL so the page is sharable without noise.
+            params.set('range_hours', String(next.hours));
+        }
+        setSearchParams(params, { replace: true });
+    };
+
     const queueQuery = useQuery({
-        queryKey: ['clients-conversion-queue', platformId || 'all'],
+        queryKey: ['clients-conversion-queue', platformId || 'all', queryParams],
         queryFn: () => api.get('/crm/clients/conversion-queue', {
-            params: platformId ? { platform_id: Number(platformId) } : {},
+            params: {
+                ...(platformId ? { platform_id: Number(platformId) } : {}),
+                ...queryParams,
+            },
         }).then((r) => r.data),
         refetchInterval: 60_000,
         staleTime: 30_000,
+        keepPreviousData: true,
     });
 
     const refreshedAgo = queueQuery.dataUpdatedAt ? Math.max(0, Math.round((Date.now() - queueQuery.dataUpdatedAt) / 1000)) : null;
@@ -244,18 +288,27 @@ export default function ConversionQueueView({ platformId = '' }) {
 
     return (
         <section className="space-y-4">
+            <QueueRangeSelector
+                value={range}
+                onChange={handleRangeChange}
+                currentLabel={buckets.range?.label}
+            />
+
             <div className="grid gap-3 md:grid-cols-3">
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">New signups (24h)</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">New signups</p>
                     <p className="mt-1 text-2xl font-semibold text-slate-900">{buckets.counts?.new_signups ?? 0}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">{buckets.range?.label || 'Last 48 hours'}</p>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Failed payments (14d)</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Failed payments</p>
                     <p className="mt-1 text-2xl font-semibold text-slate-900">{buckets.counts?.failed_payments ?? 0}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">{buckets.range?.label || 'Last 48 hours'}</p>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Stalled contacted ({'>'}72h)</p>
                     <p className="mt-1 text-2xl font-semibold text-slate-900">{buckets.counts?.stalled_contacted ?? 0}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">Idle &gt; 72 hours · independent of range</p>
                 </div>
             </div>
 
@@ -266,7 +319,7 @@ export default function ConversionQueueView({ platformId = '' }) {
                     refreshedAgo={refreshedAgo}
                     collapsed={collapsed.new_signups}
                     onToggle={togglerFor('new_signups')}
-                    emptyHint={buckets.new_signups?.length === 0 ? 'Inbox zero — no new signups in the last 24 hours.' : null}
+                    emptyHint={buckets.new_signups?.length === 0 ? `Inbox zero — no new signups in ${(buckets.range?.label || 'this window').toLowerCase()}.` : null}
                 />
                 {!collapsed.new_signups ? (
                     <div className="divide-y divide-slate-100">
@@ -291,7 +344,7 @@ export default function ConversionQueueView({ platformId = '' }) {
                     refreshedAgo={refreshedAgo}
                     collapsed={collapsed.failed_payments}
                     onToggle={togglerFor('failed_payments')}
-                    emptyHint={buckets.failed_payments?.length === 0 ? 'No open failed payments in the last 14 days.' : null}
+                    emptyHint={buckets.failed_payments?.length === 0 ? `No open failed payments in ${(buckets.range?.label || 'this window').toLowerCase()}.` : null}
                 />
                 {!collapsed.failed_payments ? (
                     <div className="divide-y divide-slate-100">
