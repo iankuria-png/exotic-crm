@@ -38,6 +38,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\SubscriptionProvisioningService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
+use App\Support\CrmClientCloseReason;
 use App\Support\DeactivationRequest;
 use App\Support\DealDeactivationReason;
 use App\Support\LinkedPaymentAction;
@@ -1508,44 +1509,87 @@ class PaymentQueueController extends Controller
         $this->authorizePaymentAccess($request, $payment);
 
         $validated = $request->validate([
-            'category' => 'required|in:timeout,customer_cancelled,duplicate_request,fraud_suspected,other',
-            'reason' => 'required|string|max:500',
+            'category' => 'nullable|in:timeout,customer_cancelled,duplicate_request,fraud_suspected,other',
+            'reason_code' => 'nullable|string|in:' . implode(',', CrmClientCloseReason::ALL),
+            'reason' => 'nullable|string|max:500',
+            'reason_note' => 'nullable|string|max:1000',
         ]);
 
-        if (!in_array($payment->status, ['initiated', 'pending'], true)) {
+        // Resolve canonical reason code: prefer new contract, fall back to legacy category mapping.
+        $reasonCode = $validated['reason_code']
+            ?? CrmClientCloseReason::fromLegacyPaymentCategory($validated['category'] ?? null);
+
+        if ($reasonCode === null) {
             return response()->json([
-                'message' => 'Only initiated or pending payments can be manually closed.',
+                'message' => 'A close reason is required.',
+                'error_code' => 'reason_required',
             ], 422);
         }
 
+        $reasonNote = $validated['reason_note'] ?? $validated['reason'] ?? null;
+        if ($reasonNote !== null) {
+            $reasonNote = trim((string) $reasonNote);
+            if ($reasonNote === '') {
+                $reasonNote = null;
+            }
+        }
+
+        if (CrmClientCloseReason::requiresNote($reasonCode) && $reasonNote === null) {
+            return response()->json([
+                'message' => 'A note is required when the reason is "Other".',
+                'error_code' => 'note_required',
+            ], 422);
+        }
+
+        if (!in_array($payment->status, ['initiated', 'pending', 'failed'], true)) {
+            return response()->json([
+                'message' => 'Only initiated, pending, or failed payments can be manually closed.',
+            ], 422);
+        }
+
+        $reasonLabel = CrmClientCloseReason::label($reasonCode);
+        $reasonText = $reasonNote !== null ? ($reasonLabel . ' — ' . $reasonNote) : $reasonLabel;
+
         $beforeState = [
             'status' => $payment->status,
+            'reconciliation_state' => $payment->reconciliation_state,
+            'resolution_code' => $payment->resolution_code,
             'raw_payload' => $payment->raw_payload,
         ];
 
         $rawPayload = is_array($payment->raw_payload) ? $payment->raw_payload : [];
         $rawPayload['manual_close'] = [
-            'category' => $validated['category'],
-            'reason' => $validated['reason'],
+            'reason_code' => $reasonCode,
+            'reason_label' => $reasonLabel,
+            'reason_note' => $reasonNote,
+            'legacy_category' => $validated['category'] ?? null,
             'closed_by' => optional($request->user())->id,
             'closed_at' => now()->toDateTimeString(),
         ];
 
+        $resolutionMeta = is_array($payment->resolution_meta_json) ? $payment->resolution_meta_json : [];
+        $resolutionMeta['manual_close'] = $rawPayload['manual_close'];
+
         $payment->forceFill([
-            'status' => 'failed',
+            // For initiated/pending the status flips to failed; for failed it stays as-is.
+            'status' => $payment->status === 'failed' ? 'failed' : 'failed',
             'reconciliation_state' => 'resolved',
+            'resolution_code' => $reasonCode,
+            'resolution_meta_json' => $resolutionMeta,
             'raw_payload' => $rawPayload,
         ])->save();
 
         $this->paymentAttemptService->record($payment, 'manual_close', 'closed', [
             'provider' => 'crm_operator',
             'error_code' => 'manual_close',
-            'error_message' => $validated['reason'],
+            'error_message' => $reasonText,
             'request_meta' => $this->paymentAttemptService->requestMetaFromRequest($request, [
-                'category' => $validated['category'],
+                'reason_code' => $reasonCode,
+                'legacy_category' => $validated['category'] ?? null,
             ]),
             'response_meta' => [
-                'category' => $validated['category'],
+                'reason_code' => $reasonCode,
+                'reason_label' => $reasonLabel,
             ],
             'created_by' => optional($request->user())->id,
         ]);
@@ -1559,9 +1603,11 @@ class PaymentQueueController extends Controller
             $beforeState,
             [
                 'status' => $payment->status,
+                'reconciliation_state' => 'resolved',
+                'resolution_code' => $reasonCode,
                 'manual_close' => $rawPayload['manual_close'],
             ],
-            $validated['reason']
+            $reasonText
         );
 
         return response()->json([

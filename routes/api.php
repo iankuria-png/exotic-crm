@@ -206,6 +206,10 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-delete', [ClientController::class, 'bulkDelete'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-refresh-display-images', [ClientController::class, 'bulkRefreshDisplayImages'])->middleware('role:admin,sub_admin,sales');
+    // Close-case routes — static segments MUST sit before /clients/{client} or route-model binding swallows them.
+    Route::get('/clients/close-reasons', [ClientController::class, 'closeReasons'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients/conversion-queue', [ClientController::class, 'conversionQueue'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/bulk-close', [ClientController::class, 'bulkClose'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/delete-preview', [ClientController::class, 'deletePreview'])->middleware('role:admin,sub_admin');
@@ -222,6 +226,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/clients/{client}/completeness', [ClientController::class, 'profileCompleteness'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/retention-insight', [ClientController::class, 'retentionInsight'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/retention-history', [ClientController::class, 'retentionHistory'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::post('/clients/{client}/close-case', [ClientController::class, 'closeCase'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/reopen', [ClientController::class, 'reopen'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/contacted', [ClientController::class, 'markContacted'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::get('/clients/{client}/analytics', [ClientController::class, 'profileAnalytics'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales');

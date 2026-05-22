@@ -9,6 +9,9 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
+import CloseCaseDialog from '../components/CloseCaseDialog';
+import ConversionQueueView from '../components/clients/ConversionQueueView';
+import ClosedCasesView from '../components/clients/ClosedCasesView';
 import { useToast } from '../components/ToastProvider';
 import { platformOptionsWithFlags } from '../utils/flags';
 import { deriveClientProfileState, isClientPubliclyActive } from '../utils/clientProfileState';
@@ -368,7 +371,24 @@ export default function Clients() {
     const canBulkRefreshThumbnails = ['admin', 'sub_admin', 'sales'].includes(String(user?.role || ''));
     const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
-    const [searchParams] = useSearchParams();
+    const canCloseCases = ['admin', 'sub_admin', 'sales'].includes(String(user?.role || ''));
+    const [searchParams, setSearchParams] = useSearchParams();
+    const allowedTabs = new Set(['all', 'conversion', 'closed']);
+    const tabParam = searchParams.get('tab') || 'all';
+    const tab = allowedTabs.has(tabParam) ? tabParam : 'all';
+    const setTab = (next) => {
+        const params = new URLSearchParams(searchParams);
+        if (next === 'all') {
+            params.delete('tab');
+        } else {
+            params.set('tab', next);
+        }
+        setSearchParams(params, { replace: true });
+    };
+
+    // Close-case dialog state — used by bulk action toolbar.
+    const [closeCaseDialog, setCloseCaseDialog] = useState({ open: false, mode: 'bulk', selectedRows: [] });
+    const [closeCaseError, setCloseCaseError] = useState(null);
 
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
@@ -800,6 +820,29 @@ export default function Clients() {
         },
     });
 
+    const bulkCloseMutation = useMutation({
+        mutationFn: ({ clientIds, reasonCode, reasonNote }) => api.post('/crm/clients/bulk-close', {
+            client_ids: clientIds,
+            reason_code: reasonCode,
+            reason_note: reasonNote,
+        }).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
+            setClearSelectionKey((current) => current + 1);
+            setCloseCaseDialog({ open: false, mode: 'bulk', selectedRows: [] });
+            setCloseCaseError(null);
+            const success = Number(payload?.summary?.success || 0);
+            const errors = Number(payload?.summary?.errors || 0);
+            toast.success(`${success} case${success === 1 ? '' : 's'} closed${errors > 0 ? ` · ${errors} skipped` : ''}.`);
+        },
+        onError: (error) => {
+            const message = error?.response?.data?.message || 'Bulk close failed.';
+            setCloseCaseError(message);
+            toast.error(message);
+        },
+    });
+
     const bulkThumbnailRefreshMutation = useMutation({
         mutationFn: (clientIds) => api.post('/crm/clients/bulk-refresh-display-images', {
             client_ids: clientIds,
@@ -959,6 +1002,15 @@ export default function Clients() {
             variant: 'danger',
             onClick: (rowsSelection) => {
                 openSelectedDeleteDialog(rowsSelection);
+            },
+        }] : []),
+        ...(canCloseCases ? [{
+            key: 'bulk-close-cases',
+            label: 'Close cases',
+            variant: 'warning',
+            onClick: (rowsSelection) => {
+                setCloseCaseError(null);
+                setCloseCaseDialog({ open: true, mode: 'bulk', selectedRows: rowsSelection });
             },
         }] : []),
     ];
@@ -1384,6 +1436,59 @@ export default function Clients() {
 
     const owners = ownersData?.owners || [];
 
+    const tabClass = (key) => {
+        const isActive = tab === key;
+        return [
+            'px-3.5 py-1.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500',
+            isActive
+                ? 'bg-white text-teal-700 shadow-sm'
+                : 'text-slate-600 hover:text-slate-800',
+        ].join(' ');
+    };
+
+    const conversionCount = Number(data?.stats?.closed_recent ?? 0); // closed (last 30d) for tab badge
+    const tabStrip = (
+        <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="Clients view">
+            <button type="button" role="tab" aria-selected={tab === 'all'} className={`${tabClass('all')} rounded-md`} onClick={() => setTab('all')}>
+                All clients
+                {stats.total ? <span className="ml-1.5 text-[11px] font-normal text-slate-400">· {stats.total.toLocaleString()}</span> : null}
+            </button>
+            <button type="button" role="tab" aria-selected={tab === 'conversion'} className={`${tabClass('conversion')} rounded-md`} onClick={() => setTab('conversion')}>
+                Conversion queue
+            </button>
+            <button type="button" role="tab" aria-selected={tab === 'closed'} className={`${tabClass('closed')} rounded-md`} onClick={() => setTab('closed')}>
+                Closed cases
+                {conversionCount ? <span className="ml-1.5 text-[11px] font-normal text-slate-400">· {conversionCount.toLocaleString()}</span> : null}
+            </button>
+        </div>
+    );
+
+    if (tab === 'conversion') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="New signups, failed payments, and stalled contacts — triage the queue."
+                />
+                {tabStrip}
+                <ConversionQueueView />
+            </div>
+        );
+    }
+
+    if (tab === 'closed') {
+        return (
+            <div className="space-y-4" data-tour="clients-root">
+                <PageHeader
+                    title="Clients"
+                    subtitle="Closed cases auto-delete after 30 days. Reopen any time within the window."
+                />
+                {tabStrip}
+                <ClosedCasesView />
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-4" data-tour="clients-root">
             <PageHeader
@@ -1420,6 +1525,8 @@ export default function Clients() {
                     </>
                 ) : null}
             />
+
+            {tabStrip}
 
             <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
@@ -2329,6 +2436,26 @@ export default function Clients() {
                     queryClient.invalidateQueries({ queryKey: ['clients'] });
                 }}
             />
+
+            {canCloseCases ? (
+                <CloseCaseDialog
+                    open={closeCaseDialog.open}
+                    mode="bulk"
+                    clientNames={(closeCaseDialog.selectedRows || []).map((r) => r.name || `Client #${r.id}`)}
+                    isPending={bulkCloseMutation.isPending}
+                    error={closeCaseError}
+                    onCancel={() => {
+                        if (bulkCloseMutation.isPending) return;
+                        setCloseCaseDialog({ open: false, mode: 'bulk', selectedRows: [] });
+                        setCloseCaseError(null);
+                    }}
+                    onConfirm={({ reason_code, reason_note }) => {
+                        const ids = (closeCaseDialog.selectedRows || []).map((r) => Number(r.id)).filter((id) => id > 0);
+                        if (ids.length === 0) return;
+                        bulkCloseMutation.mutate({ clientIds: ids, reasonCode: reason_code, reasonNote: reason_note });
+                    }}
+                />
+            ) : null}
         </div>
     );
 }

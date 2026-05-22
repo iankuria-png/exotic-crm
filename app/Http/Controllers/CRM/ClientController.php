@@ -13,7 +13,9 @@ use App\Models\Payment;
 use App\Models\TimelineEvent;
 use App\Models\Platform;
 use App\Models\User;
+use App\Exceptions\ClientCaseClosureException;
 use App\Services\AuditService;
+use App\Services\ClientCaseClosureService;
 use App\Services\ClientDeletionService;
 use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
@@ -34,6 +36,7 @@ use App\Services\WalletSettingsService;
 use App\Services\WpDirectProvisioningService;
 use App\Services\WpSyncService;
 use App\Support\CrmAuditAction;
+use App\Support\CrmClientCloseReason;
 use App\Support\DealDeactivationReason;
 use App\Support\DeactivationRequest;
 use App\Support\PhoneNormalizer;
@@ -68,7 +71,8 @@ class ClientController extends Controller
         private readonly PaymentLinkService $paymentLinkService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly ClientProfileUrlSearchService $clientProfileUrlSearchService,
-        private readonly ClientProfileImageService $clientProfileImageService
+        private readonly ClientProfileImageService $clientProfileImageService,
+        private readonly ClientCaseClosureService $clientCaseClosureService,
     ) {
     }
 
@@ -126,6 +130,13 @@ class ClientController extends Controller
 
         if ($request->filled('platform_id')) {
             $query->where('platform_id', $request->platform_id);
+        }
+
+        $view = strtolower((string) $request->input('view', 'all'));
+        if ($view === 'closed') {
+            $query->closed()->with('closedBy:id,name,email');
+        } else {
+            $query->notClosed();
         }
 
         if ($request->boolean('high_risk')) {
@@ -204,6 +215,14 @@ class ClientController extends Controller
         $newUsersStatsQuery = clone $statsQuery;
         $this->applyCanonicalPlanFilter($premiumStatsQuery, 'premium');
 
+        // Closed-case stats: identical platform scope to $query but reset the closed/notClosed filter so
+        // both views surface the same counts on the closed tab cards regardless of which view is active.
+        $closedStatsBase = Client::query();
+        $this->marketAuthorizationService->applyPlatformScope($closedStatsBase, $request->user());
+        if ($request->filled('platform_id')) {
+            $closedStatsBase->where('platform_id', $request->platform_id);
+        }
+
         if (!$request->filled('created_from') && !$request->filled('created_to')) {
             $newUsersStatsQuery->where('created_at', '>=', now()->subDays(6)->startOfDay());
         }
@@ -221,6 +240,9 @@ class ClientController extends Controller
             'retention_watch' => (clone $statsQuery)->whereHas('retentionInsight', function ($builder) {
                 $builder->whereIn('band', ClientRetentionInsightService::WATCH_BANDS);
             })->count(),
+            'closed_recent' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(30))->count(),
+            'closed_recent_7d' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(7))->count(),
+            'purging_soon' => (clone $closedStatsBase)->closed()->whereNotNull('purge_after')->where('purge_after', '<=', now()->addDays(7))->count(),
         ];
 
         $this->applyClientSort(
@@ -3706,5 +3728,312 @@ class ClientController extends Controller
         $extension = strtolower((string) $file->getClientOriginalExtension());
 
         return str_starts_with($mimeType, 'video/') || $extension === 'mp4';
+    }
+
+    public function closeReasons()
+    {
+        return response()->json([
+            'reasons' => CrmClientCloseReason::options(),
+            'soft_close_days' => ClientCaseClosureService::SOFT_CLOSE_DAYS,
+        ]);
+    }
+
+    public function closeCase(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'reason_code' => 'required|string|in:' . implode(',', CrmClientCloseReason::ALL),
+            'reason_note' => 'nullable|string|max:1000',
+        ]);
+
+        if (CrmClientCloseReason::requiresNote($validated['reason_code'])
+            && trim((string) ($validated['reason_note'] ?? '')) === '') {
+            return response()->json([
+                'message' => 'A note is required when the reason is "Other".',
+                'error_code' => 'note_required',
+            ], 422);
+        }
+
+        try {
+            $result = $this->clientCaseClosureService->close(
+                $client,
+                $validated['reason_code'],
+                $validated['reason_note'] ?? null,
+                $request->user(),
+                $request,
+            );
+        } catch (ClientCaseClosureException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'error_code' => $exception->errorCode(),
+                'context' => $exception->context(),
+            ], $exception->httpStatus());
+        }
+
+        return response()->json([
+            'message' => 'Case closed.',
+            'client' => $result['client'],
+            'cascaded_payments_count' => $result['cascaded_payments_count'],
+            'cascaded_payment_ids' => $result['cascaded_payment_ids'],
+            'purge_after' => $result['purge_after'],
+        ]);
+    }
+
+    public function reopen(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'note' => 'nullable|string|max:1000',
+        ]);
+
+        try {
+            $client = $this->clientCaseClosureService->reopen(
+                $client,
+                $validated['note'] ?? null,
+                $request->user(),
+                $request,
+            );
+        } catch (ClientCaseClosureException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'error_code' => $exception->errorCode(),
+                'context' => $exception->context(),
+            ], $exception->httpStatus());
+        }
+
+        return response()->json([
+            'message' => 'Case reopened.',
+            'client' => $client,
+        ]);
+    }
+
+    public function bulkClose(Request $request)
+    {
+        $validated = $request->validate([
+            'client_ids' => 'required|array|min:1|max:200',
+            'client_ids.*' => 'integer|exists:clients,id',
+            'reason_code' => 'required|string|in:' . implode(',', CrmClientCloseReason::ALL),
+            'reason_note' => 'nullable|string|max:1000',
+        ]);
+
+        if (CrmClientCloseReason::requiresNote($validated['reason_code'])
+            && trim((string) ($validated['reason_note'] ?? '')) === '') {
+            return response()->json([
+                'message' => 'A note is required when the reason is "Other".',
+                'error_code' => 'note_required',
+            ], 422);
+        }
+
+        // Authorize each client against the rep's platform scope. Disallowed ids
+        // are reported in the per-row error list rather than aborting the batch.
+        $clients = Client::whereIn('id', $validated['client_ids'])->get();
+        $authorizedIds = [];
+        $unauthorizedIds = [];
+        foreach ($clients as $client) {
+            try {
+                $this->authorizeClientAccess($request, $client);
+                $authorizedIds[] = (int) $client->id;
+            } catch (\Throwable $exception) {
+                $unauthorizedIds[] = (int) $client->id;
+            }
+        }
+
+        $outcome = $this->clientCaseClosureService->bulkClose(
+            $authorizedIds,
+            $validated['reason_code'],
+            $validated['reason_note'] ?? null,
+            $request->user(),
+            $request,
+        );
+
+        foreach ($unauthorizedIds as $unauthorizedId) {
+            $outcome['results'][] = [
+                'client_id' => $unauthorizedId,
+                'success' => false,
+                'error_code' => 'forbidden',
+                'error_message' => 'You do not have access to this client.',
+            ];
+            $outcome['summary']['total'] = ($outcome['summary']['total'] ?? 0) + 1;
+            $outcome['summary']['errors'] = ($outcome['summary']['errors'] ?? 0) + 1;
+        }
+
+        return response()->json($outcome);
+    }
+
+    public function markContacted(Request $request, Client $client)
+    {
+        $this->authorizeClientAccess($request, $client);
+
+        $validated = $request->validate([
+            'channel' => 'nullable|string|in:whatsapp,sms,phone,email,other',
+            'note' => 'nullable|string|max:500',
+        ]);
+
+        $channel = $validated['channel'] ?? 'other';
+        $note = isset($validated['note']) ? trim((string) $validated['note']) : null;
+        if ($note === '') {
+            $note = null;
+        }
+
+        $now = now();
+        $isFirstContact = $client->first_contact_at === null;
+
+        Client::withoutRetentionRefresh(function () use ($client, $isFirstContact, $now): void {
+            $payload = ['last_contact_at' => $now];
+            if ($isFirstContact) {
+                $payload['first_contact_at'] = $now;
+            }
+            $client->forceFill($payload)->save();
+        });
+
+        TimelineEvent::create([
+            'platform_id' => (int) $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => (int) $client->id,
+            'event_type' => 'client_contacted',
+            'actor_id' => optional($request->user())->id,
+            'content' => [
+                'channel' => $channel,
+                'note' => $note,
+                'first_contact' => $isFirstContact,
+            ],
+            'created_at' => $now,
+        ]);
+
+        return response()->json([
+            'message' => $isFirstContact ? 'Marked as first contact.' : 'Contact activity refreshed.',
+            'client' => $client->fresh(),
+        ]);
+    }
+
+    public function conversionQueue(Request $request)
+    {
+        $platformScope = function ($query) use ($request) {
+            $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
+        };
+
+        $newSignups = Client::query()
+            ->with(['platform:id,name'])
+            ->tap($platformScope)
+            ->notClosed()
+            ->whereNull('first_contact_at')
+            ->whereDoesntHave('deals', function ($q) {
+                $q->whereIn('status', ['active', 'paid', 'awaiting_payment']);
+            })
+            ->whereDoesntHave('payments', function ($q) {
+                $q->whereIn('status', ['completed', 'activated']);
+            })
+            ->where('created_at', '>=', now()->subHours(24))
+            ->orderBy('created_at', 'desc')
+            ->limit(50)
+            ->get();
+
+        $failedPayments = Payment::query()
+            ->with(['client:id,name,phone_normalized,city,platform_id,closed_at', 'client.platform:id,name', 'product:id,name,display_name'])
+            ->where('status', 'failed')
+            ->where('reconciliation_state', 'open')
+            ->where('created_at', '>=', now()->subDays(14))
+            ->whereHas('client', function ($q) use ($platformScope) {
+                $q->whereNull('closed_at');
+                $platformScope($q);
+            })
+            ->orderBy('created_at', 'desc')
+            ->limit(50)
+            ->get();
+
+        $stalled = Client::query()
+            ->with(['platform:id,name', 'assignedAgent:id,name'])
+            ->tap($platformScope)
+            ->notClosed()
+            ->whereNotNull('first_contact_at')
+            ->where('last_contact_at', '<', now()->subHours(72))
+            ->whereDoesntHave('deals', function ($q) {
+                $q->whereIn('status', ['active', 'paid']);
+            })
+            ->orderBy('last_contact_at', 'asc')
+            ->limit(50)
+            ->get();
+
+        $now = now();
+
+        return response()->json([
+            'new_signups' => $newSignups->map(fn (Client $c) => [
+                'id' => (int) $c->id,
+                'name' => $c->name,
+                'phone' => $c->phone_normalized,
+                'email' => $c->email,
+                'city' => $c->city,
+                'signup_source' => $c->signup_source,
+                'created_at' => optional($c->created_at)?->toIso8601String(),
+                'age_seconds' => $c->created_at ? max(0, $now->diffInSeconds($c->created_at)) : null,
+                'sla_bucket' => $c->created_at ? $this->conversionSlaBucket($c->created_at) : 'red',
+                'platform' => $c->platform ? ['id' => $c->platform->id, 'name' => $c->platform->name] : null,
+                'sb_user_id' => $c->sb_user_id,
+            ])->values(),
+            'failed_payments' => $failedPayments->map(function (Payment $p) use ($now) {
+                $product = $p->product?->display_name ?: $p->product?->name;
+                return [
+                    'id' => (int) $p->id,
+                    'phone' => $p->phone,
+                    'amount' => $p->amount,
+                    'currency' => $p->currency ?? 'KES',
+                    'product' => $product,
+                    'product_id' => $p->product_id,
+                    'reference' => $p->reference,
+                    'failure_reason' => $p->failure_reason,
+                    'created_at' => optional($p->created_at)?->toIso8601String(),
+                    'age_seconds' => $p->created_at ? max(0, $now->diffInSeconds($p->created_at)) : null,
+                    'sla_bucket' => $p->created_at ? $this->conversionSlaBucket($p->created_at) : 'red',
+                    'client' => $p->client ? [
+                        'id' => (int) $p->client->id,
+                        'name' => $p->client->name,
+                        'phone' => $p->client->phone_normalized,
+                        'city' => $p->client->city,
+                        'platform' => $p->client->platform ? ['id' => $p->client->platform->id, 'name' => $p->client->platform->name] : null,
+                    ] : null,
+                ];
+            })->values(),
+            'stalled_contacted' => $stalled->map(fn (Client $c) => [
+                'id' => (int) $c->id,
+                'name' => $c->name,
+                'phone' => $c->phone_normalized,
+                'city' => $c->city,
+                'first_contact_at' => optional($c->first_contact_at)?->toIso8601String(),
+                'last_contact_at' => optional($c->last_contact_at)?->toIso8601String(),
+                'age_seconds' => $c->last_contact_at ? max(0, $now->diffInSeconds($c->last_contact_at)) : null,
+                'sla_bucket' => $c->last_contact_at ? $this->conversionSlaBucket($c->last_contact_at) : 'red',
+                'platform' => $c->platform ? ['id' => $c->platform->id, 'name' => $c->platform->name] : null,
+                'assigned_agent' => $c->assignedAgent ? ['id' => $c->assignedAgent->id, 'name' => $c->assignedAgent->name] : null,
+            ])->values(),
+            'counts' => [
+                'new_signups' => $newSignups->count(),
+                'failed_payments' => $failedPayments->count(),
+                'stalled_contacted' => $stalled->count(),
+                'total' => $newSignups->count() + $failedPayments->count() + $stalled->count(),
+            ],
+            'sla_thresholds' => [
+                'green_max_minutes' => 5,
+                'yellow_max_minutes' => 30,
+                'orange_max_minutes' => 120,
+            ],
+        ]);
+    }
+
+    private function conversionSlaBucket(\DateTimeInterface $reference): string
+    {
+        $ageSeconds = max(0, now()->diffInSeconds($reference));
+
+        if ($ageSeconds < 5 * 60) {
+            return 'green';
+        }
+        if ($ageSeconds < 30 * 60) {
+            return 'yellow';
+        }
+        if ($ageSeconds < 120 * 60) {
+            return 'orange';
+        }
+        return 'red';
     }
 }

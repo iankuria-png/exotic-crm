@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import Timeline from '../components/Timeline';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
+import CloseCaseDialog from '../components/CloseCaseDialog';
 import SupportBoardChat from '../components/SupportBoardChat';
 import ClientSubscriptionDeactivationDialog from '../components/subscriptions/ClientSubscriptionDeactivationDialog';
 import { useToast } from '../components/ToastProvider';
@@ -715,6 +716,9 @@ export default function ClientDetail() {
     const [showDealModal, setShowDealModal] = useState(false);
     const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    const [closeCaseDialogOpen, setCloseCaseDialogOpen] = useState(false);
+    const [closeCaseError, setCloseCaseError] = useState(null);
+    const [showReopenConfirm, setShowReopenConfirm] = useState(false);
     const [deletePreview, setDeletePreview] = useState(null);
     const [deleteConfirmText, setDeleteConfirmText] = useState('');
     const [deleteReason, setDeleteReason] = useState('Client deleted from CRM');
@@ -1053,6 +1057,37 @@ export default function ClientDetail() {
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Client deletion failed.');
         },
+    });
+
+    const closeCaseMutation = useMutation({
+        mutationFn: ({ reasonCode, reasonNote }) => api.post(`/crm/clients/${id}/close-case`, {
+            reason_code: reasonCode,
+            reason_note: reasonNote,
+        }).then((r) => r.data),
+        onSuccess: (data) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            queryClient.invalidateQueries({ queryKey: ['clients-conversion-queue'] });
+            setCloseCaseDialogOpen(false);
+            setCloseCaseError(null);
+            toast.success(`Case closed. ${data.cascaded_payments_count || 0} payment${data.cascaded_payments_count === 1 ? '' : 's'} resolved.`);
+        },
+        onError: (error) => {
+            const data = error?.response?.data;
+            setCloseCaseError(data?.message || 'Close failed.');
+            toast.error(data?.message || 'Close failed.');
+        },
+    });
+
+    const reopenCaseMutation = useMutation({
+        mutationFn: () => api.post(`/crm/clients/${id}/reopen`).then((r) => r.data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['clients'] });
+            setShowReopenConfirm(false);
+            toast.success('Case reopened.');
+        },
+        onError: (error) => toast.error(error?.response?.data?.message || 'Reopen failed.'),
     });
 
     const activateDealMutation = useMutation({
@@ -2176,6 +2211,30 @@ export default function ClientDetail() {
 
     const isSynced = canSyncFromWp && Boolean(client.last_synced_at);
 
+    const isCaseClosed = Boolean(client?.closed_at);
+    const purgeAfterDate = client?.purge_after ? new Date(client.purge_after) : null;
+    const purgeAfterDays = purgeAfterDate ? Math.max(0, Math.ceil((purgeAfterDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000))) : null;
+    const purgeAfterPretty = purgeAfterDate && !Number.isNaN(purgeAfterDate.getTime())
+        ? purgeAfterDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+        : null;
+    const closeReasonLabelMap = {
+        not_serious: 'Not Serious',
+        no_response: 'No Response',
+        declined: 'Declined to Proceed',
+        invalid_contact: 'Invalid Contact Details',
+        inappropriate: 'Inappropriate Behaviour',
+        payment_issue: 'Payment Issue Not Resolved',
+        duplicate: 'Duplicate Contact',
+        other: 'Other',
+    };
+    const closeReasonLabel = isCaseClosed
+        ? (closeReasonLabelMap[client.close_reason_code] || client.close_reason_code || 'Closed')
+        : null;
+    const activeDealForClose = useMemo(
+        () => (client?.deals || []).find((d) => d.status === 'active') || null,
+        [client?.deals],
+    );
+
     return (
         <div className="space-y-4" data-tour="client-detail-root">
             <button
@@ -2187,6 +2246,44 @@ export default function ClientDetail() {
                 </svg>
                 Back to Clients
             </button>
+
+            {isCaseClosed ? (
+                <section className="rounded-lg border-l-4 border-amber-400 bg-amber-50 px-4 py-3" role="status" aria-live="polite">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                            <svg className="mt-0.5 h-5 w-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 15v2m-6 4h12a2 2 0 002-2v-7a2 2 0 00-2-2H6a2 2 0 00-2 2v7a2 2 0 002 2zm10-12V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                            <div>
+                                <p className="text-sm font-semibold text-amber-900">This case is closed.</p>
+                                <p className="mt-0.5 text-xs text-amber-800">
+                                    Reason: <span className="font-semibold">{closeReasonLabel}</span>
+                                    {client.closedBy?.name ? <> · Closed by {client.closedBy.name}</> : null}
+                                    {client.closed_at ? <> on {new Date(client.closed_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</> : null}
+                                </p>
+                                {purgeAfterDays !== null ? (
+                                    <p className="mt-0.5 text-xs text-amber-800">
+                                        Purges in {purgeAfterDays} day{purgeAfterDays === 1 ? '' : 's'}{purgeAfterPretty ? ` (${purgeAfterPretty})` : ''}.
+                                    </p>
+                                ) : null}
+                                {client.close_reason_note ? (
+                                    <p className="mt-1 max-w-2xl text-xs italic text-amber-800">&ldquo;{client.close_reason_note}&rdquo;</p>
+                                ) : null}
+                            </div>
+                        </div>
+                        {!isReadOnly ? (
+                            <button
+                                type="button"
+                                onClick={() => setShowReopenConfirm(true)}
+                                disabled={reopenCaseMutation.isPending}
+                                className="rounded-md border border-teal-500 bg-white px-3.5 py-1.5 text-sm font-semibold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {reopenCaseMutation.isPending ? 'Reopening…' : 'Reopen case'}
+                            </button>
+                        ) : null}
+                    </div>
+                </section>
+            ) : null}
 
             <section className="crm-surface px-5 py-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -2359,6 +2456,19 @@ export default function ClientDetail() {
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
                                         </svg>
                                         New subscription
+                                    </button>
+                                ) : null}
+                                {!isReadOnly && !isCaseClosed ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => { setCloseCaseError(null); setCloseCaseDialogOpen(true); }}
+                                        title={activeDealForClose ? 'Deactivate subscription first to close this case' : 'Close case'}
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                                    >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-7a2 2 0 00-2-2H6a2 2 0 00-2 2v7a2 2 0 002 2zm10-12V7a4 4 0 00-8 0v4h8z" />
+                                        </svg>
+                                        Close case
                                     </button>
                                 ) : null}
                                 {canDeleteClient ? (
@@ -4705,6 +4815,29 @@ export default function ClientDetail() {
                     </div>
                 </div>
             ) : null}
+
+            <CloseCaseDialog
+                open={closeCaseDialogOpen}
+                clientName={client?.name || ''}
+                openPaymentsCount={(client?.payments || []).filter((p) => ['failed', 'initiated', 'pending'].includes(p.status) && p.reconciliation_state !== 'resolved').length}
+                activeDeal={activeDealForClose ? { id: activeDealForClose.id, plan_label: activeDealForClose.plan_label || activeDealForClose.plan_type || 'subscription' } : null}
+                deactivateUrl={activeDealForClose ? `/clients/${id}?tab=deals` : null}
+                isPending={closeCaseMutation.isPending}
+                error={closeCaseError}
+                onCancel={() => { if (!closeCaseMutation.isPending) { setCloseCaseDialogOpen(false); setCloseCaseError(null); } }}
+                onConfirm={({ reason_code, reason_note }) => closeCaseMutation.mutate({ reasonCode: reason_code, reasonNote: reason_note })}
+            />
+
+            <ConfirmDialog
+                open={showReopenConfirm}
+                title={`Reopen case for ${client?.name || 'this client'}?`}
+                message="Reopening clears the closed state and brings the client back into active queues. Failed payments that were closed alongside this case remain resolved (they were closed under prior judgment)."
+                confirmLabel="Reopen case"
+                tone="default"
+                isPending={reopenCaseMutation.isPending}
+                onCancel={() => { if (!reopenCaseMutation.isPending) setShowReopenConfirm(false); }}
+                onConfirm={() => reopenCaseMutation.mutate()}
+            />
         </div>
     );
 }
