@@ -2230,10 +2230,7 @@ export default function ClientDetail() {
     const closeReasonLabel = isCaseClosed
         ? (closeReasonLabelMap[client.close_reason_code] || client.close_reason_code || 'Closed')
         : null;
-    const activeDealForClose = useMemo(
-        () => (client?.deals || []).find((d) => d.status === 'active') || null,
-        [client?.deals],
-    );
+    const activeDealForClose = (client?.deals || []).find((d) => d.status === 'active') || null;
 
     return (
         <div className="space-y-4" data-tour="client-detail-root">
