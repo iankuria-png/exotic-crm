@@ -4,7 +4,9 @@ namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
 use App\Models\Client;
+use App\Models\SeoBioFeedback;
 use App\Services\Seo\BioGenerationService;
+use App\Services\Seo\FeedbackInsightService;
 use App\Services\Seo\ProfileSnapshotBuilder;
 use App\Services\Seo\SeoScorer;
 use App\Services\WpSyncService;
@@ -12,6 +14,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class SeoController extends Controller
@@ -20,6 +23,7 @@ class SeoController extends Controller
         private readonly BioGenerationService   $generator,
         private readonly ProfileSnapshotBuilder $snapshotBuilder,
         private readonly SeoScorer              $scorer,
+        private readonly FeedbackInsightService $feedbackInsight,
     ) {}
 
     /**
@@ -51,6 +55,9 @@ class SeoController extends Controller
             'generation_options.include_contact' => 'nullable|boolean',
             'generation_options.contact_channel' => 'nullable|string|in:none,phone,whatsapp,both',
             'generation_options.custom_prompt' => 'nullable|string|max:2000',
+            'refinements'      => 'nullable|array|max:6',
+            'refinements.*'    => ['string', Rule::in(array_keys(\App\Services\Seo\BioGenerationService::REFINEMENT_PRESETS))],
+            'previous_bio'     => 'nullable|string|max:6000',
         ]);
 
         $this->validateGenerationRequest($data);
@@ -83,6 +90,76 @@ class SeoController extends Controller
         }
 
         return response()->json($result);
+    }
+
+    /**
+     * POST /api/crm/seo/feedback
+     * Log the editor's reaction to a generated bio.
+     *
+     * This rows into seo_bio_feedback, and the most recent rows per platform
+     * are injected into future system prompts so the LLM learns the editors'
+     * preferences.
+     */
+    public function feedback(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'platform_id'    => 'required|integer|min:1',
+            'client_id'      => 'nullable|integer|min:1',
+            'wp_post_id'     => 'nullable|integer|min:1',
+            'provider_used'  => 'nullable|string|max:40',
+            'rating'         => 'nullable|integer|min:-1|max:1',
+            'tag'            => ['nullable', 'string', Rule::in(SeoBioFeedback::ALLOWED_TAGS)],
+            'comment'        => 'nullable|string|max:2000',
+            'accepted'       => 'nullable|boolean',
+            'score'          => 'nullable|integer|min:0|max:100',
+            'bio_html'       => 'nullable|string|max:20000',
+            'generation_options' => 'nullable|array',
+        ]);
+
+        $row = SeoBioFeedback::create([
+            'platform_id'        => (int) $data['platform_id'],
+            'client_id'          => $data['client_id'] ?? null,
+            'wp_post_id'         => $data['wp_post_id'] ?? null,
+            'user_id'            => $request->user()?->id,
+            'provider_used'      => $data['provider_used'] ?? null,
+            'rating'             => (int) ($data['rating'] ?? 0),
+            'tag'                => $data['tag'] ?? null,
+            'comment'            => $data['comment'] ?? null,
+            'accepted'           => (bool) ($data['accepted'] ?? false),
+            'score'              => $data['score'] ?? null,
+            'generation_options' => $data['generation_options'] ?? null,
+            'bio_html'           => $data['bio_html'] ?? null,
+        ]);
+
+        $this->feedbackInsight->forgetPlatformCache((int) $data['platform_id']);
+
+        Log::info('seo.feedback.recorded', [
+            'id'          => $row->id,
+            'platform_id' => $row->platform_id,
+            'rating'      => $row->rating,
+            'tag'         => $row->tag,
+            'accepted'    => $row->accepted,
+            'user_id'     => $row->user_id,
+        ]);
+
+        return response()->json([
+            'id'      => $row->id,
+            'message' => 'Feedback recorded.',
+        ]);
+    }
+
+    /**
+     * GET /api/crm/seo/feedback/summary?platform_id=1
+     * What recent feedback is currently steering the prompt for a platform.
+     * Used by the Settings page to show editors a transparency view.
+     */
+    public function feedbackSummary(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'platform_id' => 'required|integer|min:1',
+        ]);
+
+        return response()->json($this->feedbackInsight->summaryForPlatform((int) $data['platform_id']));
     }
 
     // -------------------------------------------------------------------------

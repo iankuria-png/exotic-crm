@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useToast } from '../ToastProvider';
+import BioGenerationDefaultsCard from './BioGenerationDefaultsCard';
 
 const PROVIDER_DISPLAY = {
     claude:   { label: 'Anthropic Claude', help: 'Best quality. Get a key at console.anthropic.com.' },
@@ -53,6 +54,8 @@ export default function SeoEnginePanel() {
     const [form, setForm] = useState(null);
     const [testingProvider, setTestingProvider] = useState(null);
     const [testResults, setTestResults] = useState({});
+    const [balances, setBalances] = useState({});
+    const [refreshingBalance, setRefreshingBalance] = useState(null);
 
     // Hydrate form when settings load
     useEffect(() => {
@@ -104,6 +107,21 @@ export default function SeoEnginePanel() {
             toast.error(msg);
         },
     });
+
+    const refreshBalance = async (provider) => {
+        setRefreshingBalance(provider);
+        try {
+            const { data } = await api.get('/crm/settings/seo-engine/balance', { params: { provider } });
+            setBalances((prev) => ({ ...prev, [provider]: data }));
+        } catch (err) {
+            setBalances((prev) => ({
+                ...prev,
+                [provider]: { supported: true, error: err?.response?.data?.message || 'Could not fetch balance.' },
+            }));
+        } finally {
+            setRefreshingBalance(null);
+        }
+    };
 
     if (settingsQuery.isLoading || !form) {
         return <div className="crm-surface p-6 text-sm text-slate-500">Loading SEO Engine settings…</div>;
@@ -311,6 +329,15 @@ export default function SeoEnginePanel() {
                                         }
                                     </div>
                                 )}
+
+                                {/* === Credit balance row === */}
+                                <ProviderBalanceRow
+                                    provider={provider}
+                                    balance={balances[provider]}
+                                    refreshing={refreshingBalance === provider}
+                                    onRefresh={() => refreshBalance(provider)}
+                                    canFetch={p.hasKey || !!p.apiKey || envFallback}
+                                />
                             </div>
                         );
                     })}
@@ -318,60 +345,11 @@ export default function SeoEnginePanel() {
             </section>
 
 
-            {/* === Editorial defaults === */}
-            <section className="crm-surface p-6">
-                <h3 className="text-base font-semibold text-slate-900">Bio generation defaults</h3>
-                <p className="mt-1 text-sm text-slate-600">
-                    These defaults guide every generated bio. Agents can still override the main style options when generating a single draft.
-                </p>
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <label className="space-y-1">
-                        <span className="text-xs font-medium text-slate-700">Tone</span>
-                        <input type="text" value={form.generation.tone} onChange={(e) => updateGeneration('tone', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-xs font-medium text-slate-700">Temperament</span>
-                        <input type="text" value={form.generation.temperament} onChange={(e) => updateGeneration('temperament', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-xs font-medium text-slate-700">Min words</span>
-                        <input type="number" min="25" max="500" value={form.generation.min_words} onChange={(e) => updateGeneration('min_words', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-xs font-medium text-slate-700">Max words</span>
-                        <input type="number" min="40" max="700" value={form.generation.max_words} onChange={(e) => updateGeneration('max_words', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-xs font-medium text-slate-700">Character limit</span>
-                        <input type="number" min="200" max="5000" value={form.generation.max_characters} onChange={(e) => updateGeneration('max_characters', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
-                    </label>
-                    <label className="space-y-1">
-                        <span className="text-xs font-medium text-slate-700">Max services to mention</span>
-                        <input type="number" min="0" max="20" value={form.generation.max_services} onChange={(e) => updateGeneration('max_services', Number(e.target.value))} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" />
-                    </label>
-                </div>
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {[['include_location', 'Mention location'], ['include_services', 'Mention services'], ['include_contact', 'Mention contact option']].map(([field, label]) => (
-                        <label key={field} className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2">
-                            <input type="checkbox" checked={!!form.generation[field]} onChange={(e) => updateGeneration(field, e.target.checked)} className="h-4 w-4 rounded text-teal-600 focus:ring-teal-500 border-slate-300" />
-                            <span className="text-sm text-slate-800">{label}</span>
-                        </label>
-                    ))}
-                    <label className="space-y-1">
-                        <span className="text-xs font-medium text-slate-700">Contact channel</span>
-                        <select value={form.generation.contact_channel} onChange={(e) => updateGeneration('contact_channel', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500">
-                            <option value="whatsapp">WhatsApp</option>
-                            <option value="phone">Phone</option>
-                            <option value="both">Phone & WhatsApp</option>
-                            <option value="none">None</option>
-                        </select>
-                    </label>
-                </div>
-                <label className="mt-4 block space-y-1">
-                    <span className="text-xs font-medium text-slate-700">Custom prompt guardrail</span>
-                    <textarea rows={3} value={form.generation.custom_prompt} onChange={(e) => updateGeneration('custom_prompt', e.target.value)} className="w-full text-sm rounded-md border-slate-300 focus:border-teal-500 focus:ring-teal-500" placeholder="Example: Avoid luxury wording. Mention Nairobi naturally. Keep it simple and direct." />
-                </label>
-            </section>
+            {/* === Editorial defaults (new card) === */}
+            <BioGenerationDefaultsCard
+                value={form.generation}
+                onChange={(next) => setForm((f) => ({ ...f, generation: next }))}
+            />
 
             {/* === Save bar === */}
             <div className="sticky bottom-4 flex justify-end">
@@ -384,6 +362,67 @@ export default function SeoEnginePanel() {
                     {saveMutation.isPending ? 'Saving…' : 'Save SEO Engine settings'}
                 </button>
             </div>
+        </div>
+    );
+}
+
+/**
+ * Inline balance row for a provider card. Shows credit balance for providers
+ * that expose one (DeepSeek), and a neutral "Not available" state otherwise.
+ */
+function ProviderBalanceRow({ provider, balance, refreshing, onRefresh, canFetch }) {
+    if (!canFetch) {
+        return null;
+    }
+
+    const renderBody = () => {
+        if (!balance) {
+            return <span className="text-slate-500">Click "Check" to fetch credit balance.</span>;
+        }
+        if (balance.supported === false) {
+            return <span className="text-slate-500">{balance.error || 'Not exposed by this provider.'}</span>;
+        }
+        if (balance.error) {
+            return <span className="text-rose-700">{balance.error}</span>;
+        }
+        if (balance.balance != null) {
+            const value = Number(balance.balance);
+            const formatted = Number.isFinite(value) ? value.toFixed(2) : balance.balance;
+            const low = Number.isFinite(value) && value < 1;
+            return (
+                <span className="flex flex-wrap items-baseline gap-2">
+                    <span className={`text-base font-bold ${low ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {balance.currency || 'USD'} {formatted}
+                    </span>
+                    {balance.granted ? (
+                        <span className="text-slate-500">granted {balance.granted}</span>
+                    ) : null}
+                    {balance.topped_up ? (
+                        <span className="text-slate-500">topped-up {balance.topped_up}</span>
+                    ) : null}
+                    {balance.is_available === false ? (
+                        <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-rose-700">unavailable</span>
+                    ) : null}
+                </span>
+            );
+        }
+        return <span className="text-slate-500">No balance returned.</span>;
+    };
+
+    return (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <div>
+                <span className="font-semibold text-slate-700">Balance: </span>
+                {renderBody()}
+            </div>
+            <button
+                type="button"
+                onClick={onRefresh}
+                disabled={refreshing}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            >
+                {refreshing ? 'Checking…' : (balance ? 'Refresh' : 'Check')}
+            </button>
         </div>
     );
 }

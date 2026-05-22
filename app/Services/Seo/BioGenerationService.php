@@ -32,6 +32,47 @@ class BioGenerationService
         'custom_prompt' => '',
     ];
 
+    /**
+     * Quick-action refinements that the preview modal exposes as chips.
+     * Each refinement mutates generation_options before the second-pass call.
+     */
+    public const REFINEMENT_PRESETS = [
+        'longer' => [
+            'label' => 'Make it longer',
+            'min_words_delta' => 30,
+            'max_words_delta' => 50,
+            'max_chars_delta' => 250,
+            'prompt_addendum' => 'Lengthen the previous bio with more grounded details; do not pad with filler.',
+        ],
+        'shorter' => [
+            'label' => 'Make it shorter',
+            'min_words_delta' => -20,
+            'max_words_delta' => -30,
+            'max_chars_delta' => -200,
+            'prompt_addendum' => 'Tighten the previous bio. Cut redundant phrases. Keep the strongest sentence.',
+        ],
+        'more_creative' => [
+            'label' => 'More creative',
+            'prompt_addendum' => 'Be more imaginative and varied. Use fresher verbs and unexpected sentence rhythm. Stay factual.',
+        ],
+        'less_generic' => [
+            'label' => 'Less generic',
+            'prompt_addendum' => 'Cut all stock copywriting phrases. Use the specific profile facts to make each sentence unmistakable for this person.',
+        ],
+        'more_direct' => [
+            'label' => 'More direct',
+            'prompt_addendum' => 'Short, declarative sentences. Drop embellishment. Read like a classified listing.',
+        ],
+        'warmer' => [
+            'label' => 'Warmer tone',
+            'prompt_addendum' => 'Add warmth and personality. Use friendlier phrasing without becoming sentimental.',
+        ],
+        'different_angle' => [
+            'label' => 'Different angle',
+            'prompt_addendum' => 'Take a different angle from the previous draft. Lead with a different fact.',
+        ],
+    ];
+
     /** USD per 1M tokens. DeepSeek defaults use cache-miss input pricing. */
     private const PROVIDER_PRICING = [
         'deepseek' => ['input' => 0.27, 'output' => 1.10],
@@ -47,6 +88,7 @@ class BioGenerationService
         private readonly LinkInjector           $injector,
         private readonly LinkCatalogService     $catalogService,
         private readonly SeoScorer              $scorer,
+        private readonly FeedbackInsightService $feedback,
     ) {}
 
     /**
@@ -62,7 +104,13 @@ class BioGenerationService
         $platformId    = (int) ($params['platform_id'] ?? 0);
         $overlay       = is_array($params['profile_snapshot'] ?? null) ? $params['profile_snapshot'] : null;
         $forceProvider = isset($params['force_provider']) ? (string) $params['force_provider'] : null;
-        $generationOptions = $this->generationOptions(is_array($params['generation_options'] ?? null) ? $params['generation_options'] : []);
+        $rawOverrides  = is_array($params['generation_options'] ?? null) ? $params['generation_options'] : [];
+        $refinements   = is_array($params['refinements'] ?? null) ? $params['refinements'] : [];
+        $previousBio   = isset($params['previous_bio']) ? (string) $params['previous_bio'] : '';
+
+        // Apply quick-action refinement presets on top of any explicit overrides
+        $rawOverrides = $this->applyRefinements($rawOverrides, $refinements, $previousBio);
+        $generationOptions = $this->generationOptions($rawOverrides);
 
         // Build normalized snapshot
         if ($clientId !== null || $wpPostId !== null) {
@@ -75,6 +123,7 @@ class BioGenerationService
 
         // Generate bio text
         [$rawText, $providerUsed, $usage] = $this->generateText($snapshot, $forceProvider, $generationOptions, $overlay ?? []);
+        $rawText = $this->sanitizeOutput($rawText);
         $rawText = $this->enforceCharacterLimit($rawText, (int) $generationOptions['max_characters']);
 
         // Wrap in paragraphs
@@ -162,6 +211,7 @@ class BioGenerationService
         $temperament = $options['temperament'];
         $custom = trim((string) $options['custom_prompt']);
         $customLine = $custom !== '' ? "\nExtra editor instruction: {$custom}" : '';
+        $feedbackBlock = $this->feedback->instructionsForPlatform($snapshot->platformId);
 
         return <<<PROMPT
 You write short public profile copy for an adult escort directory in {$country}.
@@ -173,8 +223,9 @@ Style rules:
 - Do not invent services, locations, contact details, nationality, measurements, or claims.
 - Do not mention height or body measurements in the bio; these already appear in profile facts.
 - Avoid generic AI phrases like "sophisticated presence", "natural elegance", "commands attention", "unforgettable experience", "mutual respect", "quality over quantity", "bustling city", "ideal companion", "captivating presence".
-- No markdown, no headings, no lists, no emoji.
-- Return clean prose only.{$customLine}
+- No markdown, no headings, no lists, no emoji, no Unicode symbols.
+- Use plain ASCII punctuation only (no curly quotes, no em-dashes — use ' " - instead).
+- Return clean prose only.{$customLine}{$feedbackBlock}
 PROMPT;
     }
 
@@ -215,6 +266,67 @@ PROMPT;
         }
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * Fold quick-action refinements (e.g. ['longer', 'less_generic']) into
+     * the explicit override map. Each refinement bumps word/char ranges and
+     * appends a phrase to custom_prompt.
+     *
+     * Additive: passing the same preset twice doubles the effect.
+     */
+    private function applyRefinements(array $overrides, array $refinements, string $previousBio): array
+    {
+        if (empty($refinements) && $previousBio === '') {
+            return $overrides;
+        }
+
+        $stored = config('services.seo_engine.generation', []);
+        $base = array_merge(self::DEFAULT_GENERATION, is_array($stored) ? $stored : [], $overrides);
+
+        $minWords = (int) $base['min_words'];
+        $maxWords = (int) $base['max_words'];
+        $maxChars = (int) $base['max_characters'];
+        $prompt   = trim((string) $base['custom_prompt']);
+        $addenda  = [];
+
+        foreach ($refinements as $name) {
+            $preset = self::REFINEMENT_PRESETS[$name] ?? null;
+            if (!$preset) {
+                continue;
+            }
+            $minWords += (int) ($preset['min_words_delta'] ?? 0);
+            $maxWords += (int) ($preset['max_words_delta'] ?? 0);
+            $maxChars += (int) ($preset['max_chars_delta'] ?? 0);
+            if (!empty($preset['prompt_addendum'])) {
+                $addenda[] = $preset['prompt_addendum'];
+            }
+        }
+
+        if ($previousBio !== '') {
+            $clean = mb_substr(trim(strip_tags($previousBio)), 0, 600);
+            if ($clean !== '') {
+                $addenda[] = "Previous draft (do not repeat phrasing): \"{$clean}\"";
+            }
+        }
+
+        if (!empty($addenda)) {
+            $prompt = trim($prompt . "\n" . implode("\n", $addenda));
+            $overrides['custom_prompt'] = $prompt;
+        }
+
+        // Only set range overrides if a refinement actually moved them
+        if ($minWords !== (int) $base['min_words']) {
+            $overrides['min_words'] = max(25, min(500, $minWords));
+        }
+        if ($maxWords !== (int) $base['max_words']) {
+            $overrides['max_words'] = max($overrides['min_words'] ?? $minWords, min(700, $maxWords));
+        }
+        if ($maxChars !== (int) $base['max_characters']) {
+            $overrides['max_characters'] = max(200, min(5000, $maxChars));
+        }
+
+        return $overrides;
     }
 
     private function generationOptions(array $overrides = []): array
@@ -270,6 +382,57 @@ PROMPT;
     private function maxTokensForOptions(array $options): int
     {
         return max(96, min(1200, (int) ceil(((int) $options['max_words']) * 1.8) + 48));
+    }
+
+    /**
+     * Strip emoji, decorative symbols, zero-width joiners, smart-quotes that don't render
+     * cleanly on WP/MySQL, and other non-prose Unicode. Preserves accented Latin characters,
+     * standard punctuation, and currency symbols.
+     */
+    private function sanitizeOutput(string $text): string
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return '';
+        }
+
+        // 1) Strip markdown code fences if the model wrapped output (```...```)
+        $text = preg_replace('/^```[a-z]*\s*|\s*```$/im', '', $text) ?? $text;
+
+        // 2) Strip emoji & pictographic characters (broad ranges).
+        $emojiPattern = '/['
+            . '\x{1F300}-\x{1F5FF}'  // misc symbols & pictographs
+            . '\x{1F600}-\x{1F64F}'  // emoticons
+            . '\x{1F680}-\x{1F6FF}'  // transport & map
+            . '\x{1F700}-\x{1F77F}'  // alchemical
+            . '\x{1F780}-\x{1F7FF}'  // geometric shapes ext
+            . '\x{1F800}-\x{1F8FF}'  // supplemental arrows-C
+            . '\x{1F900}-\x{1F9FF}'  // supplemental symbols & pictographs
+            . '\x{1FA00}-\x{1FA6F}'  // chess symbols
+            . '\x{1FA70}-\x{1FAFF}'  // symbols & pictographs ext-A
+            . '\x{2600}-\x{26FF}'    // misc symbols (☀ ☂ ★)
+            . '\x{2700}-\x{27BF}'    // dingbats (✂ ✈ ✨)
+            . '\x{FE00}-\x{FE0F}'    // variation selectors
+            . '\x{1F1E6}-\x{1F1FF}'  // regional indicators (flags)
+            . '\x{200D}'              // zero-width joiner
+            . '\x{2028}\x{2029}'      // line/paragraph separators
+            . ']/u';
+        $text = preg_replace($emojiPattern, '', $text) ?? $text;
+
+        // 3) Normalize fancy quotes/dashes that often render as ? on WP.
+        $text = strtr($text, [
+            "\u{2018}" => "'", "\u{2019}" => "'", "\u{201A}" => ',', "\u{201B}" => "'",
+            "\u{201C}" => '"', "\u{201D}" => '"', "\u{201E}" => '"', "\u{201F}" => '"',
+            "\u{2013}" => '-', "\u{2014}" => ' - ', "\u{2015}" => '-',
+            "\u{2026}" => '...',
+            "\u{00A0}" => ' ', "\u{200B}" => '', "\u{FEFF}" => '',
+        ]);
+
+        // 4) Collapse runs of whitespace and ensure no leading/trailing whitespace.
+        $text = preg_replace('/[ \t]+/', ' ', $text) ?? $text;
+        $text = preg_replace('/\n{3,}/', "\n\n", $text) ?? $text;
+
+        return trim($text);
     }
 
     private function enforceCharacterLimit(string $text, int $limit): string

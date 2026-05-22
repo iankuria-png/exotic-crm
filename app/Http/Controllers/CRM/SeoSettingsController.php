@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Models\IntegrationSetting;
 use App\Models\Platform;
+use App\Services\Seo\Llm\ProviderBalanceService;
 use App\Services\Seo\Llm\ProviderWaterfall;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -200,6 +201,37 @@ class SeoSettingsController extends Controller
                 'error' => $e->getMessage(),
             ], 200);
         }
+    }
+
+    /**
+     * GET /api/crm/settings/seo-engine/balance?provider=deepseek
+     * Returns the remaining credit balance for the requested provider.
+     * Cached for 5 minutes to avoid hammering provider APIs on settings refresh.
+     */
+    public function balance(Request $request, ProviderBalanceService $balanceService): JsonResponse
+    {
+        $data = $request->validate([
+            'provider' => ['required', 'string', Rule::in(self::SUPPORTED_PROVIDERS)],
+        ]);
+
+        $stored = $this->loadStored();
+        $apiKey = (string) ($stored['providers'][$data['provider']]['api_key'] ?? '');
+
+        // Fall back to env values if DB has no key
+        if ($apiKey === '') {
+            $apiKey = (string) match ($data['provider']) {
+                'claude'   => env('ANTHROPIC_API_KEY', ''),
+                'openai'   => env('OPENAI_API_KEY', ''),
+                'gemini'   => env('GEMINI_API_KEY', ''),
+                'deepseek' => env('DEEPSEEK_API_KEY', ''),
+                default    => '',
+            };
+        }
+
+        $cacheKey = 'seo_engine_balance_' . $data['provider'] . '_' . md5($apiKey);
+        $result = Cache::remember($cacheKey, 300, fn() => $balanceService->fetch($data['provider'], $apiKey));
+
+        return response()->json(array_merge(['provider' => $data['provider']], $result));
     }
 
     // ----------------------------------------------------------------
