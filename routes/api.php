@@ -24,6 +24,7 @@ use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ErrorLogController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
+use App\Http\Controllers\CRM\MessagingController;
 use App\Http\Controllers\CRM\SeoSettingsController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
@@ -564,6 +565,19 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::patch('/settings/templates/{template}', [SettingsController::class, 'updateTemplate'])->middleware('role:admin,sub_admin');
     Route::delete('/settings/templates/{template}', [SettingsController::class, 'destroyTemplate'])->middleware('role:admin,sub_admin');
     Route::get('/settings/webhook-logs', [SettingsController::class, 'webhookLogs']);
+
+    Route::middleware('role:admin,sub_admin')->prefix('messaging')->group(function () {
+        Route::get('/whatsapp/profiles', [MessagingController::class, 'profiles']);
+        Route::post('/whatsapp/profiles', [MessagingController::class, 'storeProfile']);
+        Route::put('/whatsapp/profiles/{profile}', [MessagingController::class, 'updateProfile']);
+        Route::delete('/whatsapp/profiles/{profile}', [MessagingController::class, 'destroyProfile']);
+        Route::post('/whatsapp/profiles/{profile}/test', [MessagingController::class, 'testProfile']);
+        Route::post('/whatsapp/profiles/{profile}/kill-switch', [MessagingController::class, 'toggleKillSwitch']);
+        Route::get('/whatsapp/routing/{market}/{messageType}', [MessagingController::class, 'showRouting']);
+        Route::put('/whatsapp/routing/{market}/{messageType}', [MessagingController::class, 'updateRouting']);
+        Route::get('/messages', [MessagingController::class, 'messages']);
+        Route::post('/test/send', [MessagingController::class, 'testSend']);
+    });
     Route::middleware('role:admin')->group(function () {
         Route::get('/settings/error-logs', [ErrorLogController::class, 'index']);
         Route::get('/settings/error-logs/{group}', [ErrorLogController::class, 'show']);

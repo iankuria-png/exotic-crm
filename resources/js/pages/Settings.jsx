@@ -13,6 +13,7 @@ import IntegrationsMetricsRow from '../components/settings/IntegrationsMetricsRo
 import IntegrationsOverviewPanel from '../components/settings/IntegrationsOverviewPanel';
 import MarketListPanel from '../components/settings/MarketListPanel';
 import MarketCreateModal from '../components/settings/MarketCreateModal';
+import MessagingArea from '../components/settings/messaging/MessagingArea';
 import PaymentLinkRoutingPanel from '../components/settings/PaymentLinkRoutingPanel';
 import PushRoutingPanel from '../components/settings/PushRoutingPanel';
 import ScraperConfigPanel from '../components/settings/ScraperConfigPanel';
@@ -1287,7 +1288,7 @@ function IntegrationsWorkspace({
         const params = new URLSearchParams(window.location.search);
         const requestedArea = params.get('integrationArea');
         const shouldOpenCreate = params.get('createMarket');
-        const allowedAreas = new Set(['overview', 'wallet', 'markets', 'payment_links', 'sms', 'push', 'scraper']);
+        const allowedAreas = new Set(['overview', 'wallet', 'markets', 'payment_links', 'messaging', 'sms', 'push', 'scraper']);
         if (requestedArea && allowedAreas.has(requestedArea)) {
             setIntegrationArea(requestedArea);
         }
@@ -3110,6 +3111,7 @@ function IntegrationsWorkspace({
         { id: 'wallet', label: 'Wallet', hint: `${walletSystemConfig?.mode || 'disabled'} • ${walletActiveMarkets}/${platformRows.length || 0} live` },
         { id: 'markets', label: 'Markets', hint: `${platformRows.length} configured` },
         { id: 'payment_links', label: 'Payment Links', hint: paymentLinkReadOnly ? 'Read-only' : 'Editable routing' },
+        { id: 'messaging', label: 'Messaging', hint: 'Meta Cloud API' },
         { id: 'sms', label: 'SMS Routing', hint: smsProviderForm.enabled ? 'Enabled' : 'Disabled' },
         { id: 'push', label: 'Push Routing', hint: `${pushReadyPlatforms}/${pushConfiguredPlatforms || 0} ready` },
         { id: 'scraper', label: 'Scraper', hint: `${scraperSources.length} sources` },
@@ -3210,6 +3212,14 @@ function IntegrationsWorkspace({
                     updatePushPlatformField={updatePushPlatformField}
                     updatePushProviderCredentialField={updatePushProviderCredentialField}
                     updatePushProviderField={updatePushProviderField}
+                />
+            ) : null}
+
+            {integrationArea === 'messaging' ? (
+                <MessagingArea
+                    platformRows={platformRows}
+                    statusChip={statusChip}
+                    toast={toast}
                 />
             ) : null}
 

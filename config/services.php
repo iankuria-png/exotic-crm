@@ -84,6 +84,10 @@ return [
         ],
     ],
 
+    'whatsapp' => [
+        'meta_default_api_version' => env('WHATSAPP_META_API_VERSION', 'v25.0'),
+    ],
+
     'exotic_crm_sync' => [
         'shared_key' => env('EXOTIC_CRM_SYNC_SHARED_KEY'),
         'shared_key_platform_ids' => env('EXOTIC_CRM_SYNC_SHARED_KEY_PLATFORM_IDS', ''),

@@ -45,3 +45,57 @@ Known deferrals:
 Plan mismatches:
 
 - None identified in the Phase 1 scope.
+
+## Phase 2 - Meta Cloud API engine, profile storage, dispatcher, and admin UI
+
+Status: complete
+
+Files changed:
+
+- `app/Http/Controllers/CRM/MessagingController.php`
+- `app/Http/Controllers/CRM/SettingsController.php`
+- `app/Models/WhatsAppMessage.php`
+- `app/Models/WhatsAppProviderProfile.php`
+- `app/Models/WhatsAppRoutingRule.php`
+- `app/Models/WhatsAppSender.php`
+- `app/Services/Messaging/DispatchResult.php`
+- `app/Services/Messaging/Engines/MetaCloudApiEngine.php`
+- `app/Services/Messaging/MessageRecipient.php`
+- `app/Services/Messaging/MessagingDispatcher.php`
+- `app/Services/Messaging/NormalizedInbound.php`
+- `app/Services/Messaging/SendRequest.php`
+- `app/Services/Messaging/SendResult.php`
+- `app/Services/Messaging/WhatsAppEngineInterface.php`
+- `app/Services/Messaging/WhatsAppGatewayService.php`
+- `config/services.php`
+- `database/migrations/2026_05_24_000003_extend_messaging_phase_one_enums.php`
+- `database/migrations/2026_05_24_000004_create_whatsapp_phase_two_tables.php`
+- `resources/js/components/settings/messaging/*`
+- `resources/js/pages/Settings.jsx`
+- `routes/api.php`
+- `tests/Feature/MessagingPhaseTwoTest.php`
+- Vite build assets in `public/build`
+
+Tests added/updated:
+
+- Added `MessagingPhaseTwoTest` for profile secret encryption/masking, WhatsApp template authoring, Meta text dispatch payloads, audit/timeline writes, kill-switch blocking, suppression-before-HTTP ordering, idempotency-key dedupe, and an env-gated live Meta sandbox send.
+
+Commands run:
+
+- `php artisan test tests/Feature/MessagingPhaseTwoTest.php tests/Feature/MessagingSuppressionServiceTest.php tests/Unit/Support/PhoneNormalizerTest.php` - passed, 17 tests / 49 assertions, 1 skipped because Meta sandbox env vars are not configured.
+- `php artisan test tests/Feature/CrmStreamFourAuthorizationTest.php --filter='templates|sms_provider_test_dispatch'` - passed, 2 tests / 8 assertions.
+- `npm run build` - passed.
+- `php -l` on the new/modified Phase 2 PHP entry points - passed.
+
+Known deferrals:
+
+- Conversation, renewal, campaign, payment-link, and credential producers remain unwired.
+- Producer validators remain closed except `SettingsController` template authoring, which now accepts `channel=whatsapp` as planned for Phase 2.
+- No Baileys runtime behavior or sidecar code was added.
+- No AI workflow was added.
+- WhatsApp fallback is only SMS fallback through `MessagingDispatcher`; no alternate WhatsApp engine fallback chain is exposed.
+
+Plan mismatches:
+
+- The plan's `MessageRecipient` DTO included `paymentId`, but the consolidated `whatsapp_messages` table omitted `payment_id`. Added nullable `payment_id` to `whatsapp_messages` so planned Phase 4 payment-link sends have a real audit join.
+- The Phase 1 enum migration needed to preserve the repository's existing credential template categories and rebuild SQLite enum checks for tests. Corrected the migration while keeping MySQL/Postgres behavior additive.
