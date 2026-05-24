@@ -22,6 +22,8 @@ class Product extends Model
         'is_active',
         'is_public',
         'is_archived',
+        'origin',
+        'created_by_user_id',
         'sort_order',
     ];
 
@@ -53,6 +55,11 @@ class Product extends Model
     public function platform()
     {
         return $this->belongsTo(Platform::class);
+    }
+
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'created_by_user_id');
     }
 
     public function prices()

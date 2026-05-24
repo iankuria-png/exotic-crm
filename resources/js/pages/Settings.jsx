@@ -224,6 +224,9 @@ function buildPackageEditor(platform) {
         is_active: Boolean(row.is_active),
         is_public: row.is_public !== false,
         is_archived: Boolean(row.is_archived),
+        origin: row.origin || 'admin',
+        creator: row.creator || null,
+        created_by_user_id: row.created_by_user_id || null,
         prices: Array.isArray(row.prices) && row.prices.length > 0
             ? row.prices.map((p) => ({
                 id: p.id || null,
@@ -5043,6 +5046,11 @@ function IntegrationsWorkspace({
                                                     {row.is_public === false ? (
                                                         <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 ring-1 ring-inset ring-slate-200">
                                                             CRM only
+                                                        </span>
+                                                    ) : null}
+                                                    {row.origin === 'sales' ? (
+                                                        <span className="rounded-md bg-teal-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-teal-700 ring-1 ring-inset ring-teal-100">
+                                                            Sales-created{row.creator?.name ? ` - ${row.creator.name}` : ''}
                                                         </span>
                                                     ) : null}
                                                     <button

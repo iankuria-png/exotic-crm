@@ -30,6 +30,8 @@ final class CrmAuditAction
     public const DEAL_RENEW = 'deal_renew';
     public const DEAL_FREE_TRIAL = 'deal_free_trial';
     public const DEAL_DISCOUNT = 'deal_discount';
+    public const DEAL_CREATE_CUSTOM = 'deal_create_custom';
+    public const PRODUCT_CREATE_SALES = 'product_create_sales';
     public const CONVERSATION_SMS_SENT = 'conversation_sms_sent';
     public const CONVERSATION_SMS_FAILED = 'conversation_sms_failed';
     public const CONVERSATION_WHATSAPP_SENT = 'conversation_whatsapp_sent';

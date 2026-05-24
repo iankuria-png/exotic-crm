@@ -41,6 +41,7 @@ use App\Services\MarketAuthorizationService;
 use App\Services\SbLeadImportRunService;
 use App\Services\SupportBoardLeadImportService;
 use App\Services\NotificationService;
+use App\Services\ProductCatalogService;
 use App\Services\PushNotification\PushProviderService;
 use App\Services\ReportingCurrencyService;
 use App\Services\ScraperSourceService;
@@ -2889,7 +2890,6 @@ class SettingsController extends Controller
                 ->keyBy(fn(Product $product) => (int) $product->id);
 
             $seen = [];
-            $seenSlugs = [];
             $touchedProductIds = [];
 
             foreach ($validated['packages'] as $row) {
@@ -2905,19 +2905,6 @@ class SettingsController extends Controller
                         'packages' => "Duplicate package name '{$name}' submitted. Submit each package once.",
                     ]);
                 }
-
-                $rowSlug = trim((string) ($row['slug'] ?? ''));
-                $slug = Str::slug($rowSlug !== '' ? $rowSlug : $name, '_');
-                if ($slug === '') {
-                    $slug = 'package';
-                }
-                $baseSlug = $slug;
-                $slugSuffix = 2;
-                while (array_key_exists($slug, $seenSlugs)) {
-                    $slug = $baseSlug . '_' . $slugSuffix;
-                    $slugSuffix++;
-                }
-                $seenSlugs[$slug] = true;
 
                 $priceRows = $this->normalizeSubmittedPriceRows($row, $platform, $isActive);
                 $activePricedDurations = collect($priceRows)
@@ -2941,14 +2928,17 @@ class SettingsController extends Controller
                 if (!$product) {
                     $product = Product::query()
                         ->where('platform_id', (int) $platform->id)
-                        ->where(function ($query) use ($name, $slug): void {
-                            $query->whereRaw('UPPER(name) = ?', [$name])
-                                ->orWhere('slug', $slug);
-                        })
+                        ->whereRaw('UPPER(name) = ?', [$name])
                         ->first();
                 }
 
                 $product = $product ?? new Product();
+                $rowSlug = trim((string) ($row['slug'] ?? ''));
+                $slug = ProductCatalogService::generateUniqueSlugForPlatform(
+                    (int) $platform->id,
+                    $rowSlug !== '' ? $rowSlug : $name,
+                    $product->exists ? (int) $product->id : null
+                );
                 $product->platform_id = (int) $platform->id;
                 $product->name = $name;
                 $product->display_name = $displayName;
@@ -4026,6 +4016,8 @@ class SettingsController extends Controller
             CrmAuditAction::DEAL_ACTIVATE,
             CrmAuditAction::DEAL_DEACTIVATE,
             CrmAuditAction::DEAL_EXTEND,
+            CrmAuditAction::DEAL_CREATE_CUSTOM,
+            CrmAuditAction::PRODUCT_CREATE_SALES,
             CrmAuditAction::PAYMENT_MATCH_AUTO,
             CrmAuditAction::PAYMENT_MATCH_CONFIRM,
             CrmAuditAction::PAYMENT_MATCH_BATCH,
@@ -4525,31 +4517,12 @@ class SettingsController extends Controller
 
     private function normalizePackageName(string $value): string
     {
-        return strtoupper(trim($value));
+        return ProductCatalogService::normalizePackageName($value);
     }
 
     private function normalizePackageTier(string $tier, string $name): string
     {
-        $tier = strtolower(trim($tier));
-        if (in_array($tier, ['basic', 'premium', 'vip', 'vvip', 'custom'], true)) {
-            return $tier;
-        }
-
-        $slug = strtolower(trim($name));
-        if (str_contains($slug, 'vvip')) {
-            return 'vvip';
-        }
-        if (str_contains($slug, 'vip')) {
-            return 'vip';
-        }
-        if (str_contains($slug, 'premium')) {
-            return 'premium';
-        }
-        if (str_contains($slug, 'basic')) {
-            return 'basic';
-        }
-
-        return 'custom';
+        return ProductCatalogService::normalizePackageTier($tier, $name);
     }
 
     /**
@@ -4766,7 +4739,7 @@ class SettingsController extends Controller
         $products = Product::query()
             ->where('platform_id', (int) $platform->id)
             ->where('is_archived', false)
-            ->with('prices')
+            ->with(['prices', 'creator:id,name,email'])
             ->orderBy('sort_order')
             ->orderBy('name')
             ->get();
@@ -4777,7 +4750,7 @@ class SettingsController extends Controller
             $products = Product::query()
                 ->where('platform_id', (int) $platform->id)
                 ->where('is_archived', false)
-                ->with('prices')
+                ->with(['prices', 'creator:id,name,email'])
                 ->orderBy('sort_order')
                 ->orderBy('name')
                 ->get();
@@ -4816,6 +4789,13 @@ class SettingsController extends Controller
                 'is_active' => (bool) $product->is_active,
                 'is_public' => (bool) ($product->is_public ?? true),
                 'is_archived' => (bool) $product->is_archived,
+                'origin' => $product->origin ?: 'admin',
+                'created_by_user_id' => $product->created_by_user_id ? (int) $product->created_by_user_id : null,
+                'creator' => $product->creator ? [
+                    'id' => (int) $product->creator->id,
+                    'name' => $product->creator->name,
+                    'email' => $product->creator->email,
+                ] : null,
                 'sort_order' => (int) $product->sort_order,
                 'prices' => $prices,
             ];

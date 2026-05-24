@@ -199,23 +199,114 @@ class DealController extends Controller
             'product_price_id' => 'nullable|exists:product_prices,id',
             'duration' => 'nullable|in:weekly,biweekly,monthly,manual',
             'lead_id' => 'nullable|exists:leads,id',
+            'custom_amount' => 'nullable|numeric|min:1',
+            'custom_duration_days' => 'nullable|integer|min:1|max:365',
+            'base_product_price_id' => 'nullable|exists:product_prices,id',
+            'save_as_package' => 'nullable|boolean',
+            'new_package_name' => 'required_if:save_as_package,true|nullable|string|min:2|max:64',
         ]);
 
-        $client = Client::findOrFail($validated['client_id']);
+        $client = Client::with('platform')->findOrFail($validated['client_id']);
         $this->marketAuthorizationService->ensureUserCanAccessPlatform(
             $request->user(),
             (int) $client->platform_id,
             'You do not have access to this client market.'
         );
 
-        $deal = $this->dealPaymentService->createPendingDealFromCatalog(
-            $client,
-            (int) $validated['product_id'],
-            isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null,
-            $validated['duration'] ?? null,
-            (int) $request->user()->id,
-            isset($validated['lead_id']) ? (int) $validated['lead_id'] : null
-        );
+        $hasCustomAmount = array_key_exists('custom_amount', $validated) && $validated['custom_amount'] !== null && $validated['custom_amount'] !== '';
+        $hasCustomDuration = array_key_exists('custom_duration_days', $validated) && $validated['custom_duration_days'] !== null && $validated['custom_duration_days'] !== '';
+        if ($hasCustomAmount !== $hasCustomDuration) {
+            throw ValidationException::withMessages([
+                'custom_amount' => 'Custom amount and custom duration must be supplied together.',
+            ]);
+        }
+
+        $saveAsPackage = (bool) ($validated['save_as_package'] ?? false);
+        if ($saveAsPackage && (!$hasCustomAmount || !$hasCustomDuration)) {
+            throw ValidationException::withMessages([
+                'save_as_package' => 'Custom amount and duration are required before saving a package.',
+            ]);
+        }
+
+        $baseProduct = $this->dealPaymentService->resolveScopedProduct((int) $validated['product_id'], (int) $client->platform_id);
+        $baseProductPrice = null;
+        if (!empty($validated['base_product_price_id'])) {
+            $baseProductPrice = $this->dealPaymentService->resolveScopedProductPrice((int) $validated['base_product_price_id'], $baseProduct);
+        }
+
+        if ($hasCustomAmount && count($client->platform?->effectiveCurrencies() ?? []) > 1 && !$baseProductPrice) {
+            throw ValidationException::withMessages([
+                'base_product_price_id' => 'Select a base pricing option for multi-currency custom deals.',
+            ]);
+        }
+
+        if ($hasCustomAmount && $saveAsPackage) {
+            $deal = $this->dealPaymentService->createSalesPackageAndDeal(
+                $client,
+                (int) $baseProduct->id,
+                $baseProductPrice ? (int) $baseProductPrice->id : null,
+                (string) $validated['new_package_name'],
+                (float) $validated['custom_amount'],
+                (int) $validated['custom_duration_days'],
+                (int) $request->user()->id,
+                isset($validated['lead_id']) ? (int) $validated['lead_id'] : null
+            );
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::PRODUCT_CREATE_SALES,
+                'product',
+                (int) $deal->product_id,
+                null,
+                [
+                    'product_id' => (int) $deal->product_id,
+                    'base_product_id' => (int) $baseProduct->id,
+                    'base_product_price_id' => $baseProductPrice?->id,
+                    'amount' => (float) $validated['custom_amount'],
+                    'duration_days' => (int) $validated['custom_duration_days'],
+                    'actor_id' => (int) $request->user()->id,
+                ],
+                'Sales-created package'
+            );
+        } elseif ($hasCustomAmount) {
+            $deal = $this->dealPaymentService->createPendingDealWithCustomPricing(
+                $client,
+                (int) $baseProduct->id,
+                $baseProductPrice ? (int) $baseProductPrice->id : null,
+                (float) $validated['custom_amount'],
+                (int) $validated['custom_duration_days'],
+                (int) $request->user()->id,
+                isset($validated['lead_id']) ? (int) $validated['lead_id'] : null
+            );
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::DEAL_CREATE_CUSTOM,
+                'deal',
+                (int) $deal->id,
+                null,
+                [
+                    'deal_id' => (int) $deal->id,
+                    'base_product_id' => (int) $baseProduct->id,
+                    'base_product_price_id' => $baseProductPrice?->id,
+                    'base_amount' => $baseProductPrice ? (float) $baseProductPrice->price : null,
+                    'custom_amount' => (float) $validated['custom_amount'],
+                    'custom_duration_days' => (int) $validated['custom_duration_days'],
+                ],
+                'Created custom-priced deal'
+            );
+        } else {
+            $deal = $this->dealPaymentService->createPendingDealFromCatalog(
+                $client,
+                (int) $baseProduct->id,
+                isset($validated['product_price_id']) ? (int) $validated['product_price_id'] : null,
+                $validated['duration'] ?? null,
+                (int) $request->user()->id,
+                isset($validated['lead_id']) ? (int) $validated['lead_id'] : null
+            );
+        }
 
         $deal->load(['client', 'product', 'platform']);
         return response()->json($deal, 201);
@@ -286,12 +377,12 @@ class DealController extends Controller
             : null;
         $paymentLinkProvider = $paymentLinkSelection['provider'] ?? null;
 
-        // Resolve duration days: explicit request param → ProductPrice lookup → legacy enum fallback
-        $explicitDays = isset($validated['duration_days']) ? (int) $validated['duration_days'] : 0;
-        if ($explicitDays > 0) {
-            $durationDays = $explicitDays;
-        } else {
-            // Try to resolve from the deal's product + duration via product_prices table
+        // Resolve duration days: explicit request param -> stored deal value -> catalog lookup -> legacy enum fallback
+        $durationDays = isset($validated['duration_days']) ? (int) $validated['duration_days'] : 0;
+        if ($durationDays < 1 && (int) ($deal->duration_days ?? 0) > 0) {
+            $durationDays = (int) $deal->duration_days;
+        }
+        if ($durationDays < 1) {
             $durationDays = $this->dealPaymentService->resolveDurationDaysFromCatalog($deal);
         }
         if ($durationDays < 1) {
@@ -356,7 +447,7 @@ class DealController extends Controller
                         $deal,
                         $discountAudit['before'],
                         $discountAudit['after'],
-                        $validated['reason'] ?: 'Applied discount during activation'
+                        ($validated['reason'] ?? null) ?: 'Applied discount during activation'
                     );
                 }
                 DB::commit();
@@ -421,7 +512,7 @@ class DealController extends Controller
                     (int) $deal->id,
                     $beforeState,
                     $afterState,
-                    $validated['reason'] ?: 'Activation initiated pending payment'
+                    ($validated['reason'] ?? null) ?: 'Activation initiated pending payment'
                 );
 
                 TimelineEvent::create([
@@ -443,7 +534,7 @@ class DealController extends Controller
                         $deal,
                         $discountAudit['before'],
                         $discountAudit['after'],
-                        $validated['reason'] ?: 'Applied discount during activation'
+                        ($validated['reason'] ?? null) ?: 'Applied discount during activation'
                     );
                 }
 
@@ -521,7 +612,7 @@ class DealController extends Controller
                 (int) $deal->id,
                 $beforeState,
                 $afterState,
-                $validated['reason'] ?: 'Activated via CRM flow'
+                ($validated['reason'] ?? null) ?: 'Activated via CRM flow'
             );
 
             if ($isFreeTrial) {
@@ -536,7 +627,7 @@ class DealController extends Controller
                         'approval_mode' => 'pin',
                         'duration_days' => $durationDays,
                     ],
-                    $validated['reason'] ?: 'Free trial activation from CRM flow'
+                    ($validated['reason'] ?? null) ?: 'Free trial activation from CRM flow'
                 );
             }
 
@@ -546,7 +637,7 @@ class DealController extends Controller
                     $deal,
                     $discountAudit['before'],
                     $discountAudit['after'],
-                    $validated['reason'] ?: 'Applied discount during activation'
+                    ($validated['reason'] ?? null) ?: 'Applied discount during activation'
                 );
             }
 
@@ -1507,6 +1598,22 @@ class DealController extends Controller
         $baseAmount = $this->discountBaseAmount($deal);
 
         if ($discountPercentage === null || $discountPercentage <= 0) {
+            if ($deal->discount_percentage === null && $deal->original_amount === null && $deal->discount_source === null) {
+                return [
+                    'applied' => false,
+                    'before' => $before,
+                    'after' => $before,
+                ];
+            }
+
+            if ($deal->discount_source !== null && $deal->discount_source !== 'agent_manual') {
+                return [
+                    'applied' => false,
+                    'before' => $before,
+                    'after' => $before,
+                ];
+            }
+
             $deal->update([
                 'amount' => round($baseAmount, 2),
                 'original_amount' => null,

@@ -15,6 +15,7 @@ use App\Models\User;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
@@ -126,6 +127,154 @@ class DealPaymentService
         ]);
 
         return $deal;
+    }
+
+    public function createPendingDealWithCustomPricing(
+        Client $client,
+        int $baseProductId,
+        ?int $baseProductPriceId,
+        float $amount,
+        int $durationDays,
+        int $actorId,
+        ?int $leadId
+    ): Deal {
+        $client->loadMissing('platform');
+
+        $product = $this->resolveScopedProduct($baseProductId, (int) $client->platform_id);
+        $basePrice = $baseProductPriceId ? $this->resolveScopedProductPrice($baseProductPriceId, $product) : null;
+        $currency = strtoupper((string) (
+            $basePrice?->currency
+            ?: $product->currency
+            ?: $client->platform?->currency_code
+            ?: 'KES'
+        ));
+
+        $lifecycle = $this->subscriptionLifecycleService->resolveForClient(
+            $client,
+            (int) $client->platform_id
+        );
+
+        $deal = Deal::create([
+            'platform_id' => $client->platform_id,
+            'client_id' => $client->id,
+            'lead_id' => $leadId,
+            'product_id' => $product->id,
+            'product_price_id' => null,
+            'base_product_price_id' => $basePrice?->id,
+            'plan_type' => $this->derivePlanTypeFromProduct($product),
+            'amount' => round($amount, 2),
+            'currency' => $currency,
+            'duration' => 'manual',
+            'duration_days' => $durationDays,
+            'status' => 'pending',
+            'assigned_to' => $actorId,
+            'subscription_lifecycle' => $lifecycle['subscription_lifecycle'],
+            'subscription_lifecycle_source' => $lifecycle['subscription_lifecycle_source'],
+            'subscription_lifecycle_reason' => $lifecycle['subscription_lifecycle_reason'],
+        ]);
+
+        $baseAmount = $basePrice ? (float) $basePrice->price : null;
+        $this->emitDealCreatedTimeline($deal, $client, $actorId, [
+            'product_price_id' => null,
+            'base_product_price_id' => $basePrice?->id,
+            'base_amount' => $baseAmount,
+            'custom_pricing' => true,
+            'duration_days' => $durationDays,
+        ]);
+
+        return $deal;
+    }
+
+    public function createSalesPackageAndDeal(
+        Client $client,
+        int $baseProductId,
+        ?int $baseProductPriceId,
+        string $packageName,
+        float $amount,
+        int $durationDays,
+        int $actorId,
+        ?int $leadId
+    ): Deal {
+        return DB::transaction(function () use (
+            $client,
+            $baseProductId,
+            $baseProductPriceId,
+            $packageName,
+            $amount,
+            $durationDays,
+            $actorId,
+            $leadId
+        ): Deal {
+            $client->loadMissing('platform');
+            $baseProduct = $this->resolveScopedProduct($baseProductId, (int) $client->platform_id);
+            $basePrice = $baseProductPriceId ? $this->resolveScopedProductPrice($baseProductPriceId, $baseProduct) : null;
+            $name = ProductCatalogService::normalizePackageName($packageName);
+
+            if ($name === '') {
+                throw ValidationException::withMessages([
+                    'new_package_name' => 'Package name is required.',
+                ]);
+            }
+
+            $duplicate = Product::query()
+                ->where('platform_id', (int) $client->platform_id)
+                ->whereRaw('UPPER(name) = ?', [$name])
+                ->exists();
+
+            if ($duplicate) {
+                throw ValidationException::withMessages([
+                    'new_package_name' => 'A package with this name already exists for this market.',
+                ]);
+            }
+
+            $currency = strtoupper((string) (
+                $basePrice?->currency
+                ?: $baseProduct->currency
+                ?: $client->platform?->currency_code
+                ?: 'KES'
+            ));
+            $sortOrder = ((int) Product::query()
+                ->where('platform_id', (int) $client->platform_id)
+                ->max('sort_order')) + 10;
+
+            $product = Product::create([
+                'platform_id' => (int) $client->platform_id,
+                'name' => $name,
+                'display_name' => trim($packageName),
+                'slug' => ProductCatalogService::generateUniqueSlugForPlatform((int) $client->platform_id, $name),
+                'tier' => $baseProduct->tier ?: ProductCatalogService::normalizePackageTier('', (string) $baseProduct->name),
+                'weekly_price' => 0,
+                'biweekly_price' => 0,
+                'monthly_price' => 0,
+                'currency' => $currency,
+                'is_active' => true,
+                'is_public' => false,
+                'is_archived' => false,
+                'origin' => 'sales',
+                'created_by_user_id' => $actorId,
+                'sort_order' => $sortOrder,
+            ]);
+
+            $price = ProductPrice::create([
+                'product_id' => (int) $product->id,
+                'duration_key' => 'custom_' . $durationDays . 'd',
+                'duration_label' => $durationDays . ' days',
+                'duration_days' => $durationDays,
+                'price' => round($amount, 2),
+                'currency' => $currency,
+                'is_active' => true,
+                'sort_order' => 0,
+            ]);
+
+            return $this->createPendingDealFromCatalog(
+                $client,
+                (int) $product->id,
+                (int) $price->id,
+                null,
+                $actorId,
+                $leadId
+            );
+        });
     }
 
     public function createManualPaymentForDeal(
@@ -666,6 +815,39 @@ class DealPaymentService
             'manual' => 30,
             default => 30,
         };
+    }
+
+    private function emitDealCreatedTimeline(Deal $deal, Client $client, int $actorId, array $content = []): void
+    {
+        TimelineEvent::create([
+            'platform_id' => $client->platform_id,
+            'entity_type' => 'deal',
+            'entity_id' => $deal->id,
+            'event_type' => 'deal_created',
+            'actor_id' => $actorId,
+            'content' => array_merge([
+                'plan_type' => $deal->plan_type,
+                'duration' => $deal->duration,
+                'amount' => $deal->amount,
+                'product_price_id' => $deal->product_price_id,
+                'duration_days' => $deal->duration_days,
+            ], $content),
+            'created_at' => now(),
+        ]);
+
+        TimelineEvent::create([
+            'platform_id' => $client->platform_id,
+            'entity_type' => 'client',
+            'entity_id' => $client->id,
+            'event_type' => 'deal_created',
+            'actor_id' => $actorId,
+            'content' => [
+                'deal_id' => $deal->id,
+                'plan_type' => $deal->plan_type,
+                'amount' => $deal->amount,
+            ],
+            'created_at' => now(),
+        ]);
     }
 
     public function normalizeReferenceRoot(string $reference): string

@@ -990,14 +990,33 @@ export default function ClientDetail() {
 
     const createDealMutation = useMutation({
         mutationFn: (deal) =>
-            api.post('/crm/deals', {
-                ...deal,
-                product_id: Number(deal.product_id),
-                product_price_id: deal.product_price_id ? Number(deal.product_price_id) : undefined,
-            }).then((r) => r.data),
+            api.post('/crm/deals', (() => {
+                const payload = {
+                    ...deal,
+                    product_id: Number(deal.product_id),
+                };
+                if (deal.product_price_id) {
+                    payload.product_price_id = Number(deal.product_price_id);
+                } else {
+                    delete payload.product_price_id;
+                }
+                if (deal.base_product_price_id) {
+                    payload.base_product_price_id = Number(deal.base_product_price_id);
+                } else {
+                    delete payload.base_product_price_id;
+                }
+                if (deal.custom_amount) {
+                    payload.custom_amount = Number(deal.custom_amount);
+                }
+                if (deal.custom_duration_days) {
+                    payload.custom_duration_days = Number(deal.custom_duration_days);
+                }
+                return payload;
+            })()).then((r) => r.data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            queryClient.invalidateQueries({ queryKey: ['products', clientPlatformId] });
             setShowDealModal(false);
             toast.success('Subscription created for client.');
         },
@@ -5173,29 +5192,87 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
         client_id: client.id,
         product_id: '',
         product_price_id: '',
+        customMode: false,
+        customAmount: '',
+        customDurationDays: '',
+        saveAsPackage: false,
+        newPackageName: '',
     });
 
     const selectedProduct = products?.find((p) => String(p.id) === String(form.product_id));
     const availablePrices = selectedProduct?.active_prices || [];
     const selectedPrice = availablePrices.find((p) => String(p.id) === String(form.product_price_id));
+    const customAmountNumber = Number(form.customAmount || 0);
+    const customDurationNumber = Number(form.customDurationDays || 0);
 
     const handleProductChange = (e) => {
         const productId = e.target.value;
         const product = products?.find((p) => String(p.id) === String(productId));
         const prices = product?.active_prices || [];
+        const defaultPrice = prices.length === 1 ? prices[0] : null;
         setForm({
             ...form,
             product_id: productId,
-            product_price_id: prices.length === 1 ? String(prices[0].id) : '',
+            product_price_id: defaultPrice ? String(defaultPrice.id) : '',
+            customAmount: form.customMode && defaultPrice ? String(defaultPrice.price || '') : form.customAmount,
+            customDurationDays: form.customMode && defaultPrice ? String(defaultPrice.duration_days || '') : form.customDurationDays,
+        });
+    };
+
+    const handleCustomToggle = () => {
+        setForm((current) => {
+            const nextCustomMode = !current.customMode;
+            if (!nextCustomMode) {
+                return {
+                    ...current,
+                    customMode: false,
+                    saveAsPackage: false,
+                    newPackageName: '',
+                };
+            }
+
+            const product = products?.find((p) => String(p.id) === String(current.product_id));
+            const price = (product?.active_prices || []).find((p) => String(p.id) === String(current.product_price_id));
+            return {
+                ...current,
+                customMode: true,
+                customAmount: price ? String(price.price || '') : current.customAmount,
+                customDurationDays: price ? String(price.duration_days || '') : current.customDurationDays,
+            };
         });
     };
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        onSubmit(form);
+        const payload = {
+            client_id: form.client_id,
+            product_id: form.product_id,
+        };
+
+        if (form.customMode) {
+            payload.custom_amount = form.customAmount;
+            payload.custom_duration_days = form.customDurationDays;
+            if (form.product_price_id) {
+                payload.base_product_price_id = form.product_price_id;
+            }
+            if (form.saveAsPackage) {
+                payload.save_as_package = true;
+                payload.new_package_name = form.newPackageName.trim();
+            }
+        } else {
+            payload.product_price_id = form.product_price_id;
+        }
+
+        onSubmit(payload);
     };
 
-    const canSubmit = form.product_id && form.product_price_id && !isPending;
+    const canSubmit = form.product_id
+        && !isPending
+        && (
+            form.customMode
+                ? customAmountNumber > 0 && customDurationNumber >= 1 && (!form.saveAsPackage || form.newPackageName.trim().length >= 2)
+                : Boolean(form.product_price_id)
+        );
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={onClose}>
@@ -5225,7 +5302,7 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
                         </select>
                     </div>
 
-                    {form.product_id && availablePrices.length > 0 ? (
+                    {form.product_id && availablePrices.length > 0 && !form.customMode ? (
                         <div>
                             <label className="mb-1 block text-sm font-medium text-slate-700">Duration &amp; Price</label>
                             <select
@@ -5242,18 +5319,91 @@ function DealModal({ client, products, onClose, onSubmit, isPending, error }) {
                                 ))}
                             </select>
                         </div>
-                    ) : form.product_id ? (
+                    ) : form.product_id && !form.customMode ? (
                         <p className="text-sm text-amber-600">No active pricing options for this package.</p>
                     ) : null}
 
-                    {selectedPrice ? (
+                    {form.product_id ? (
+                        <button
+                            type="button"
+                            onClick={handleCustomToggle}
+                            className="text-sm font-semibold text-teal-700 hover:text-teal-800"
+                        >
+                            {form.customMode ? 'Use catalog pricing' : 'Custom amount or duration?'}
+                        </button>
+                    ) : null}
+
+                    {form.customMode ? (
+                        <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <label className="block">
+                                    <span className="mb-1 block text-sm font-medium text-slate-700">Amount</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        step="0.01"
+                                        value={form.customAmount}
+                                        onChange={(e) => setForm({ ...form, customAmount: e.target.value })}
+                                        className="crm-input w-full"
+                                        placeholder="1000"
+                                        required={form.customMode}
+                                    />
+                                </label>
+                                <label className="block">
+                                    <span className="mb-1 block text-sm font-medium text-slate-700">Days</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max="365"
+                                        step="1"
+                                        value={form.customDurationDays}
+                                        onChange={(e) => setForm({ ...form, customDurationDays: e.target.value })}
+                                        className="crm-input w-full"
+                                        placeholder="5"
+                                        required={form.customMode}
+                                    />
+                                </label>
+                            </div>
+                            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={form.saveAsPackage}
+                                    onChange={(e) => setForm({ ...form, saveAsPackage: e.target.checked, newPackageName: e.target.checked ? form.newPackageName : '' })}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-200"
+                                />
+                                Save as a new package (visible to other agents)
+                            </label>
+                            {form.saveAsPackage ? (
+                                <label className="block">
+                                    <span className="mb-1 block text-sm font-medium text-slate-700">Package name</span>
+                                    <input
+                                        type="text"
+                                        value={form.newPackageName}
+                                        onChange={(e) => setForm({ ...form, newPackageName: e.target.value })}
+                                        className="crm-input w-full"
+                                        placeholder="Premium Mini 3d"
+                                        required={form.saveAsPackage}
+                                    />
+                                </label>
+                            ) : null}
+                        </div>
+                    ) : null}
+
+                    {selectedPrice || form.customMode ? (
                         <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
                             <span className="font-medium">{selectedProduct?.display_name || selectedProduct?.name}</span>
                             {' · '}
-                            {selectedPrice.duration_label}
+                            {form.customMode ? `${customDurationNumber || 0} days` : selectedPrice.duration_label}
                             {' · '}
-                            <span className="font-semibold text-slate-900">{formatCurrency(selectedPrice.price, selectedPrice.currency || platformCurrency)}</span>
-                            {selectedPrice.duration_days ? <span className="text-slate-400"> ({selectedPrice.duration_days} days)</span> : null}
+                            <span className="font-semibold text-slate-900">
+                                {formatCurrency(form.customMode ? customAmountNumber : selectedPrice.price, selectedPrice?.currency || platformCurrency)}
+                            </span>
+                            {!form.customMode && selectedPrice.duration_days ? <span className="text-slate-400"> ({selectedPrice.duration_days} days)</span> : null}
+                            {form.customMode && selectedPrice ? (
+                                <div className="mt-1 text-xs text-slate-500">
+                                    Base: {formatCurrency(selectedPrice.price, selectedPrice.currency || platformCurrency)} · {selectedPrice.duration_days || 0} days
+                                </div>
+                            ) : null}
                         </div>
                     ) : null}
 
