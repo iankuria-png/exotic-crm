@@ -1084,6 +1084,7 @@ export default function Campaigns() {
                                     >
                                         <option value="sms">SMS</option>
                                         <option value="email">Email</option>
+                                        <option value="whatsapp">WhatsApp</option>
                                     </select>
                                 </div>
                                 <div>

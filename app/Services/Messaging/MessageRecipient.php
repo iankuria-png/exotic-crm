@@ -83,4 +83,17 @@ final class MessageRecipient
             locale: $this->locale,
         );
     }
+
+    public function withDealId(?int $dealId): self
+    {
+        return new self(
+            phoneE164: $this->phoneE164,
+            platformId: $this->platformId,
+            clientId: $this->clientId,
+            leadId: $this->leadId,
+            dealId: $dealId,
+            paymentId: $this->paymentId,
+            locale: $this->locale,
+        );
+    }
 }

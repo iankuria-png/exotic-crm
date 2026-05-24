@@ -50,6 +50,7 @@ export default function Conversations() {
     const [search, setSearch] = useState('');
     const [selectedClientId, setSelectedClientId] = useState(null);
     const [showAllMessages, setShowAllMessages] = useState(false);
+    const [composerChannel, setComposerChannel] = useState('sms');
     const [selectedTemplateId, setSelectedTemplateId] = useState('');
     const [draftMessage, setDraftMessage] = useState('');
     const [followUpAt, setFollowUpAt] = useState('');
@@ -67,10 +68,10 @@ export default function Conversations() {
     });
 
     const { data: templatesData } = useQuery({
-        queryKey: ['conversation-templates'],
+        queryKey: ['conversation-templates', composerChannel],
         queryFn: () =>
             api.get('/crm/settings/templates', {
-                params: { per_page: 100, status: 'active', channel: 'sms' },
+                params: { per_page: 100, status: 'active', channel: composerChannel },
             }).then((response) => response.data),
     });
 
@@ -93,6 +94,17 @@ export default function Conversations() {
         queryFn: () => api.get(`/crm/clients/${selectedClientId}`).then((response) => response.data),
         enabled: !!selectedClientId,
     });
+    const whatsappAvailable = Boolean(selectedClient?.whatsapp_conversation_enabled);
+
+    useEffect(() => {
+        setSelectedTemplateId('');
+    }, [composerChannel]);
+
+    useEffect(() => {
+        if (composerChannel === 'whatsapp' && selectedClient && !whatsappAvailable) {
+            setComposerChannel('sms');
+        }
+    }, [composerChannel, selectedClient, whatsappAvailable]);
 
     const followUpCountByClient = useMemo(() => {
         const map = new Map();
@@ -118,6 +130,7 @@ export default function Conversations() {
             api.post(`/crm/conversations/clients/${selectedClientId}/send`, {
                 template_id: selectedTemplateId || null,
                 message: draftMessage.trim(),
+                channel: composerChannel,
                 follow_up_at: followUpAt || null,
             }).then((response) => response.data),
         onSuccess: (result) => {
@@ -126,13 +139,14 @@ export default function Conversations() {
             setDraftMessage('');
             setFollowUpAt('');
             setSelectedTemplateId('');
+            const deliveredChannel = result?.delivery?.channel || composerChannel;
             const deliveryStatus = result?.delivery?.status || 'unknown';
             const tone = result?.delivery?.success ? 'success' : 'danger';
             setComposerFeedback({
                 tone,
                 text: result?.delivery?.success
-                    ? `SMS sent (${deliveryStatus}) and logged to timeline.`
-                    : `SMS failed (${deliveryStatus}). Message was still logged.`,
+                    ? `${deliveredChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'} sent (${deliveryStatus}) and logged to timeline.`
+                    : `${composerChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'} failed (${deliveryStatus}). Message was still logged.`,
             });
         },
         onError: () => {
@@ -289,6 +303,27 @@ export default function Conversations() {
                                 </div>
 
                                 <footer className="border-t border-slate-100 bg-white p-4">
+                                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                                        {['sms', 'whatsapp'].map((channel) => {
+                                            const disabled = channel === 'whatsapp' && !whatsappAvailable;
+                                            return (
+                                                <button
+                                                    key={channel}
+                                                    type="button"
+                                                    disabled={disabled}
+                                                    onClick={() => setComposerChannel(channel)}
+                                                    className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                                        composerChannel === channel
+                                                            ? 'border-teal-300 bg-teal-50 text-teal-800'
+                                                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                                    }`}
+                                                    title={disabled ? 'WhatsApp conversation routing is not enabled for this market.' : undefined}
+                                                >
+                                                    {channel === 'whatsapp' ? 'WhatsApp' : 'SMS'}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
                                     <div className="grid gap-2 md:grid-cols-[220px_220px_minmax(0,1fr)]">
                                         <select
                                             value={selectedTemplateId}
@@ -327,7 +362,9 @@ export default function Conversations() {
                                         <p className={`text-xs font-medium ${
                                             composerFeedback?.tone === 'success' ? 'text-emerald-700' : composerFeedback?.tone === 'danger' ? 'text-rose-700' : 'text-slate-500'
                                         }`}>
-                                            {composerFeedback?.text || 'Messages are sent through the SMS gateway and logged on the client timeline.'}
+                                            {composerFeedback?.text || (composerChannel === 'whatsapp'
+                                                ? 'Messages are sent through configured WhatsApp routing and logged on the client timeline.'
+                                                : 'Messages are sent through the SMS gateway and logged on the client timeline.')}
                                         </p>
                                         <button
                                             type="button"

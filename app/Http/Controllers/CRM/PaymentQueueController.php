@@ -2382,7 +2382,7 @@ class PaymentQueueController extends Controller
     }
 
     /**
-     * Send payment link via SMS (and optionally other channels later).
+     * Send payment link through the selected customer messaging channel.
      * Link is built from platform site URL + config path so customer can complete payment.
      */
     public function sendPaymentLink(Request $request, Payment $payment)
@@ -2390,7 +2390,7 @@ class PaymentQueueController extends Controller
         $this->authorizePaymentAccess($request, $payment);
 
         $validated = $request->validate([
-            'channel' => 'required|in:sms',
+            'channel' => 'required|in:sms,whatsapp',
             'phone' => 'nullable|string|max:20',
             'provider' => 'nullable|string|max:50',
             'reason' => 'nullable|string|max:500',
@@ -2409,13 +2409,13 @@ class PaymentQueueController extends Controller
             'provider' => $validated['provider'] ?? null,
             'reason' => (string) ($validated['reason'] ?? 'Send payment link from CRM'),
             'notification_purpose' => 'payment_link',
-            'success_message' => 'Payment link sent by SMS.',
-            'disabled_message' => 'Payment link message prepared (SMS is disabled in settings).',
+            'success_message' => $validated['channel'] === 'whatsapp' ? 'Payment link sent by WhatsApp.' : 'Payment link sent by SMS.',
+            'disabled_message' => $validated['channel'] === 'whatsapp' ? 'Payment link prepared but WhatsApp could not send.' : 'Payment link message prepared (SMS is disabled in settings).',
         ]);
 
         if (!($sendResult['success'] ?? false)) {
             return response()->json([
-                'message' => $sendResult['message'] ?? 'SMS could not be sent.',
+                'message' => $sendResult['message'] ?? 'Message could not be sent.',
             ], (int) ($sendResult['http_status'] ?? 500));
         }
 

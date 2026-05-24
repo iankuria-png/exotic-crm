@@ -21,6 +21,8 @@ const CHANNEL_OPTIONS = [
     { key: 'both', label: 'Email + SMS' },
     { key: 'email', label: 'Email only' },
     { key: 'sms', label: 'SMS only' },
+    { key: 'whatsapp', label: 'WhatsApp only' },
+    { key: 'sms_whatsapp', label: 'SMS + WhatsApp' },
 ];
 
 const TIMING_OPTIONS = [
@@ -254,7 +256,7 @@ export default function CredentialDispatchDrawer({
     );
 
     const requiresPhoneNow = useMemo(
-        () => form.timing === 'send_now' && (form.channel === 'sms' || form.channel === 'both'),
+        () => form.timing === 'send_now' && ['sms', 'whatsapp', 'both', 'sms_whatsapp'].includes(form.channel),
         [form.channel, form.timing],
     );
 
@@ -523,7 +525,7 @@ export default function CredentialDispatchDrawer({
                     <section className="grid gap-3 md:grid-cols-2">
                         <div>
                             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.09em] text-slate-500">Channel</p>
-                            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                            <div className="flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
                                 {CHANNEL_OPTIONS.map((option) => (
                                     <button
                                         key={option.key}

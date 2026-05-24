@@ -6,6 +6,9 @@ use App\Billing\Support\BillingProxyLifecycleService;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Models\Payment;
 use App\Models\Platform;
+use App\Services\Messaging\DispatchResult;
+use App\Services\Messaging\MessageRecipient;
+use App\Services\Messaging\MessagingDispatcher;
 use App\Support\CrmAuditAction;
 use App\Support\PhoneNormalizer;
 use Illuminate\Http\Request;
@@ -22,7 +25,8 @@ class PaymentLinkService
         private readonly BillingModeService $billingModeService,
         private readonly WalletSettingsService $walletSettingsService,
         private readonly BillingRoutingDecisionRecorder $billingRoutingDecisionRecorder,
-        private readonly BillingProxyLifecycleService $billingProxyLifecycleService
+        private readonly BillingProxyLifecycleService $billingProxyLifecycleService,
+        private readonly MessagingDispatcher $messagingDispatcher
     ) {
     }
 
@@ -99,7 +103,7 @@ class PaymentLinkService
             ];
         }
 
-        $channel = trim((string) ($options['channel'] ?? 'sms'));
+        $channel = strtolower(trim((string) ($options['channel'] ?? 'sms')));
         if ($channel === '') {
             $channel = 'sms';
         }
@@ -177,13 +181,16 @@ class PaymentLinkService
             'platform_id' => $payment->platform_id,
             'phone_prefix' => $platform->phone_prefix ?: '254',
         ], is_array($options['notification_context'] ?? null) ? $options['notification_context'] : []);
-        $result = $this->notificationService->sendSms($phone, $message, $notificationContext);
+        $result = $this->dispatchPaymentLinkMessage($payment, $phone, $message, $channel, $notificationContext, $options);
         $latencyMs = (int) round((microtime(true) - $attemptStartedAt) * 1000);
 
         $attemptStatus = ($result['success'] ?? false) === true
             ? (($result['status'] ?? '') === 'disabled' ? 'disabled' : 'success')
             : 'failed';
         $providerForAttempt = $result['provider'] ?? ($providerKey ?: 'payment_link');
+        $failedErrorCode = $channel === 'whatsapp'
+            ? (string) ($result['error_code'] ?? 'whatsapp_send_failed')
+            : 'sms_send_failed';
 
         $this->paymentAttemptService->record(
             $payment,
@@ -191,12 +198,17 @@ class PaymentLinkService
             $attemptStatus,
             [
                 'provider' => $providerForAttempt,
-                'error_code' => ($result['success'] ?? false) === true ? null : 'sms_send_failed',
-                'error_message' => ($result['success'] ?? false) === true ? null : ($result['provider_response'] ?? 'SMS could not be sent.'),
+                'error_code' => ($result['success'] ?? false) === true ? null : $failedErrorCode,
+                'error_message' => ($result['success'] ?? false) === true ? null : ($result['provider_response'] ?? 'Message could not be sent.'),
                 'latency_ms' => $latencyMs,
                 'request_meta' => $requestMeta,
                 'response_meta' => [
-                    'sms_status' => $result['status'] ?? null,
+                    'message_status' => $result['status'] ?? null,
+                    'channel' => $channel,
+                    'delivered_channel' => $result['channel'] ?? $channel,
+                    'whatsapp_message_id' => $result['whatsapp_message_id'] ?? null,
+                    'fallback_attempted' => $result['fallback_attempted'] ?? false,
+                    'sms_status' => $channel === 'sms' || ($result['channel'] ?? null) === 'sms' ? ($result['status'] ?? null) : null,
                     'provider_response' => $result['provider_response'] ?? null,
                     'payment_url' => $paymentUrl,
                 ],
@@ -211,8 +223,12 @@ class PaymentLinkService
             'requested_provider' => $options['requested_provider'] ?? null,
         ];
         $afterState = [
-            'sms_success' => $result['success'] ?? false,
-            'sms_status' => $result['status'] ?? null,
+            'message_success' => $result['success'] ?? false,
+            'message_status' => $result['status'] ?? null,
+            'channel' => $channel,
+            'delivered_channel' => $result['channel'] ?? $channel,
+            'whatsapp_message_id' => $result['whatsapp_message_id'] ?? null,
+            'fallback_attempted' => $result['fallback_attempted'] ?? false,
             'provider' => $providerKey,
             'mode' => $providerMode,
             'provider_override_requested' => (bool) ($options['provider_override_requested'] ?? false),
@@ -251,7 +267,7 @@ class PaymentLinkService
             return [
                 'success' => false,
                 'http_status' => 502,
-                'message' => $result['provider_response'] ?? ((string) ($options['failure_message'] ?? 'SMS could not be sent.')),
+                'message' => $result['provider_response'] ?? ((string) ($options['failure_message'] ?? 'Message could not be sent.')),
                 'payment_url' => $paymentUrl,
                 'phone' => $phone,
                 'notification_result' => $result,
@@ -265,12 +281,49 @@ class PaymentLinkService
             'http_status' => 200,
             'message' => ($result['status'] ?? '') === 'disabled'
                 ? (string) ($options['disabled_message'] ?? 'Payment link prepared (SMS disabled).')
-                : (string) ($options['success_message'] ?? 'Payment link sent by SMS.'),
+                : (string) ($options['success_message'] ?? ($channel === 'whatsapp' ? 'Payment link sent by WhatsApp.' : 'Payment link sent by SMS.')),
             'payment_url' => $paymentUrl,
             'phone' => $phone,
             'notification_result' => $result,
             'request_meta' => $requestMeta,
             'latency_ms' => $latencyMs,
+        ];
+    }
+
+    private function dispatchPaymentLinkMessage(Payment $payment, string $phone, string $message, string $channel, array $notificationContext, array $options): array
+    {
+        if ($channel !== 'whatsapp') {
+            return $this->notificationService->sendSms($phone, $message, $notificationContext);
+        }
+
+        $recipient = $payment->client
+            ? MessageRecipient::fromClient($payment->client)->withPaymentId((int) $payment->id)
+            : MessageRecipient::fromPhone($phone, (int) $payment->platform_id, (string) ($payment->platform?->phone_prefix ?: '254'))->withPaymentId((int) $payment->id);
+        $request = $options['request'] ?? null;
+        $actorId = $request instanceof Request ? optional($request->user())->id : ($options['actor_id'] ?? null);
+
+        $dispatch = $this->messagingDispatcher->dispatch($recipient, $message, 'whatsapp_with_sms_fallback', array_merge($notificationContext, [
+            'message_type' => 'payment_link',
+            'actor_id' => $actorId,
+            'idempotency_key' => 'payment-link-' . $payment->id . '-' . sha1($phone . '|' . $message . '|' . microtime(true)),
+        ]));
+
+        return $this->serializeDispatchResult($dispatch);
+    }
+
+    private function serializeDispatchResult(DispatchResult $dispatch): array
+    {
+        return [
+            'success' => $dispatch->success,
+            'status' => $dispatch->status,
+            'provider' => $dispatch->channel,
+            'channel' => $dispatch->channel,
+            'provider_response' => $dispatch->smsResult['provider_response']
+                ?? $dispatch->errorMessage
+                ?? ($dispatch->success ? 'Message accepted by provider.' : 'Message could not be sent.'),
+            'whatsapp_message_id' => $dispatch->whatsAppMessage?->id,
+            'fallback_attempted' => $dispatch->fallbackAttempted,
+            'error_code' => $dispatch->errorCode,
         ];
     }
 

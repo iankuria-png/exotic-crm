@@ -50,6 +50,8 @@ final class CrmAuditAction
     public const WHATSAPP_SENDER_QUARANTINED = 'whatsapp_sender_quarantined';
     public const RENEWAL_SMS_SENT = 'renewal_sms_sent';
     public const RENEWAL_SMS_FAILED = 'renewal_sms_failed';
+    public const RENEWAL_WHATSAPP_SENT = 'renewal_whatsapp_sent';
+    public const RENEWAL_WHATSAPP_FAILED = 'renewal_whatsapp_failed';
     public const RENEWAL_PAUSE = 'renewal_pause';
     public const RENEWAL_RESUME = 'renewal_resume';
     public const CAMPAIGN_RUN_CONFIGURED = 'campaign_run_configured';

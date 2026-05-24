@@ -150,3 +150,58 @@ Known deferrals:
 Plan mismatches:
 
 - There is no separate React lead detail page in the current app. The lead inbound indicator was implemented on the existing leads table rows and backed by `LeadController` list/show counts, while the client detail header keeps the planned detail-style indicator.
+
+## Phase 4 - Existing producer wiring through MessagingDispatcher
+
+Status: complete
+
+Files changed:
+
+- `app/Http/Controllers/CRM/ConversationController.php`
+- `app/Http/Controllers/CRM/ClientController.php`
+- `app/Http/Controllers/CRM/RenewalController.php`
+- `app/Http/Controllers/CRM/PaymentQueueController.php`
+- `app/Services/RenewalService.php`
+- `app/Services/PaymentLinkService.php`
+- `app/Services/CredentialDeliveryService.php`
+- `app/Services/Messaging/MessageRecipient.php`
+- `app/Services/Messaging/WhatsAppGatewayService.php`
+- `app/Services/TeamActivityService.php`
+- `app/Services/ClientRetentionInsightService.php`
+- `app/Support/CrmAuditAction.php`
+- `database/migrations/2026_05_24_000005_extend_client_credential_dispatch_channels.php`
+- `database/seeders/SprintThreeTemplateSeeder.php`
+- `resources/js/pages/Conversations.jsx`
+- `resources/js/pages/Campaigns.jsx`
+- `resources/js/pages/Payments.jsx`
+- `resources/js/pages/ClientDetail.jsx`
+- `resources/js/components/CredentialDispatchDrawer.jsx`
+- `tests/Feature/MessagingPhaseFourTest.php`
+- `tests/Feature/ClientAccessServiceTest.php`
+- `tests/Unit/PaymentLinkServiceTest.php`
+- Vite build assets in `public/build`
+
+Tests added/updated:
+
+- Added `MessagingPhaseFourTest` for WhatsApp conversation sends, manual renewal reminders, payment-link sends with payment context, and credential delivery with WhatsApp channel.
+- Updated constructor-based payment-link and credential access tests for the new dispatcher dependencies.
+
+Commands run:
+
+- `php -l` on Phase 4 modified PHP entry points and the new credential-channel migration - passed.
+- `php artisan test tests/Feature/MessagingPhaseFourTest.php` - passed, 4 tests / 23 assertions.
+- `php artisan test tests/Feature/MessagingPhaseFourTest.php tests/Feature/MessagingPhaseThreeTest.php tests/Feature/MessagingPhaseTwoTest.php tests/Feature/MessagingSuppressionServiceTest.php tests/Unit/Support/PhoneNormalizerTest.php tests/Unit/PaymentLinkServiceTest.php tests/Feature/ClientAccessServiceTest.php` - passed, 34 tests / 142 assertions, 1 skipped because Meta sandbox env vars are not configured.
+- `php artisan test tests/Feature/CrmStreamFourAuthorizationTest.php --filter='templates|sms_provider_test_dispatch|renewal_run_is_scoped|paused_renewal_target_is_excluded'` - passed, 4 tests / 12 assertions.
+- `npm run build` - passed.
+- `git diff --check` - passed.
+
+Known deferrals:
+
+- Baileys remains unimplemented and unactivated pending the Phase 5 risk-acceptance gate.
+- No AI workflow or response drafting was added.
+- The operational soak period described in the plan cannot be performed in code; WhatsApp renewal seed campaigns are created disabled by default.
+- Payment-link WhatsApp uses the planned WhatsApp-with-SMS-fallback preference; other producer channels use the selected channel directly.
+
+Plan mismatches:
+
+- `client_credential_dispatches.channel` had its own enum/check constraint, so Phase 4 required an additional additive migration before credential WhatsApp validators could safely open.

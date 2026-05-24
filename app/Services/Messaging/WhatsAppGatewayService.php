@@ -206,6 +206,10 @@ class WhatsAppGatewayService
 
     private function recordTimelineEvent(WhatsAppMessage $message, SendRequest $request, string $eventType, array $content): void
     {
+        if (!empty($request->context['suppress_gateway_timeline'])) {
+            return;
+        }
+
         [$entityType, $entityId] = $this->timelineEntity($request);
 
         if (!$entityType || !$entityId) {

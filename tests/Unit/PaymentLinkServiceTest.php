@@ -6,8 +6,10 @@ use App\Models\BillingMarketProviderBinding;
 use App\Models\BillingProviderProfile;
 use App\Models\BillingRoutingRule;
 use App\Models\Platform;
+use App\Billing\Support\BillingProxyLifecycleService;
 use App\Billing\Support\BillingRoutingDecisionRecorder;
 use App\Services\AuditService;
+use App\Services\Messaging\MessagingDispatcher;
 use App\Services\PaymentLinkService;
 use App\Services\PaymentAttemptService;
 use App\Services\NotificationService;
@@ -180,7 +182,9 @@ class PaymentLinkServiceTest extends TestCase
             new AuditService(),
             app(\App\Services\BillingModeService::class),
             app(WalletSettingsService::class),
-            app(BillingRoutingDecisionRecorder::class)
+            app(BillingRoutingDecisionRecorder::class),
+            app(BillingProxyLifecycleService::class),
+            app(MessagingDispatcher::class)
         );
     }
 }

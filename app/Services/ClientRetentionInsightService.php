@@ -604,7 +604,7 @@ class ClientRetentionInsightService
         $events = TimelineEvent::query()
             ->where('entity_type', 'deal')
             ->whereIn('entity_id', $dealIds)
-            ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed'])
+            ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed', 'renewal_whatsapp_sent', 'renewal_whatsapp_failed'])
             ->where('created_at', '>=', now()->subDays(self::SIGNAL_WINDOW_DAYS))
             ->get(['event_type', 'created_at']);
 
@@ -618,8 +618,8 @@ class ClientRetentionInsightService
             return $this->unavailableComponent('Reminder Responsiveness');
         }
 
-        $sent = $events->where('event_type', 'renewal_sms_sent')->count();
-        $failed = $events->where('event_type', 'renewal_sms_failed')->count();
+        $sent = $events->whereIn('event_type', ['renewal_sms_sent', 'renewal_whatsapp_sent'])->count();
+        $failed = $events->whereIn('event_type', ['renewal_sms_failed', 'renewal_whatsapp_failed'])->count();
         $lastReminderAt = optional($events->sortByDesc('created_at')->first())->created_at;
 
         $responseReceived = false;
@@ -686,6 +686,8 @@ class ClientRetentionInsightService
             ->whereIn('event_type', [
                 'conversation_sms_sent',
                 'conversation_sms_failed',
+                'conversation_whatsapp_sent',
+                'conversation_whatsapp_failed',
                 'sms_sent',
                 'sms_delivered',
                 'sms_failed',
@@ -702,9 +704,9 @@ class ClientRetentionInsightService
             return $this->unavailableComponent('Notification Responsiveness');
         }
 
-        $failed = $events->whereIn('event_type', ['conversation_sms_failed', 'sms_failed', 'whatsapp_failed', 'push_notification_failed'])->count();
+        $failed = $events->whereIn('event_type', ['conversation_sms_failed', 'conversation_whatsapp_failed', 'sms_failed', 'whatsapp_failed', 'push_notification_failed'])->count();
         $delivered = $events->whereIn('event_type', ['sms_delivered', 'whatsapp_delivered'])->count();
-        $sent = $events->whereIn('event_type', ['conversation_sms_sent', 'sms_sent', 'whatsapp_sent', 'push_notification_sent'])->count();
+        $sent = $events->whereIn('event_type', ['conversation_sms_sent', 'conversation_whatsapp_sent', 'sms_sent', 'whatsapp_sent', 'push_notification_sent'])->count();
 
         $attempted = max(1, $sent + $delivered + $failed);
         $failureRatio = $failed / $attempted;

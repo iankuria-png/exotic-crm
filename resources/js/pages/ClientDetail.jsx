@@ -3349,6 +3349,7 @@ export default function ClientDetail() {
                                         <option value="internal">Internal</option>
                                         <option value="call">Call</option>
                                         <option value="sms">SMS</option>
+                                        <option value="whatsapp">WhatsApp</option>
                                         <option value="email">Email</option>
                                     </select>
                                     <input
@@ -3390,7 +3391,7 @@ export default function ClientDetail() {
                                             ? 'bg-sky-50 text-sky-700 ring-sky-200'
                                             : 'bg-slate-100 text-slate-600 ring-slate-200'
                                     }`}>
-                                        {{ support_chat: 'Chat' }[note.note_type] || note.note_type}
+                                        {{ support_chat: 'Chat', whatsapp: 'WhatsApp' }[note.note_type] || note.note_type}
                                     </span>
                                     <span className="text-xs text-slate-500">by {note.author?.name || 'Unknown'}</span>
                                 </div>

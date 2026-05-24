@@ -64,7 +64,7 @@ class RenewalController extends Controller
             'platform_id' => 'nullable|integer|exists:platforms,id',
             'search' => 'nullable|string|max:255',
             'bucket' => 'nullable|in:all,active,risk,pending,workload,stable,expired,lapsed,paused',
-            'channel' => 'nullable|in:sms,email',
+            'channel' => 'nullable|in:sms,email,whatsapp',
             'dry_run' => 'nullable|boolean',
             'reason' => 'nullable|string|max:500',
         ]);
@@ -164,6 +164,7 @@ class RenewalController extends Controller
             'deal_id' => 'nullable|integer|exists:deals,id',
             'client_id' => 'nullable|integer|exists:clients,id',
             'template_id' => 'nullable|integer|exists:templates,id',
+            'channel' => 'nullable|in:sms,whatsapp',
         ]);
 
         if (empty($validated['deal_id']) && empty($validated['client_id'])) {
@@ -192,7 +193,8 @@ class RenewalController extends Controller
         $result = $this->renewalService->sendManualReminder(
             $deal,
             $validated['template_id'] ?? null,
-            $request->user()->id
+            $request->user()->id,
+            $validated['channel'] ?? 'sms'
         );
 
         $status = !empty($result['success']) ? 200 : 422;
@@ -209,6 +211,7 @@ class RenewalController extends Controller
             'search' => 'nullable|string|max:255',
             'bucket' => 'nullable|in:all,active,risk,pending,workload,stable,expired,lapsed,paused',
             'template_id' => 'nullable|integer|exists:templates,id',
+            'channel' => 'nullable|in:sms,whatsapp',
             'dry_run' => 'nullable|boolean',
         ]);
 
@@ -234,7 +237,8 @@ class RenewalController extends Controller
             $filters,
             $validated['template_id'] ?? null,
             $request->user()->id,
-            (bool) ($validated['dry_run'] ?? false)
+            (bool) ($validated['dry_run'] ?? false),
+            $validated['channel'] ?? 'sms'
         );
 
         return response()->json($result);

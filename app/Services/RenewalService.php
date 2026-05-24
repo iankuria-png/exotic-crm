@@ -15,6 +15,9 @@ use App\Models\Template;
 use App\Models\TimelineEvent;
 use App\Models\User;
 use App\Services\MarketAuthorizationService;
+use App\Services\Messaging\DispatchResult;
+use App\Services\Messaging\MessageRecipient;
+use App\Services\Messaging\MessagingDispatcher;
 use App\Support\CrmAuditAction;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -31,7 +34,8 @@ class RenewalService
         private readonly MarketBillingMethodPolicy $marketBillingMethodPolicy,
         private readonly WalletAutoRenewPolicy $walletAutoRenewPolicy,
         private readonly WalletCheckoutService $walletCheckoutService,
-        private readonly ClientSubscriptionActionResolver $clientSubscriptionActionResolver
+        private readonly ClientSubscriptionActionResolver $clientSubscriptionActionResolver,
+        private readonly MessagingDispatcher $messagingDispatcher
     ) {
     }
 
@@ -556,8 +560,9 @@ class RenewalService
         ];
     }
 
-    public function bulkRemind(array $selection, bool $selectAll = false, array $filters = [], ?int $templateId = null, ?int $actorId = null, bool $dryRun = false): array
+    public function bulkRemind(array $selection, bool $selectAll = false, array $filters = [], ?int $templateId = null, ?int $actorId = null, bool $dryRun = false, string $channel = 'sms'): array
     {
+        $channel = $this->normalizeMessageChannel($channel);
         $targets = [];
 
         if ($selectAll) {
@@ -656,8 +661,8 @@ class RenewalService
                 if ($dryRun) {
                     $paused = $this->isReminderPaused($deal);
                     $template = $templateId
-                        ? Template::query()->where('id', $templateId)->where('channel', 'sms')->first()
-                        : $this->resolveDefaultRenewalTemplate($deal);
+                        ? Template::query()->where('id', $templateId)->where('channel', $channel)->first()
+                        : $this->resolveDefaultRenewalTemplate($deal, $channel);
                     $hasClient = $deal->client !== null;
                     $canSend = $hasClient && $template !== null && !$paused;
                     $skipReason = $paused ? 'paused' : (!$hasClient ? 'no_client' : ($template === null ? 'no_template' : null));
@@ -673,7 +678,7 @@ class RenewalService
                     continue;
                 }
 
-                $res = $this->sendManualReminder($deal, $templateId, $actorId);
+                $res = $this->sendManualReminder($deal, $templateId, $actorId, $channel);
                 if (!empty($res['success'])) {
                     $sent++;
                 } else {
@@ -818,9 +823,11 @@ class RenewalService
         ]);
     }
 
-    public function sendManualReminder(Deal $deal, ?int $templateId = null, ?int $actorId = null): array
+    public function sendManualReminder(Deal $deal, ?int $templateId = null, ?int $actorId = null, string $channel = 'sms'): array
     {
         $deal->loadMissing(['client.platform', 'product']);
+        $channel = $this->normalizeMessageChannel($channel);
+        $channelLabel = $this->channelLabel($channel);
 
         if ($this->isReminderPaused($deal)) {
             $resumeOn = $deal->renewal_paused_until ? Carbon::parse($deal->renewal_paused_until)->toDateTimeString() : 'manual resume';
@@ -841,14 +848,14 @@ class RenewalService
         }
 
         $template = $templateId
-            ? Template::query()->where('id', $templateId)->where('channel', 'sms')->first()
-            : $this->resolveDefaultRenewalTemplate($deal);
+            ? Template::query()->where('id', $templateId)->where('channel', $channel)->first()
+            : $this->resolveDefaultRenewalTemplate($deal, $channel);
 
         if (!$template) {
             return [
                 'success' => false,
                 'status' => 'failed',
-                'reason' => 'No SMS template available for this reminder.',
+                'reason' => "No {$channelLabel} template available for this reminder.",
             ];
         }
 
@@ -866,17 +873,18 @@ class RenewalService
             ];
         }
 
-        $delivery = $this->notificationService->sendSmsToClient($deal->client, $rendered['body'], [
+        $delivery = $this->dispatchRenewalMessage($deal, $rendered['body'], $channel, [
             'phone_prefix' => optional($deal->client->platform)->phone_prefix ?? '254',
             'template_id' => $template->id,
             'deal_id' => $deal->id,
+            'actor_id' => $actorId,
             'mode' => 'manual',
         ]);
 
-        $eventType = $delivery['success'] ? 'renewal_sms_sent' : 'renewal_sms_failed';
-        $notePrefix = $delivery['success'] ? '[Renewal SMS]' : '[Renewal SMS Failed]';
+        $eventType = $this->renewalEventType($channel, (bool) $delivery['success']);
+        $notePrefix = $delivery['success'] ? "[Renewal {$channelLabel}]" : "[Renewal {$channelLabel} Failed]";
 
-        DB::transaction(function () use ($deal, $template, $delivery, $eventType, $notePrefix, $rendered, $actorId) {
+        DB::transaction(function () use ($deal, $template, $delivery, $eventType, $notePrefix, $rendered, $actorId, $channel) {
             ClientNote::create([
                 'client_id' => $deal->client_id,
                 'author_id' => $this->resolveActorId($actorId),
@@ -899,8 +907,10 @@ class RenewalService
                 'actor_id' => $actorId,
                 'content' => [
                     'template_id' => $template->id,
+                    'channel' => $channel,
                     'delivery_status' => $delivery['status'],
                     'provider_response' => $delivery['provider_response'] ?? null,
+                    'whatsapp_message_id' => $delivery['whatsapp_message_id'] ?? null,
                     'manual' => true,
                 ],
                 'created_at' => now(),
@@ -909,13 +919,15 @@ class RenewalService
             $this->auditService->record([
                 'platform_id' => $deal->platform_id,
                 'actor_id' => $actorId,
-                'action' => $delivery['success'] ? CrmAuditAction::RENEWAL_SMS_SENT : CrmAuditAction::RENEWAL_SMS_FAILED,
+                'action' => $eventType,
                 'entity_type' => $deal->id ? 'deal' : 'client',
                 'entity_id' => $deal->id ?: $deal->client_id,
                 'before_state' => null,
                 'after_state' => [
                     'template_id' => $template->id,
+                    'channel' => $channel,
                     'delivery_status' => $delivery['status'],
+                    'whatsapp_message_id' => $delivery['whatsapp_message_id'] ?? null,
                 ],
                 'reason' => 'Manual renewal reminder',
             ]);
@@ -1035,6 +1047,8 @@ class RenewalService
     private function runSingleCampaign(RenewalCampaign $campaign, ?int $actorId, ?array $platformIds = null, array $options = []): array
     {
         $campaign->loadMissing('template');
+        $channel = $this->normalizeMessageChannel((string) ($campaign->template?->channel ?: $campaign->channel ?: 'sms'));
+        $channelLabel = $this->channelLabel($channel);
 
         $deals = !empty($options['targets']) && is_array($options['targets'])
             ? $this->targetDealsFromOverviewTargets(collect($options['targets']), $platformIds)
@@ -1116,7 +1130,7 @@ class RenewalService
             $deal->loadMissing(['client.platform', 'product']);
             if (!$deal->client || !$campaign->template) {
                 $failed++;
-                $this->writeRenewalTimeline($deal, $campaign, $run, false, 'Missing client or template');
+                $this->writeRenewalTimeline($deal, $campaign, $run, false, 'Missing client or template', $channel);
                 continue;
             }
 
@@ -1132,26 +1146,30 @@ class RenewalService
                     $campaign,
                     $run,
                     false,
-                    'Missing variables: ' . implode(', ', $rendered['missing'])
+                    'Missing variables: ' . implode(', ', $rendered['missing']),
+                    $channel
                 );
                 continue;
             }
 
-            $delivery = $this->notificationService->sendSmsToClient($deal->client, $rendered['body'], [
+            $delivery = $this->dispatchRenewalMessage($deal, $rendered['body'], $channel, [
                 'phone_prefix' => optional($deal->client->platform)->phone_prefix ?? '254',
                 'campaign_id' => $campaign->id,
                 'run_id' => $run->id,
                 'template_id' => $campaign->template_id,
+                'actor_id' => $runnerId,
             ]);
 
             if ($delivery['success']) {
                 $sent++;
+            } elseif (($delivery['status'] ?? null) === 'suppressed') {
+                $skipped++;
             } else {
                 $failed++;
             }
 
-            DB::transaction(function () use ($deal, $campaign, $run, $rendered, $delivery, $runnerId) {
-                $notePrefix = $delivery['success'] ? '[RC' . $campaign->id . '] Renewal SMS' : '[RC' . $campaign->id . '] Renewal SMS Failed';
+            DB::transaction(function () use ($deal, $campaign, $run, $rendered, $delivery, $runnerId, $channel, $channelLabel) {
+                $notePrefix = $delivery['success'] ? '[RC' . $campaign->id . "] Renewal {$channelLabel}" : '[RC' . $campaign->id . "] Renewal {$channelLabel} Failed";
 
                 ClientNote::create([
                     'client_id' => $deal->client_id,
@@ -1167,19 +1185,22 @@ class RenewalService
                     $campaign,
                     $run,
                     (bool) $delivery['success'],
-                    $delivery['provider_response'] ?? null
+                    $delivery['provider_response'] ?? null,
+                    $channel
                 );
 
                 $this->auditService->record([
                     'platform_id' => $deal->platform_id,
                     'actor_id' => $runnerId,
-                    'action' => $delivery['success'] ? CrmAuditAction::RENEWAL_SMS_SENT : CrmAuditAction::RENEWAL_SMS_FAILED,
+                    'action' => $this->renewalEventType($channel, (bool) $delivery['success']),
                     'entity_type' => $deal->id ? 'deal' : 'client',
                     'entity_id' => $deal->id ?: $deal->client_id,
                     'after_state' => [
                         'campaign_id' => $campaign->id,
                         'run_id' => $run->id,
+                        'channel' => $channel,
                         'delivery_status' => $delivery['status'],
+                        'whatsapp_message_id' => $delivery['whatsapp_message_id'] ?? null,
                     ],
                     'reason' => 'Automated renewal campaign',
                 ]);
@@ -1348,7 +1369,7 @@ class RenewalService
         }
 
         $rows = TimelineEvent::query()
-            ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed'])
+            ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed', 'renewal_whatsapp_sent', 'renewal_whatsapp_failed'])
             ->where(function ($query) use ($dealIds, $clientIds) {
                 if ($dealIds->isNotEmpty()) {
                     $query->where(function ($dealScope) use ($dealIds) {
@@ -1406,8 +1427,8 @@ class RenewalService
 
                 return [
                     $key => [
-                        'reminders_sent_count' => $events->where('event_type', 'renewal_sms_sent')->count(),
-                        'reminders_failed_count' => $events->where('event_type', 'renewal_sms_failed')->count(),
+                        'reminders_sent_count' => $events->whereIn('event_type', ['renewal_sms_sent', 'renewal_whatsapp_sent'])->count(),
+                        'reminders_failed_count' => $events->whereIn('event_type', ['renewal_sms_failed', 'renewal_whatsapp_failed'])->count(),
                         'last_renewal_reminder_at' => optional($lastReminder?->created_at)->toDateTimeString(),
                         'wallet_auto_renew_state' => $walletStates->get($key),
                     ],
@@ -1623,47 +1644,107 @@ class RenewalService
         return TimelineEvent::query()
             ->where('entity_type', $entityType)
             ->where('entity_id', $entityId)
-            ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed'])
+            ->whereIn('event_type', ['renewal_sms_sent', 'renewal_sms_failed', 'renewal_whatsapp_sent', 'renewal_whatsapp_failed'])
             ->whereDate('created_at', now()->toDateString())
             ->where('content', 'like', '%"campaign_id":' . $campaignId . '%')
             ->exists();
     }
 
-    private function writeRenewalTimeline($deal, RenewalCampaign $campaign, RenewalRun $run, bool $success, ?string $response): void
+    private function dispatchRenewalMessage(Deal $deal, string $body, string $channel, array $context): array
     {
+        $deal->loadMissing(['client.platform']);
+        $channel = $this->normalizeMessageChannel($channel);
+
+        if ($channel === 'sms') {
+            return $this->notificationService->sendSmsToClient($deal->client, $body, $context);
+        }
+
+        $recipient = MessageRecipient::fromClient($deal->client)
+            ->withDealId($deal->id ? (int) $deal->id : null);
+
+        $dispatch = $this->messagingDispatcher->dispatch($recipient, $body, 'whatsapp', array_merge($context, [
+            'message_type' => 'renewal',
+            'suppress_gateway_timeline' => true,
+            'idempotency_key' => 'renewal-' . ($context['campaign_id'] ?? 'manual') . '-' . ($deal->id ?: $deal->client_id) . '-' . sha1($body . '|' . ($context['run_id'] ?? '') . '|' . microtime(true)),
+        ]));
+
+        return $this->serializeDispatchResult($dispatch);
+    }
+
+    private function serializeDispatchResult(DispatchResult $dispatch): array
+    {
+        return [
+            'success' => $dispatch->success,
+            'status' => $dispatch->status,
+            'provider' => $dispatch->channel,
+            'provider_response' => $dispatch->smsResult['provider_response']
+                ?? $dispatch->errorMessage
+                ?? ($dispatch->success ? 'Message accepted by provider.' : 'Message could not be sent.'),
+            'whatsapp_message_id' => $dispatch->whatsAppMessage?->id,
+            'fallback_attempted' => $dispatch->fallbackAttempted,
+            'error_code' => $dispatch->errorCode,
+        ];
+    }
+
+    private function normalizeMessageChannel(string $channel): string
+    {
+        return strtolower(trim($channel)) === 'whatsapp' ? 'whatsapp' : 'sms';
+    }
+
+    private function channelLabel(string $channel): string
+    {
+        return $this->normalizeMessageChannel($channel) === 'whatsapp' ? 'WhatsApp' : 'SMS';
+    }
+
+    private function renewalEventType(string $channel, bool $success): string
+    {
+        if ($this->normalizeMessageChannel($channel) === 'whatsapp') {
+            return $success ? CrmAuditAction::RENEWAL_WHATSAPP_SENT : CrmAuditAction::RENEWAL_WHATSAPP_FAILED;
+        }
+
+        return $success ? CrmAuditAction::RENEWAL_SMS_SENT : CrmAuditAction::RENEWAL_SMS_FAILED;
+    }
+
+    private function writeRenewalTimeline($deal, RenewalCampaign $campaign, RenewalRun $run, bool $success, ?string $response, string $channel = 'sms'): void
+    {
+        $channel = $this->normalizeMessageChannel($channel);
+
         TimelineEvent::create([
             'platform_id' => $deal->platform_id,
             'entity_type' => $deal->id ? 'deal' : 'client',
             'entity_id' => $deal->id ?: $deal->client_id,
-            'event_type' => $success ? 'renewal_sms_sent' : 'renewal_sms_failed',
+            'event_type' => $this->renewalEventType($channel, $success),
             'actor_id' => null,
             'content' => [
                 'campaign_id' => $campaign->id,
                 'run_id' => $run->id,
                 'template_id' => $campaign->template_id,
+                'channel' => $channel,
                 'response' => $response,
             ],
             'created_at' => now(),
         ]);
     }
 
-    private function resolveDefaultRenewalTemplate(Deal $deal): ?Template
+    private function resolveDefaultRenewalTemplate(Deal $deal, string $channel = 'sms'): ?Template
     {
+        $channel = $this->normalizeMessageChannel($channel);
         $trigger = $this->suggestTriggerDays($deal);
 
         $campaign = RenewalCampaign::query()
             ->where('enabled', true)
             ->where('trigger_days', $trigger)
+            ->whereHas('template', fn (Builder $templateQuery) => $templateQuery->where('channel', $channel))
             ->with('template')
             ->first();
 
-        if ($campaign?->template) {
+        if ($campaign?->template && $campaign->template->channel === $channel) {
             return $campaign->template;
         }
 
         return Template::query()
             ->where('category', 'renewal')
-            ->where('channel', 'sms')
+            ->where('channel', $channel)
             ->where('status', 'active')
             ->orderByDesc('id')
             ->first();

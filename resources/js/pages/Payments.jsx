@@ -1090,7 +1090,7 @@ export default function Payments() {
             queryClient.invalidateQueries({ queryKey: ['payments'] });
             queryClient.invalidateQueries({ queryKey: ['payment-diagnostics', variables.paymentId] });
             setSendLinkDialog({ open: false, payment: null, channel: 'sms', provider: '', phone: '', reason: 'Send payment link from CRM' });
-            toast.success('Payment link sent by SMS.');
+            toast.success(variables.channel === 'whatsapp' ? 'Payment link sent by WhatsApp.' : 'Payment link sent by SMS.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Send payment link failed.');
@@ -3687,9 +3687,9 @@ export default function Payments() {
                 open={sendLinkDialog.open && !!sendLinkDialog.payment}
                 title="Send payment link"
                 message={sendLinkDialog.payment
-                    ? `Send a payment page link by SMS for payment #${sendLinkDialog.payment.id} (${formatCurrency(sendLinkDialog.payment.amount, resolveCurrency(sendLinkDialog.payment.currency))}).`
+                    ? `Send a payment page link for payment #${sendLinkDialog.payment.id} (${formatCurrency(sendLinkDialog.payment.amount, resolveCurrency(sendLinkDialog.payment.currency))}).`
                     : ''}
-                confirmLabel="Send SMS"
+                confirmLabel={sendLinkDialog.channel === 'whatsapp' ? 'Send WhatsApp' : 'Send SMS'}
                 onCancel={() => setSendLinkDialog({ open: false, payment: null, channel: 'sms', provider: '', phone: '', reason: 'Send payment link from CRM' })}
                 onConfirm={() => {
                     if (sendLinkDialog.payment) {
@@ -3706,6 +3706,18 @@ export default function Payments() {
                 isPending={sendPaymentLinkMutation.isPending}
             >
                 <div className="space-y-3">
+                    <div>
+                        <label htmlFor="send-link-channel" className="mb-1 block text-sm font-medium text-slate-700">Channel</label>
+                        <select
+                            id="send-link-channel"
+                            value={sendLinkDialog.channel}
+                            onChange={(event) => setSendLinkDialog((current) => ({ ...current, channel: event.target.value }))}
+                            className="crm-select"
+                        >
+                            <option value="sms">SMS</option>
+                            <option value="whatsapp">WhatsApp</option>
+                        </select>
+                    </div>
                     <div>
                         <label htmlFor="send-link-provider" className="mb-1 block text-sm font-medium text-slate-700">Payment link provider</label>
                         <select

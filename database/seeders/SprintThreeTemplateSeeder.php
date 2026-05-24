@@ -63,5 +63,24 @@ class SprintThreeTemplateSeeder extends Seeder
                 ['template_id' => $template->id, 'enabled' => true]
             );
         }
+
+        foreach ($templates as $triggerDays => $template) {
+            $whatsAppTemplate = Template::updateOrCreate(
+                ['title' => str_replace('Renewal SMS', 'Renewal WhatsApp', $template->title), 'channel' => 'whatsapp'],
+                [
+                    'platform_id' => null,
+                    'category' => $template->category,
+                    'subject' => null,
+                    'body' => $template->body . ' Reply STOP to opt out.',
+                    'variables' => $template->variables,
+                    'status' => 'active',
+                ]
+            );
+
+            RenewalCampaign::updateOrCreate(
+                ['product_id' => null, 'trigger_days' => $triggerDays, 'channel' => 'whatsapp'],
+                ['template_id' => $whatsAppTemplate->id, 'enabled' => false]
+            );
+        }
     }
 }

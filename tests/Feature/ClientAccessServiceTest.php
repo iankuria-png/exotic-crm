@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Client;
 use App\Models\Platform;
 use App\Services\CredentialDeliveryService;
+use App\Services\Messaging\MessagingDispatcher;
 use App\Services\NotificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery\MockInterface;
@@ -34,7 +35,8 @@ class ClientAccessServiceTest extends TestCase
         ]);
 
         $service = new CredentialDeliveryService(
-            $this->mockedNotificationService()
+            $this->mockedNotificationService(),
+            app(MessagingDispatcher::class)
         );
 
         $context = $service->accessContext($client);

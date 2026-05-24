@@ -1007,7 +1007,9 @@ class TeamActivityService
                 break;
 
             case 'conversation_sms_sent':
+            case 'conversation_whatsapp_sent':
             case 'renewal_sms_sent':
+            case 'renewal_whatsapp_sent':
                 $entry['sms_sent']++;
                 break;
 
@@ -1508,7 +1510,9 @@ class TeamActivityService
             'payment_match_auto' => 'Matched payment automatically',
             'payment_create_subscription' => 'Created subscription from payment',
             'conversation_sms_sent' => 'Sent conversation SMS',
+            'conversation_whatsapp_sent' => 'Sent conversation WhatsApp',
             'renewal_sms_sent' => 'Sent renewal SMS',
+            'renewal_whatsapp_sent' => 'Sent renewal WhatsApp',
             'lead_status_update' => (($log->after_state['status'] ?? null) === 'contacted')
                 ? 'Contacted lead'
                 : 'Updated lead status',

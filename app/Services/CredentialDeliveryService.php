@@ -6,6 +6,9 @@ use App\Models\Client;
 use App\Models\ClientCredentialDispatch;
 use App\Models\Platform;
 use App\Models\Template;
+use App\Services\Messaging\DispatchResult;
+use App\Services\Messaging\MessageRecipient;
+use App\Services\Messaging\MessagingDispatcher;
 use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -22,7 +25,8 @@ class CredentialDeliveryService
     public const ACCESS_LINKS_DISABLED_MESSAGE = 'No WordPress login or profile URL is configured for this market.';
 
     public function __construct(
-        private readonly NotificationService $notificationService
+        private readonly NotificationService $notificationService,
+        private readonly MessagingDispatcher $messagingDispatcher
     ) {
     }
 
@@ -190,7 +194,7 @@ class CredentialDeliveryService
         }
 
         $channel = (string) ($payload['channel'] ?? 'both');
-        if (!in_array($channel, ['email', 'sms', 'both'], true)) {
+        if (!in_array($channel, ['email', 'sms', 'whatsapp', 'both', 'sms_whatsapp'], true)) {
             throw new \InvalidArgumentException('Invalid credential channel.');
         }
 
@@ -222,7 +226,7 @@ class CredentialDeliveryService
             }
         }
 
-        if (in_array($channel, ['sms', 'both'], true) && !$recipientPhone) {
+        if (in_array($channel, ['sms', 'whatsapp', 'both', 'sms_whatsapp'], true) && !$recipientPhone) {
             if ($timing === 'send_now') {
                 throw new \InvalidArgumentException('Recipient phone is required for the selected credential channel.');
             }
@@ -359,6 +363,44 @@ class CredentialDeliveryService
             }
         }
 
+        if (in_array('whatsapp', $requestedChannels, true)) {
+            if (!$normalized['recipient_phone']) {
+                $channelResults['whatsapp'] = [
+                    'success' => false,
+                    'status' => 'failed',
+                    'provider' => null,
+                    'provider_response' => 'Recipient phone is missing.',
+                ];
+                $errors[] = 'WhatsApp recipient phone is missing.';
+            } else {
+                $whatsAppDispatch = $this->messagingDispatcher->dispatch(
+                    new MessageRecipient(
+                        phoneE164: $normalized['recipient_phone'],
+                        platformId: (int) $client->platform_id,
+                        clientId: (int) $client->id,
+                    ),
+                    (string) $messageBundle['whatsapp_body'],
+                    'whatsapp',
+                    [
+                        'platform_id' => (int) $client->platform_id,
+                        'client_id' => (int) $client->id,
+                        'message_type' => 'credential',
+                        'notification_type' => 'client_credentials',
+                        'credential_dispatch_id' => (int) $dispatch->id,
+                        'actor_id' => $actorId,
+                        'suppress_gateway_timeline' => true,
+                        'idempotency_key' => 'credential-' . $dispatch->id . '-whatsapp',
+                    ]
+                );
+                $whatsAppResult = $this->serializeDispatchResult($whatsAppDispatch);
+
+                $channelResults['whatsapp'] = $whatsAppResult;
+                if (empty($whatsAppResult['success'])) {
+                    $errors[] = 'WhatsApp send failed: ' . ($whatsAppResult['provider_response'] ?? 'unknown error');
+                }
+            }
+        }
+
         $successCount = collect($requestedChannels)
             ->filter(fn (string $channel) => !empty($channelResults[$channel]['success']))
             ->count();
@@ -457,8 +499,9 @@ class CredentialDeliveryService
 
         $emailTemplate = $this->resolveTemplate((int) $platform->id, $category, 'email');
         $smsTemplate = $this->resolveTemplate((int) $platform->id, $category, 'sms');
+        $whatsAppTemplate = $this->resolveTemplate((int) $platform->id, $category, 'whatsapp');
 
-        if ($emailTemplate || $smsTemplate) {
+        if ($emailTemplate || $smsTemplate || $whatsAppTemplate) {
             $subject = $emailTemplate
                 ? $this->interpolate((string) ($emailTemplate->subject ?? ''), $placeholders)
                 : ($method === 'temporary_password'
@@ -472,10 +515,14 @@ class CredentialDeliveryService
             $smsBody = $smsTemplate
                 ? $this->interpolate((string) $smsTemplate->body, $placeholders)
                 : $this->buildDefaultSmsBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl);
+            $whatsAppBody = $whatsAppTemplate
+                ? $this->interpolate((string) $whatsAppTemplate->body, $placeholders)
+                : $smsBody;
 
             return [
                 'subject' => $subject,
                 'sms_body' => $smsBody,
+                'whatsapp_body' => $whatsAppBody,
                 'email_body' => $emailBody,
                 'profile_url' => $profileUrl,
                 'login_url' => $loginUrl,
@@ -490,6 +537,7 @@ class CredentialDeliveryService
                 ? 'Your Exotic profile temporary credentials'
                 : 'Set up your Exotic profile access',
             'sms_body' => $this->buildDefaultSmsBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl),
+            'whatsapp_body' => $this->buildDefaultSmsBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl),
             'email_body' => $this->buildDefaultEmailBody($method, $clientName, $wpUsername, $temporaryPassword, $loginUrl, $setupUrl, $profileUrl, $supportChatUrl),
             'profile_url' => $profileUrl,
             'login_url' => $loginUrl,
@@ -747,8 +795,25 @@ class CredentialDeliveryService
         return match ($channel) {
             'email' => ['email'],
             'sms' => ['sms'],
+            'whatsapp' => ['whatsapp'],
+            'sms_whatsapp' => ['sms', 'whatsapp'],
             default => ['email', 'sms'],
         };
+    }
+
+    private function serializeDispatchResult(DispatchResult $dispatch): array
+    {
+        return [
+            'success' => $dispatch->success,
+            'status' => $dispatch->status,
+            'provider' => $dispatch->channel,
+            'provider_response' => $dispatch->smsResult['provider_response']
+                ?? $dispatch->errorMessage
+                ?? ($dispatch->success ? 'Message accepted by provider.' : 'Message could not be sent.'),
+            'whatsapp_message_id' => $dispatch->whatsAppMessage?->id,
+            'fallback_attempted' => $dispatch->fallbackAttempted,
+            'error_code' => $dispatch->errorCode,
+        ];
     }
 
     private function normalizePhone(?string $phone, string $prefix = '254'): ?string

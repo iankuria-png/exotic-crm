@@ -533,6 +533,14 @@ class ClientController extends Controller
             ->where('client_id', $client->id)
             ->where('direction', 'inbound')
             ->count());
+        $client->setAttribute('whatsapp_conversation_enabled', \App\Models\WhatsAppRoutingRule::query()
+            ->where('market_id', $client->platform_id)
+            ->where('message_type', 'conversation')
+            ->where('enabled', true)
+            ->whereHas('primaryProfile', fn ($profile) => $profile
+                ->where('active', true)
+                ->where('kill_switch_enabled', false))
+            ->exists());
 
         return response()->json($client);
     }
@@ -988,7 +996,7 @@ class ClientController extends Controller
         $this->authorizeClientAccess($request, $client);
 
         $validated = $request->validate([
-            'note_type' => 'required|in:call,email,sms,internal,system,support_chat',
+            'note_type' => 'required|in:call,email,sms,whatsapp,internal,system,support_chat',
             'content' => 'required|string|max:5000',
             'follow_up_at' => 'nullable|date|after:now',
         ]);
@@ -2554,7 +2562,7 @@ class ClientController extends Controller
 
         $validated = $request->validate([
             'method' => 'required|in:setup_link,temporary_password',
-            'channel' => 'required|in:email,sms,both',
+            'channel' => 'required|in:email,sms,whatsapp,both,sms_whatsapp',
             'timing' => 'required|in:send_now,manual_send_later',
             'recipient_email' => 'nullable|email|max:255',
             'recipient_phone' => 'nullable|string|max:30',
