@@ -99,3 +99,54 @@ Plan mismatches:
 
 - The plan's `MessageRecipient` DTO included `paymentId`, but the consolidated `whatsapp_messages` table omitted `payment_id`. Added nullable `payment_id` to `whatsapp_messages` so planned Phase 4 payment-link sends have a real audit join.
 - The Phase 1 enum migration needed to preserve the repository's existing credential template categories and rebuild SQLite enum checks for tests. Corrected the migration while keeping MySQL/Postgres behavior additive.
+
+## Phase 3 - Inbound Meta webhooks and STOP suppression
+
+Status: complete
+
+Files changed:
+
+- `app/Http/Controllers/CRM/MessagingWebhookController.php`
+- `app/Http/Controllers/CRM/MessagingController.php`
+- `app/Http/Controllers/CRM/ClientController.php`
+- `app/Http/Controllers/CRM/LeadController.php`
+- `app/Models/Lead.php`
+- `app/Services/Messaging/Inbound/MetaWebhookHandler.php`
+- `app/Services/Messaging/Inbound/InboundMessagePipeline.php`
+- `config/services.php`
+- `resources/js/components/settings/messaging/MessagingArea.jsx`
+- `resources/js/components/settings/messaging/SuppressionsCard.jsx`
+- `resources/js/pages/ClientDetail.jsx`
+- `resources/js/pages/Leads.jsx`
+- `routes/api.php`
+- `tests/Feature/MessagingPhaseThreeTest.php`
+- Vite build assets in `public/build`
+
+Tests added/updated:
+
+- Added `MessagingPhaseThreeTest` for Meta verify-challenge handling, invalid signature rejection, inbound STOP suppression creation, webhook replay dedupe, delivery status updates, timeline/audit writes, lead inbound count exposure, suppression listing, and audited revocation.
+
+Commands run:
+
+- `php -l app/Http/Controllers/CRM/MessagingWebhookController.php` - passed.
+- `php -l app/Services/Messaging/Inbound/MetaWebhookHandler.php` - passed.
+- `php -l app/Services/Messaging/Inbound/InboundMessagePipeline.php` - passed.
+- `php -l app/Models/Lead.php` - passed.
+- `php -l app/Http/Controllers/CRM/LeadController.php` - passed.
+- `php -l tests/Feature/MessagingPhaseThreeTest.php` - passed.
+- `php artisan test tests/Feature/MessagingPhaseThreeTest.php` - passed, 6 tests / 53 assertions.
+- `php artisan test tests/Feature/MessagingPhaseThreeTest.php tests/Feature/MessagingPhaseTwoTest.php tests/Feature/MessagingSuppressionServiceTest.php tests/Unit/Support/PhoneNormalizerTest.php` - passed, 23 tests / 102 assertions, 1 skipped because Meta sandbox env vars are not configured.
+- `php artisan route:list --path=messaging` - passed; shows the public Meta webhook routes plus authenticated messaging admin routes.
+- `npm run build` - passed.
+
+Known deferrals:
+
+- No conversation, campaign, renewal, payment-link, or credential producer was wired to WhatsApp.
+- No producer-side validator was opened.
+- No Baileys routes, sidecar runtime, or sender pool behavior was added.
+- No AI workflow or response drafting was added.
+- Full WhatsApp conversation rendering remains out of scope; Phase 3 adds only inbound counters and suppression administration.
+
+Plan mismatches:
+
+- There is no separate React lead detail page in the current app. The lead inbound indicator was implemented on the existing leads table rows and backed by `LeadController` list/show counts, while the client detail header keeps the planned detail-style indicator.

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\CRM;
 
 use App\Http\Controllers\Controller;
+use App\Models\MessagingSuppression;
 use App\Models\Platform;
 use App\Models\WhatsAppMessage;
 use App\Models\WhatsAppProviderProfile;
@@ -268,6 +269,53 @@ class MessagingController extends Controller
         return response()->json($query->paginate($request->integer('per_page', 25)));
     }
 
+    public function suppressions(Request $request)
+    {
+        $query = MessagingSuppression::query()
+            ->with(['platform:id,name,country', 'revokedBy:id,name'])
+            ->orderByRaw('revoked_at IS NULL DESC')
+            ->orderByDesc('opted_out_at');
+
+        $this->applyMarketScopeWithGlobals($query, $request);
+
+        if ($request->filled('channel')) {
+            $query->where('channel', $request->input('channel'));
+        }
+
+        if ($request->boolean('active_only', true)) {
+            $query->whereNull('revoked_at');
+        }
+
+        return response()->json($query->paginate($request->integer('per_page', 25)));
+    }
+
+    public function revokeSuppression(Request $request, MessagingSuppression $suppression)
+    {
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform($request->user(), $suppression->platform_id ? (int) $suppression->platform_id : null);
+
+        if (!$suppression->revoked_at) {
+            $suppression->forceFill([
+                'revoked_at' => now(),
+                'revoked_by' => optional($request->user())->id,
+            ])->save();
+
+            $this->auditService->fromRequest(
+                $request,
+                (int) ($suppression->platform_id ?: Platform::query()->orderBy('id')->value('id')),
+                CrmAuditAction::MESSAGING_OPT_OUT_REVOKED,
+                'messaging_suppression',
+                (int) $suppression->id,
+                ['revoked_at' => null],
+                [
+                    'revoked_at' => optional($suppression->revoked_at)->toISOString(),
+                    'revoked_by' => $suppression->revoked_by,
+                ]
+            );
+        }
+
+        return response()->json($suppression->fresh(['platform:id,name,country', 'revokedBy:id,name']));
+    }
+
     public function testSend(Request $request)
     {
         $validated = $request->validate([
@@ -428,6 +476,18 @@ class MessagingController extends Controller
 
         if (is_array($allowedPlatformIds)) {
             $query->whereIn($column, $allowedPlatformIds);
+        }
+    }
+
+    private function applyMarketScopeWithGlobals($query, Request $request): void
+    {
+        $allowedPlatformIds = $this->marketAuthorizationService->resolveAccessiblePlatformIds($request->user());
+
+        if (is_array($allowedPlatformIds)) {
+            $query->where(function ($builder) use ($allowedPlatformIds) {
+                $builder->whereNull('platform_id')
+                    ->orWhereIn('platform_id', $allowedPlatformIds);
+            });
         }
     }
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../../services/api';
+import SuppressionsCard from './SuppressionsCard';
 import TestSendModal from './TestSendModal';
 import WhatsAppProfileForm from './WhatsAppProfileForm';
 import WhatsAppProfilesTable from './WhatsAppProfilesTable';
@@ -156,6 +157,11 @@ export default function MessagingArea({ platformRows, statusChip, toast }) {
                     selectedMarketId={selectedMarketId}
                     selectedMessageType={selectedMessageType}
                     statusChip={statusChip}
+                />
+
+                <SuppressionsCard
+                    statusChip={statusChip}
+                    toast={toast}
                 />
             </div>
 

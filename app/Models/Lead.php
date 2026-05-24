@@ -54,6 +54,11 @@ class Lead extends Model
             ->where('entity_type', 'lead');
     }
 
+    public function whatsAppMessages()
+    {
+        return $this->hasMany(WhatsAppMessage::class);
+    }
+
     public function scopeNew($query)
     {
         return $query->where('status', 'new');

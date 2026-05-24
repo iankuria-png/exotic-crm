@@ -2322,6 +2322,11 @@ export default function ClientDetail() {
                                 {client.premium ? <span className="inline-flex items-center rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-200">Premium</span> : null}
                                 {client.featured ? <span className="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">Featured</span> : null}
                                 {client.verified ? <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">Verified</span> : null}
+                                {Number(client.whatsapp_inbound_count || 0) > 0 ? (
+                                    <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                                        WhatsApp inbound {client.whatsapp_inbound_count}
+                                    </span>
+                                ) : null}
                                 {newBadgePresentation.chipLabel ? (
                                     <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
                                         currentNewBadgeMode === 'force_off'

@@ -25,6 +25,7 @@ use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ErrorLogController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\MessagingController;
+use App\Http\Controllers\CRM\MessagingWebhookController;
 use App\Http\Controllers\CRM\SeoSettingsController;
 use App\Http\Controllers\CRM\SettingsController;
 use App\Http\Controllers\CRM\ConversationController;
@@ -95,6 +96,9 @@ Route::middleware(['verify.wordpress.shared_key'])->prefix('kyc')->group(functio
 Route::middleware(['verify.kyc.upload'])->prefix('kyc')->group(function () {
     Route::post('/uploads/blob', [BlobUploadController::class, 'store']);
 });
+
+Route::get('/crm/messaging/webhook/meta', [MessagingWebhookController::class, 'verifyMeta']);
+Route::post('/crm/messaging/webhook/meta', [MessagingWebhookController::class, 'receiveMeta']);
 
 // Image proxy — public but rate-limited; domain allowlist enforced server-side
 Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:120,1');
@@ -576,6 +580,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/whatsapp/routing/{market}/{messageType}', [MessagingController::class, 'showRouting']);
         Route::put('/whatsapp/routing/{market}/{messageType}', [MessagingController::class, 'updateRouting']);
         Route::get('/messages', [MessagingController::class, 'messages']);
+        Route::get('/suppressions', [MessagingController::class, 'suppressions']);
+        Route::post('/suppressions/{suppression}/revoke', [MessagingController::class, 'revokeSuppression']);
         Route::post('/test/send', [MessagingController::class, 'testSend']);
     });
     Route::middleware('role:admin')->group(function () {

@@ -44,7 +44,10 @@ class LeadController extends Controller
             'You do not have access to this lead market.'
         );
 
-        $query = Lead::with(['platform', 'assignedAgent', 'convertedClient']);
+        $query = Lead::with(['platform', 'assignedAgent', 'convertedClient'])
+            ->withCount([
+                'whatsAppMessages as whatsapp_inbound_count' => fn ($whatsAppMessages) => $whatsAppMessages->where('direction', 'inbound'),
+            ]);
         $this->marketAuthorizationService->applyPlatformScope($query, $request->user());
 
         if (!$request->boolean('include_archived')) {
@@ -579,6 +582,9 @@ class LeadController extends Controller
     {
         $this->authorizeLeadAccess($request, $lead);
         $lead->load(['platform', 'assignedAgent', 'convertedClient']);
+        $lead->loadCount([
+            'whatsAppMessages as whatsapp_inbound_count' => fn ($whatsAppMessages) => $whatsAppMessages->where('direction', 'inbound'),
+        ]);
 
         $matched = $this->resolveMatchedClientSummary($lead);
         $lead->setAttribute('matched_client', $matched);

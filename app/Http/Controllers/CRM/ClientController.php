@@ -529,6 +529,10 @@ class ClientController extends Controller
         ]);
         $this->hydrateBillingPlatformState($client);
         $this->appendSubscriptionActionMetadata($client);
+        $client->setAttribute('whatsapp_inbound_count', \App\Models\WhatsAppMessage::query()
+            ->where('client_id', $client->id)
+            ->where('direction', 'inbound')
+            ->count());
 
         return response()->json($client);
     }

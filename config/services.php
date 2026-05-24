@@ -86,6 +86,10 @@ return [
 
     'whatsapp' => [
         'meta_default_api_version' => env('WHATSAPP_META_API_VERSION', 'v25.0'),
+        'stop_keywords' => array_filter(array_map(
+            'trim',
+            explode(',', env('WHATSAPP_STOP_KEYWORDS', 'stop,unsubscribe,cancel,end,quit,stopall'))
+        )),
     ],
 
     'exotic_crm_sync' => [

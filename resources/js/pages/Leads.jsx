@@ -749,7 +749,14 @@ export default function Leads() {
             label: 'Lead',
             render: (row) => (
                 <div>
-                    <p className="text-sm font-semibold text-slate-900">{row.name || 'Unnamed'}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{row.name || 'Unnamed'}</p>
+                        {Number(row.whatsapp_inbound_count || 0) > 0 ? (
+                            <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                                WA inbound {row.whatsapp_inbound_count}
+                            </span>
+                        ) : null}
+                    </div>
                     <p className="text-xs text-slate-500">{row.email || row.phone_normalized || 'No contact detail'}</p>
                 </div>
             ),
