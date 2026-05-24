@@ -13,6 +13,8 @@ class CurrencyCanonicalizer
         'TZS.' => 'TZS',
         'NAIRA' => 'NGN',
         'CEDI' => 'GHS',
+        'BIR' => 'ETB',
+        'BIRR' => 'ETB',
         'USD$' => 'USD',
         '$' => 'USD',
     ];

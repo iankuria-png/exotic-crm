@@ -31,9 +31,11 @@ class ReportingCurrencySurfacesTest extends TestCase
 
         $kenya = Platform::factory()->create(['name' => 'Kenya', 'country' => 'Kenya', 'currency_code' => 'KES']);
         $ghana = Platform::factory()->create(['name' => 'Ghana', 'country' => 'Ghana', 'currency_code' => 'GHS']);
+        $ethiopia = Platform::factory()->create(['name' => 'Ethiopia', 'country' => 'Ethiopia', 'currency_code' => 'BIR']);
 
         $this->rate('KES', '2026-04-20', 0.0077);
         $this->rate('GHS', '2026-04-20', 0.085);
+        $this->rate('ETB', '2026-04-20', 0.008);
 
         Payment::factory()->create([
             'platform_id' => $kenya->id,
@@ -53,23 +55,35 @@ class ReportingCurrencySurfacesTest extends TestCase
             'created_at' => '2026-04-20 10:00:00',
             'completed_at' => '2026-04-20 10:10:00',
         ]);
+        Payment::factory()->create([
+            'platform_id' => $ethiopia->id,
+            'amount' => 3500,
+            'currency' => 'BIR',
+            'status' => 'completed',
+            'purpose' => 'subscription',
+            'created_at' => '2026-04-20 11:00:00',
+            'completed_at' => '2026-04-20 11:10:00',
+        ]);
 
         $dashboard = $this->getJson('/api/crm/dashboard?from=2026-04-20&to=2026-04-20&currency_mode=flat&reporting_currency=USD');
         $dashboard->assertOk()
             ->assertJsonPath('filters.currency_mode', 'flat')
             ->assertJsonPath('kpis.normalized_currency', 'USD')
             ->assertJsonPath('kpis.revenue_window', null)
-            ->assertJsonPath('kpis.revenue_window_normalized', 24.7)
-            ->assertJsonPath('kpis.revenue_window_normalization_meta.partial', false);
+            ->assertJsonPath('kpis.revenue_window_normalized', 52.7)
+            ->assertJsonPath('kpis.revenue_window_normalization_meta.partial', false)
+            ->assertJsonPath('kpis.revenue_window_normalization_meta.currency_aliases.0.source_currency', 'BIR')
+            ->assertJsonPath('kpis.revenue_window_normalization_meta.currency_aliases.0.canonical_currency', 'ETB');
         $this->assertSame(1000.0, (float) $dashboard->json('kpis.revenue_window_breakdown.KES'));
         $this->assertSame(200.0, (float) $dashboard->json('kpis.revenue_window_breakdown.GHS'));
+        $this->assertSame(3500.0, (float) $dashboard->json('kpis.revenue_window_breakdown.BIR'));
 
         $reports = $this->getJson('/api/crm/reports/summary?from=2026-04-20&to=2026-04-20&currency_mode=flat&reporting_currency=USD');
         $reports->assertOk()
             ->assertJsonPath('filters.currency_mode', 'flat')
             ->assertJsonPath('kpis.normalized_currency', 'USD')
             ->assertJsonPath('kpis.total_revenue', null)
-            ->assertJsonPath('kpis.total_revenue_normalized', 24.7)
+            ->assertJsonPath('kpis.total_revenue_normalized', 52.7)
             ->assertJsonPath('kpis.total_revenue_normalization_meta.partial', false);
 
         $payments = $this->getJson('/api/crm/payments?from=2026-04-20&to=2026-04-20&currency_mode=flat&reporting_currency=USD');
@@ -77,10 +91,11 @@ class ReportingCurrencySurfacesTest extends TestCase
             ->assertJsonPath('stats.currency_mode', 'flat')
             ->assertJsonPath('stats.normalized_currency', 'USD')
             ->assertJsonPath('stats.confirmed_amount', null)
-            ->assertJsonPath('stats.confirmed_normalized_amount', 24.7)
+            ->assertJsonPath('stats.confirmed_normalized_amount', 52.7)
             ->assertJsonPath('stats.confirmed_normalization_meta.partial', false);
         $this->assertSame(1000.0, (float) $payments->json('stats.confirmed_amount_breakdown.KES'));
         $this->assertSame(200.0, (float) $payments->json('stats.confirmed_amount_breakdown.GHS'));
+        $this->assertSame(3500.0, (float) $payments->json('stats.confirmed_amount_breakdown.BIR'));
     }
 
     public function test_dashboard_stays_available_when_fx_provider_rejects_a_currency(): void
