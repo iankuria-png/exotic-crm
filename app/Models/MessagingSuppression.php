@@ -21,11 +21,21 @@ class MessagingSuppression extends Model
 
     protected $casts = [
         'platform_id' => 'integer',
+        'platform_scope' => 'integer',
+        'active_marker' => 'integer',
         'source_message_id' => 'integer',
         'opted_out_at' => 'datetime',
         'revoked_at' => 'datetime',
         'revoked_by' => 'integer',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function (MessagingSuppression $suppression): void {
+            $suppression->platform_scope = $suppression->platform_id ?: 0;
+            $suppression->active_marker = $suppression->revoked_at ? null : 1;
+        });
+    }
 
     public function platform()
     {

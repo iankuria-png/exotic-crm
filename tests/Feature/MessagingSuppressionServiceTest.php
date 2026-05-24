@@ -57,12 +57,16 @@ class MessagingSuppressionServiceTest extends TestCase
         $first = $service->recordOptOut('0748612016', 'whatsapp', 'keyword_stop', platformId: $platform->id);
         $service->revoke($first, $actor);
 
+        $this->assertSame($platform->id, $first->refresh()->platform_scope);
+        $this->assertNull($first->active_marker);
         $this->assertFalse($service->isSuppressed('254748612016', 'whatsapp', $platform->id));
 
         $second = $service->recordOptOut('254748612016', 'whatsapp', 'manual', platformId: $platform->id);
 
         $this->assertFalse($first->is($second));
         $this->assertSame(2, MessagingSuppression::count());
+        $this->assertSame($platform->id, $second->platform_scope);
+        $this->assertSame(1, $second->active_marker);
         $this->assertTrue($service->isSuppressed('254748612016', 'whatsapp', $platform->id));
         $this->assertSame($actor->id, $first->refresh()->revoked_by);
     }
