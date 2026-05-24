@@ -7,6 +7,7 @@ use App\Models\IntegrationSetting;
 use App\Services\Sms\AfricasTalkingSmsProvider;
 use App\Services\Sms\LegacyGatewaySmsProvider;
 use App\Services\Sms\SmsProviderInterface;
+use App\Support\PhoneNormalizer;
 use Illuminate\Support\Facades\Log;
 
 class NotificationService
@@ -403,18 +404,9 @@ class NotificationService
 
     private function normalizePhone(?string $phone, string $prefix = '254'): ?string
     {
-        if (!$phone) {
-            return null;
-        }
+        $normalized = PhoneNormalizer::normalize($phone, $prefix);
 
-        $normalized = preg_replace('/[^\d+]/', '', $phone);
-        $normalized = ltrim((string) $normalized, '+');
-
-        if (str_starts_with($normalized, '0')) {
-            $normalized = $prefix . substr($normalized, 1);
-        }
-
-        if (!preg_match('/^\d{10,15}$/', $normalized)) {
+        if (!$normalized || !preg_match('/^\d{10,15}$/', $normalized)) {
             return null;
         }
 
