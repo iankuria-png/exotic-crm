@@ -141,7 +141,7 @@ class CeoDashboardTest extends TestCase
             ->assertOk()
             ->json();
 
-        $this->assertSame(['self_service', 'manual', 'other'], array_column($pie['channels'], 'key'));
+        $this->assertEqualsCanonicalizing(['self_service', 'manual', 'other'], array_column($pie['channels'], 'key'));
         $this->assertSame(['self_service', 'manual', 'other'], array_column($pie['markets'][0]['channels'], 'key'));
 
         $manual = $this->getJson('/api/crm/dashboard/ceo/recent-payments?limit=20&channel=manual&reporting_currency=USD')
@@ -253,19 +253,51 @@ class CeoDashboardTest extends TestCase
             'updated_at' => now(),
         ]);
 
+        $legacyAgentEntry = $this->payment($platform, $product, [
+            'amount' => 60,
+            'source' => 'gateway',
+            'provider_key' => null,
+            'transaction_reference' => 'UERLP5FZJE',
+            'reference_number' => 'UERLP5FZJE',
+            'match_confidence' => 'manual',
+            'confirmed_by' => $ceo->id,
+            'confirmed_at' => now(),
+            'reconciliation_state' => 'resolved',
+            'completed_at' => now()->subMinutes(15),
+        ]);
+
+        $legacyUnknown = $this->payment($platform, $product, [
+            'amount' => 40,
+            'source' => 'gateway',
+            'provider_key' => null,
+            'transaction_reference' => 'LEGACY-UNKNOWN-1',
+            'reference_number' => 'LEGACY-UNKNOWN-1',
+            'completed_at' => now()->subMinutes(20),
+        ]);
+
         $pie = $this->getJson('/api/crm/dashboard/ceo/market-pie?reporting_currency=USD')
             ->assertOk()
             ->json();
 
-        $this->assertSame(['self_service', 'manual'], array_column($pie['channels'], 'key'));
+        $this->assertEqualsCanonicalizing(['self_service', 'manual', 'other'], array_column($pie['channels'], 'key'));
 
         $manual = $this->getJson('/api/crm/dashboard/ceo/recent-payments?channel=manual&reporting_currency=USD')
             ->assertOk()
             ->json('payments');
 
-        $this->assertCount(1, $manual);
-        $this->assertSame('manual', $manual[0]['channel']['key']);
-        $this->assertSame('Manual proof', $manual[0]['method']['label']);
+        $this->assertCount(2, $manual);
+        $this->assertEqualsCanonicalizing([$manualProof->id, $legacyAgentEntry->id], array_column($manual, 'id'));
+        $this->assertTrue(collect($manual)->every(fn (array $payment) => $payment['channel']['key'] === 'manual'));
+
+        $selfServiceRows = $this->getJson('/api/crm/dashboard/ceo/recent-payments?channel=self_service&reporting_currency=USD')
+            ->assertOk()
+            ->json('payments');
+        $this->assertSame([$selfService->id], array_column($selfServiceRows, 'id'));
+
+        $otherRows = $this->getJson('/api/crm/dashboard/ceo/recent-payments?channel=other&reporting_currency=USD')
+            ->assertOk()
+            ->json('payments');
+        $this->assertSame([$legacyUnknown->id], array_column($otherRows, 'id'));
     }
 
     private function user(array $overrides = []): User

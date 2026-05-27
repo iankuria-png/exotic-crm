@@ -86,6 +86,12 @@ class CeoDashboardDataService
                 'source',
                 'payment_data',
                 'manual_payment_bundle_id',
+                'match_confidence',
+                'confirmed_by',
+                'confirmed_at',
+                'reconciliation_state',
+                'transaction_reference',
+                'reference_number',
             ])
             ->with([
                 'platform:id,name,country,currency_code',
@@ -778,6 +784,8 @@ class CeoDashboardDataService
                     ->whereNull('manual_payment_bundle_id')
                     ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%'])
                     ->whereRaw("LOWER(COALESCE(source, '')) NOT LIKE ?", ['%manual%'])
+                    ->whereRaw("LOWER(COALESCE(match_confidence, '')) != ?", ['manual'])
+                    ->whereNull('confirmed_by')
                     ->whereDoesntHave('routingDecisions', function (Builder $decisionQuery) {
                         $decisionQuery->whereNotNull('provider_type_key')
                             ->whereRaw("LOWER(COALESCE(provider_type_key, '')) NOT LIKE ?", ['%manual%']);
@@ -789,7 +797,7 @@ class CeoDashboardDataService
                     })
                     ->where(function (Builder $sourceBuilder) {
                         $sourceBuilder->whereNull('source')
-                            ->orWhereNotIn('source', ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'deal_payment_initiation']);
+                            ->orWhereNotIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout']);
                     });
             });
         }
@@ -801,7 +809,20 @@ class CeoDashboardDataService
             $builder->whereHas('manualSubmission')
                 ->orWhereNotNull('manual_payment_bundle_id')
                 ->orWhereRaw("LOWER(COALESCE(provider_key, '')) LIKE ?", ['%manual%'])
-                ->orWhereRaw("LOWER(COALESCE(source, '')) LIKE ?", ['%manual%']);
+                ->orWhereRaw("LOWER(COALESCE(source, '')) LIKE ?", ['%manual%'])
+                ->orWhereRaw("LOWER(COALESCE(match_confidence, '')) = ?", ['manual'])
+                ->orWhere(function (Builder $legacyAgentEntry) {
+                    $legacyAgentEntry->whereDoesntHave('routingDecisions')
+                        ->whereDoesntHave('providerTransactions')
+                        ->where(function (Builder $providerBuilder) {
+                            $providerBuilder->whereNull('provider_key')
+                                ->orWhere('provider_key', '');
+                        })
+                        ->where(function (Builder $referenceBuilder) {
+                            $referenceBuilder->whereRaw("UPPER(COALESCE(transaction_reference, '')) LIKE ?", ['UE%'])
+                                ->orWhereRaw("UPPER(COALESCE(reference_number, '')) LIKE ?", ['UE%']);
+                        });
+                });
         });
     }
 
@@ -812,6 +833,7 @@ class CeoDashboardDataService
             ->whereNull('manual_payment_bundle_id')
             ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%'])
             ->whereRaw("LOWER(COALESCE(source, '')) NOT LIKE ?", ['%manual%'])
+            ->whereRaw("LOWER(COALESCE(match_confidence, '')) != ?", ['manual'])
             ->where(function (Builder $builder) {
                 $builder->whereHas('routingDecisions', function (Builder $decisionQuery) {
                     $decisionQuery->whereNotNull('provider_type_key')
@@ -823,7 +845,7 @@ class CeoDashboardDataService
                             ->where('provider_key', '!=', '')
                             ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%']);
                     })
-                    ->orWhereIn('source', ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'deal_payment_initiation']);
+                    ->orWhereIn('source', ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout']);
             });
     }
 
@@ -885,6 +907,8 @@ class CeoDashboardDataService
         $source = strtolower(trim((string) $payment->source));
         $origin = strtolower(trim((string) data_get($payment->payment_data, 'origin', '')));
         $billingSurface = strtolower(trim((string) data_get($payment->payment_data, 'billing_surface', '')));
+        $matchConfidence = strtolower(trim((string) $payment->match_confidence));
+        $reference = strtoupper(trim((string) ($payment->transaction_reference ?: $payment->reference_number)));
 
         if (
             $payment->manualSubmission
@@ -893,6 +917,7 @@ class CeoDashboardDataService
             || str_contains($source, 'manual')
             || str_contains($origin, 'manual')
             || str_contains($billingSurface, 'manual')
+            || $matchConfidence === 'manual'
         ) {
             $label = $payment->manualSubmission ? 'Manual proof' : 'Agent manual';
 
@@ -908,12 +933,21 @@ class CeoDashboardDataService
         $routingDecision = $payment->routingDecisions
             ->sortByDesc(fn ($decision) => optional($decision->created_at)->getTimestamp() ?? 0)
             ->first();
+        $hasStructuredProviderRoute = ($routingDecision && trim((string) $routingDecision->provider_type_key) !== '')
+            || $payment->providerTransactions->isNotEmpty()
+            || $provider !== '';
+
+        if (!$hasStructuredProviderRoute && str_starts_with($reference, 'UE')) {
+            return [
+                'key' => 'manual',
+                'label' => 'Agent manual',
+                'description' => 'Legacy agent-entered payment reference without a provider route or transaction.',
+            ];
+        }
 
         if (
-            ($routingDecision && trim((string) $routingDecision->provider_type_key) !== '')
-            || $payment->providerTransactions->isNotEmpty()
-            || $provider !== ''
-            || in_array($source, ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'deal_payment_initiation'], true)
+            $hasStructuredProviderRoute
+            || in_array($source, ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout'], true)
         ) {
             $providerName = $routingDecision?->provider_type_key ?: $payment->providerTransactions->first()?->provider_type_key ?: $payment->provider_key;
 
@@ -942,7 +976,7 @@ class CeoDashboardDataService
             ];
         }
 
-        if ($provider !== '' || in_array($sourceValue, ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service'], true)) {
+        if ($provider !== '' || in_array($sourceValue, ['hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout'], true)) {
             return [
                 'key' => 'self_service',
                 'label' => 'Self-service',

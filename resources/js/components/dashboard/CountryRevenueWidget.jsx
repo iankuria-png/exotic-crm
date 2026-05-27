@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
     Area,
@@ -505,6 +505,7 @@ export default function CountryRevenueWidget({
     hideOwnControls = false,
 }) {
     const [expandedPlatformId, setExpandedPlatformId] = useState(null);
+    const [showAllMarkets, setShowAllMarkets] = useState(false);
     const subtitle = describeWindow(rangeMode, fromDate, toDate);
     const detailParams = useMemo(() => ({
         ...(fromDate ? { from: fromDate } : {}),
@@ -533,6 +534,17 @@ export default function CountryRevenueWidget({
             ? Number(row.current_revenue_normalized)
             : (row.current_revenue ?? Object.values(row.current_revenue_breakdown || {}).reduce((sum, amount) => sum + Number(amount || 0), 0))
     )), 0);
+    const visibleMarkets = useMemo(() => (showAllMarkets ? data : data.slice(0, 6)), [data, showAllMarkets]);
+    const hiddenCount = Math.max(0, data.length - visibleMarkets.length);
+
+    useEffect(() => {
+        if (showAllMarkets || !expandedPlatformId) return;
+
+        const stillVisible = visibleMarkets.some((market) => Number(market.platform_id) === Number(expandedPlatformId));
+        if (!stillVisible) {
+            setExpandedPlatformId(null);
+        }
+    }, [expandedPlatformId, showAllMarkets, visibleMarkets]);
 
     return (
         <SectionFrame
@@ -553,7 +565,7 @@ export default function CountryRevenueWidget({
                 </div>
             ) : data.length > 0 ? (
                 <div className="space-y-3">
-                    {data.map((market, index) => {
+                    {visibleMarkets.map((market, index) => {
                         const isExpanded = expandedPlatformId === market.platform_id;
                         const leadingValue = currencyMode === 'flat' && market.current_revenue_normalized !== null && market.current_revenue_normalized !== undefined
                             ? Number(market.current_revenue_normalized)
@@ -635,6 +647,23 @@ export default function CountryRevenueWidget({
                             </div>
                         );
                     })}
+                    {data.length > 6 ? (
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-800">
+                                    {showAllMarkets ? `Showing all ${data.length} markets` : `Showing top ${visibleMarkets.length} of ${data.length} markets`}
+                                </p>
+                                <p className="text-xs text-slate-500">Lower-volume markets stay collapsed so the executive view remains scannable.</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowAllMarkets((current) => !current)}
+                                className="min-h-11 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            >
+                                {showAllMarkets ? 'Collapse to top 6' : `Show ${hiddenCount} more`}
+                            </button>
+                        </div>
+                    ) : null}
                 </div>
             ) : (
                 <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
