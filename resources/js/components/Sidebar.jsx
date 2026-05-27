@@ -31,6 +31,7 @@ const navGroups = [
     {
         title: 'Admin',
         items: [
+            { to: '/admin/commissions', label: 'Commissions', icon: 'M12 6v12m3.75-8.25h-4.5a2.25 2.25 0 0 0 0 4.5h1.5a2.25 2.25 0 1 1 0 4.5H8.25M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
             { to: '/settings', label: 'Settings', icon: 'M10.5 6h3m-6.75 6h10.5m-12.75 6h15M4.5 6h.008v.008H4.5V6Zm0 6h.008v.008H4.5V12Zm0 6h.008v.008H4.5V18Z' },
         ],
     },
@@ -52,6 +53,18 @@ const resourcesGroup = {
         { to: '/faq/feedback', label: 'Feedback', icon: 'M3.75 6.75h16.5v8.25H9.75l-3.75 3v-3h-2.25V6.75Z' },
     ],
 };
+
+const fieldSalesGroups = [
+    {
+        title: 'Field Sales',
+        items: [
+            { to: '/field/home', label: 'Home', icon: 'M3.75 12h16.5M6.75 6.75h10.5M6.75 17.25h10.5M4.5 4.5h15v15h-15v-15Z' },
+            { to: '/clients?signup_source=field', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
+            { to: '/field/commissions', label: 'Commissions', icon: 'M12 6v12m3.75-8.25h-4.5a2.25 2.25 0 0 0 0 4.5h1.5a2.25 2.25 0 1 1 0 4.5H8.25M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
+        ],
+    },
+    resourcesGroup,
+];
 
 export default function Sidebar({ onClose }) {
     const { user, logout, impersonation } = useAuth();
@@ -77,7 +90,9 @@ export default function Sidebar({ onClose }) {
         ? Number(queueCountQuery.data?.mine_count || 0)
         : Number(queueCountQuery.data?.in_review_count || 0);
 
-    const filteredNavGroups = role === 'marketing'
+    const filteredNavGroups = role === 'field_sales'
+        ? fieldSalesGroups
+        : role === 'marketing'
         ? [
             {
                 title: 'Workspace',

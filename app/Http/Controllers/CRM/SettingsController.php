@@ -4043,6 +4043,10 @@ class SettingsController extends Controller
             CrmAuditAction::LEAD_DELETE,
             CrmAuditAction::ROLE_UPDATE,
             CrmAuditAction::USER_CREATE,
+            CrmAuditAction::FIELD_SALES_CLIENT_LOGIN_AS_CLIENT,
+            CrmAuditAction::FIELD_SALES_TRIAL_ACTIVATE,
+            CrmAuditAction::FIELD_SALES_SETTINGS_UPDATE,
+            CrmAuditAction::COMMISSION_MARK_PAID,
             // Legacy action names retained for backward compatibility.
             'deal_activated',
             'deal_deactivated',
@@ -4142,6 +4146,7 @@ class SettingsController extends Controller
             'admins' => $users->where('role', 'admin')->count(),
             'sub_admins' => $users->where('role', 'sub_admin')->count(),
             'sales' => $users->where('role', 'sales')->count(),
+            'field_sales' => $users->where('role', 'field_sales')->count(),
             'inactive' => $users->where('status', 'inactive')->count(),
         ];
 
@@ -4162,7 +4167,7 @@ class SettingsController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|email|max:255|unique:users,email',
             'password' => 'nullable|string|min:8|max:120',
-            'role' => 'required|in:admin,sub_admin,sales,marketing',
+            'role' => 'required|in:admin,sub_admin,sales,field_sales,marketing',
             'status' => 'required|in:active,inactive',
             'sb_agent_id' => 'nullable|integer',
             'phone' => 'nullable|string|max:30',
@@ -4253,7 +4258,7 @@ class SettingsController extends Controller
     public function updateRole(Request $request, User $user)
     {
         $validated = $request->validate([
-            'role' => 'required|in:admin,sub_admin,sales,marketing',
+            'role' => 'required|in:admin,sub_admin,sales,field_sales,marketing',
             'status' => 'required|in:active,inactive',
             'sb_agent_id' => 'nullable|integer',
             'phone' => 'nullable|string|max:30',
@@ -5642,6 +5647,34 @@ class SettingsController extends Controller
                 'severity' => 'low',
                 'summary' => 'A new CRM user account was created.',
                 'suggested_action' => 'Validate role and assigned markets before onboarding handoff.',
+            ],
+            CrmAuditAction::FIELD_SALES_CLIENT_LOGIN_AS_CLIENT => [
+                'title' => 'Field client session opened',
+                'category' => 'field_sales',
+                'severity' => 'medium',
+                'summary' => 'A field agent opened a client session for deposit handoff.',
+                'suggested_action' => 'Confirm the session aligns with the client onboarding timeline.',
+            ],
+            CrmAuditAction::FIELD_SALES_TRIAL_ACTIVATE => [
+                'title' => 'Field trial activated',
+                'category' => 'field_sales',
+                'severity' => 'low',
+                'summary' => 'A field agent activated a no-PIN free trial after deposit verification.',
+                'suggested_action' => 'Review conversion follow-up if the trial does not become paid.',
+            ],
+            CrmAuditAction::FIELD_SALES_SETTINGS_UPDATE => [
+                'title' => 'Field settings changed',
+                'category' => 'field_sales',
+                'severity' => 'medium',
+                'summary' => 'Field sales deposit, trial, or commission settings were updated.',
+                'suggested_action' => 'Confirm the new rates and thresholds match the approved field policy.',
+            ],
+            CrmAuditAction::COMMISSION_MARK_PAID => [
+                'title' => 'Commission payout recorded',
+                'category' => 'field_sales',
+                'severity' => 'medium',
+                'summary' => 'Earned field commissions were marked paid.',
+                'suggested_action' => 'Reconcile the payout reference against finance records.',
             ],
             'payment_auto_matched' => [
                 'title' => 'Payment auto-match run',

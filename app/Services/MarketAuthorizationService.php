@@ -12,11 +12,13 @@ class MarketAuthorizationService
     public const ROLE_ADMIN = 'admin';
     public const ROLE_SUB_ADMIN = 'sub_admin';
     public const ROLE_SALES = 'sales';
+    public const ROLE_FIELD_SALES = 'field_sales';
     public const ROLE_MARKETING = 'marketing';
     public const ALLOWED_ROLES = [
         self::ROLE_ADMIN,
         self::ROLE_SUB_ADMIN,
         self::ROLE_SALES,
+        self::ROLE_FIELD_SALES,
         self::ROLE_MARKETING,
     ];
 
@@ -127,7 +129,7 @@ class MarketAuthorizationService
     {
         $users = User::query()
             ->where('status', 'active')
-            ->whereIn('role', [self::ROLE_SALES, self::ROLE_SUB_ADMIN, self::ROLE_ADMIN])
+            ->whereIn('role', [self::ROLE_SALES, self::ROLE_FIELD_SALES, self::ROLE_SUB_ADMIN, self::ROLE_ADMIN])
             ->with('platforms:id')
             ->orderBy('id')
             ->get();

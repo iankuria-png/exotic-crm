@@ -818,7 +818,7 @@ export default function ClientDetail() {
         queryFn: () => api.get('/crm/me').then((response) => response.data),
     });
     const currentUser = meData?.user || null;
-    const isReadOnly = currentUser?.role === 'marketing';
+    const isReadOnly = ['marketing', 'field_sales'].includes(String(currentUser?.role || ''));
     const canManageWallet = ['admin', 'sub_admin', 'sales'].includes(String(currentUser?.role || ''));
     const canDeleteClient = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));
     const canOverridePaymentLinkProvider = ['admin', 'sub_admin'].includes(String(currentUser?.role || ''));

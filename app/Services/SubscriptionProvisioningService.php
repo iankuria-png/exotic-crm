@@ -49,6 +49,7 @@ class SubscriptionProvisioningService
         $isFreeTrial = (bool) ($options['is_free_trial'] ?? false);
         $approvedBy = $options['free_trial_approved_by'] ?? null;
         $actorId = isset($options['actor_id']) ? (int) $options['actor_id'] : null;
+        $fieldAgentId = isset($options['activated_by_field_agent']) ? (int) $options['activated_by_field_agent'] : null;
 
         $platform = $client->platform ?? Platform::findOrFail((int) $client->platform_id);
         $wpPostId = (int) ($client->wp_post_id ?? 0);
@@ -77,7 +78,14 @@ class SubscriptionProvisioningService
             'duration_days' => $durationDays,
             'is_free_trial' => $isFreeTrial,
             'free_trial_approved_by' => $isFreeTrial ? $approvedBy : null,
+            'activated_by_field_agent' => $fieldAgentId ?: $deal->activated_by_field_agent,
         ] + $lifecycleAttributes)->save();
+
+        if (!$isFreeTrial) {
+            $commissionService = app(CommissionService::class);
+            $commissionService->recordActivationCommission($deal);
+            $commissionService->recordRenewalCommission($deal);
+        }
 
         $this->updateLinkedPayment($payment, $deal, $client, array_merge($options, [
             'activated_at' => $activatedAt,

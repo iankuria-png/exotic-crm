@@ -16,6 +16,9 @@ import Settings from './pages/Settings';
 import Setup from './pages/Setup';
 import Team from './pages/Team';
 import Kyc from './pages/Kyc';
+import FieldHome from './pages/Field/FieldHome';
+import FieldCommissions from './pages/Field/FieldCommissions';
+import AdminCommissions from './pages/AdminCommissions';
 import FaqHome from './pages/Faq/FaqHome';
 import FaqCategory from './pages/Faq/FaqCategory';
 import FaqArticle from './pages/Faq/FaqArticle';
@@ -78,6 +81,22 @@ function ProtectedRoute({ children }) {
         return <Navigate to="/" replace />;
     }
 
+    if (user.role === 'field_sales') {
+        const path = location.pathname || '/';
+        const allowed = path.startsWith('/field')
+            || path.startsWith('/clients')
+            || path.startsWith('/faq')
+            || path.startsWith('/university');
+
+        if (path === '/') {
+            return <Navigate to="/field/home" replace />;
+        }
+
+        if (!allowed) {
+            return <Navigate to="/field/home" replace />;
+        }
+    }
+
     return children;
 }
 
@@ -96,6 +115,8 @@ export default function AppRouter() {
                 }
             >
                 <Route index element={<Dashboard />} />
+                <Route path="field/home" element={<FieldHome />} />
+                <Route path="field/commissions" element={<FieldCommissions />} />
                 <Route path="clients" element={<Clients />} />
                 <Route path="clients/:id" element={<ClientDetail />} />
                 <Route path="deals" element={<Deals />} />
@@ -126,6 +147,7 @@ export default function AppRouter() {
                 <Route path="university/manage/dashboard" element={<UniversityManagement />} />
                 <Route path="renewals" element={<Navigate to="/campaigns" replace />} />
                 <Route path="reports" element={<Reports />} />
+                <Route path="admin/commissions" element={<AdminCommissions />} />
                 <Route path="settings" element={<Settings />} />
             </Route>
         </Routes>

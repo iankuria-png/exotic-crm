@@ -47,13 +47,7 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $token,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'role' => $user->role,
-                'status' => $user->status ?? 'active',
-            ],
+            'user' => $this->serializeUser($user),
         ]);
     }
 
@@ -63,14 +57,32 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $request->session()->pull('crm_pending_login_token'),
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'role' => $user->role,
-                'status' => $user->status ?? 'active',
-            ],
+            'user' => $this->serializeUser($user),
         ]);
+    }
+
+    private function serializeUser(User $user): array
+    {
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'status' => $user->status ?? 'active',
+            'assigned_market_ids' => $user->assignedMarketIds(),
+            'capabilities' => $this->capabilitiesForRole((string) $user->role),
+        ];
+    }
+
+    private function capabilitiesForRole(string $role): array
+    {
+        return [
+            'field_sales_workspace' => $role === 'field_sales',
+            'field_sales_client_access' => in_array($role, ['admin', 'sub_admin', 'sales', 'field_sales'], true),
+            'field_sales_trial_activation' => in_array($role, ['admin', 'field_sales'], true),
+            'field_sales_commissions' => in_array($role, ['admin', 'sub_admin', 'field_sales'], true),
+            'settings_manage_field_sales' => in_array($role, ['admin', 'sub_admin'], true),
+        ];
     }
 
     public function logout(Request $request)

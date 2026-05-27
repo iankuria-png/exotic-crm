@@ -87,6 +87,7 @@ class ClientController extends Controller
         $query = Client::with([
             'platform',
             'assignedAgent',
+            'creator:id,name,email,role',
             'retentionInsight:client_id,score,band,primary_tag,computed_at',
             'activeDeal.product:id,name,display_name,slug,tier',
         ]);
@@ -152,6 +153,10 @@ class ClientController extends Controller
 
         if ($request->filled('signup_source')) {
             $query->where('signup_source', $request->signup_source);
+        }
+
+        if ($request->filled('created_by')) {
+            $query->where('created_by', (int) $request->input('created_by'));
         }
 
         if ($request->filled('verified')) {
@@ -386,10 +391,30 @@ class ClientController extends Controller
             'height' => 'nullable|string|max:50',
             'weight' => 'nullable|string|max:50',
             'bio' => 'nullable|string|max:5000',
+            'signup_source' => 'nullable|in:crm_manual,crm_provisioned,field',
             'reason' => 'nullable|string|max:500',
         ]);
 
         $onboardingMode = (string) ($validated['onboarding_mode'] ?? 'manual');
+        if (($request->user()?->role ?? null) === MarketAuthorizationService::ROLE_FIELD_SALES) {
+            $validated['signup_source'] = 'field';
+            $onboardingMode = 'wp_provision';
+            $validated['onboarding_mode'] = 'wp_provision';
+        }
+
+        if (($validated['signup_source'] ?? null) === 'field') {
+            if (($request->user()?->role ?? null) !== MarketAuthorizationService::ROLE_FIELD_SALES) {
+                return response()->json([
+                    'message' => 'Only field sales users can create field-sourced clients.',
+                ], 403);
+            }
+
+            if ($onboardingMode !== 'wp_provision') {
+                return response()->json([
+                    'message' => 'Field sales clients must be provisioned in WordPress.',
+                ], 422);
+            }
+        }
         if (
             $onboardingMode === 'wp_provision'
             && empty($validated['email'])
@@ -521,6 +546,7 @@ class ClientController extends Controller
         $client->load([
             'platform',
             'assignedAgent',
+            'creator:id,name,email,role',
             'deals' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
             'notes' => fn($q) => $q->with('author')->orderBy('created_at', 'desc'),
             'payments' => fn($q) => $q->with('product')->orderBy('created_at', 'desc'),
@@ -2481,6 +2507,8 @@ class ClientController extends Controller
             'reason' => 'required|string|max:500',
             'source' => 'nullable|string|max:100',
         ]);
+        $isFieldDepositFlow = ($request->user()?->role ?? null) === MarketAuthorizationService::ROLE_FIELD_SALES
+            || ($validated['source'] ?? null) === 'field_sales.deposit_flow';
 
         try {
             $result = $this->credentialDeliveryService->createClientSessionLink($client, [
@@ -2529,6 +2557,7 @@ class ClientController extends Controller
                 'target' => $target,
                 'expires_at' => $expiresAt,
                 'session_link_generated' => true,
+                'source' => $validated['source'] ?? null,
             ],
             'created_at' => now(),
         ]);
@@ -2545,9 +2574,33 @@ class ClientController extends Controller
                 'target' => $target,
                 'expires_at' => $expiresAt,
                 'session_link_generated' => true,
+                'source' => $validated['source'] ?? null,
+                'field_sales_deposit_flow' => $isFieldDepositFlow,
+                'request_ip' => $request->ip(),
+                'user_agent' => substr((string) $request->userAgent(), 0, 500),
             ],
             (string) $validated['reason']
         );
+
+        if ($isFieldDepositFlow) {
+            $this->auditService->fromRequest(
+                $request,
+                (int) $client->platform_id,
+                CrmAuditAction::FIELD_SALES_CLIENT_LOGIN_AS_CLIENT,
+                'client',
+                (int) $client->id,
+                null,
+                [
+                    'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+                    'target' => $target,
+                    'expires_at' => $expiresAt,
+                    'source' => 'field_sales.deposit_flow',
+                    'request_ip' => $request->ip(),
+                    'user_agent' => substr((string) $request->userAgent(), 0, 500),
+                ],
+                (string) $validated['reason']
+            );
+        }
 
         return response()->json([
             'url' => $result['url'],
@@ -2786,6 +2839,8 @@ class ClientController extends Controller
 
         $assignedTo = $this->resolveAssignedOwner($platformId, $payload, $name);
         $normalizedPhone = PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix) ?? '';
+        $duplicatePhoneMatches = $this->duplicatePhoneMatches($platformId, $normalizedPhone);
+        $signupSource = $this->resolveSignupSource($request, $payload, 'crm_provisioned');
 
         $provisioningResult = (new WpDirectProvisioningService($platform))->provisionEscort([
             'name' => $name,
@@ -2824,7 +2879,8 @@ class ClientController extends Controller
                 'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
                 'profile_status' => (string) ($provisioningResult['wp_post_status'] ?? $profileStatus),
                 'assigned_to' => $assignedTo,
-                'signup_source' => 'crm_provisioned',
+                'created_by' => (int) $request->user()->id,
+                'signup_source' => $signupSource,
                 'premium' => false,
                 'featured' => false,
                 'verified' => false,
@@ -2837,8 +2893,10 @@ class ClientController extends Controller
             $syncedClient = (new ClientSyncService($platform))->syncOne($wpPostId);
             if ($assignedTo && (int) ($syncedClient->assigned_to ?? 0) !== $assignedTo) {
                 $syncedClient->assigned_to = $assignedTo;
-                $syncedClient->save();
             }
+            $syncedClient->created_by = $syncedClient->created_by ?: (int) $request->user()->id;
+            $syncedClient->signup_source = $signupSource;
+            $syncedClient->save();
             $client = $syncedClient;
             $syncStatus = 'success';
         } catch (\Throwable $exception) {
@@ -2858,6 +2916,7 @@ class ClientController extends Controller
             'actor_id' => $request->user()->id,
             'content' => [
                 'source' => 'wp_provisioned',
+                'signup_source' => $signupSource,
                 'assigned_to' => $client->assigned_to,
                 'profile_status' => $client->profile_status,
                 'wp_post_id' => $client->wp_post_id,
@@ -2866,6 +2925,7 @@ class ClientController extends Controller
                 'placeholder_email_used' => (bool) ($provisioningResult['placeholder_email_used'] ?? false),
                 'profile_finalize_status' => $profileFinalizeStatus,
                 'sync_status' => $syncStatus,
+                'duplicate_phone_matches' => $duplicatePhoneMatches,
             ],
             'created_at' => now(),
         ]);
@@ -2879,6 +2939,7 @@ class ClientController extends Controller
             null,
             [
                 'source' => 'wp_provisioned',
+                'signup_source' => $signupSource,
                 'name' => $client->name,
                 'phone_normalized' => $client->phone_normalized,
                 'email' => $client->email,
@@ -2890,11 +2951,13 @@ class ClientController extends Controller
                 'linked_existing_user' => (bool) ($provisioningResult['linked_existing_user'] ?? false),
                 'placeholder_email_used' => (bool) ($provisioningResult['placeholder_email_used'] ?? false),
                 'sync_status' => $syncStatus,
+                'duplicate_phone_matches' => $duplicatePhoneMatches,
             ],
             $reason
         );
 
-        $client->load(['platform', 'assignedAgent']);
+        $client->load(['platform', 'assignedAgent', 'creator:id,name,email,role']);
+        $client->setAttribute('duplicate_phone_matches', $duplicatePhoneMatches);
 
         return $client;
     }
@@ -2968,6 +3031,9 @@ class ClientController extends Controller
 
         $assignedTo = $this->resolveAssignedOwner($platformId, $payload, $name);
         $phonePrefix = (string) (Platform::query()->whereKey($platformId)->value('phone_prefix') ?: '254');
+        $normalizedPhone = PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix);
+        $duplicatePhoneMatches = $this->duplicatePhoneMatches($platformId, $normalizedPhone);
+        $signupSource = $this->resolveSignupSource($request, $payload, 'crm_manual');
 
         $manualWpPostId = $this->nextManualWpPostId($platformId);
 
@@ -2977,12 +3043,13 @@ class ClientController extends Controller
             'wp_user_id' => !empty($payload['wp_user_id']) ? (int) $payload['wp_user_id'] : null,
             'client_type' => 'escort',
             'name' => $name,
-            'phone_normalized' => PhoneNormalizer::normalize($payload['phone_normalized'] ?? null, $phonePrefix),
+            'phone_normalized' => $normalizedPhone,
             'email' => !empty($payload['email']) ? trim((string) $payload['email']) : null,
             'city' => !empty($payload['city']) ? trim((string) $payload['city']) : null,
             'profile_status' => $profileStatus,
             'assigned_to' => $assignedTo,
-            'signup_source' => 'crm_manual',
+            'created_by' => (int) $request->user()->id,
+            'signup_source' => $signupSource,
             'premium' => false,
             'featured' => false,
             'verified' => false,
@@ -2997,8 +3064,10 @@ class ClientController extends Controller
             'actor_id' => $request->user()->id,
             'content' => [
                 'source' => 'manual',
+                'signup_source' => $signupSource,
                 'assigned_to' => $client->assigned_to,
                 'profile_status' => $client->profile_status,
+                'duplicate_phone_matches' => $duplicatePhoneMatches,
             ],
             'created_at' => now(),
         ]);
@@ -3018,13 +3087,60 @@ class ClientController extends Controller
                 'profile_status' => $client->profile_status,
                 'assigned_to' => $client->assigned_to,
                 'wp_post_id' => $client->wp_post_id,
+                'signup_source' => $signupSource,
+                'duplicate_phone_matches' => $duplicatePhoneMatches,
             ],
             $reason
         );
 
-        $client->load(['platform', 'assignedAgent']);
+        $client->load(['platform', 'assignedAgent', 'creator:id,name,email,role']);
+        $client->setAttribute('duplicate_phone_matches', $duplicatePhoneMatches);
 
         return $client;
+    }
+
+    private function resolveSignupSource(Request $request, array $payload, string $default): string
+    {
+        $source = strtolower(trim((string) ($payload['signup_source'] ?? '')));
+
+        if ($source === '') {
+            return $default;
+        }
+
+        if ($source === 'field') {
+            if (($request->user()?->role ?? null) !== MarketAuthorizationService::ROLE_FIELD_SALES) {
+                throw new \InvalidArgumentException('Only field sales users can create field-sourced clients.');
+            }
+
+            return 'field';
+        }
+
+        return in_array($source, ['crm_manual', 'crm_provisioned'], true) ? $source : $default;
+    }
+
+    private function duplicatePhoneMatches(int $platformId, ?string $normalizedPhone, ?int $excludeClientId = null): array
+    {
+        $phone = trim((string) $normalizedPhone);
+        if ($phone === '') {
+            return [];
+        }
+
+        return Client::query()
+            ->where('platform_id', $platformId)
+            ->where('phone_normalized', $phone)
+            ->when($excludeClientId, fn ($query) => $query->where('id', '!=', $excludeClientId))
+            ->latest('id')
+            ->limit(10)
+            ->get(['id', 'name', 'phone_normalized', 'profile_status', 'wp_post_id'])
+            ->map(fn (Client $client) => [
+                'id' => (int) $client->id,
+                'name' => $client->name,
+                'phone_normalized' => $client->phone_normalized,
+                'profile_status' => $client->profile_status,
+                'wp_post_id' => (int) ($client->wp_post_id ?? 0),
+            ])
+            ->values()
+            ->all();
     }
 
     private function nextManualWpPostId(int $platformId): int

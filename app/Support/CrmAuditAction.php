@@ -89,6 +89,10 @@ final class CrmAuditAction
     public const CLIENT_CREDENTIAL_SEND = 'client_credential_send';
     public const CLIENT_CREDENTIAL_RETRY = 'client_credential_retry';
     public const CLIENT_LOGIN_AS_CLIENT_LINK = 'client_login_as_client_link';
+    public const FIELD_SALES_CLIENT_LOGIN_AS_CLIENT = 'field_sales_client_login_as_client';
+    public const FIELD_SALES_TRIAL_ACTIVATE = 'field_sales_trial_activate';
+    public const FIELD_SALES_SETTINGS_UPDATE = 'field_sales_settings_update';
+    public const COMMISSION_MARK_PAID = 'commission_mark_paid';
     public const CLIENT_DELETE = 'client_delete';
     public const CLIENT_BULK_DELETE = 'client_bulk_delete';
     public const CLIENT_CLOSE_CASE = 'client_close_case';

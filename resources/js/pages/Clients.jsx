@@ -359,7 +359,7 @@ export default function Clients() {
     const allowedHasChatFilters = new Set(['1', '0']);
     const allowedHighRiskFilters = new Set(['1']);
     const allowedOnlineFilters = new Set(['5', '15', '30', '60', '360', '1440', '10080']);
-    const allowedSignupSources = new Set(['fast_signup', 'full_registration', 'crm_manual', 'crm_provisioned']);
+    const allowedSignupSources = new Set(['fast_signup', 'full_registration', 'crm_manual', 'crm_provisioned', 'field']);
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
     const allowedBehaviorTags = new Set(RETENTION_BEHAVIOR_TAGS);
     const allowedNewUsersFilters = new Set(['today', '7d', '30d', 'custom']);
@@ -1377,6 +1377,7 @@ export default function Clients() {
                     full_registration: { label: 'Full', classes: 'bg-slate-50 text-slate-600 ring-slate-200' },
                     crm_manual: { label: 'Manual', classes: 'bg-purple-50 text-purple-700 ring-purple-200' },
                     crm_provisioned: { label: 'Provisioned', classes: 'bg-green-50 text-green-700 ring-green-200' },
+                    field: { label: 'Field', classes: 'bg-teal-50 text-teal-700 ring-teal-200' },
                 };
                 const source = sourceMap[row.signup_source];
                 if (!source) {
@@ -1747,6 +1748,7 @@ export default function Clients() {
                             { value: 'full_registration', label: 'Full Registration' },
                             { value: 'crm_manual', label: 'CRM Manual' },
                             { value: 'crm_provisioned', label: 'CRM Provisioned' },
+                            { value: 'field', label: 'Field Sales' },
                         ]}
                     />
 

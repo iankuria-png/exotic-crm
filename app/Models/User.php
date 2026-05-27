@@ -74,7 +74,7 @@ class User extends Authenticatable
     public function paymentFailureSmsEnabled(): bool
     {
         $prefs = $this->notification_prefs;
-        $default = in_array($this->role, ['sales'], true);
+        $default = in_array($this->role, ['sales', 'field_sales'], true);
 
         if (!is_array($prefs)) {
             return $default;
@@ -99,7 +99,7 @@ class User extends Authenticatable
 
     public function paymentFailureSmsState(): string
     {
-        if (!in_array($this->role, ['admin', 'sub_admin', 'sales'], true)) {
+        if (!in_array($this->role, ['admin', 'sub_admin', 'sales', 'field_sales'], true)) {
             return 'not_eligible';
         }
 

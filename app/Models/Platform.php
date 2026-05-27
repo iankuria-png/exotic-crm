@@ -14,6 +14,8 @@ class Platform extends Model
         'db_host', 'db_name', 'db_user', 'db_pass', 'db_prefix', 'product_id',
         'wp_api_url', 'wp_api_user', 'wp_api_password',
         'phone_prefix', 'timezone', 'currency_code',
+        'field_activation_deposit_minor', 'field_trial_duration_days', 'field_trial_product_id',
+        'field_activation_commission_rate', 'field_renewal_commission_rate', 'field_renewal_commission_months',
         'supported_currencies', 'multi_currency_wallet_enabled',
         'sync_last_checked_at', 'sync_last_synced_at',
         'sync_last_scope', 'sync_last_status',
@@ -49,6 +51,12 @@ class Platform extends Model
         'multi_currency_wallet_enabled' => 'boolean',
         'support_board_token' => 'encrypted',
         'wallet_settings' => 'array',
+        'field_activation_deposit_minor' => 'integer',
+        'field_trial_duration_days' => 'integer',
+        'field_trial_product_id' => 'integer',
+        'field_activation_commission_rate' => 'decimal:4',
+        'field_renewal_commission_rate' => 'decimal:4',
+        'field_renewal_commission_months' => 'integer',
     ];
     
     public function getConnectionConfig()

@@ -23,6 +23,7 @@ use App\Http\Controllers\CRM\PaymentExportController;
 use App\Http\Controllers\CRM\PaymentLinkProxyController;
 use App\Http\Controllers\CRM\DealController;
 use App\Http\Controllers\CRM\ErrorLogController;
+use App\Http\Controllers\CRM\FieldSalesController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\MessagingController;
 use App\Http\Controllers\CRM\MessagingWebhookController;
@@ -126,6 +127,21 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/heartbeat', [TeamController::class, 'heartbeat']);
     Route::get('/team/me', [TeamController::class, 'myStats']);
 
+    Route::middleware('role:field_sales,admin')->prefix('field')->group(function () {
+        Route::get('/home', [FieldSalesController::class, 'home']);
+        Route::get('/commissions', [FieldSalesController::class, 'commissions']);
+        Route::get('/clients/{client}/deposit-status', [FieldSalesController::class, 'depositStatus']);
+        Route::post('/clients/{client}/activate-trial', [FieldSalesController::class, 'activateTrial']);
+    });
+
+    Route::middleware('role:admin,sub_admin')->group(function () {
+        Route::get('/admin/commissions', [FieldSalesController::class, 'adminCommissions']);
+        Route::post('/admin/commissions/mark-paid', [FieldSalesController::class, 'markPaid']);
+        Route::get('/reports/field-sales', [FieldSalesController::class, 'report']);
+        Route::get('/settings/field-sales', [FieldSalesController::class, 'settings']);
+        Route::put('/settings/field-sales', [FieldSalesController::class, 'updateSettings']);
+    });
+
     // SEO Profile Optimization Engine
     Route::prefix('seo')->group(function () {
         Route::post('/generate-bio', [SeoController::class, 'generateBio']);
@@ -137,7 +153,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/dashboard', [CrmDashboardController::class, 'summary']);
     Route::get('/dashboard/country-revenue', [CrmDashboardController::class, 'countryRevenue']);
     Route::get('/dashboard/country-performance/{platform}', [CrmDashboardController::class, 'countryPerformance']);
-    Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::get('/products', [CrmDashboardController::class, 'products']);
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales');
     Route::get('/markets/{platform}/sync/latest', [SettingsController::class, 'latestPlatformClientSync'])->middleware('role:admin,sub_admin,sales');
@@ -206,9 +222,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     });
 
     // Clients (marketing role has read-only access)
-    Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::get('/clients/cities', [ClientController::class, 'cities'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales');
+    Route::get('/clients', [ClientController::class, 'index'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/cities', [ClientController::class, 'cities'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::post('/clients/upload-csv', [ClientController::class, 'uploadCsv'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/bulk-delete/preview', [ClientController::class, 'bulkDeletePreview'])->middleware('role:admin,sub_admin');
     Route::post('/clients/bulk-delete', [ClientController::class, 'bulkDelete'])->middleware('role:admin,sub_admin');
@@ -217,42 +233,42 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/clients/close-reasons', [ClientController::class, 'closeReasons'])->middleware('role:admin,sub_admin,sales');
     Route::get('/clients/conversion-queue', [ClientController::class, 'conversionQueue'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/bulk-close', [ClientController::class, 'bulkClose'])->middleware('role:admin,sub_admin,sales');
-    Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}', [ClientController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/delete-preview', [ClientController::class, 'deletePreview'])->middleware('role:admin,sub_admin');
     Route::delete('/clients/{client}', [ClientController::class, 'destroy'])->middleware('role:admin,sub_admin');
-    Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/timeline', [ClientController::class, 'timeline'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/notes', [ClientController::class, 'storeNote'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/sync', [ClientController::class, 'syncOne'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/deactivate-subscription', [ClientController::class, 'deactivateSubscription'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/verified-status', [ClientController::class, 'updateVerifiedStatus'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/new-badge', [ClientController::class, 'updateNewBadge'])->middleware('role:admin,sub_admin,sales');
-    Route::get('/clients/{client}/tours', [ClientController::class, 'tours'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/tours', [ClientController::class, 'tours'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/tours', [ClientController::class, 'addTour'])->middleware('role:admin,sub_admin,sales');
     Route::delete('/clients/{client}/tours/{tourId}', [ClientController::class, 'deleteTour'])->middleware('role:admin,sub_admin,sales');
-    Route::get('/clients/{client}/completeness', [ClientController::class, 'profileCompleteness'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::get('/clients/{client}/retention-insight', [ClientController::class, 'retentionInsight'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::get('/clients/{client}/retention-history', [ClientController::class, 'retentionHistory'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/completeness', [ClientController::class, 'profileCompleteness'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/{client}/retention-insight', [ClientController::class, 'retentionInsight'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/{client}/retention-history', [ClientController::class, 'retentionHistory'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/close-case', [ClientController::class, 'closeCase'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/reopen', [ClientController::class, 'reopen'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/contacted', [ClientController::class, 'markContacted'])->middleware('role:admin,sub_admin,sales');
-    Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::get('/clients/{client}/analytics', [ClientController::class, 'profileAnalytics'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/wp-profile', [ClientController::class, 'wpProfile'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/{client}/analytics', [ClientController::class, 'profileAnalytics'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::patch('/clients/{client}/wp-profile', [ClientController::class, 'updateWpProfile'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/repair-wp-link', [ClientController::class, 'repairWpLink'])->middleware('role:admin,sub_admin,sales');
-    Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/media', [ClientController::class, 'media'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/media', [ClientController::class, 'uploadMedia'])->middleware('role:admin,sub_admin,sales');
     Route::delete('/clients/{client}/media/{attachmentId}', [ClientController::class, 'deleteMedia'])->middleware('role:admin,sub_admin,sales');
     Route::patch('/clients/{client}/media/{attachmentId}/set-main', [ClientController::class, 'setMainMedia'])->middleware('role:admin,sub_admin,sales');
-    Route::get('/clients/{client}/health', [ClientController::class, 'health'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::get('/clients/{client}/access-context', [ClientController::class, 'credentialAccessContext'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::get('/clients/{client}/wallet', [ClientWalletController::class, 'show'])->middleware('role:admin,sub_admin,sales,marketing');
-    Route::get('/clients/{client}/wallet/transactions', [ClientWalletController::class, 'transactions'])->middleware('role:admin,sub_admin,sales,marketing');
+    Route::get('/clients/{client}/health', [ClientController::class, 'health'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/{client}/access-context', [ClientController::class, 'credentialAccessContext'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/{client}/wallet', [ClientWalletController::class, 'show'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::get('/clients/{client}/wallet/transactions', [ClientWalletController::class, 'transactions'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
     Route::post('/clients/{client}/wallet/topup', [ClientWalletController::class, 'topup'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/wallet/adjustment', [ClientWalletController::class, 'adjustment'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/health/resolve', [ClientController::class, 'resolveHealth'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/credentials/reset', [ClientController::class, 'resetCredentials'])->middleware('role:admin,sub_admin,sales');
-    Route::post('/clients/{client}/login-as-client', [ClientController::class, 'loginAsClient'])->middleware('role:admin,sub_admin,sales');
+    Route::post('/clients/{client}/login-as-client', [ClientController::class, 'loginAsClient'])->middleware('role:admin,sub_admin,sales,field_sales');
     Route::get('/clients/{client}/credentials/dispatches', [ClientController::class, 'credentialDispatches'])->middleware('role:admin,sub_admin,sales,marketing');
     Route::post('/clients/{client}/credentials/dispatch', [ClientController::class, 'sendCredentials'])->middleware('role:admin,sub_admin,sales');
     Route::post('/clients/{client}/credentials/dispatches/{dispatch}/retry', [ClientController::class, 'retryCredentialDispatch'])->middleware('role:admin,sub_admin,sales');

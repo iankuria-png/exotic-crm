@@ -19,6 +19,7 @@ import PushRoutingPanel from '../components/settings/PushRoutingPanel';
 import ScraperConfigPanel from '../components/settings/ScraperConfigPanel';
 import ScraperCreateModal from '../components/settings/ScraperCreateModal';
 import SalesDashboardSettingsPanel from '../components/settings/SalesDashboardSettingsPanel';
+import FieldSalesSettingsPanel from '../components/settings/FieldSalesSettingsPanel';
 import SeoEnginePanel from '../components/settings/SeoEnginePanel';
 import SmsRoutingPanel from '../components/settings/SmsRoutingPanel';
 import WordPressSyncKeyCard from '../components/settings/WordPressSyncKeyCard';
@@ -40,6 +41,7 @@ const baseTabs = [
     { id: 'logs', label: 'Webhook Logs' },
     { id: 'error-logs', label: 'Error Logs' },
     { id: 'roles', label: 'Roles & Permissions' },
+    { id: 'field-sales', label: 'Field Sales' },
     { id: 'security', label: 'Security' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'health', label: 'System Health' },
@@ -6682,7 +6684,7 @@ function ErrorLogsWorkspace() {
 
     return (
         <div className="space-y-4">
-            <section className="grid gap-4 md:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-5">
                 <MetricCard
                     label="Unresolved Critical"
                     value={Number(summary.unresolved_critical || 0).toLocaleString()}
@@ -6887,6 +6889,7 @@ function ErrorLogsWorkspace() {
 function roleClasses(role) {
     if (role === 'admin') return 'bg-indigo-50 text-indigo-700 ring-indigo-200';
     if (role === 'sub_admin') return 'bg-sky-50 text-sky-700 ring-sky-200';
+    if (role === 'field_sales') return 'bg-teal-50 text-teal-700 ring-teal-200';
     if (role === 'marketing') return 'bg-violet-50 text-violet-700 ring-violet-200';
     return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
@@ -7067,7 +7070,7 @@ function RolesWorkspace() {
     const getSmsEnabled = () => {
         if (!editor) return false;
         const prefs = editor.notification_prefs;
-        if (!prefs?.payment_failure_sms) return editor.role === 'sales';
+        if (!prefs?.payment_failure_sms) return ['sales', 'field_sales'].includes(editor.role);
         return !!prefs.payment_failure_sms.enabled;
     };
 
@@ -7149,7 +7152,7 @@ function RolesWorkspace() {
 
     const getLiveAlertState = () => {
         if (!editor) return 'disabled';
-        if (!['admin', 'sub_admin', 'sales'].includes(editor.role)) return 'not_eligible';
+        if (!['admin', 'sub_admin', 'sales', 'field_sales'].includes(editor.role)) return 'not_eligible';
         return getSmsEnabled() ? 'enabled' : 'disabled';
     };
 
@@ -7159,6 +7162,7 @@ function RolesWorkspace() {
                 <MetricCard label="Admins" value={(summary.admins || 0).toLocaleString()} meta="full permissions" tone="accent" />
                 <MetricCard label="Sub-admins" value={(summary.sub_admins || 0).toLocaleString()} meta="market-level controls" tone="default" />
                 <MetricCard label="Sales Agents" value={(summary.sales || 0).toLocaleString()} meta="execution role" tone="success" />
+                <MetricCard label="Field Sales" value={(summary.field_sales || 0).toLocaleString()} meta="field execution" tone="accent" />
                 <MetricCard label="Inactive Users" value={(summary.inactive || 0).toLocaleString()} meta="access suspended" tone="warning" />
             </section>
 
@@ -7291,6 +7295,7 @@ function RolesWorkspace() {
                                         <option value="admin">Admin</option>
                                         <option value="sub_admin">Sub-admin</option>
                                         <option value="sales">Sales</option>
+                                        <option value="field_sales">Field Sales</option>
                                         <option value="marketing">Marketing</option>
                                     </select>
                                 </div>
@@ -7390,7 +7395,7 @@ function RolesWorkspace() {
                                             <p className="text-sm font-medium text-slate-700">Payment failure SMS alerts</p>
                                             <p className="text-xs text-slate-500">
                                                 {editor.role === 'marketing'
-                                                    ? 'This alert is available for sales, admin, and sub-admin roles only.'
+                                                    ? 'This alert is available for sales, field sales, admin, and sub-admin roles only.'
                                                     : ['admin', 'sub_admin'].includes(editor.role)
                                                     ? 'Opt in to receive an SMS when a payment fails in your accessible markets.'
                                                     : 'Receive an SMS when a payment fails in your assigned markets.'}
@@ -7565,6 +7570,7 @@ function RolesWorkspace() {
                                 <option value="admin">Admin</option>
                                 <option value="sub_admin">Sub-admin</option>
                                 <option value="sales">Sales</option>
+                                <option value="field_sales">Field Sales</option>
                                 <option value="marketing">Marketing</option>
                             </select>
                             <select
@@ -8415,6 +8421,10 @@ export default function Settings() {
                 return canViewRoles;
             }
 
+            if (tab.id === 'field-sales') {
+                return ['admin', 'sub_admin'].includes(user?.role || '');
+            }
+
             if (tab.id === 'security') {
                 return canManageSecurity;
             }
@@ -8503,6 +8513,7 @@ export default function Settings() {
             {activeTab === 'logs' ? <WebhookLogsWorkspace /> : null}
             {activeTab === 'error-logs' && (user?.role || '') === 'admin' ? <ErrorLogsWorkspace /> : null}
             {activeTab === 'roles' && canViewRoles ? <RolesWorkspace /> : null}
+            {activeTab === 'field-sales' && ['admin', 'sub_admin'].includes(user?.role || '') ? <FieldSalesSettingsPanel /> : null}
             {activeTab === 'security' && canManageSecurity ? <SecuritySettingsWorkspace /> : null}
             {activeTab === 'dashboard' ? (
                 <div className="space-y-4">

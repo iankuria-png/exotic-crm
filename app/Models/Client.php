@@ -70,6 +70,7 @@ class Client extends Model
         'wallet_currency',
         'wallet_last_synced_at',
         'assigned_to',
+        'created_by',
         'duplicate_of',
         'closed_at',
         'close_reason_code',
@@ -137,6 +138,16 @@ class Client extends Model
     public function assignedAgent()
     {
         return $this->belongsTo(User::class, 'assigned_to');
+    }
+
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function commissions()
+    {
+        return $this->hasMany(Commission::class);
     }
 
     public function riskMarkedBy()
