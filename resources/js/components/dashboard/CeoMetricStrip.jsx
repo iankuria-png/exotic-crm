@@ -14,17 +14,17 @@ function metricValue(key, metric, reporting) {
         );
     }
 
-    if (key === 'active_clients') {
-        return Number(metric.value?.count || 0).toLocaleString();
+    if (key === 'new_user_revenue' || key === 'existing_user_revenue') {
+        return moneyFromBreakdown(
+            metric.value?.source_breakdown,
+            metric.value?.normalized_amount,
+            metric.value?.normalized_currency || reporting?.targetCurrency,
+            reporting?.displayMode
+        );
     }
 
-    if (key === 'renewals_recovered') {
-        const recovered = Number(metric.value?.recovered || 0);
-        const due = Number(metric.value?.due || 0);
-        const rate = metric.value?.rate;
-        return rate === null || rate === undefined
-            ? `${recovered} / ${due}`
-            : `${Number(rate).toFixed(1)}%`;
+    if (key === 'active_clients') {
+        return Number(metric.value?.count || 0).toLocaleString();
     }
 
     return Number(metric.value?.count || 0).toLocaleString();
@@ -37,12 +37,12 @@ function metricSubHint(key, metric) {
         return `Snapshot as of ${metric.value?.as_of || 'nearest prior date'}`;
     }
 
-    if (key === 'renewals_recovered') {
-        const due = Number(metric.value?.due || 0);
-        if (due <= 0) {
-            return `${Number(metric.value?.renewal_payments || 0).toLocaleString()} renewal payments collected`;
-        }
-        return `${Number(metric.value?.recovered || 0).toLocaleString()} recovered of ${due.toLocaleString()} due-window base`;
+    if (key === 'new_user_revenue' || key === 'existing_user_revenue') {
+        const share = Number(metric.value?.share_percent || 0).toFixed(1);
+        const payments = Number(metric.value?.payments_count || 0).toLocaleString();
+        const clients = Number(metric.value?.clients_count || 0).toLocaleString();
+
+        return `${share}% of revenue · ${payments} payments · ${clients} clients`;
     }
 
     if (key === 'collected_revenue') {
@@ -56,8 +56,8 @@ export default function CeoMetricStrip({ metrics = {}, reporting, isLoading, onO
     const order = [
         ['collected_revenue', 'Collected Revenue'],
         ['active_clients', 'Active Users'],
-        ['new_activations', 'New Activations'],
-        ['renewals_recovered', 'Renewals Recovered'],
+        ['new_user_revenue', 'New User Revenue'],
+        ['existing_user_revenue', 'Existing User Revenue'],
     ];
 
     return (

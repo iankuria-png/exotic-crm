@@ -3,12 +3,14 @@
 namespace Tests\Feature;
 
 use App\Models\ClientActiveSnapshot;
+use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -149,8 +151,121 @@ class CeoDashboardTest extends TestCase
             ->json('payments');
 
         $this->assertCount(1, $manual);
-        $this->assertSame('Manual', $manual[0]['channel']['label']);
+        $this->assertSame('manual', $manual[0]['channel']['key']);
         $this->assertSame(50.0, (float) $manual[0]['amount']);
+    }
+
+    public function test_summary_uses_customer_revenue_mix_instead_of_ambiguous_activation_rate(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Lagos',
+            'country' => 'Nigeria',
+            'currency_code' => 'USD',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        Sanctum::actingAs($ceo);
+
+        $newClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'created_at' => '2026-05-03 10:00:00',
+        ]);
+        $existingClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'created_at' => '2026-04-15 10:00:00',
+        ]);
+
+        $this->payment($platform, $product, [
+            'client_id' => $newClient->id,
+            'amount' => 250,
+            'completed_at' => '2026-05-10 12:00:00',
+        ]);
+        $this->payment($platform, $product, [
+            'client_id' => $existingClient->id,
+            'amount' => 750,
+            'completed_at' => '2026-05-10 12:05:00',
+        ]);
+
+        $summary = $this->getJson('/api/crm/dashboard/ceo/summary?horizon=custom&from=2026-05-01&to=2026-05-31&reporting_currency=USD')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('New User Revenue', data_get($summary, 'metrics.new_user_revenue.label'));
+        $this->assertSame('Existing User Revenue', data_get($summary, 'metrics.existing_user_revenue.label'));
+        $this->assertSame(250.0, (float) data_get($summary, 'metrics.new_user_revenue.value.normalized_amount'));
+        $this->assertSame(750.0, (float) data_get($summary, 'metrics.existing_user_revenue.value.normalized_amount'));
+        $this->assertSame(25.0, (float) data_get($summary, 'customer_mix.buckets.new_active.share_percent'));
+        $this->assertSame(75.0, (float) data_get($summary, 'customer_mix.buckets.existing_active.share_percent'));
+    }
+
+    public function test_collection_channels_use_routing_and_manual_proof_signals(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Abuja',
+            'country' => 'Nigeria',
+            'currency_code' => 'USD',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $client = Client::factory()->create(['platform_id' => $platform->id]);
+        $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        Sanctum::actingAs($ceo);
+
+        $selfService = $this->payment($platform, $product, [
+            'amount' => 100,
+            'source' => 'import',
+            'provider_key' => null,
+            'completed_at' => now()->subMinutes(5),
+        ]);
+        DB::table('billing_routing_decisions')->insert([
+            'payment_id' => $selfService->id,
+            'market_id' => $platform->id,
+            'billing_surface' => 'subscription',
+            'provider_type_key' => 'pawapay',
+            'execution_mode' => 'proxy',
+            'environment' => 'production',
+            'snapshot_json' => json_encode(['provider_key' => 'pawapay']),
+            'created_at' => now(),
+        ]);
+
+        $manualProof = $this->payment($platform, $product, [
+            'client_id' => $client->id,
+            'amount' => 80,
+            'source' => 'import',
+            'provider_key' => null,
+            'completed_at' => now()->subMinutes(10),
+        ]);
+        DB::table('payment_manual_submissions')->insert([
+            'payment_id' => $manualProof->id,
+            'client_id' => $client->id,
+            'platform_id' => $platform->id,
+            'product_id' => $product->id,
+            'duration_key' => 'weekly',
+            'manual_method_key' => 'bank_transfer',
+            'activated_on_submit' => true,
+            'sender_name' => 'Customer',
+            'transaction_reference' => 'MANUAL-PROOF-1',
+            'proof_path' => 'proofs/example.jpg',
+            'proof_mime' => 'image/jpeg',
+            'proof_size_bytes' => 1234,
+            'review_decision' => 'approved',
+            'reviewed_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $pie = $this->getJson('/api/crm/dashboard/ceo/market-pie?reporting_currency=USD')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(['self_service', 'manual'], array_column($pie['channels'], 'key'));
+
+        $manual = $this->getJson('/api/crm/dashboard/ceo/recent-payments?channel=manual&reporting_currency=USD')
+            ->assertOk()
+            ->json('payments');
+
+        $this->assertCount(1, $manual);
+        $this->assertSame('manual', $manual[0]['channel']['key']);
+        $this->assertSame('Manual proof', $manual[0]['method']['label']);
     }
 
     private function user(array $overrides = []): User

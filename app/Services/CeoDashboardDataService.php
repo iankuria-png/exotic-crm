@@ -28,10 +28,8 @@ class CeoDashboardDataService
         $priorRevenue = $this->revenueTotal($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency']);
         $currentActive = $this->activeClientSnapshot($context['to'], $context['platform_id']);
         $startActive = $this->activeClientSnapshot($context['from']->copy()->subDay(), $context['platform_id']);
-        $currentActivations = $this->activationCount($context['from'], $context['to'], $context['platform_id']);
-        $priorActivations = $this->activationCount($context['prior_from'], $context['prior_to'], $context['platform_id']);
-        $currentRenewals = $this->renewalRecovery($context['from'], $context['to'], $context['platform_id']);
-        $priorRenewals = $this->renewalRecovery($context['prior_from'], $context['prior_to'], $context['platform_id']);
+        $currentCustomerMix = $this->customerRevenueMix($context['from'], $context['to'], $context['platform_id'], $context['target_currency']);
+        $priorCustomerMix = $this->customerRevenueMix($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency']);
         $marketPie = $this->marketPie($request)['markets'] ?? [];
         $agentPerformance = $this->agentPerformance($request)['agents'] ?? [];
 
@@ -53,43 +51,67 @@ class CeoDashboardDataService
                     'delta_percent' => $this->percentDelta($currentActive['count'], $startActive['count']),
                     'href' => '/clients',
                 ],
-                'new_activations' => [
-                    'label' => 'New Activations',
-                    'value' => $currentActivations,
-                    'prior_value' => $priorActivations,
-                    'delta_percent' => $this->percentDelta($currentActivations['count'], $priorActivations['count']),
-                    'href' => '/deals?status=active',
+                'new_user_revenue' => [
+                    'label' => 'New User Revenue',
+                    'value' => $currentCustomerMix['buckets']['new_active'],
+                    'prior_value' => $priorCustomerMix['buckets']['new_active'],
+                    'delta_percent' => $this->percentDelta($currentCustomerMix['buckets']['new_active']['normalized_amount'], $priorCustomerMix['buckets']['new_active']['normalized_amount']),
+                    'href' => '/payments?customer_mix_segment=new_active',
                 ],
-                'renewals_recovered' => [
-                    'label' => 'Renewals Recovered',
-                    'value' => $currentRenewals,
-                    'prior_value' => $priorRenewals,
-                    'delta_percent' => $this->percentDelta($currentRenewals['rate'], $priorRenewals['rate']),
-                    'href' => '/renewals',
+                'existing_user_revenue' => [
+                    'label' => 'Existing User Revenue',
+                    'value' => $currentCustomerMix['buckets']['existing_active'],
+                    'prior_value' => $priorCustomerMix['buckets']['existing_active'],
+                    'delta_percent' => $this->percentDelta($currentCustomerMix['buckets']['existing_active']['normalized_amount'], $priorCustomerMix['buckets']['existing_active']['normalized_amount']),
+                    'href' => '/payments?customer_mix_segment=existing_active',
                 ],
             ],
-            'insights' => $this->insights($marketPie, $agentPerformance, $currentRevenue, $priorRevenue, $currentRenewals),
+            'customer_mix' => $currentCustomerMix,
+            'insights' => $this->insights($marketPie, $agentPerformance, $currentRevenue, $priorRevenue, $currentCustomerMix),
         ];
     }
 
     public function marketPie(Request $request): array
     {
         $context = $this->context($request);
-        $rows = $this->baseCollectedPayments($context['from'], $context['to'], $context['platform_id'])
-            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
-            ->selectRaw('payments.platform_id')
-            ->selectRaw('platforms.name as platform_name')
-            ->selectRaw('platforms.country as platform_country')
-            ->selectRaw('payments.provider_key')
-            ->selectRaw('payments.source')
-            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$context['target_currency']}') as currency")
-            ->selectRaw($this->dateExpression() . ' as event_date')
-            ->selectRaw('SUM(payments.amount) as amount')
-            ->selectRaw('COUNT(*) as payments_count')
-            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country', 'payments.provider_key', 'payments.source')
-            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$context['target_currency']}')")
-            ->groupByRaw($this->dateExpression())
+        $payments = $this->baseCollectedPayments($context['from'], $context['to'], $context['platform_id'])
+            ->select([
+                'id',
+                'platform_id',
+                'amount',
+                'currency',
+                'completed_at',
+                'created_at',
+                'provider_key',
+                'source',
+                'payment_data',
+                'manual_payment_bundle_id',
+            ])
+            ->with([
+                'platform:id,name,country,currency_code',
+                'routingDecisions:id,payment_id,provider_type_key,execution_mode,environment,created_at',
+                'providerTransactions:id,payment_id,provider_type_key,created_at,last_status_at',
+                'manualSubmission:id,payment_id,manual_method_key,review_decision,reviewed_at',
+            ])
             ->get();
+
+        $rows = $payments->map(function (Payment $payment) use ($context) {
+            $eventDate = $payment->completed_at ?: $payment->created_at;
+
+            return (object) [
+                'payment_id' => $payment->id,
+                'platform_id' => $payment->platform_id,
+                'platform_name' => $payment->platform?->name ?: 'Unassigned market',
+                'platform_country' => $payment->platform?->country ?: '',
+                'provider_key' => $payment->provider_key,
+                'source' => $payment->source,
+                'channel_key' => $this->paymentChannel($payment)['key'],
+                'currency' => strtoupper((string) ($payment->currency ?: $payment->platform?->currency_code ?: $context['target_currency'])),
+                'event_date' => $eventDate?->toDateString() ?: now()->toDateString(),
+                'amount' => (float) $payment->amount,
+                'payments_count' => 1,
+            ];
+        });
 
         $markets = $rows
             ->groupBy('platform_id')
@@ -102,9 +124,9 @@ class CeoDashboardDataService
                 }
 
                 $channels = $group
-                    ->groupBy(fn ($row) => $this->paymentChannelFromValues($row->provider_key, $row->source)['key'])
+                    ->groupBy('channel_key')
                     ->map(function (Collection $channelRows) use ($context) {
-                        $channel = $this->paymentChannelFromValues($channelRows->first()->provider_key, $channelRows->first()->source);
+                        $channel = $this->paymentChannelFromKey((string) $channelRows->first()->channel_key);
                         $normalized = $this->reportingCurrencyService->normalizeEventRows($channelRows, $context['target_currency'], false);
                         $breakdown = [];
 
@@ -205,7 +227,16 @@ class CeoDashboardDataService
         $payments = Payment::query()
             ->businessVisible()
             ->excludingWalletTopups()
-            ->with(['client:id,name', 'platform:id,name,country,currency_code', 'product:id,name', 'deal.assignedAgent:id,name,role', 'confirmedBy:id,name,role'])
+            ->with([
+                'client:id,name',
+                'platform:id,name,country,currency_code',
+                'product:id,name',
+                'deal.assignedAgent:id,name,role',
+                'confirmedBy:id,name,role',
+                'routingDecisions:id,payment_id,provider_type_key,execution_mode,environment,created_at',
+                'providerTransactions:id,payment_id,provider_type_key,created_at,last_status_at',
+                'manualSubmission:id,payment_id,manual_method_key,review_decision,reviewed_at',
+            ])
             ->where('status', 'completed')
             ->when($context['platform_id'], fn (Builder $query, int $platformId) => $query->where('platform_id', $platformId))
             ->when($channelFilter !== 'all', fn (Builder $query) => $this->applyPaymentChannelFilter($query, $channelFilter))
@@ -433,46 +464,79 @@ class CeoDashboardDataService
         ];
     }
 
-    private function activationCount(Carbon $from, Carbon $to, ?int $platformId): array
+    private function customerRevenueMix(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): array
     {
+        $baseQuery = $this->baseCollectedPayments($from, $to, $platformId);
+        $bucketKeys = ['new_active', 'existing_active', 'unattributed', 'other_matched'];
+        $buckets = [];
+
+        foreach ($bucketKeys as $bucketKey) {
+            $bucketQuery = $this->applyCustomerMixBucketScope(clone $baseQuery, $bucketKey, $from, $to);
+            $normalized = $this->reportingCurrencyService->normalizePaymentQuery(clone $bucketQuery, $targetCurrency, false);
+            $countQuery = clone $bucketQuery;
+
+            $buckets[$bucketKey] = [
+                'key' => $bucketKey,
+                'payments_count' => (int) (clone $bucketQuery)->count(),
+                'clients_count' => (int) $countQuery
+                    ->whereNotNull('payments.client_id')
+                    ->distinct('payments.client_id')
+                    ->count('payments.client_id'),
+                'source_breakdown' => $normalized['source_breakdown'],
+                'normalized_amount' => $normalized['normalized_total'],
+                'normalized_currency' => $normalized['normalized_currency'],
+                'normalization_meta' => $normalized['normalization_meta'],
+                'share_percent' => 0.0,
+            ];
+        }
+
+        $total = (float) array_sum(array_map(
+            static fn (array $bucket) => (float) ($bucket['normalized_amount'] ?? 0),
+            $buckets
+        ));
+
+        foreach ($buckets as $bucketKey => $bucket) {
+            $amount = (float) ($bucket['normalized_amount'] ?? 0);
+            $buckets[$bucketKey]['share_percent'] = $total > 0 ? round(($amount / $total) * 100, 1) : 0.0;
+        }
+
         return [
-            'count' => (int) Deal::query()
-                ->whereNotNull('activated_at')
-                ->whereBetween('activated_at', [$from, $to])
-                ->when($platformId, fn (Builder $query, int $id) => $query->where('platform_id', $id))
-                ->count(),
+            'total' => $total,
+            'target_currency' => $targetCurrency,
+            'buckets' => $buckets,
         ];
     }
 
-    private function renewalRecovery(Carbon $from, Carbon $to, ?int $platformId): array
+    private function applyCustomerMixBucketScope(Builder $query, string $bucketKey, Carbon $from, Carbon $to): Builder
     {
-        $paymentsRecovered = (int) $this->baseCollectedPayments($from, $to, $platformId)
-            ->where(function (Builder $query) {
-                $query->where('payments.subscription_lifecycle', 'renewal')
-                    ->orWhereExists(function ($subQuery) {
-                        $subQuery->selectRaw('1')
-                            ->from('deals')
-                            ->whereColumn('deals.id', 'payments.deal_id')
-                            ->where('deals.subscription_lifecycle', 'renewal');
-                    });
-            })
-            ->count();
-
-        $dueWindowBase = (int) Deal::query()
-            ->whereBetween('expires_at', [$from, $to])
-            ->when($platformId, fn (Builder $query, int $id) => $query->where('platform_id', $id))
-            ->count();
-        $rateBase = max($dueWindowBase, $paymentsRecovered);
-        $creditedRecovered = min($paymentsRecovered, $rateBase);
-
-        return [
-            'recovered' => $creditedRecovered,
-            'renewal_payments' => $paymentsRecovered,
-            'due' => $rateBase,
-            'due_window_base' => $dueWindowBase,
-            'overflow_recoveries' => max(0, $paymentsRecovered - $dueWindowBase),
-            'rate' => $rateBase > 0 ? round(($creditedRecovered / $rateBase) * 100, 1) : null,
-        ];
+        return match ($bucketKey) {
+            'new_active' => $query->whereHas('client', function (Builder $clientQuery) use ($from, $to) {
+                $clientQuery->active()
+                    ->where('created_at', '>=', $from)
+                    ->where('created_at', '<=', $to);
+            }),
+            'existing_active' => $query->whereHas('client', function (Builder $clientQuery) use ($from) {
+                $clientQuery->active()
+                    ->where('created_at', '<', $from);
+            }),
+            'unattributed' => $query->whereNull('payments.client_id'),
+            'other_matched' => $query
+                ->whereNotNull('payments.client_id')
+                ->where(function (Builder $builder) use ($to) {
+                    $builder->whereDoesntHave('client')
+                        ->orWhereHas('client', function (Builder $clientQuery) use ($to) {
+                            $clientQuery->where(function (Builder $nonActiveOrOutOfPeriod) use ($to) {
+                                $nonActiveOrOutOfPeriod
+                                    ->whereNull('profile_status')
+                                    ->orWhere('profile_status', '!=', 'publish')
+                                    ->orWhere('needs_payment', true)
+                                    ->orWhere('notactive', true)
+                                    ->orWhere('created_at', '>', $to);
+                            });
+                        });
+                }),
+            default => $query,
+        };
     }
 
     private function bucketedRevenue(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency, string $bucket): array
@@ -625,14 +689,13 @@ class CeoDashboardDataService
         };
     }
 
-    private function insights(array $markets, array $agents, array $currentRevenue, array $priorRevenue, array $renewals): array
+    private function insights(array $markets, array $agents, array $currentRevenue, array $priorRevenue, array $customerMix): array
     {
         $topMarket = $markets[0] ?? null;
         $topAgent = $agents[0] ?? null;
         $revenueDelta = $this->percentDelta($currentRevenue['normalized_total'], $priorRevenue['normalized_total']);
-        $renewalMessage = (int) ($renewals['due'] ?? 0) > 0
-            ? sprintf('%d of %d due-window renewals recovered.', (int) $renewals['recovered'], (int) $renewals['due'])
-            : sprintf('%d renewal payments collected; no due-window base.', (int) ($renewals['renewal_payments'] ?? 0));
+        $existingShare = (float) data_get($customerMix, 'buckets.existing_active.share_percent', 0);
+        $newShare = (float) data_get($customerMix, 'buckets.new_active.share_percent', 0);
 
         return array_values(array_filter([
             $topMarket ? [
@@ -658,10 +721,10 @@ class CeoDashboardDataService
                     : sprintf('Collected revenue is %s%s%% vs. prior window.', $revenueDelta >= 0 ? '+' : '', number_format($revenueDelta, 1)),
             ],
             [
-                'key' => 'renewal_risk',
-                'tone' => (($renewals['rate'] ?? 0) >= 70) ? 'positive' : 'warning',
-                'label' => 'Renewal recovery',
-                'message' => $renewalMessage,
+                'key' => 'customer_mix',
+                'tone' => $existingShare >= $newShare ? 'positive' : 'market',
+                'label' => 'Customer mix',
+                'message' => sprintf('Existing users contribute %s%% vs. %s%% from new users.', number_format($existingShare, 1), number_format($newShare, 1)),
             ],
         ]));
     }
@@ -669,9 +732,9 @@ class CeoDashboardDataService
     private function summarizeChannels(Collection $rows, string $targetCurrency, float $total): array
     {
         return $rows
-            ->groupBy(fn ($row) => $this->paymentChannelFromValues($row->provider_key, $row->source)['key'])
+            ->groupBy('channel_key')
             ->map(function (Collection $channelRows) use ($targetCurrency, $total) {
-                $channel = $this->paymentChannelFromValues($channelRows->first()->provider_key, $channelRows->first()->source);
+                $channel = $this->paymentChannelFromKey((string) $channelRows->first()->channel_key);
                 $normalized = $this->reportingCurrencyService->normalizeEventRows($channelRows, $targetCurrency, false);
                 $value = (float) ($normalized['normalized_total'] ?? 0);
                 $breakdown = [];
@@ -700,27 +763,68 @@ class CeoDashboardDataService
     private function applyPaymentChannelFilter(Builder $query, string $channel): void
     {
         if ($channel === 'manual') {
-            $query->where('source', 'manual');
+            $this->whereManualChannel($query);
             return;
         }
 
         if ($channel === 'self_service') {
-            $query->where(function (Builder $builder) {
-                $builder->whereNotNull('provider_key')
-                    ->orWhereIn('source', ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service']);
-            });
+            $this->whereSelfServiceChannel($query);
             return;
         }
 
         if ($channel === 'other') {
             $query->where(function (Builder $builder) {
-                $builder->whereNull('provider_key')
+                $builder->whereDoesntHave('manualSubmission')
+                    ->whereNull('manual_payment_bundle_id')
+                    ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%'])
+                    ->whereRaw("LOWER(COALESCE(source, '')) NOT LIKE ?", ['%manual%'])
+                    ->whereDoesntHave('routingDecisions', function (Builder $decisionQuery) {
+                        $decisionQuery->whereNotNull('provider_type_key')
+                            ->whereRaw("LOWER(COALESCE(provider_type_key, '')) NOT LIKE ?", ['%manual%']);
+                    })
+                    ->whereDoesntHave('providerTransactions')
+                    ->where(function (Builder $providerBuilder) {
+                        $providerBuilder->whereNull('provider_key')
+                            ->orWhere('provider_key', '');
+                    })
                     ->where(function (Builder $sourceBuilder) {
                         $sourceBuilder->whereNull('source')
-                            ->orWhereNotIn('source', ['manual', 'gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service']);
+                            ->orWhereNotIn('source', ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'deal_payment_initiation']);
                     });
             });
         }
+    }
+
+    private function whereManualChannel(Builder $query): void
+    {
+        $query->where(function (Builder $builder) {
+            $builder->whereHas('manualSubmission')
+                ->orWhereNotNull('manual_payment_bundle_id')
+                ->orWhereRaw("LOWER(COALESCE(provider_key, '')) LIKE ?", ['%manual%'])
+                ->orWhereRaw("LOWER(COALESCE(source, '')) LIKE ?", ['%manual%']);
+        });
+    }
+
+    private function whereSelfServiceChannel(Builder $query): void
+    {
+        $query
+            ->whereDoesntHave('manualSubmission')
+            ->whereNull('manual_payment_bundle_id')
+            ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%'])
+            ->whereRaw("LOWER(COALESCE(source, '')) NOT LIKE ?", ['%manual%'])
+            ->where(function (Builder $builder) {
+                $builder->whereHas('routingDecisions', function (Builder $decisionQuery) {
+                    $decisionQuery->whereNotNull('provider_type_key')
+                        ->whereRaw("LOWER(COALESCE(provider_type_key, '')) NOT LIKE ?", ['%manual%']);
+                })
+                    ->orWhereHas('providerTransactions')
+                    ->orWhere(function (Builder $providerBuilder) {
+                        $providerBuilder->whereNotNull('provider_key')
+                            ->where('provider_key', '!=', '')
+                            ->whereRaw("LOWER(COALESCE(provider_key, '')) NOT LIKE ?", ['%manual%']);
+                    })
+                    ->orWhereIn('source', ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'deal_payment_initiation']);
+            });
     }
 
     private function dateExpression(): string
@@ -732,6 +836,18 @@ class CeoDashboardDataService
 
     private function paymentMethod(Payment $payment): array
     {
+        $payment->loadMissing('manualSubmission');
+
+        if ($payment->manualSubmission) {
+            return [
+                'label' => 'Manual proof',
+                'subtitle' => $payment->manualSubmission->manual_method_key
+                    ? Str::of((string) $payment->manualSubmission->manual_method_key)->replace('_', ' ')->title()->toString()
+                    : null,
+                'source' => 'manual_submission',
+            ];
+        }
+
         $provider = trim((string) $payment->provider_key);
         if ($provider !== '') {
             return [
@@ -763,6 +879,53 @@ class CeoDashboardDataService
 
     private function paymentChannel(Payment $payment): array
     {
+        $payment->loadMissing(['routingDecisions', 'providerTransactions', 'manualSubmission']);
+
+        $provider = strtolower(trim((string) $payment->provider_key));
+        $source = strtolower(trim((string) $payment->source));
+        $origin = strtolower(trim((string) data_get($payment->payment_data, 'origin', '')));
+        $billingSurface = strtolower(trim((string) data_get($payment->payment_data, 'billing_surface', '')));
+
+        if (
+            $payment->manualSubmission
+            || $payment->manual_payment_bundle_id
+            || str_contains($provider, 'manual')
+            || str_contains($source, 'manual')
+            || str_contains($origin, 'manual')
+            || str_contains($billingSurface, 'manual')
+        ) {
+            $label = $payment->manualSubmission ? 'Manual proof' : 'Agent manual';
+
+            return [
+                'key' => 'manual',
+                'label' => $label,
+                'description' => $payment->manualSubmission
+                    ? 'Customer-submitted proof reviewed through the manual payment route.'
+                    : 'Recorded by an agent after the customer shared an offline payment code.',
+            ];
+        }
+
+        $routingDecision = $payment->routingDecisions
+            ->sortByDesc(fn ($decision) => optional($decision->created_at)->getTimestamp() ?? 0)
+            ->first();
+
+        if (
+            ($routingDecision && trim((string) $routingDecision->provider_type_key) !== '')
+            || $payment->providerTransactions->isNotEmpty()
+            || $provider !== ''
+            || in_array($source, ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service', 'self_checkout', 'deal_payment_initiation'], true)
+        ) {
+            $providerName = $routingDecision?->provider_type_key ?: $payment->providerTransactions->first()?->provider_type_key ?: $payment->provider_key;
+
+            return [
+                'key' => 'self_service',
+                'label' => 'Self-service',
+                'description' => $providerName
+                    ? sprintf('Activated through a provider route such as %s.', Str::headline((string) $providerName))
+                    : 'Activated through payment links, hosted checkout, STK, or provider callbacks.',
+            ];
+        }
+
         return $this->paymentChannelFromValues($payment->provider_key, $payment->source);
     }
 
@@ -771,7 +934,7 @@ class CeoDashboardDataService
         $provider = trim((string) $providerKey);
         $sourceValue = strtolower(trim((string) $source));
 
-        if ($sourceValue === 'manual') {
+        if (str_contains(strtolower($provider), 'manual') || str_contains($sourceValue, 'manual')) {
             return [
                 'key' => 'manual',
                 'label' => 'Manual',
@@ -792,6 +955,27 @@ class CeoDashboardDataService
             'label' => 'Other',
             'description' => 'Imported or legacy records without a clear collection channel.',
         ];
+    }
+
+    private function paymentChannelFromKey(string $key): array
+    {
+        return match ($key) {
+            'manual' => [
+                'key' => 'manual',
+                'label' => 'Manual',
+                'description' => 'Agent-entered codes or customer-submitted proof.',
+            ],
+            'self_service' => [
+                'key' => 'self_service',
+                'label' => 'Self-service',
+                'description' => 'Provider-routed collection such as PawaPay, checkout, STK, or callbacks.',
+            ],
+            default => [
+                'key' => 'other',
+                'label' => 'Other',
+                'description' => 'Imported or legacy records without a clear collection channel.',
+            ],
+        };
     }
 
     private function serializeWindow(array $context): array

@@ -20,19 +20,22 @@ function EmptyState({ message }) {
     );
 }
 
-function PieTooltip({ active, payload, reporting }) {
+function PieTooltip({ active, payload, reporting, viewMode }) {
     if (!active || !payload?.length) return null;
     const item = payload[0]?.payload;
     if (!item) return null;
+    const title = viewMode === 'channel'
+        ? (item.label || item.name)
+        : (item.platform_id ? marketLabel(item) : 'Other markets');
 
     return (
-        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
-            <p className="text-sm font-semibold text-slate-900">{marketLabel(item)}</p>
-            <p className="mt-1 text-xs text-slate-500">{Number(item.share_percent || 0).toFixed(1)}% of revenue</p>
-            <p className="mt-2 text-sm font-semibold text-teal-800">
+        <div className="min-w-[190px] rounded-lg border border-slate-800 bg-slate-950 p-3 text-white shadow-2xl">
+            <p className="text-sm font-semibold">{title}</p>
+            <p className="mt-1 text-xs text-slate-300">{Number(item.share_percent || 0).toFixed(1)}% of collected revenue</p>
+            <p className="mt-2 text-base font-semibold text-teal-200">
                 {moneyFromBreakdown(item.source_breakdown, item.normalized_total, item.normalized_currency || reporting?.targetCurrency, reporting?.displayMode)}
             </p>
-            <p className="text-xs text-slate-500">{Number(item.payments_count || 0).toLocaleString()} payments</p>
+            <p className="text-xs text-slate-300">{Number(item.payments_count || 0).toLocaleString()} payments</p>
         </div>
     );
 }
@@ -94,7 +97,7 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
             title="Revenue by Market"
             subtitle={selectedMarket ? `Scoped to ${marketLabel(selectedMarket)}. Clear the scope to compare all markets.` : 'Platform-level revenue share with collection-channel mix.'}
             className="overflow-hidden"
-            contentClassName="min-h-[360px]"
+            contentClassName="min-h-[500px]"
             action={(
                 <div className="flex flex-wrap justify-end gap-2">
                     {selectedMarket ? (
@@ -136,28 +139,34 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
             ) : total <= 0 || chartData.length === 0 ? (
                 <EmptyState message="No market revenue in this window yet." />
             ) : (
-                <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-                    <div className="relative h-72">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <PieChart>
-                                <Pie
-                                    data={chartData}
-                                    dataKey="value"
-                                    nameKey="name"
-                                    innerRadius={72}
-                                    outerRadius={112}
-                                    paddingAngle={2}
-                                    onClick={(entry) => viewMode === 'market' && entry.platform_id ? onSelectMarket(entry.platform_id) : setShowOther(true)}
-                                    isAnimationActive
-                                >
-                                    {chartData.map((entry) => (
-                                        <Cell key={entry.name} fill={entry.color} stroke="#fff" strokeWidth={2} />
-                                    ))}
-                                </Pie>
-                                <Tooltip content={<PieTooltip reporting={reporting} />} />
-                            </PieChart>
-                        </ResponsiveContainer>
-                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="grid gap-5 xl:grid-cols-[minmax(300px,0.9fr)_minmax(260px,1fr)]">
+                    <div className="relative h-80">
+                        <div className="relative z-10 h-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie
+                                        data={chartData}
+                                        dataKey="value"
+                                        nameKey="name"
+                                        innerRadius={82}
+                                        outerRadius={128}
+                                        paddingAngle={2}
+                                        onClick={(entry) => viewMode === 'market' && entry.platform_id ? onSelectMarket(entry.platform_id) : setShowOther(true)}
+                                        isAnimationActive
+                                    >
+                                        {chartData.map((entry) => (
+                                            <Cell key={entry.name} fill={entry.color} stroke="#fff" strokeWidth={2} />
+                                        ))}
+                                    </Pie>
+                                    <Tooltip
+                                        content={<PieTooltip reporting={reporting} viewMode={viewMode} />}
+                                        wrapperStyle={{ zIndex: 80, outline: 'none' }}
+                                        allowEscapeViewBox={{ x: true, y: true }}
+                                    />
+                                </PieChart>
+                            </ResponsiveContainer>
+                        </div>
+                        <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
                             <div className="max-w-[140px] text-center">
                                 <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                                     {viewMode === 'market' ? 'Collected' : 'Channels'}
@@ -169,45 +178,47 @@ export default function MarketRevenuePieWidget({ data, reporting, isLoading, err
                         </div>
                     </div>
 
-                    <div className="space-y-2">
-                        {chartData.slice(0, 8).map((market) => (
-                            <button
-                                key={`${market.platform_id || 'other'}-${market.name}`}
-                                type="button"
-                                onClick={() => viewMode === 'market' && market.platform_id ? onSelectMarket(market.platform_id) : setShowOther((current) => !current)}
-                                className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                                aria-label={`${market.name} ${Number(market.share_percent || 0).toFixed(1)} percent of revenue`}
-                            >
-                                <span className="min-w-0 flex-1">
-                                    <span className="flex items-center gap-2">
-                                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: market.color }} />
-                                        <span className="truncate text-sm font-semibold text-slate-900">
-                                            {viewMode === 'channel' ? market.label : (market.platform_id ? marketLabel(market) : 'Other markets')}
+                    <div className="min-w-0 space-y-3">
+                        <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
+                            {chartData.map((market) => (
+                                <button
+                                    key={`${market.platform_id || 'other'}-${market.name}`}
+                                    type="button"
+                                    onClick={() => viewMode === 'market' && market.platform_id ? onSelectMarket(market.platform_id) : setShowOther((current) => !current)}
+                                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5 text-left transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                                    aria-label={`${market.name} ${Number(market.share_percent || 0).toFixed(1)} percent of revenue`}
+                                >
+                                    <span className="min-w-0 flex-1">
+                                        <span className="flex items-center gap-2">
+                                            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: market.color }} />
+                                            <span className="min-w-0 text-sm font-semibold leading-snug text-slate-900">
+                                                {viewMode === 'channel' ? market.label : (market.platform_id ? marketLabel(market) : 'Other markets')}
+                                            </span>
                                         </span>
+                                        {viewMode === 'market' && Array.isArray(market.channels) && market.channels.length > 0 ? (
+                                            <span className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                                {market.channels.map((channel) => (
+                                                    <span
+                                                        key={channel.key}
+                                                        style={{
+                                                            width: `${Math.max(3, Number(channel.share_percent || 0))}%`,
+                                                            backgroundColor: CHANNEL_COLORS[channel.key] || '#64748b',
+                                                        }}
+                                                        title={`${channel.label}: ${Number(channel.share_percent || 0).toFixed(1)}%`}
+                                                    />
+                                                ))}
+                                            </span>
+                                        ) : (
+                                            <span className="mt-1 block truncate text-[11px] text-slate-500">{market.description || `${Number(market.payments_count || 0).toLocaleString()} payments`}</span>
+                                        )}
                                     </span>
-                                    {viewMode === 'market' && Array.isArray(market.channels) && market.channels.length > 0 ? (
-                                        <span className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-slate-100">
-                                            {market.channels.map((channel) => (
-                                                <span
-                                                    key={channel.key}
-                                                    style={{
-                                                        width: `${Math.max(3, Number(channel.share_percent || 0))}%`,
-                                                        backgroundColor: CHANNEL_COLORS[channel.key] || '#64748b',
-                                                    }}
-                                                    title={`${channel.label}: ${Number(channel.share_percent || 0).toFixed(1)}%`}
-                                                />
-                                            ))}
-                                        </span>
-                                    ) : (
-                                        <span className="mt-1 block truncate text-[11px] text-slate-500">{market.description || `${Number(market.payments_count || 0).toLocaleString()} payments`}</span>
-                                    )}
-                                </span>
-                                <span className="shrink-0 text-right">
-                                    <span className="block text-sm font-semibold text-slate-900">{Number(market.share_percent || 0).toFixed(1)}%</span>
-                                    <span className="block text-[11px] text-slate-500">{formatCurrency(market.normalized_total || 0, market.normalized_currency || reporting?.targetCurrency)}</span>
-                                </span>
-                            </button>
-                        ))}
+                                    <span className="shrink-0 text-right">
+                                        <span className="block text-sm font-semibold text-slate-900">{Number(market.share_percent || 0).toFixed(1)}%</span>
+                                        <span className="block text-[11px] text-slate-500">{formatCurrency(market.normalized_total || 0, market.normalized_currency || reporting?.targetCurrency)}</span>
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
 
                         {viewMode === 'market' ? (
                             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">

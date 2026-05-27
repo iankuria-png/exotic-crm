@@ -173,8 +173,8 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onAgentClick={setFocusedAgentId}
             />
 
-            <section className="grid gap-4 xl:grid-cols-12">
-                <div className="xl:col-span-7">
+            <section className="grid gap-4 2xl:grid-cols-2">
+                <div>
                     <RevenueTrendWidget
                         data={trendQuery.data}
                         isLoading={trendQuery.isLoading}
@@ -186,9 +186,10 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         onBucketChange={setTrendBucket}
                         showComparison={trendComparison}
                         onShowComparisonChange={setTrendComparison}
+                        customerMix={summaryQuery.data?.customer_mix}
                     />
                 </div>
-                <div className="xl:col-span-5">
+                <div>
                     <MarketRevenuePieWidget
                         data={marketPieQuery.data}
                         reporting={reporting}
