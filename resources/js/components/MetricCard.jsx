@@ -41,7 +41,7 @@ export default function MetricCard({
         interactive
             ? 'w-full cursor-pointer transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500'
             : '',
-        active ? 'border-teal-300 bg-teal-50/60' : '',
+        active ? 'border-teal-400 ring-1 ring-teal-200' : '',
     ].filter(Boolean).join(' ');
 
     const content = (
