@@ -71,6 +71,7 @@ class Kernel extends HttpKernel
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
         'role' => \App\Http\Middleware\RoleMiddleware::class,
         'crm.active' => \App\Http\Middleware\EnsureCrmUserIsActive::class,
+        'crm.ceo' => \App\Http\Middleware\EnsureCeoAccess::class,
         'crm.impersonation' => \App\Http\Middleware\CrmImpersonationMiddleware::class,
         'wallet.auth' => \App\Http\Middleware\AuthenticateWalletRequest::class,
         'verify.wordpress.shared_key' => \App\Http\Middleware\VerifyWordPressSharedKey::class,

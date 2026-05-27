@@ -501,6 +501,8 @@ export default function CountryRevenueWidget({
     errorMessage = null,
     currencyMode = 'native',
     targetCurrency = 'USD',
+    title = 'Top Performing Countries',
+    hideOwnControls = false,
 }) {
     const [expandedPlatformId, setExpandedPlatformId] = useState(null);
     const subtitle = describeWindow(rangeMode, fromDate, toDate);
@@ -534,10 +536,10 @@ export default function CountryRevenueWidget({
 
     return (
         <SectionFrame
-            title="Top Performing Countries"
+            title={title}
             subtitle={subtitle}
             className="overflow-hidden"
-            action={<PeriodToggle rangeMode={rangeMode} onSetWeek={onSetWeek} onSetMonth={onSetMonth} onSetCustom={onSetCustom} />}
+            action={hideOwnControls ? null : <PeriodToggle rangeMode={rangeMode} onSetWeek={onSetWeek} onSetMonth={onSetMonth} onSetCustom={onSetCustom} />}
         >
             {isLoading ? (
                 <div className="space-y-3">

@@ -6920,6 +6920,7 @@ function RolesWorkspace() {
         password: '',
         phone: '',
         role: 'sales',
+        is_ceo: false,
         status: 'active',
         assigned_market_ids: [],
         reason: 'New team member onboarding',
@@ -6955,6 +6956,7 @@ function RolesWorkspace() {
                 password: '',
                 phone: '',
                 role: 'sales',
+                is_ceo: false,
                 status: 'active',
                 assigned_market_ids: [],
                 reason: 'New team member onboarding',
@@ -7001,6 +7003,7 @@ function RolesWorkspace() {
         setSelectedUser(user);
         setEditor({
             role: user.role || 'sales',
+            is_ceo: Boolean(user.is_ceo),
             status: user.status || 'active',
             sb_agent_id: user.sb_agent_id ?? '',
             assigned_market_ids: Array.isArray(user.assigned_market_ids) ? user.assigned_market_ids.map((id) => Number(id)) : [],
@@ -7163,6 +7166,7 @@ function RolesWorkspace() {
                 <MetricCard label="Sub-admins" value={(summary.sub_admins || 0).toLocaleString()} meta="market-level controls" tone="default" />
                 <MetricCard label="Sales Agents" value={(summary.sales || 0).toLocaleString()} meta="execution role" tone="success" />
                 <MetricCard label="Field Sales" value={(summary.field_sales || 0).toLocaleString()} meta="field execution" tone="accent" />
+                <MetricCard label="CEO Access" value={(summary.ceos || 0).toLocaleString()} meta="executive dashboard tag" tone="slate" />
                 <MetricCard label="Inactive Users" value={(summary.inactive || 0).toLocaleString()} meta="access suspended" tone="warning" />
             </section>
 
@@ -7192,6 +7196,7 @@ function RolesWorkspace() {
                                 <tr>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">User</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Role</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">CEO</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Status</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Assigned Markets</th>
                                     <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Phone</th>
@@ -7217,6 +7222,15 @@ function RolesWorkspace() {
                                                 <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${roleClasses(user.role)}`}>
                                                     {user.role.replace('_', ' ')}
                                                 </span>
+                                            </td>
+                                            <td className="px-4 py-2.5">
+                                                {user.is_ceo ? (
+                                                    <span className="inline-flex items-center rounded-md bg-slate-900 px-2.5 py-0.5 text-xs font-semibold text-white ring-1 ring-inset ring-slate-900">
+                                                        CEO
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-xs text-slate-400">No</span>
+                                                )}
                                             </td>
                                             <td className="px-4 py-2.5">
                                                 <span className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
@@ -7289,7 +7303,11 @@ function RolesWorkspace() {
                                     <select
                                         id="role-select"
                                         value={editor.role}
-                                        onChange={(event) => setEditor((current) => ({ ...current, role: event.target.value }))}
+                                        onChange={(event) => setEditor((current) => ({
+                                            ...current,
+                                            role: event.target.value,
+                                            is_ceo: event.target.value === 'admin' ? current.is_ceo : false,
+                                        }))}
                                         className="crm-select w-full"
                                     >
                                         <option value="admin">Admin</option>
@@ -7311,6 +7329,28 @@ function RolesWorkspace() {
                                         <option value="active">Active</option>
                                         <option value="inactive">Inactive</option>
                                     </select>
+                                </div>
+
+                                <div className="md:col-span-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-800">Mark as CEO</p>
+                                            <p className="mt-1 text-xs text-slate-500">Grants the executive dashboard when the user is an active admin.</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={Boolean(editor.is_ceo)}
+                                            disabled={editor.role !== 'admin'}
+                                            onClick={() => setEditor((current) => ({ ...current, is_ceo: !current.is_ceo }))}
+                                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${editor.role !== 'admin' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${editor.is_ceo ? 'bg-slate-900' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${editor.is_ceo ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+                                    {editor.role !== 'admin' ? (
+                                        <p className="mt-2 text-xs text-amber-700">CEO access is only valid for admin users.</p>
+                                    ) : null}
                                 </div>
 
                                 <div className="md:col-span-2">
@@ -7505,6 +7545,7 @@ function RolesWorkspace() {
                                     userId: selectedUser.id,
                                     payload: {
                                         role: editor.role,
+                                        is_ceo: editor.role === 'admin' && Boolean(editor.is_ceo),
                                         status: editor.status,
                                         sb_agent_id: editor.sb_agent_id === '' ? null : Number(editor.sb_agent_id),
                                         phone: editor.phone.trim() || null,
@@ -7564,7 +7605,11 @@ function RolesWorkspace() {
                             />
                             <select
                                 value={createForm.role}
-                                onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value }))}
+                                onChange={(event) => setCreateForm((current) => ({
+                                    ...current,
+                                    role: event.target.value,
+                                    is_ceo: event.target.value === 'admin' ? current.is_ceo : false,
+                                }))}
                                 className="crm-select"
                             >
                                 <option value="admin">Admin</option>
@@ -7581,6 +7626,24 @@ function RolesWorkspace() {
                                 <option value="active">Active</option>
                                 <option value="inactive">Inactive</option>
                             </select>
+                            <div className="md:col-span-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-semibold text-slate-800">Mark as CEO</p>
+                                        <p className="mt-1 text-xs text-slate-500">Available for active admin users only.</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={Boolean(createForm.is_ceo)}
+                                        disabled={createForm.role !== 'admin'}
+                                        onClick={() => setCreateForm((current) => ({ ...current, is_ceo: !current.is_ceo }))}
+                                        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${createForm.role !== 'admin' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${createForm.is_ceo ? 'bg-slate-900' : 'bg-slate-200'}`}
+                                    >
+                                        <span className={`mt-1 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${createForm.is_ceo ? 'translate-x-6' : 'translate-x-1'}`} />
+                                    </button>
+                                </div>
+                            </div>
                             <textarea
                                 rows={2}
                                 value={createForm.reason}
@@ -7622,6 +7685,7 @@ function RolesWorkspace() {
                                     email: createForm.email,
                                     phone: createForm.phone.trim() || null,
                                     role: createForm.role,
+                                    is_ceo: createForm.role === 'admin' && Boolean(createForm.is_ceo),
                                     status: createForm.status,
                                     assigned_market_ids: createForm.assigned_market_ids,
                                     reason: createForm.reason,

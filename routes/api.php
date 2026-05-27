@@ -14,6 +14,7 @@ use App\Http\Controllers\API\ActivityLogController;
 use App\Http\Controllers\AfricanCountryController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 use App\Http\Controllers\CRM\AuthSettingsController;
+use App\Http\Controllers\CRM\CeoDashboardController;
 use App\Http\Controllers\CRM\DashboardController as CrmDashboardController;
 use App\Http\Controllers\CRM\ClientController;
 use App\Http\Controllers\CRM\ClientWalletController;
@@ -154,6 +155,13 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::get('/dashboard/country-revenue', [CrmDashboardController::class, 'countryRevenue']);
     Route::get('/dashboard/country-performance/{platform}', [CrmDashboardController::class, 'countryPerformance']);
     Route::get('/dashboard/my-markets', [CrmDashboardController::class, 'myMarkets'])->middleware('role:admin,sub_admin,sales,field_sales,marketing');
+    Route::middleware('crm.ceo')->prefix('dashboard/ceo')->group(function () {
+        Route::get('/summary', [CeoDashboardController::class, 'summary']);
+        Route::get('/market-pie', [CeoDashboardController::class, 'marketPie']);
+        Route::get('/revenue-trend', [CeoDashboardController::class, 'revenueTrend']);
+        Route::get('/recent-payments', [CeoDashboardController::class, 'recentPayments']);
+        Route::get('/agent-performance', [CeoDashboardController::class, 'agentPerformance']);
+    });
     Route::get('/products', [CrmDashboardController::class, 'products']);
     Route::post('/markets/{platform}/sync', [SettingsController::class, 'runSalesMarketSync'])->middleware('role:admin,sub_admin,sales');
     Route::get('/markets/{platform}/sync/latest', [SettingsController::class, 'latestPlatformClientSync'])->middleware('role:admin,sub_admin,sales');

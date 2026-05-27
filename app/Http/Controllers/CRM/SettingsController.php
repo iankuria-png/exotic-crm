@@ -4099,7 +4099,7 @@ class SettingsController extends Controller
             ->keyBy('id');
 
         $users = User::query()
-            ->select(['id', 'name', 'email', 'role', 'status', 'phone', 'notification_prefs', 'assigned_market_ids', 'sb_agent_id'])
+            ->select(['id', 'name', 'email', 'role', 'is_ceo', 'status', 'phone', 'notification_prefs', 'assigned_market_ids', 'sb_agent_id'])
             ->with('platforms:id,name,country')
             ->orderBy('role')
             ->orderBy('name')
@@ -4132,6 +4132,7 @@ class SettingsController extends Controller
                     'name' => $user->name,
                     'email' => $user->email,
                     'role' => $user->role,
+                    'is_ceo' => (bool) ($user->is_ceo ?? false),
                     'status' => $user->status ?? 'active',
                     'payment_failure_sms_state' => $user->paymentFailureSmsState(),
                     'sb_agent_id' => $user->sb_agent_id ? (int) $user->sb_agent_id : null,
@@ -4147,6 +4148,7 @@ class SettingsController extends Controller
             'sub_admins' => $users->where('role', 'sub_admin')->count(),
             'sales' => $users->where('role', 'sales')->count(),
             'field_sales' => $users->where('role', 'field_sales')->count(),
+            'ceos' => $users->where('is_ceo', true)->count(),
             'inactive' => $users->where('status', 'inactive')->count(),
         ];
 
@@ -4168,6 +4170,7 @@ class SettingsController extends Controller
             'email' => 'required|email|max:255|unique:users,email',
             'password' => 'nullable|string|min:8|max:120',
             'role' => 'required|in:admin,sub_admin,sales,field_sales,marketing',
+            'is_ceo' => 'nullable|boolean',
             'status' => 'required|in:active,inactive',
             'sb_agent_id' => 'nullable|integer',
             'phone' => 'nullable|string|max:30',
@@ -4189,12 +4192,14 @@ class SettingsController extends Controller
             ->all();
 
         $passwordHash = Hash::make($validated['password'] ?? Str::random(16));
+        $isCeo = ($validated['role'] === 'admin') && (bool) ($validated['is_ceo'] ?? false);
 
         $user = User::query()->create([
             'name' => $validated['name'],
             'email' => strtolower(trim((string) $validated['email'])),
             'password' => $passwordHash,
             'role' => $validated['role'],
+            'is_ceo' => $isCeo,
             'status' => $validated['status'],
             'phone' => $validated['phone'] ?? null,
             'notification_prefs' => $validated['notification_prefs'] ?? null,
@@ -4219,6 +4224,7 @@ class SettingsController extends Controller
                     'name' => $user->name,
                     'email' => $user->email,
                     'role' => $user->role,
+                    'is_ceo' => (bool) ($user->is_ceo ?? false),
                     'status' => $user->status ?? 'active',
                     'phone' => $user->phone,
                     'notification_prefs' => $user->notification_prefs,
@@ -4245,6 +4251,7 @@ class SettingsController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'role' => $user->role,
+            'is_ceo' => (bool) ($user->is_ceo ?? false),
             'status' => $user->status ?? 'active',
             'payment_failure_sms_state' => $user->paymentFailureSmsState(),
             'phone' => $user->phone,
@@ -4259,6 +4266,7 @@ class SettingsController extends Controller
     {
         $validated = $request->validate([
             'role' => 'required|in:admin,sub_admin,sales,field_sales,marketing',
+            'is_ceo' => 'nullable|boolean',
             'status' => 'required|in:active,inactive',
             'sb_agent_id' => 'nullable|integer',
             'phone' => 'nullable|string|max:30',
@@ -4282,6 +4290,7 @@ class SettingsController extends Controller
 
         $beforeState = [
             'role' => $user->role,
+            'is_ceo' => (bool) ($user->is_ceo ?? false),
             'status' => $user->status ?? 'active',
             'phone' => $user->phone,
             'notification_prefs' => $user->notification_prefs,
@@ -4291,6 +4300,7 @@ class SettingsController extends Controller
 
         $updateData = [
             'role' => $validated['role'],
+            'is_ceo' => ($validated['role'] === 'admin') && (bool) ($validated['is_ceo'] ?? false),
             'status' => $validated['status'],
             'phone' => $validated['phone'] ?? null,
             'notification_prefs' => array_key_exists('notification_prefs', $validated)
@@ -4319,6 +4329,7 @@ class SettingsController extends Controller
                 $beforeState,
                 [
                     'role' => $user->role,
+                    'is_ceo' => (bool) ($user->is_ceo ?? false),
                     'status' => $user->status ?? 'active',
                     'phone' => $user->phone,
                     'notification_prefs' => $user->notification_prefs,
@@ -4346,6 +4357,7 @@ class SettingsController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'role' => $user->role,
+            'is_ceo' => (bool) ($user->is_ceo ?? false),
             'status' => $user->status ?? 'active',
             'payment_failure_sms_state' => $user->paymentFailureSmsState(),
             'phone' => $user->phone,

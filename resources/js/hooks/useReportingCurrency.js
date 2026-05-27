@@ -15,21 +15,23 @@ function cleanCurrency(value, fallback = DEFAULT_TARGET) {
     return normalized ? normalized.slice(0, 8) : fallback;
 }
 
-export default function useReportingCurrency({ preferFlat = false } = {}) {
+export default function useReportingCurrency({ preferFlat = false, storageKeys = {} } = {}) {
     const fallbackMode = preferFlat ? 'flat' : 'native';
+    const modeStorageKey = storageKeys.mode || MODE_STORAGE_KEY;
+    const targetStorageKey = storageKeys.target || TARGET_STORAGE_KEY;
     const [displayMode, setDisplayModeState] = useState(() => {
         if (typeof window === 'undefined') {
             return fallbackMode;
         }
 
-        return cleanMode(window.localStorage.getItem(MODE_STORAGE_KEY), fallbackMode);
+        return cleanMode(window.localStorage.getItem(modeStorageKey), fallbackMode);
     });
     const [targetCurrency, setTargetCurrencyState] = useState(() => {
         if (typeof window === 'undefined') {
             return DEFAULT_TARGET;
         }
 
-        return cleanCurrency(window.localStorage.getItem(TARGET_STORAGE_KEY), DEFAULT_TARGET);
+        return cleanCurrency(window.localStorage.getItem(targetStorageKey), DEFAULT_TARGET);
     });
 
     const settingsQuery = useQuery({
@@ -47,17 +49,17 @@ export default function useReportingCurrency({ preferFlat = false } = {}) {
             return;
         }
 
-        const storedTarget = window.localStorage.getItem(TARGET_STORAGE_KEY);
+        const storedTarget = window.localStorage.getItem(targetStorageKey);
         if (!storedTarget && systemTargetCurrency) {
             setTargetCurrencyState(systemTargetCurrency);
         }
-    }, [systemTargetCurrency]);
+    }, [systemTargetCurrency, targetStorageKey]);
 
     const setDisplayMode = (mode) => {
         const next = cleanMode(mode, fallbackMode);
         setDisplayModeState(next);
         if (typeof window !== 'undefined') {
-            window.localStorage.setItem(MODE_STORAGE_KEY, next);
+            window.localStorage.setItem(modeStorageKey, next);
         }
     };
 
@@ -65,7 +67,7 @@ export default function useReportingCurrency({ preferFlat = false } = {}) {
         const next = cleanCurrency(currency, systemTargetCurrency);
         setTargetCurrencyState(next);
         if (typeof window !== 'undefined') {
-            window.localStorage.setItem(TARGET_STORAGE_KEY, next);
+            window.localStorage.setItem(targetStorageKey, next);
         }
     };
 

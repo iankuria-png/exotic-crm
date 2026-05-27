@@ -10,6 +10,7 @@ import CommsBalanceWidget from '../components/dashboard/CommsBalanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import RevenueByPackageWidget from '../components/dashboard/RevenueByPackageWidget';
 import SalesDashboardView from '../components/dashboard/SalesDashboardView';
+import CeoDashboard from './CeoDashboard';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import useReportingCurrency from '../hooks/useReportingCurrency';
 import { useAuth } from '../hooks/useAuth';
@@ -23,6 +24,7 @@ import FxNormalizationNotice from '../components/FxNormalizationNotice';
 const DASHBOARD_REFRESH_MS = 30_000;
 const LIST_PREVIEW_LIMIT = 6;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
+const CEO_VIEW_MODE_STORAGE_KEY = 'exoticcrm.dashboard.ceo_view_mode';
 
 function clampPercent(value) {
     return Math.max(0, Math.min(100, value));
@@ -1062,6 +1064,17 @@ function OperationsDashboard() {
 export default function Dashboard() {
     const navigate = useNavigate();
     const { user, isLoading } = useAuth();
+    const [ceoViewMode, setCeoViewMode] = useState(() => {
+        if (typeof window === 'undefined') return 'ceo';
+        return window.localStorage.getItem(CEO_VIEW_MODE_STORAGE_KEY) || 'ceo';
+    });
+
+    const setDashboardViewMode = (mode) => {
+        setCeoViewMode(mode);
+        if (typeof window !== 'undefined') {
+            window.localStorage.setItem(CEO_VIEW_MODE_STORAGE_KEY, mode);
+        }
+    };
 
     if (isLoading && !user) {
         return (
@@ -1078,6 +1091,31 @@ export default function Dashboard() {
 
     if (user?.role === 'sales') {
         return <SalesDashboardView user={user} navigate={navigate} />;
+    }
+
+    if (user?.is_ceo && ceoViewMode !== 'admin') {
+        return <CeoDashboard user={user} onSwitchAdminView={() => setDashboardViewMode('admin')} />;
+    }
+
+    if (user?.is_ceo && ceoViewMode === 'admin') {
+        return (
+            <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                    <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Admin view</p>
+                        <p className="mt-1 text-sm text-slate-600">Standard operations dashboard is active.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setDashboardViewMode('ceo')}
+                        className="rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    >
+                        Switch to CEO view
+                    </button>
+                </div>
+                <OperationsDashboard />
+            </div>
+        );
     }
 
     return <OperationsDashboard />;

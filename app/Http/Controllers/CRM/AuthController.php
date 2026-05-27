@@ -68,6 +68,9 @@ class AuthController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'role' => $user->role,
+            'is_ceo' => (bool) ($user->is_ceo ?? false)
+                && ($user->role ?? null) === 'admin'
+                && ($user->status ?? 'active') === 'active',
             'status' => $user->status ?? 'active',
             'assigned_market_ids' => $user->assignedMarketIds(),
             'capabilities' => $this->capabilitiesForRole((string) $user->role),

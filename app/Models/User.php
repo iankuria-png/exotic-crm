@@ -18,6 +18,7 @@ class User extends Authenticatable
         'google_linked_at',
         'password',
         'role',
+        'is_ceo',
         'assigned_market_ids',
         'status',
         'phone',
@@ -33,6 +34,7 @@ class User extends Authenticatable
         'email_verified_at' => 'datetime',
         'google_linked_at' => 'datetime',
         'assigned_market_ids' => 'array',
+        'is_ceo' => 'boolean',
         'notification_prefs' => 'array',
     ];
     
