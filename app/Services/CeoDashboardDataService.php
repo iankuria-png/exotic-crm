@@ -80,11 +80,13 @@ class CeoDashboardDataService
             ->selectRaw('payments.platform_id')
             ->selectRaw('platforms.name as platform_name')
             ->selectRaw('platforms.country as platform_country')
+            ->selectRaw('payments.provider_key')
+            ->selectRaw('payments.source')
             ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$context['target_currency']}') as currency")
             ->selectRaw($this->dateExpression() . ' as event_date')
             ->selectRaw('SUM(payments.amount) as amount')
             ->selectRaw('COUNT(*) as payments_count')
-            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
+            ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country', 'payments.provider_key', 'payments.source')
             ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$context['target_currency']}')")
             ->groupByRaw($this->dateExpression())
             ->get();
@@ -99,7 +101,32 @@ class CeoDashboardDataService
                     $sourceBreakdown[$currency] = ($sourceBreakdown[$currency] ?? 0.0) + (float) $row->amount;
                 }
 
-                return [
+                $channels = $group
+                    ->groupBy(fn ($row) => $this->paymentChannelFromValues($row->provider_key, $row->source)['key'])
+                    ->map(function (Collection $channelRows) use ($context) {
+                        $channel = $this->paymentChannelFromValues($channelRows->first()->provider_key, $channelRows->first()->source);
+                        $normalized = $this->reportingCurrencyService->normalizeEventRows($channelRows, $context['target_currency'], false);
+                        $breakdown = [];
+
+                        foreach ($channelRows as $row) {
+                            $currency = strtoupper((string) $row->currency);
+                            $breakdown[$currency] = ($breakdown[$currency] ?? 0.0) + (float) $row->amount;
+                        }
+
+                        return [
+                            'key' => $channel['key'],
+                            'label' => $channel['label'],
+                            'description' => $channel['description'],
+                            'source_breakdown' => $breakdown,
+                            'normalized_total' => $normalized['normalized_total'],
+                            'normalized_currency' => $normalized['normalized_currency'],
+                            'payments_count' => (int) $channelRows->sum('payments_count'),
+                        ];
+                    })
+                    ->sortByDesc(fn (array $channel) => (float) ($channel['normalized_total'] ?? array_sum($channel['source_breakdown'])))
+                    ->values();
+
+                $market = [
                     'platform_id' => (int) $group->first()->platform_id,
                     'name' => (string) $group->first()->platform_name,
                     'country' => (string) $group->first()->platform_country,
@@ -108,7 +135,12 @@ class CeoDashboardDataService
                     'normalized_currency' => $normalized['normalized_currency'],
                     'normalization_meta' => $normalized['normalization_meta'],
                     'payments_count' => (int) $group->sum('payments_count'),
+                    'channels' => $channels->all(),
                 ];
+
+                $market['primary_channel'] = $channels->first();
+
+                return $market;
             })
             ->sortByDesc(fn (array $market) => (float) ($market['normalized_total'] ?? array_sum($market['source_breakdown'])))
             ->values();
@@ -117,6 +149,14 @@ class CeoDashboardDataService
         $withShares = $markets->map(function (array $market) use ($total) {
             $value = (float) ($market['normalized_total'] ?? array_sum($market['source_breakdown']));
             $market['share_percent'] = $total > 0 ? round(($value / $total) * 100, 1) : 0.0;
+            $market['channels'] = collect($market['channels'] ?? [])
+                ->map(function (array $channel) use ($value) {
+                    $channelValue = (float) ($channel['normalized_total'] ?? array_sum($channel['source_breakdown'] ?? []));
+                    $channel['share_percent'] = $value > 0 ? round(($channelValue / $value) * 100, 1) : 0.0;
+                    return $channel;
+                })
+                ->values()
+                ->all();
             return $market;
         });
 
@@ -124,6 +164,7 @@ class CeoDashboardDataService
             'window' => $this->serializeWindow($context),
             'selected_market' => $context['platform'] ? $this->serializePlatform($context['platform']) : null,
             'total' => $total,
+            'channels' => $this->summarizeChannels($rows, $context['target_currency'], $total),
             'markets' => $withShares->all(),
         ];
     }
@@ -131,8 +172,9 @@ class CeoDashboardDataService
     public function revenueTrend(Request $request): array
     {
         $context = $this->context($request);
-        $current = $this->bucketedRevenue($context['from'], $context['to'], $context['platform_id'], $context['target_currency'], $context['bucket']);
-        $prior = $this->bucketedRevenue($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency'], $context['bucket']);
+        $bucket = $this->resolveTrendBucket($request, $context['bucket']);
+        $current = $this->bucketedRevenue($context['from'], $context['to'], $context['platform_id'], $context['target_currency'], $bucket);
+        $prior = $this->bucketedRevenue($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency'], $bucket);
         $priorValues = array_values($prior);
 
         $points = collect(array_values($current))->map(function (array $point, int $index) use ($priorValues) {
@@ -141,6 +183,8 @@ class CeoDashboardDataService
                 ...$point,
                 'prior_label' => $priorPoint['label'] ?? null,
                 'prior_value' => $priorPoint['value'] ?? null,
+                'prior_payments_count' => $priorPoint['payments_count'] ?? 0,
+                'prior_average_ticket' => $priorPoint['average_ticket'] ?? 0,
                 'prior_source_breakdown' => $priorPoint['source_breakdown'] ?? [],
                 'delta_percent' => $this->percentDelta($point['value'], $priorPoint['value'] ?? null),
             ];
@@ -148,7 +192,7 @@ class CeoDashboardDataService
 
         return [
             'window' => $this->serializeWindow($context),
-            'bucket' => $context['bucket'],
+            'bucket' => $bucket,
             'points' => $points,
         ];
     }
@@ -156,18 +200,23 @@ class CeoDashboardDataService
     public function recentPayments(Request $request): array
     {
         $context = $this->context($request);
+        $limit = $this->resolveRecentPaymentLimit($request);
+        $channelFilter = $this->resolveChannelFilter($request);
         $payments = Payment::query()
             ->businessVisible()
             ->excludingWalletTopups()
             ->with(['client:id,name', 'platform:id,name,country,currency_code', 'product:id,name', 'deal.assignedAgent:id,name,role', 'confirmedBy:id,name,role'])
             ->where('status', 'completed')
             ->when($context['platform_id'], fn (Builder $query, int $platformId) => $query->where('platform_id', $platformId))
+            ->when($channelFilter !== 'all', fn (Builder $query) => $this->applyPaymentChannelFilter($query, $channelFilter))
             ->orderByRaw('COALESCE(completed_at, created_at) desc')
-            ->limit(10)
+            ->limit($limit)
             ->get();
 
         return [
             'window' => $this->serializeWindow($context),
+            'limit' => $limit,
+            'channel_filter' => $channelFilter,
             'payments' => $payments->map(function (Payment $payment) use ($context) {
                 $eventDate = $payment->completed_at ?: $payment->created_at;
                 $currency = strtoupper((string) ($payment->currency ?: $payment->platform?->currency_code ?: $context['target_currency']));
@@ -197,6 +246,7 @@ class CeoDashboardDataService
                     'normalized_currency' => $normalized['normalized_currency'],
                     'normalization_meta' => $normalized['normalization_meta'],
                     'method' => $this->paymentMethod($payment),
+                    'channel' => $this->paymentChannel($payment),
                     'agent' => $payment->deal?->assignedAgent ? [
                         'id' => (int) $payment->deal->assignedAgent->id,
                         'name' => $payment->deal->assignedAgent->name,
@@ -255,6 +305,9 @@ class CeoDashboardDataService
                 'renewals' => [
                     'recovered' => (int) $renewal['recovered'],
                     'due' => (int) $renewal['due'],
+                    'renewal_payments' => (int) ($renewal['renewal_payments'] ?? $renewal['recovered']),
+                    'due_window_base' => (int) ($renewal['due_window_base'] ?? $renewal['due']),
+                    'overflow_recoveries' => (int) ($renewal['overflow_recoveries'] ?? 0),
                     'rate' => (int) $renewal['due'] > 0 ? round(((int) $renewal['recovered'] / (int) $renewal['due']) * 100, 1) : null,
                 ],
                 'activations' => [
@@ -317,6 +370,27 @@ class CeoDashboardDataService
         ];
     }
 
+    private function resolveTrendBucket(Request $request, string $fallback): string
+    {
+        $bucket = strtolower(trim((string) $request->query('bucket', $fallback)));
+
+        return in_array($bucket, ['day', 'week', 'month'], true) ? $bucket : $fallback;
+    }
+
+    private function resolveRecentPaymentLimit(Request $request): int
+    {
+        $limit = (int) $request->query('limit', 10);
+
+        return in_array($limit, [10, 20, 30], true) ? $limit : 10;
+    }
+
+    private function resolveChannelFilter(Request $request): string
+    {
+        $filter = strtolower(trim((string) $request->query('channel', 'all')));
+
+        return in_array($filter, ['all', 'self_service', 'manual', 'other'], true) ? $filter : 'all';
+    }
+
     private function revenueTotal(Carbon $from, Carbon $to, ?int $platformId, string $targetCurrency): array
     {
         $query = $this->baseCollectedPayments($from, $to, $platformId);
@@ -372,7 +446,7 @@ class CeoDashboardDataService
 
     private function renewalRecovery(Carbon $from, Carbon $to, ?int $platformId): array
     {
-        $recovered = (int) $this->baseCollectedPayments($from, $to, $platformId)
+        $paymentsRecovered = (int) $this->baseCollectedPayments($from, $to, $platformId)
             ->where(function (Builder $query) {
                 $query->where('payments.subscription_lifecycle', 'renewal')
                     ->orWhereExists(function ($subQuery) {
@@ -384,15 +458,20 @@ class CeoDashboardDataService
             })
             ->count();
 
-        $due = (int) Deal::query()
+        $dueWindowBase = (int) Deal::query()
             ->whereBetween('expires_at', [$from, $to])
             ->when($platformId, fn (Builder $query, int $id) => $query->where('platform_id', $id))
             ->count();
+        $rateBase = max($dueWindowBase, $paymentsRecovered);
+        $creditedRecovered = min($paymentsRecovered, $rateBase);
 
         return [
-            'recovered' => $recovered,
-            'due' => $due,
-            'rate' => $due > 0 ? round(($recovered / $due) * 100, 1) : null,
+            'recovered' => $creditedRecovered,
+            'renewal_payments' => $paymentsRecovered,
+            'due' => $rateBase,
+            'due_window_base' => $dueWindowBase,
+            'overflow_recoveries' => max(0, $paymentsRecovered - $dueWindowBase),
+            'rate' => $rateBase > 0 ? round(($creditedRecovered / $rateBase) * 100, 1) : null,
         ];
     }
 
@@ -406,6 +485,7 @@ class CeoDashboardDataService
             ->selectRaw('platforms.country as platform_country')
             ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
             ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(*) as payments_count')
             ->groupByRaw($this->dateExpression())
             ->groupBy('payments.platform_id', 'platforms.name', 'platforms.country')
             ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
@@ -417,6 +497,10 @@ class CeoDashboardDataService
                 return [
                     'label' => $label,
                     'value' => $normalized['normalized_total'] ?? 0,
+                    'payments_count' => (int) $bucketRows->sum('payments_count'),
+                    'average_ticket' => (int) $bucketRows->sum('payments_count') > 0
+                        ? round((float) ($normalized['normalized_total'] ?? 0) / (int) $bucketRows->sum('payments_count'), 2)
+                        : 0,
                     'source_breakdown' => $normalized['source_breakdown'],
                     'normalization_meta' => $normalized['normalization_meta'],
                 ];
@@ -469,10 +553,19 @@ class CeoDashboardDataService
         return $due->keys()
             ->merge($recovered->keys())
             ->unique()
-            ->mapWithKeys(fn ($agentId) => [(int) $agentId => [
-                'recovered' => (int) ($recovered[$agentId] ?? 0),
-                'due' => (int) ($due[$agentId] ?? 0),
-            ]]);
+            ->mapWithKeys(function ($agentId) use ($recovered, $due) {
+                $paymentsRecovered = (int) ($recovered[$agentId] ?? 0);
+                $dueWindowBase = (int) ($due[$agentId] ?? 0);
+                $rateBase = max($dueWindowBase, $paymentsRecovered);
+
+                return [(int) $agentId => [
+                    'recovered' => min($paymentsRecovered, $rateBase),
+                    'renewal_payments' => $paymentsRecovered,
+                    'due' => $rateBase,
+                    'due_window_base' => $dueWindowBase,
+                    'overflow_recoveries' => max(0, $paymentsRecovered - $dueWindowBase),
+                ]];
+            });
     }
 
     private function agentActivationRows(Carbon $from, Carbon $to, ?int $platformId): Collection
@@ -537,6 +630,9 @@ class CeoDashboardDataService
         $topMarket = $markets[0] ?? null;
         $topAgent = $agents[0] ?? null;
         $revenueDelta = $this->percentDelta($currentRevenue['normalized_total'], $priorRevenue['normalized_total']);
+        $renewalMessage = (int) ($renewals['due'] ?? 0) > 0
+            ? sprintf('%d of %d due-window renewals recovered.', (int) $renewals['recovered'], (int) $renewals['due'])
+            : sprintf('%d renewal payments collected; no due-window base.', (int) ($renewals['renewal_payments'] ?? 0));
 
         return array_values(array_filter([
             $topMarket ? [
@@ -565,9 +661,66 @@ class CeoDashboardDataService
                 'key' => 'renewal_risk',
                 'tone' => (($renewals['rate'] ?? 0) >= 70) ? 'positive' : 'warning',
                 'label' => 'Renewal recovery',
-                'message' => sprintf('%d of %d due renewals recovered.', (int) $renewals['recovered'], (int) $renewals['due']),
+                'message' => $renewalMessage,
             ],
         ]));
+    }
+
+    private function summarizeChannels(Collection $rows, string $targetCurrency, float $total): array
+    {
+        return $rows
+            ->groupBy(fn ($row) => $this->paymentChannelFromValues($row->provider_key, $row->source)['key'])
+            ->map(function (Collection $channelRows) use ($targetCurrency, $total) {
+                $channel = $this->paymentChannelFromValues($channelRows->first()->provider_key, $channelRows->first()->source);
+                $normalized = $this->reportingCurrencyService->normalizeEventRows($channelRows, $targetCurrency, false);
+                $value = (float) ($normalized['normalized_total'] ?? 0);
+                $breakdown = [];
+
+                foreach ($channelRows as $row) {
+                    $currency = strtoupper((string) $row->currency);
+                    $breakdown[$currency] = ($breakdown[$currency] ?? 0.0) + (float) $row->amount;
+                }
+
+                return [
+                    'key' => $channel['key'],
+                    'label' => $channel['label'],
+                    'description' => $channel['description'],
+                    'source_breakdown' => $breakdown,
+                    'normalized_total' => $normalized['normalized_total'],
+                    'normalized_currency' => $normalized['normalized_currency'],
+                    'payments_count' => (int) $channelRows->sum('payments_count'),
+                    'share_percent' => $total > 0 ? round(($value / $total) * 100, 1) : 0.0,
+                ];
+            })
+            ->sortByDesc(fn (array $channel) => (float) ($channel['normalized_total'] ?? array_sum($channel['source_breakdown'] ?? [])))
+            ->values()
+            ->all();
+    }
+
+    private function applyPaymentChannelFilter(Builder $query, string $channel): void
+    {
+        if ($channel === 'manual') {
+            $query->where('source', 'manual');
+            return;
+        }
+
+        if ($channel === 'self_service') {
+            $query->where(function (Builder $builder) {
+                $builder->whereNotNull('provider_key')
+                    ->orWhereIn('source', ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service']);
+            });
+            return;
+        }
+
+        if ($channel === 'other') {
+            $query->where(function (Builder $builder) {
+                $builder->whereNull('provider_key')
+                    ->where(function (Builder $sourceBuilder) {
+                        $sourceBuilder->whereNull('source')
+                            ->orWhereNotIn('source', ['manual', 'gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service']);
+                    });
+            });
+        }
     }
 
     private function dateExpression(): string
@@ -605,6 +758,39 @@ class CeoDashboardDataService
             'label' => $source !== '' ? Str::of($source)->replace('_', ' ')->title()->toString() : 'Unknown',
             'subtitle' => null,
             'source' => 'source',
+        ];
+    }
+
+    private function paymentChannel(Payment $payment): array
+    {
+        return $this->paymentChannelFromValues($payment->provider_key, $payment->source);
+    }
+
+    private function paymentChannelFromValues($providerKey, $source): array
+    {
+        $provider = trim((string) $providerKey);
+        $sourceValue = strtolower(trim((string) $source));
+
+        if ($sourceValue === 'manual') {
+            return [
+                'key' => 'manual',
+                'label' => 'Manual',
+                'description' => 'Recorded by the team from an offline or direct confirmation.',
+            ];
+        }
+
+        if ($provider !== '' || in_array($sourceValue, ['gateway', 'hosted_checkout', 'payment_link', 'checkout', 'self_service'], true)) {
+            return [
+                'key' => 'self_service',
+                'label' => 'Self-service',
+                'description' => 'Collected through payment links, hosted checkout, STK, or provider callbacks.',
+            ];
+        }
+
+        return [
+            'key' => 'other',
+            'label' => 'Other',
+            'description' => 'Imported or legacy records without a clear collection channel.',
         ];
     }
 

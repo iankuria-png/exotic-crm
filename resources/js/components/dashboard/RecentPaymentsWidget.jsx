@@ -4,6 +4,14 @@ import { getCountryFlag } from '../../utils/flags';
 import { formatCurrency } from '../../utils/currency';
 import { relativeTime } from './ceoFormatters';
 
+const LIMITS = [10, 20, 30];
+const CHANNELS = [
+    { key: 'all', label: 'All methods' },
+    { key: 'self_service', label: 'Self-service' },
+    { key: 'manual', label: 'Manual' },
+    { key: 'other', label: 'Other' },
+];
+
 function SkeletonRows() {
     return (
         <div className="space-y-2">
@@ -14,15 +22,50 @@ function SkeletonRows() {
     );
 }
 
-export default function RecentPaymentsWidget({ data, isLoading, errorMessage, onOpenPayment }) {
+export default function RecentPaymentsWidget({
+    data,
+    isLoading,
+    errorMessage,
+    onOpenPayment,
+    limit = 10,
+    onLimitChange,
+    channel = 'all',
+    onChannelChange,
+}) {
     const payments = data?.payments || [];
 
     return (
         <SectionFrame
-            title="Last 10 Payments"
+            title={`Last ${limit} Payments`}
             subtitle="Completed cash events only, refreshed while the tab is active."
             className="overflow-hidden"
             contentClassName="min-h-[360px]"
+            action={(
+                <div className="flex flex-wrap justify-end gap-2">
+                    <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5" role="group" aria-label="Recent payments count">
+                        {LIMITS.map((value) => (
+                            <button
+                                key={value}
+                                type="button"
+                                onClick={() => onLimitChange(value)}
+                                className={`rounded px-2.5 py-1.5 text-xs font-semibold transition ${limit === value ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                            >
+                                {value}
+                            </button>
+                        ))}
+                    </div>
+                    <select
+                        value={channel}
+                        onChange={(event) => onChannelChange(event.target.value)}
+                        className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                        aria-label="Payment channel"
+                    >
+                        {CHANNELS.map((item) => (
+                            <option key={item.key} value={item.key}>{item.label}</option>
+                        ))}
+                    </select>
+                </div>
+            )}
         >
             {isLoading ? (
                 <SkeletonRows />
@@ -51,6 +94,7 @@ export default function RecentPaymentsWidget({ data, isLoading, errorMessage, on
                                     <span aria-hidden="true">|</span>
                                     <span>{payment.product || 'Subscription'}</span>
                                     <span aria-hidden="true">|</span>
+                                    <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">{payment.channel?.label || 'Other'}</span>
                                     <span>{payment.method?.label || 'Unknown method'}</span>
                                     {payment.method?.subtitle ? <span>{payment.method.subtitle}</span> : null}
                                     {payment.agent?.name ? <span>Agent: {payment.agent.name}</span> : null}

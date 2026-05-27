@@ -38,7 +38,11 @@ function metricSubHint(key, metric) {
     }
 
     if (key === 'renewals_recovered') {
-        return `${Number(metric.value?.recovered || 0).toLocaleString()} recovered of ${Number(metric.value?.due || 0).toLocaleString()} due`;
+        const due = Number(metric.value?.due || 0);
+        if (due <= 0) {
+            return `${Number(metric.value?.renewal_payments || 0).toLocaleString()} renewal payments collected`;
+        }
+        return `${Number(metric.value?.recovered || 0).toLocaleString()} recovered of ${due.toLocaleString()} due-window base`;
     }
 
     if (key === 'collected_revenue') {

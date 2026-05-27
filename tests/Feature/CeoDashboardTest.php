@@ -105,6 +105,54 @@ class CeoDashboardTest extends TestCase
         $this->assertSame([200.0, 100.0], array_map(fn ($payment) => (float) $payment['amount'], $recent));
     }
 
+    public function test_market_pie_and_recent_payments_expose_channel_controls(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Accra',
+            'country' => 'Ghana',
+            'currency_code' => 'USD',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        Sanctum::actingAs($ceo);
+
+        $this->payment($platform, $product, [
+            'amount' => 100,
+            'source' => 'gateway',
+            'provider_key' => 'pawapay',
+            'completed_at' => now()->subMinutes(5),
+        ]);
+        $this->payment($platform, $product, [
+            'amount' => 50,
+            'source' => 'manual',
+            'provider_key' => null,
+            'completed_at' => now()->subMinutes(10),
+        ]);
+        $this->payment($platform, $product, [
+            'amount' => 25,
+            'source' => 'import',
+            'provider_key' => null,
+            'completed_at' => now()->subMinutes(15),
+        ]);
+
+        $pie = $this->getJson('/api/crm/dashboard/ceo/market-pie?reporting_currency=USD')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(['self_service', 'manual', 'other'], array_column($pie['channels'], 'key'));
+        $this->assertSame(['self_service', 'manual', 'other'], array_column($pie['markets'][0]['channels'], 'key'));
+
+        $manual = $this->getJson('/api/crm/dashboard/ceo/recent-payments?limit=20&channel=manual&reporting_currency=USD')
+            ->assertOk()
+            ->assertJsonPath('limit', 20)
+            ->assertJsonPath('channel_filter', 'manual')
+            ->json('payments');
+
+        $this->assertCount(1, $manual);
+        $this->assertSame('Manual', $manual[0]['channel']['label']);
+        $this->assertSame(50.0, (float) $manual[0]['amount']);
+    }
+
     private function user(array $overrides = []): User
     {
         return User::query()->create(array_merge([

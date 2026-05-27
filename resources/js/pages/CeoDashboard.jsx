@@ -51,6 +51,11 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [customRange, setCustomRange] = useState(defaultCustomRange);
     const [platformFilter, setPlatformFilter] = useState(null);
     const [focusedAgentId, setFocusedAgentId] = useState(null);
+    const [trendMetric, setTrendMetric] = useState('revenue');
+    const [trendBucket, setTrendBucket] = useState('auto');
+    const [trendComparison, setTrendComparison] = useState(true);
+    const [recentLimit, setRecentLimit] = useState(10);
+    const [recentChannel, setRecentChannel] = useState('all');
 
     const queryParams = useMemo(() => ({
         horizon,
@@ -78,14 +83,25 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     });
 
     const trendQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'revenue-trend', queryParams],
-        queryFn: () => api.get('/crm/dashboard/ceo/revenue-trend', { params: queryParams }).then((response) => response.data),
+        queryKey: ['ceo-dashboard', 'revenue-trend', queryParams, trendBucket],
+        queryFn: () => api.get('/crm/dashboard/ceo/revenue-trend', {
+            params: {
+                ...queryParams,
+                ...(trendBucket !== 'auto' ? { bucket: trendBucket } : {}),
+            },
+        }).then((response) => response.data),
         staleTime: 45_000,
     });
 
     const recentPaymentsQuery = useQuery({
-        queryKey: ['ceo-dashboard', 'recent-payments', queryParams],
-        queryFn: () => api.get('/crm/dashboard/ceo/recent-payments', { params: queryParams }).then((response) => response.data),
+        queryKey: ['ceo-dashboard', 'recent-payments', queryParams, recentLimit, recentChannel],
+        queryFn: () => api.get('/crm/dashboard/ceo/recent-payments', {
+            params: {
+                ...queryParams,
+                limit: recentLimit,
+                channel: recentChannel,
+            },
+        }).then((response) => response.data),
         refetchInterval: typeof document === 'undefined' || document.visibilityState === 'visible' ? 60_000 : false,
         staleTime: 20_000,
     });
@@ -164,6 +180,12 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         isLoading={trendQuery.isLoading}
                         errorMessage={trendQuery.isError ? apiError(trendQuery.error, 'Revenue trend could not be loaded.') : null}
                         currency={trendQuery.data?.window?.target_currency || reporting.targetCurrency}
+                        metric={trendMetric}
+                        onMetricChange={setTrendMetric}
+                        bucket={trendBucket}
+                        onBucketChange={setTrendBucket}
+                        showComparison={trendComparison}
+                        onShowComparisonChange={setTrendComparison}
                     />
                 </div>
                 <div className="xl:col-span-5">
@@ -173,6 +195,8 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         isLoading={marketPieQuery.isLoading}
                         errorMessage={marketPieQuery.isError ? apiError(marketPieQuery.error, 'Market revenue could not be loaded.') : null}
                         onSelectMarket={handleMarketScope}
+                        selectedMarket={selectedMarket}
+                        onClearMarket={() => handleMarketScope(null)}
                     />
                 </div>
             </section>
@@ -207,6 +231,10 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                         isLoading={recentPaymentsQuery.isLoading}
                         errorMessage={recentPaymentsQuery.isError ? apiError(recentPaymentsQuery.error, 'Recent payments could not be loaded.') : null}
                         onOpenPayment={(paymentId) => navigate(`/payments?search=${paymentId}`)}
+                        limit={recentLimit}
+                        onLimitChange={setRecentLimit}
+                        channel={recentChannel}
+                        onChannelChange={setRecentChannel}
                     />
                 </div>
             </section>
