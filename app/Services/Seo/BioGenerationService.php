@@ -30,6 +30,31 @@ class BioGenerationService
         'include_contact' => true,
         'contact_channel' => 'whatsapp',
         'custom_prompt' => '',
+        'language' => 'en',
+    ];
+
+    /**
+     * Supported output languages → display label + LLM directive.
+     * Add a language by extending this map; the prompt builder picks the
+     * directive automatically.
+     */
+    public const SUPPORTED_LANGUAGES = [
+        'en' => [
+            'label'     => 'English',
+            'directive' => 'Write the entire bio in natural, idiomatic English.',
+        ],
+        'fr' => [
+            'label'     => 'French',
+            'directive' => 'Write the entire bio in natural, idiomatic French (français). Use standard punctuation. No mixed languages.',
+        ],
+        'pt' => [
+            'label'     => 'Portuguese',
+            'directive' => 'Write the entire bio in natural, idiomatic Portuguese (português). Use standard punctuation. No mixed languages.',
+        ],
+        'sw' => [
+            'label'     => 'Swahili',
+            'directive' => 'Write the entire bio in natural, conversational Swahili (Kiswahili) that local readers will understand. Avoid Sheng/slang. No mixed languages.',
+        ],
     ];
 
     /**
@@ -212,9 +237,13 @@ class BioGenerationService
         $custom = trim((string) $options['custom_prompt']);
         $customLine = $custom !== '' ? "\nExtra editor instruction: {$custom}" : '';
         $feedbackBlock = $this->feedback->instructionsForPlatform($snapshot->platformId);
+        $langCode = (string) ($options['language'] ?? 'en');
+        $langDirective = self::SUPPORTED_LANGUAGES[$langCode]['directive']
+            ?? self::SUPPORTED_LANGUAGES['en']['directive'];
 
         return <<<PROMPT
 You write short public profile copy for an adult escort directory in {$country}.
+{$langDirective}
 Write {$minWords}-{$maxWords} words, no more than {$maxChars} characters.
 Tone: {$tone}. Temperament: {$temperament}.
 Style rules:
@@ -346,6 +375,11 @@ PROMPT;
             ? $options['contact_channel']
             : self::DEFAULT_GENERATION['contact_channel'];
         $options['custom_prompt'] = trim((string) $options['custom_prompt']);
+
+        $lang = strtolower(trim((string) ($options['language'] ?? 'en')));
+        $options['language'] = array_key_exists($lang, self::SUPPORTED_LANGUAGES)
+            ? $lang
+            : self::DEFAULT_GENERATION['language'];
 
         return $options;
     }

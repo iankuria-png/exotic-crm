@@ -55,6 +55,7 @@ class SeoController extends Controller
             'generation_options.include_contact' => 'nullable|boolean',
             'generation_options.contact_channel' => 'nullable|string|in:none,phone,whatsapp,both',
             'generation_options.custom_prompt' => 'nullable|string|max:2000',
+            'generation_options.language' => ['nullable', 'string', Rule::in(array_keys(\App\Services\Seo\BioGenerationService::SUPPORTED_LANGUAGES))],
             'refinements'      => 'nullable|array|max:6',
             'refinements.*'    => ['string', Rule::in(array_keys(\App\Services\Seo\BioGenerationService::REFINEMENT_PRESETS))],
             'previous_bio'     => 'nullable|string|max:6000',

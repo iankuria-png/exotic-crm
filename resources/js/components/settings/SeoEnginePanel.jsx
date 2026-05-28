@@ -25,6 +25,7 @@ const DEFAULT_GENERATION = {
     include_contact: true,
     contact_channel: 'whatsapp',
     custom_prompt: '',
+    language: 'en',
 };
 
 

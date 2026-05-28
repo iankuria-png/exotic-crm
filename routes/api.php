@@ -68,6 +68,7 @@ use App\Http\Controllers\CRM\University\GlossaryController as UniversityGlossary
 use App\Http\Controllers\CRM\University\LessonController as UniversityLessonController;
 use App\Http\Controllers\CRM\University\ModuleController as UniversityModuleController;
 use App\Http\Controllers\CRM\University\ProgressController as UniversityProgressController;
+use App\Http\Controllers\CRM\BulkBioController;
 use App\Http\Controllers\CRM\SeoController;
 use App\Http\Controllers\Wp\WpSeoController;
 use App\Http\Middleware\WpServiceAuth;
@@ -148,6 +149,17 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/generate-bio', [SeoController::class, 'generateBio']);
         Route::post('/feedback', [SeoController::class, 'feedback']);
         Route::get('/feedback/summary', [SeoController::class, 'feedbackSummary']);
+
+        // Bulk bio generation
+        Route::prefix('bulk')->group(function () {
+            Route::post('/preview',          [BulkBioController::class, 'preview']);
+            Route::get('/',                  [BulkBioController::class, 'index']);
+            Route::post('/',                 [BulkBioController::class, 'store']);
+            Route::get('/{batch}',           [BulkBioController::class, 'show']);
+            Route::post('/{batch}/accept',   [BulkBioController::class, 'accept']);
+            Route::post('/{batch}/cancel',   [BulkBioController::class, 'cancel']);
+            Route::delete('/{batch}',        [BulkBioController::class, 'destroy']);
+        });
     });
 
     // Dashboard

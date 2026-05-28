@@ -36,6 +36,7 @@ export default function GenerateBioButton({
         max_characters: '',
         max_services: '',
         contact_channel: '',
+        language: '',
     });
 
     const buildOverrides = () => Object.fromEntries(
@@ -176,6 +177,18 @@ export default function GenerateBioButton({
 
             {showOptions ? (
                 <div className="mt-2 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-3">
+                    <select
+                        className="rounded-md border-slate-300 text-sm"
+                        value={generationOptions.language}
+                        onChange={(e) => updateOption('language', e.target.value)}
+                        aria-label="Bio language"
+                    >
+                        <option value="">Default language</option>
+                        <option value="en">🇬🇧 English</option>
+                        <option value="fr">🇫🇷 French</option>
+                        <option value="pt">🇵🇹 Portuguese</option>
+                        <option value="sw">🇰🇪 Swahili</option>
+                    </select>
                     <input
                         className="rounded-md border-slate-300 text-sm"
                         value={generationOptions.tone}

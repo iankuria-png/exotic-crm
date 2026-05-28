@@ -37,6 +37,13 @@ const CONTACT_OPTIONS = [
     { key: 'none',     label: 'None' },
 ];
 
+const LANGUAGE_OPTIONS = [
+    { code: 'en', label: 'English',    flag: '🇬🇧' },
+    { code: 'fr', label: 'French',     flag: '🇫🇷' },
+    { code: 'pt', label: 'Portuguese', flag: '🇵🇹' },
+    { code: 'sw', label: 'Swahili',    flag: '🇰🇪' },
+];
+
 function tonePresetForValue(value) {
     return TONE_PRESETS.find((preset) => preset.value === value);
 }
@@ -127,6 +134,34 @@ export default function BioGenerationDefaultsCard({ value, onChange }) {
                         className="w-full rounded-lg border-slate-300 text-sm focus:border-teal-500 focus:ring-teal-500"
                     />
                 )}
+            </div>
+
+            {/* ─── Language ───────────────────────────────────────────────────── */}
+            <div className="mt-6 space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bio language</label>
+                <div className="flex flex-wrap gap-2">
+                    {LANGUAGE_OPTIONS.map((lang) => {
+                        const active = (value.language || 'en') === lang.code;
+                        return (
+                            <button
+                                key={lang.code}
+                                type="button"
+                                onClick={() => update('language', lang.code)}
+                                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-semibold transition ${
+                                    active
+                                        ? 'border-teal-400 bg-teal-50 text-teal-800 ring-1 ring-teal-300'
+                                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                                }`}
+                            >
+                                <span aria-hidden="true">{lang.flag}</span>
+                                <span>{lang.label}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+                <p className="text-xs text-slate-500">
+                    The LLM is instructed to write the entire bio in the selected language. Agents can override per draft.
+                </p>
             </div>
 
             {/* ─── Temperament slider ─────────────────────────────────────────── */}

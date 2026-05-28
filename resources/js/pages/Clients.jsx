@@ -17,6 +17,7 @@ import { platformOptionsWithFlags } from '../utils/flags';
 import { deriveClientProfileState, isClientPubliclyActive } from '../utils/clientProfileState';
 import { normalizePhone } from '../utils/phone';
 import GenerateBioButton from '../components/seo/GenerateBioButton';
+import BulkBioModal from '../components/seo/BulkBioModal';
 import { useAuth } from '../hooks/useAuth';
 import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
 import { proxyImageUrl } from '../utils/imageProxy';
@@ -454,6 +455,7 @@ export default function Clients() {
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
+    const [showBulkBioModal, setShowBulkBioModal] = useState(false);
     const [showCsvConfirm, setShowCsvConfirm] = useState(false);
     const [csvResult, setCsvResult] = useState(null);
     const [clearSelectionKey, setClearSelectionKey] = useState(0);
@@ -1511,6 +1513,14 @@ export default function Clients() {
                         ) : null}
                         <button
                             type="button"
+                            onClick={() => setShowBulkBioModal(true)}
+                            className="crm-btn-secondary"
+                            title="Paste profile URLs to generate bios in bulk"
+                        >
+                            ✨ Bulk bios
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => setShowCsvModal(true)}
                             className="crm-btn-secondary"
                         >
@@ -2458,6 +2468,13 @@ export default function Clients() {
                     }}
                 />
             ) : null}
+
+            <BulkBioModal
+                open={showBulkBioModal}
+                onClose={() => setShowBulkBioModal(false)}
+                platforms={platformOptions.map((p) => ({ id: p.platform_id, name: p.name }))}
+                defaultPlatformId={platformOptions[0]?.platform_id || null}
+            />
         </div>
     );
 }

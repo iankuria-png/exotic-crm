@@ -44,7 +44,10 @@ class SeoSettingsController extends Controller
         'include_contact' => true,
         'contact_channel' => 'whatsapp',
         'custom_prompt' => '',
+        'language' => 'en',
     ];
+
+    private const SUPPORTED_LANGUAGES = ['en', 'fr', 'pt', 'sw'];
 
     /**
      * GET /api/crm/settings/seo-engine
@@ -59,6 +62,10 @@ class SeoSettingsController extends Controller
             'config'    => $stored,
             'available_providers' => self::SUPPORTED_PROVIDERS,
             'env_keys_detected'   => $this->detectEnvKeys(),
+            'available_languages' => collect(\App\Services\Seo\BioGenerationService::SUPPORTED_LANGUAGES)
+                ->map(fn($info, $code) => ['code' => $code, 'label' => $info['label']])
+                ->values()
+                ->all(),
             'platforms' => Platform::query()
                 ->orderBy('name')
                 ->get(['id', 'name', 'country'])
@@ -95,6 +102,7 @@ class SeoSettingsController extends Controller
             'generation.include_contact' => 'nullable|boolean',
             'generation.contact_channel' => 'nullable|string|in:none,phone,whatsapp,both',
             'generation.custom_prompt' => 'nullable|string|max:2000',
+            'generation.language' => ['nullable', 'string', Rule::in(self::SUPPORTED_LANGUAGES)],
         ]);
 
         $previous = $this->loadStored();
@@ -278,6 +286,10 @@ class SeoSettingsController extends Controller
             ? $generation['contact_channel']
             : self::DEFAULT_GENERATION['contact_channel'];
         $generation['custom_prompt'] = trim((string) $generation['custom_prompt']);
+        $lang = strtolower(trim((string) ($generation['language'] ?? 'en')));
+        $generation['language'] = in_array($lang, self::SUPPORTED_LANGUAGES, true)
+            ? $lang
+            : self::DEFAULT_GENERATION['language'];
 
         return $generation;
     }
