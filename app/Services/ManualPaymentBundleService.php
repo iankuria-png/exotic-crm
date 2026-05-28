@@ -104,7 +104,7 @@ class ManualPaymentBundleService
                 'status' => ManualPaymentBundle::STATUS_COMMITTING,
                 'audit_state' => (float) $preview['unallocated_amount'] > 0
                     ? ManualPaymentBundle::AUDIT_NEEDS_FINANCE_RESOLUTION
-                    : ManualPaymentBundle::AUDIT_PENDING_FINANCE_REVIEW,
+                    : ManualPaymentBundle::AUDIT_RESOLVED,
                 'idempotency_key' => $idempotencyKey,
                 'created_by' => $actorId,
             ]);
@@ -207,7 +207,7 @@ class ManualPaymentBundleService
                     'match_confidence' => 'manual',
                     'confirmed_by' => $actorId,
                     'confirmed_at' => now(),
-                    'reconciliation_state' => 'manual_review',
+                    'reconciliation_state' => 'resolved',
                     'sync_client' => false,
                     'emit_profile_activated_timeline' => false,
                     'emit_deal_activated_timeline' => false,
@@ -428,6 +428,45 @@ class ManualPaymentBundleService
      * @param  array{reason_code: string, notes: string}  $params
      * @return array<string, mixed>
      */
+    public function approveBundle(ManualPaymentBundle $bundle, int $actorId): array
+    {
+        $bundle->loadMissing(['payments.client', 'payments.deal', 'createdBy', 'platform']);
+
+        if ($bundle->status !== ManualPaymentBundle::STATUS_COMMITTED) {
+            throw ValidationException::withMessages([
+                'bundle' => "Bundle cannot be approved from status '{$bundle->status}'.",
+            ]);
+        }
+
+        if ($bundle->audit_state === ManualPaymentBundle::AUDIT_RESOLVED) {
+            return $this->serializeCommittedBundle($bundle, true);
+        }
+
+        if ($bundle->audit_state !== ManualPaymentBundle::AUDIT_PENDING_FINANCE_REVIEW) {
+            throw ValidationException::withMessages([
+                'audit_state' => "Bundle in audit state '{$bundle->audit_state}' cannot be approved.",
+            ]);
+        }
+
+        DB::transaction(function () use ($bundle, $actorId) {
+            foreach ($bundle->payments as $payment) {
+                if ($payment->reconciliation_state === 'manual_review') {
+                    $payment->forceFill([
+                        'reconciliation_state' => 'resolved',
+                        'confirmed_by' => $payment->confirmed_by ?? $actorId,
+                        'confirmed_at' => $payment->confirmed_at ?? now(),
+                    ])->save();
+                }
+            }
+
+            $bundle->forceFill([
+                'audit_state' => ManualPaymentBundle::AUDIT_RESOLVED,
+            ])->save();
+        });
+
+        return $this->serializeCommittedBundle($bundle->fresh(['payments.client', 'payments.deal', 'createdBy', 'platform']), false);
+    }
+
     public function voidBundle(ManualPaymentBundle $bundle, array $params, int $actorId): array
     {
         $bundle->loadMissing(['payments.deal.client.platform', 'payments.client']);
@@ -1015,7 +1054,7 @@ class ManualPaymentBundleService
                 $payment->forceFill([
                     'status' => 'completed',
                     'completed_at' => $payment->completed_at ?? $now,
-                    'reconciliation_state' => 'manual_review',
+                    'reconciliation_state' => 'resolved',
                     'match_confidence' => 'manual',
                     'confirmed_by' => $actorId,
                     'confirmed_at' => $payment->confirmed_at ?? $now,
@@ -1049,7 +1088,7 @@ class ManualPaymentBundleService
                 'status' => ManualPaymentBundle::STATUS_COMMITTED,
                 'audit_state' => (float) $preview['unallocated_amount'] > 0
                     ? ManualPaymentBundle::AUDIT_NEEDS_FINANCE_RESOLUTION
-                    : ManualPaymentBundle::AUDIT_PENDING_FINANCE_REVIEW,
+                    : ManualPaymentBundle::AUDIT_RESOLVED,
             ])->save();
         });
 
