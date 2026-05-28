@@ -5,10 +5,19 @@ import SubsidiaryClientPreview from './SubsidiaryClientPreview';
 import SubsidiaryClientSearchPopover from './SubsidiaryClientSearchPopover';
 
 function configMessage(errors = []) {
-    if (errors.includes('missing_trial_product')) return 'Trial product is not configured for this market.';
+    if (errors.includes('free_trial_disabled')) return 'Free trials are disabled in Billing subscription rules for this market.';
+    if (errors.includes('missing_matching_product')) return 'No matching subscription package is available in this market.';
+    if (errors.includes('missing_trial_product')) return 'No matching subscription package is available in this market.';
     if (errors.includes('missing_wp_api_credentials')) return 'WordPress API credentials are incomplete for this market.';
     if (errors.includes('missing_wp_db_credentials')) return 'WordPress database credentials are incomplete for new client provisioning.';
     return null;
+}
+
+function optionSuffix(errors = []) {
+    if (errors.includes('free_trial_disabled')) return 'free trial off';
+    if (errors.includes('missing_matching_product') || errors.includes('missing_trial_product')) return 'missing package';
+    if (errors.includes('missing_wp_api_credentials')) return 'WP API missing';
+    return 'not ready';
 }
 
 export default function SubsidiaryTrialSection({
@@ -65,7 +74,9 @@ export default function SubsidiaryTrialSection({
 
     const targetOptions = useMemo(() => targets.map((target) => ({
         ...target,
-        disabled: (target.config_errors || []).includes('missing_trial_product')
+        disabled: (target.config_errors || []).includes('free_trial_disabled')
+            || (target.config_errors || []).includes('missing_matching_product')
+            || (target.config_errors || []).includes('missing_trial_product')
             || (target.config_errors || []).includes('missing_wp_api_credentials'),
     })), [targets]);
 
@@ -110,7 +121,7 @@ export default function SubsidiaryTrialSection({
                             <option value="">{targetsQuery.isLoading ? 'Loading markets...' : 'Choose market'}</option>
                             {targetOptions.map((target) => (
                                 <option key={target.id} value={target.id} disabled={target.disabled} title={configMessage(target.config_errors)}>
-                                    {target.name}{target.disabled ? ' (not ready)' : ''}
+                                    {target.name}{target.disabled ? ` (${optionSuffix(target.config_errors)})` : ''}
                                 </option>
                             ))}
                         </select>

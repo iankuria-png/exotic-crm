@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Billing\Repositories\BillingConfigurationRepository;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Platform;
@@ -19,13 +20,14 @@ class SubsidiaryTrialService
         private readonly SubsidiaryClientResolver $clientResolver,
         private readonly DealPaymentService $dealPaymentService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
-        private readonly AuditService $auditService
+        private readonly AuditService $auditService,
+        private readonly BillingConfigurationRepository $billingConfigurationRepository
     ) {
     }
 
     public function targetsForDeal(Deal $main, User $user): array
     {
-        $main->loadMissing('client.platform');
+        $main->loadMissing('client.platform', 'product');
         $query = Platform::query()
             ->where('id', '!=', (int) $main->platform_id)
             ->orderBy('name');
@@ -33,13 +35,13 @@ class SubsidiaryTrialService
         $this->marketAuthorizationService->applyPlatformScope($query, $user, 'id');
 
         return [
-            'targets' => $query->get()->map(fn (Platform $platform) => $this->targetPayload($platform))->values()->all(),
+            'targets' => $query->get()->map(fn (Platform $platform) => $this->targetPayload($platform, $main))->values()->all(),
         ];
     }
 
     public function previewForDeal(Deal $main, Platform $target): array
     {
-        $main->loadMissing(['client.platform']);
+        $main->loadMissing(['client.platform', 'product']);
         $client = $main->client;
         if (!$client) {
             throw new \InvalidArgumentException('Deal has no associated client.');
@@ -57,8 +59,8 @@ class SubsidiaryTrialService
         }
 
         return [
-            'target_platform' => $this->targetPayload($target),
-            'config_errors' => $this->configErrors($target),
+            'target_platform' => $this->targetPayload($target, $main),
+            'config_errors' => $this->configErrors($target, $main),
             'match' => $match,
             'will_create' => $match ? null : [
                 'name' => $client->name,
@@ -66,7 +68,7 @@ class SubsidiaryTrialService
                 'email' => $client->email,
                 'city' => $client->city,
             ],
-            'default_duration_days' => max(1, (int) ($target->field_trial_duration_days ?? 7)),
+            'default_duration_days' => $this->freeTrialDurationDays($target),
         ];
     }
 
@@ -88,9 +90,13 @@ class SubsidiaryTrialService
         }
 
         try {
-            $errors = $this->configErrors($target);
-            if (in_array('missing_trial_product', $errors, true)) {
-                return $this->fail($main, $intent, 'no_trial_product', 'Subsidiary trial product is not configured.');
+            $main->loadMissing('product');
+            $errors = $this->configErrors($target, $main);
+            if (in_array('free_trial_disabled', $errors, true)) {
+                return $this->fail($main, $intent, 'free_trial_disabled', 'Free trials are not enabled for the subsidiary market.');
+            }
+            if (in_array('missing_matching_product', $errors, true)) {
+                return $this->fail($main, $intent, 'no_matching_product', 'No matching subscription package is available in the subsidiary market.');
             }
             if (in_array('missing_wp_api_credentials', $errors, true)) {
                 return $this->fail($main, $intent, 'missing_wp_api_credentials', 'Subsidiary WordPress API credentials are incomplete.');
@@ -126,12 +132,9 @@ class SubsidiaryTrialService
                 return $activeTrial->fresh(['client', 'product', 'platform']);
             }
 
-            $product = Product::query()
-                ->where('platform_id', (int) $target->id)
-                ->where('is_active', true)
-                ->find((int) $target->field_trial_product_id);
+            $product = $this->resolveTrialProduct($target, $main);
             if (!$product) {
-                return $this->fail($main, $intent, 'no_trial_product', 'Configured subsidiary trial product is unavailable.');
+                return $this->fail($main, $intent, 'no_matching_product', 'No matching subscription package is available in the subsidiary market.');
             }
 
             $durationDays = max(1, min(90, (int) ($intent['duration_days'] ?? $target->field_trial_duration_days ?? 7)));
@@ -334,24 +337,31 @@ class SubsidiaryTrialService
         return $this->clientResolver->resolve($main->client, $target, (array) ($intent['subsidiary_client_seed'] ?? []));
     }
 
-    private function targetPayload(Platform $platform): array
+    private function targetPayload(Platform $platform, Deal $main): array
     {
+        $product = $this->resolveTrialProduct($platform, $main);
+
         return [
             'id' => (int) $platform->id,
             'name' => $platform->name,
-            'field_trial_product_id' => $platform->field_trial_product_id ? (int) $platform->field_trial_product_id : null,
-            'field_trial_duration_days' => max(1, (int) ($platform->field_trial_duration_days ?? 7)),
+            'free_trial_enabled' => $this->freeTrialEnabled($platform),
+            'free_trial_duration_days' => $this->freeTrialDurationDays($platform),
+            'trial_product_id' => $product ? (int) $product->id : null,
+            'trial_product_name' => $product?->name,
             'wp_api_ready' => $this->wpApiReady($platform),
             'wp_provisioning_ready' => $this->wpProvisioningReady($platform),
-            'config_errors' => $this->configErrors($platform),
+            'config_errors' => $this->configErrors($platform, $main),
         ];
     }
 
-    private function configErrors(Platform $platform): array
+    private function configErrors(Platform $platform, Deal $main): array
     {
         $errors = [];
-        if (!$platform->field_trial_product_id) {
-            $errors[] = 'missing_trial_product';
+        if (!$this->freeTrialEnabled($platform)) {
+            $errors[] = 'free_trial_disabled';
+        }
+        if (!$this->resolveTrialProduct($platform, $main)) {
+            $errors[] = 'missing_matching_product';
         }
         if (!$this->wpApiReady($platform)) {
             $errors[] = 'missing_wp_api_credentials';
@@ -361,6 +371,84 @@ class SubsidiaryTrialService
         }
 
         return $errors;
+    }
+
+    private function freeTrialEnabled(Platform $platform): bool
+    {
+        $rule = $this->billingConfigurationRepository->subscriptionRuleForMarket((int) $platform->id);
+
+        return (bool) data_get($rule?->free_trial_json, 'enabled', false);
+    }
+
+    private function freeTrialDurationDays(Platform $platform): int
+    {
+        $rule = $this->billingConfigurationRepository->subscriptionRuleForMarket((int) $platform->id);
+        $days = (int) data_get($rule?->free_trial_json, 'duration_days', 0);
+
+        return max(1, min(90, $days > 0 ? $days : 7));
+    }
+
+    private function resolveTrialProduct(Platform $target, Deal $main): ?Product
+    {
+        $main->loadMissing('product');
+        $base = Product::query()
+            ->where('platform_id', (int) $target->id)
+            ->where('is_active', true)
+            ->where(function ($query) {
+                $query->where('is_archived', false)
+                    ->orWhereNull('is_archived');
+            });
+
+        if ((int) ($target->product_id ?? 0) > 0) {
+            $default = (clone $base)->find((int) $target->product_id);
+            if ($default) {
+                return $default;
+            }
+        }
+
+        $source = $main->product;
+        if ($source) {
+            $slug = trim((string) ($source->slug ?? ''));
+            if ($slug !== '') {
+                $match = (clone $base)->where('slug', $slug)->first();
+                if ($match) {
+                    return $match;
+                }
+            }
+
+            $tier = strtolower(trim((string) ($source->tier ?? '')));
+            if ($tier !== '' && $tier !== 'custom') {
+                $match = (clone $base)->whereRaw('LOWER(tier) = ?', [$tier])->orderBy('sort_order')->orderBy('id')->first();
+                if ($match) {
+                    return $match;
+                }
+            }
+
+            $name = ProductCatalogService::normalizePackageName((string) ($source->name ?? ''));
+            if ($name !== '') {
+                $match = (clone $base)
+                    ->where(function ($query) use ($name) {
+                        $query->whereRaw('UPPER(name) = ?', [$name])
+                            ->orWhereRaw('UPPER(display_name) = ?', [$name]);
+                    })
+                    ->first();
+                if ($match) {
+                    return $match;
+                }
+            }
+        }
+
+        $planType = strtolower(trim((string) ($main->plan_type ?? '')));
+        if ($planType !== '' && $planType !== 'custom') {
+            $match = (clone $base)->whereRaw('LOWER(tier) = ?', [$planType])->orderBy('sort_order')->orderBy('id')->first();
+            if ($match) {
+                return $match;
+            }
+        }
+
+        $single = (clone $base)->limit(2)->get();
+
+        return $single->count() === 1 ? $single->first() : null;
     }
 
     private function wpApiReady(Platform $platform): bool
@@ -394,7 +482,9 @@ class SubsidiaryTrialService
     private function errorMessage(string $code): string
     {
         return match ($code) {
-            'no_trial_product' => 'Subsidiary trial product is not configured.',
+            'free_trial_disabled' => 'Free trials are not enabled for the subsidiary market.',
+            'no_matching_product' => 'No matching subscription package is available in the subsidiary market.',
+            'no_trial_product' => 'No matching subscription package is available in the subsidiary market.',
             'missing_wp_api_credentials' => 'Subsidiary WordPress API credentials are incomplete.',
             'missing_wp_db_credentials' => 'Subsidiary WordPress database credentials are incomplete.',
             'wp_provisioning_failed' => 'Subsidiary WordPress provisioning failed.',
