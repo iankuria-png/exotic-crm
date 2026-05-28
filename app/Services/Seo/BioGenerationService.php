@@ -430,6 +430,12 @@ PROMPT;
             return '';
         }
 
+        // 0) Repair classic mojibake — LLMs sometimes return UTF-8 bytes that
+        //    were already decoded once through Latin-1/Windows-1252, producing
+        //    "régulière" → "rÃ©guliÃ¨re". MUST run before sanitization so the
+        //    regex passes below see real characters.
+        $text = $this->demojibake($text);
+
         // 1) Strip markdown code fences if the model wrapped output (```...```)
         $text = preg_replace('/^```[a-z]*\s*|\s*```$/im', '', $text) ?? $text;
 
@@ -467,6 +473,50 @@ PROMPT;
         $text = preg_replace('/\n{3,}/', "\n\n", $text) ?? $text;
 
         return trim($text);
+    }
+
+    /**
+     * Repair "double-encoded UTF-8" mojibake that some LLMs produce on
+     * non-English output. Pattern: `é` (UTF-8 0xC3 0xA9) got interpreted as
+     * Latin-1 chars `Ã` + `©` and re-encoded to UTF-8 (4 bytes), so the
+     * editor sees `Ã©`.
+     *
+     * Detection is conservative: we only run the fix when the string
+     * contains the characteristic mojibake signatures AND the re-decode
+     * yields valid UTF-8 with no replacement chars. If the heuristic
+     * doesn't fire, we return the original text untouched so we never
+     * mangle already-correct strings.
+     */
+    private function demojibake(string $text): string
+    {
+        // Quick reject — no characteristic mojibake glyphs.
+        // Common signatures: Ã[©¨ ç¢] (latin accents), â€[™"\'] (smart quotes/dashes).
+        if (!preg_match('/Ã[\x{0080}-\x{00FF}]|â€[™"\'\x{0080}-\x{00BF}]/u', $text)) {
+            return $text;
+        }
+
+        // Attempt the classic fix: re-interpret the UTF-8 byte sequence as if
+        // it were Latin-1 (ISO-8859-1). That collapses the double-encoded
+        // bytes back to the original UTF-8 bytes of the intended character.
+        $attempt = @mb_convert_encoding($text, 'ISO-8859-1', 'UTF-8');
+        if ($attempt === false || $attempt === '') {
+            return $text;
+        }
+
+        // The result must be valid UTF-8 — otherwise we've made things worse.
+        if (!mb_check_encoding($attempt, 'UTF-8')) {
+            return $text;
+        }
+
+        // Sanity check: the fix should REMOVE the mojibake signatures.
+        // If they're still present, the input wasn't pure-mojibake (mixed
+        // proper + mojibaked) and our fix would mangle the proper bytes —
+        // bail rather than partially corrupting.
+        if (preg_match('/Ã[\x{0080}-\x{00FF}]|â€[™"\'\x{0080}-\x{00BF}]/u', $attempt)) {
+            return $text;
+        }
+
+        return $attempt;
     }
 
     private function enforceCharacterLimit(string $text, int $limit): string

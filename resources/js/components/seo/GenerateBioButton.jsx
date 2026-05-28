@@ -105,6 +105,28 @@ export default function GenerateBioButton({
         }
     };
 
+    const requestTranslation = async (bioHtml) => {
+        if (!bioHtml) throw new Error('No bio to translate.');
+        const lang = preview?.generation_options?.language || generationOptions.language || 'en';
+        if (lang === 'en') return { translation_html: bioHtml, cached: true };
+
+        const resp = await fetch('/api/crm/seo/translate-bio', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                'X-XSRF-TOKEN': getCsrfToken(),
+            },
+            credentials: 'same-origin',
+            body: JSON.stringify({ bio_html: bioHtml, from_language: lang }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw new Error(data.message || data.error || `Translate failed (${resp.status}).`);
+        }
+        return data;
+    };
+
     const sendFeedback = (feedback) => {
         // Fire-and-forget; UI shows "Saved" optimistically.
         const body = {
@@ -246,6 +268,7 @@ export default function GenerateBioButton({
                 breakdown={preview?.breakdown ?? null}
                 providerUsed={preview?.provider_used ?? ''}
                 usage={preview?.usage ?? null}
+                language={preview?.generation_options?.language || generationOptions.language || 'en'}
                 regenerating={regenerating}
                 onAccept={handleAccept}
                 onDiscard={() => {
@@ -254,6 +277,7 @@ export default function GenerateBioButton({
                 }}
                 onRegenerate={handleRegenerate}
                 onFeedback={sendFeedback}
+                onTranslate={requestTranslation}
             />
         </>
     );

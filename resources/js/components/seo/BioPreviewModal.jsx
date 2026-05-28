@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import SeoScoreBadge from './SeoScoreBadge';
 
+const LANGUAGE_LABEL = {
+    en: 'English',
+    fr: 'French',
+    pt: 'Portuguese',
+    sw: 'Swahili',
+};
+const LANGUAGE_FLAG = {
+    en: '🇬🇧',
+    fr: '🇫🇷',
+    pt: '🇵🇹',
+    sw: '🇰🇪',
+};
+
 /**
  * Enhanced preview modal for a generated bio.
  *
@@ -19,11 +32,13 @@ export default function BioPreviewModal({
     breakdown,
     providerUsed,
     usage = null,
+    language = 'en',           // language the bio was generated in
     regenerating = false,
     onAccept,
     onDiscard,
-    onRegenerate,   // (refinements: string[]) => void
-    onFeedback,     // ({ rating, tag, comment, accepted }) => void
+    onRegenerate,              // (refinements: string[]) => void
+    onFeedback,                // ({ rating, tag, comment, accepted }) => void
+    onTranslate,               // (bioHtml: string) => Promise<{translation_html, cached}>
 }) {
     const [rating, setRating] = useState(null); // 1, -1, or null
     const [tag, setTag] = useState(null);
@@ -31,7 +46,16 @@ export default function BioPreviewModal({
     const [feedbackSent, setFeedbackSent] = useState(false);
     const [activeRefinements, setActiveRefinements] = useState([]);
 
-    // Reset feedback state when a new bio arrives
+    // Translation peek state
+    const [showTranslation, setShowTranslation] = useState(false);
+    const [translationHtml, setTranslationHtml] = useState(null);
+    const [translationCached, setTranslationCached] = useState(false);
+    const [translating, setTranslating] = useState(false);
+    const [translationError, setTranslationError] = useState(null);
+
+    const isNonEnglish = language && language !== 'en';
+
+    // Reset feedback + translation state when a new bio arrives
     useEffect(() => {
         if (open && bioHtml) {
             setRating(null);
@@ -39,8 +63,33 @@ export default function BioPreviewModal({
             setComment('');
             setFeedbackSent(false);
             setActiveRefinements([]);
+            setShowTranslation(false);
+            setTranslationHtml(null);
+            setTranslationCached(false);
+            setTranslationError(null);
         }
     }, [open, bioHtml]);
+
+    const handleToggleTranslation = async () => {
+        if (!onTranslate || !isNonEnglish) return;
+        if (translationHtml) {
+            // Already have it — just toggle visibility
+            setShowTranslation((v) => !v);
+            return;
+        }
+        setTranslating(true);
+        setTranslationError(null);
+        try {
+            const data = await onTranslate(bioHtml);
+            setTranslationHtml(data?.translation_html || '<p><em>Translation came back empty.</em></p>');
+            setTranslationCached(!!data?.cached);
+            setShowTranslation(true);
+        } catch (err) {
+            setTranslationError(err?.message || 'Could not translate.');
+        } finally {
+            setTranslating(false);
+        }
+    };
 
     const rows = useMemo(() => [
         ['Bio length',     breakdown?.word_count ?? 0],
@@ -115,6 +164,12 @@ export default function BioPreviewModal({
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <SeoScoreBadge score={score} />
+                            {language ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700" title={`Bio language: ${LANGUAGE_LABEL[language] || language}`}>
+                                    <span aria-hidden="true">{LANGUAGE_FLAG[language] || '🌐'}</span>
+                                    {LANGUAGE_LABEL[language] || language.toUpperCase()}
+                                </span>
+                            ) : null}
                             {providerUsed ? (
                                 <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                                     {providerUsed}
@@ -131,6 +186,42 @@ export default function BioPreviewModal({
 
                 {/* ── Body (scrollable) ── */}
                 <div className="flex-1 overflow-y-auto px-5 py-4">
+                    {/* Peek-English toggle bar for non-English bios */}
+                    {isNonEnglish && onTranslate ? (
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                            <div className="flex items-center gap-2 text-slate-600">
+                                <span aria-hidden="true">{LANGUAGE_FLAG[language]}</span>
+                                <span className="font-semibold text-slate-800">{LANGUAGE_LABEL[language]} bio</span>
+                                {translationCached && showTranslation ? (
+                                    <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">cached</span>
+                                ) : null}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleToggleTranslation}
+                                disabled={translating}
+                                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                    showTranslation
+                                        ? 'bg-teal-600 text-white shadow-sm'
+                                        : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                                }`}
+                            >
+                                {translating ? (
+                                    <><Spinner /> Translating…</>
+                                ) : showTranslation ? (
+                                    <><span aria-hidden="true">🇬🇧</span> Hide English</>
+                                ) : (
+                                    <><span aria-hidden="true">🇬🇧</span> Peek in English</>
+                                )}
+                            </button>
+                        </div>
+                    ) : null}
+                    {translationError ? (
+                        <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                            {translationError}
+                        </div>
+                    ) : null}
+
                     {/* Bio body — fade overlay when regenerating */}
                     <div className="relative">
                         <div
@@ -147,6 +238,22 @@ export default function BioPreviewModal({
                             </div>
                         ) : null}
                     </div>
+
+                    {/* English translation peek — slides in under the original */}
+                    {isNonEnglish && showTranslation && translationHtml ? (
+                        <div className="mt-3 overflow-hidden rounded-xl border border-teal-200 bg-teal-50/40">
+                            <div className="flex items-center justify-between gap-2 border-b border-teal-100 bg-teal-50 px-3 py-1.5 text-[11px]">
+                                <div className="flex items-center gap-1.5 font-semibold uppercase tracking-[0.08em] text-teal-800">
+                                    <span aria-hidden="true">🇬🇧</span> English meaning (for editorial review only)
+                                </div>
+                                <span className="text-[10px] text-teal-600">Not saved to WP — original {LANGUAGE_LABEL[language]} bio is what gets used.</span>
+                            </div>
+                            <div
+                                className="prose prose-sm max-w-none p-4 text-slate-800"
+                                dangerouslySetInnerHTML={{ __html: translationHtml }}
+                            />
+                        </div>
+                    ) : null}
 
                     {/* Usage line */}
                     {usage ? (

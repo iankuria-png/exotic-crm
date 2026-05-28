@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\SeoBioFeedback;
 use App\Services\Seo\BioGenerationService;
+use App\Services\Seo\BioTranslationService;
 use App\Services\Seo\FeedbackInsightService;
 use App\Services\Seo\ProfileSnapshotBuilder;
 use App\Services\Seo\SeoScorer;
@@ -24,6 +25,7 @@ class SeoController extends Controller
         private readonly ProfileSnapshotBuilder $snapshotBuilder,
         private readonly SeoScorer              $scorer,
         private readonly FeedbackInsightService $feedbackInsight,
+        private readonly BioTranslationService  $translator,
     ) {}
 
     /**
@@ -147,6 +149,38 @@ class SeoController extends Controller
             'id'      => $row->id,
             'message' => 'Feedback recorded.',
         ]);
+    }
+
+    /**
+     * POST /api/crm/seo/translate-bio
+     * Translate an already-generated non-English bio into English so editors
+     * can sanity-check the meaning without speaking the target language.
+     *
+     * Cached for 24h by (language, content-hash) so toggling the peek view
+     * back and forth is free after the first translation.
+     */
+    public function translateBio(Request $request): JsonResponse
+    {
+        if (!config('services.seo_engine.enabled', false)) {
+            return response()->json(['message' => 'SEO Engine is disabled.'], 403);
+        }
+
+        $data = $request->validate([
+            'bio_html'      => 'required|string|max:20000',
+            'from_language' => ['required', 'string', Rule::in(array_keys(BioGenerationService::SUPPORTED_LANGUAGES))],
+        ]);
+
+        if ($data['from_language'] === 'en') {
+            return response()->json([
+                'translation_html' => $data['bio_html'],
+                'provider_used'    => 'noop',
+                'cached'           => true,
+                'message'          => 'Source is already English.',
+            ]);
+        }
+
+        $result = $this->translator->translateToEnglish($data['bio_html'], $data['from_language']);
+        return response()->json($result);
     }
 
     /**

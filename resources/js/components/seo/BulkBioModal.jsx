@@ -271,11 +271,21 @@ export default function BulkBioModal({ open, onClose, platforms = [], defaultPla
                     breakdown={drillIntoRow.breakdown}
                     providerUsed={drillIntoRow.provider_used}
                     usage={null}
+                    language={batch?.language || language}
                     onAccept={() => {
                         acceptMutation.mutate([drillIntoRow.id]);
                         setDrillIntoRow(null);
                     }}
                     onDiscard={() => setDrillIntoRow(null)}
+                    onTranslate={async (bioHtml) => {
+                        const lang = batch?.language || language || 'en';
+                        if (lang === 'en') return { translation_html: bioHtml, cached: true };
+                        const { data } = await api.post('/crm/seo/translate-bio', {
+                            bio_html: bioHtml,
+                            from_language: lang,
+                        });
+                        return data;
+                    }}
                 />
             ) : null}
         </div>
