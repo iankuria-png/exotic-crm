@@ -977,6 +977,20 @@ export default function Payments() {
         enabled: bundleDetailDialog.open && !!bundleDetailDialog.bundleId,
     });
 
+    const approveBundleMutation = useMutation({
+        mutationFn: (bundleId) =>
+            api.post(`/crm/manual-payment-bundles/${bundleId}/approve`).then((response) => response.data),
+        onSuccess: (_, bundleId) => {
+            queryClient.invalidateQueries({ queryKey: ['payments'] });
+            queryClient.invalidateQueries({ queryKey: ['bundle-detail', bundleId] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            toast.success('Bundle approved. Child payments marked resolved.');
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Failed to approve bundle.');
+        },
+    });
+
     const voidBundleMutation = useMutation({
         mutationFn: ({ bundleId, reason_code, notes }) =>
             api.post(`/crm/manual-payment-bundles/${bundleId}/void`, { reason_code, notes }).then((response) => response.data),
@@ -4247,6 +4261,22 @@ export default function Payments() {
                                                     </li>
                                                 ))}
                                             </ul>
+                                        </div>
+                                    ) : null}
+
+                                    {user?.role === 'admin' && bundleDetailData.bundle.status === 'committed' && bundleDetailData.bundle.audit_state === 'pending_finance_review' ? (
+                                        <div className="border-t border-slate-100 pt-4">
+                                            <button
+                                                type="button"
+                                                onClick={() => approveBundleMutation.mutate(bundleDetailData.bundle.id)}
+                                                disabled={approveBundleMutation.isPending}
+                                                className="w-full rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {approveBundleMutation.isPending ? 'Approving…' : 'Approve bundle'}
+                                            </button>
+                                            <p className="mt-2 text-center text-[11px] text-slate-500">
+                                                Marks the bundle and its child payments as resolved so they count toward confirmed revenue.
+                                            </p>
                                         </div>
                                     ) : null}
 

@@ -207,6 +207,45 @@ class ManualPaymentBundleController extends Controller
         ]);
     }
 
+    public function approve(Request $request, int $id)
+    {
+        $bundle = ManualPaymentBundle::query()
+            ->with(['payments.client', 'payments.deal', 'createdBy', 'platform'])
+            ->findOrFail($id);
+
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            (int) $bundle->platform_id,
+            'You do not have access to this bundle market.'
+        );
+
+        try {
+            $result = $this->manualPaymentBundleService->approveBundle(
+                $bundle,
+                (int) $request->user()->id
+            );
+        } catch (ValidationException $exception) {
+            throw $exception;
+        }
+
+        $this->auditService->fromRequest(
+            $request,
+            (int) $bundle->platform_id,
+            CrmAuditAction::MANUAL_PAYMENT_BUNDLE_APPROVE,
+            'manual_payment_bundle',
+            (int) $bundle->id,
+            null,
+            [
+                'reference_root' => $bundle->reference_root,
+                'payment_count' => $bundle->payments->count(),
+                'total_amount' => (float) $bundle->total_amount,
+            ],
+            "Bundle approved: {$bundle->reference_root}"
+        );
+
+        return response()->json($result);
+    }
+
     public function void(Request $request, int $id)
     {
         $bundle = ManualPaymentBundle::query()

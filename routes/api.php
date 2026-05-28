@@ -392,6 +392,7 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::post('/manual-payment-bundles/commit', [ManualPaymentBundleController::class, 'commit']);
         Route::get('/manual-payment-bundles/{bundle}', [ManualPaymentBundleController::class, 'show']);
         Route::post('/manual-payment-bundles/{bundle}/void', [ManualPaymentBundleController::class, 'void'])->middleware('role:admin');
+        Route::post('/manual-payment-bundles/{bundle}/approve', [ManualPaymentBundleController::class, 'approve'])->middleware('role:admin');
     });
 
     Route::prefix('faq')->group(function () {
