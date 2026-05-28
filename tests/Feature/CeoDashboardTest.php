@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\ClientActiveSnapshot;
+use App\Models\AgentGoalOverride;
 use App\Models\Client;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -298,6 +299,122 @@ class CeoDashboardTest extends TestCase
             ->assertOk()
             ->json('payments');
         $this->assertSame([$legacyUnknown->id], array_column($otherRows, 'id'));
+    }
+
+    public function test_agent_performance_surfaces_weekly_individual_revenue_targets_in_month_window(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'USD',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $ceo = $this->user(['role' => 'admin', 'is_ceo' => true]);
+        $agent = $this->user([
+            'name' => 'Benjamin Kiura',
+            'role' => 'sales',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        $agent->platforms()->sync([$platform->id]);
+        Sanctum::actingAs($ceo);
+
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'assigned_to' => $agent->id]);
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'assigned_to' => $agent->id,
+            'amount' => 300,
+            'currency' => 'USD',
+            'status' => 'active',
+        ]);
+
+        $this->payment($platform, $product, [
+            'client_id' => $client->id,
+            'deal_id' => $deal->id,
+            'amount' => 300,
+            'status' => 'completed',
+            'completed_at' => '2026-05-12 12:00:00',
+        ]);
+
+        AgentGoalOverride::query()->create([
+            'user_id' => $agent->id,
+            'platform_id' => $platform->id,
+            'metric' => 'revenue',
+            'target' => 5000,
+            'target_currency' => 'USD',
+            'period' => 'weekly',
+            'set_by' => $ceo->id,
+        ]);
+
+        $response = $this->getJson('/api/crm/dashboard/ceo/agent-performance?horizon=custom&from=2026-05-01&to=2026-05-31&reporting_currency=USD')
+            ->assertOk();
+
+        $benjamin = collect($response->json('agents'))->firstWhere('id', $agent->id);
+
+        $this->assertNotNull($benjamin);
+        $this->assertSame('weekly', data_get($benjamin, 'target.period'));
+        $this->assertSame(5000.0, (float) data_get($benjamin, 'target.target'));
+        $this->assertSame(300.0, (float) data_get($benjamin, 'target.current'));
+        $this->assertSame(6, (int) data_get($benjamin, 'target.percentage'));
+    }
+
+    public function test_country_revenue_surfaces_individual_market_revenue_targets(): void
+    {
+        $platform = Platform::factory()->create([
+            'name' => 'Kenya',
+            'country' => 'Kenya',
+            'currency_code' => 'USD',
+        ]);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $admin = $this->user(['role' => 'admin']);
+        $agent = $this->user([
+            'name' => 'Benjamin Kiura',
+            'role' => 'sales',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        $agent->platforms()->sync([$platform->id]);
+        Sanctum::actingAs($admin);
+
+        $client = Client::factory()->create(['platform_id' => $platform->id, 'assigned_to' => $agent->id]);
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'assigned_to' => $agent->id,
+            'amount' => 300,
+            'currency' => 'USD',
+            'status' => 'active',
+        ]);
+
+        $this->payment($platform, $product, [
+            'client_id' => $client->id,
+            'deal_id' => $deal->id,
+            'amount' => 300,
+            'status' => 'completed',
+            'completed_at' => '2026-05-12 12:00:00',
+        ]);
+
+        AgentGoalOverride::query()->create([
+            'user_id' => $agent->id,
+            'platform_id' => $platform->id,
+            'metric' => 'revenue',
+            'target' => 5000,
+            'target_currency' => 'USD',
+            'period' => 'weekly',
+            'set_by' => $admin->id,
+        ]);
+
+        $response = $this->getJson('/api/crm/dashboard/country-revenue?from=2026-05-01&to=2026-05-31&country_period=month&currency_mode=flat&reporting_currency=USD')
+            ->assertOk();
+
+        $kenya = collect($response->json())->firstWhere('platform_id', $platform->id);
+
+        $this->assertNotNull($kenya);
+        $this->assertSame('weekly', data_get($kenya, 'target.period'));
+        $this->assertSame(5000.0, (float) data_get($kenya, 'target.target'));
+        $this->assertSame(300.0, (float) data_get($kenya, 'target.current'));
+        $this->assertSame(6, (int) data_get($kenya, 'target.percentage'));
     }
 
     private function user(array $overrides = []): User

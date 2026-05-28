@@ -615,6 +615,7 @@ class CeoDashboardDataService
     private function agentRevenueTargets(Collection $agents, array $context): array
     {
         $period = $this->goalPeriodForContext($context);
+        $periods = $this->goalPeriodPreference($period);
         $targetCurrency = strtoupper((string) $context['target_currency']);
         $agentIds = $agents->pluck('id')->map(fn ($id) => (int) $id)->all();
 
@@ -624,7 +625,7 @@ class CeoDashboardDataService
 
         $defaults = AgentGoal::query()
             ->where('metric', 'revenue')
-            ->where('period', $period)
+            ->whereIn('period', $periods)
             ->where(function ($query) use ($targetCurrency) {
                 $query->whereNull('target_currency')
                     ->orWhere('target_currency', $targetCurrency);
@@ -637,7 +638,7 @@ class CeoDashboardDataService
 
         $overrides = AgentGoalOverride::query()
             ->where('metric', 'revenue')
-            ->where('period', $period)
+            ->whereIn('period', $periods)
             ->whereIn('user_id', $agentIds)
             ->where(function ($query) use ($targetCurrency) {
                 $query->whereNull('target_currency')
@@ -651,6 +652,7 @@ class CeoDashboardDataService
         foreach ($agents as $agent) {
             $agentPlatforms = $agent->platforms->pluck('id')->map(fn ($id) => (int) $id)->all();
             $effective = [];
+            $candidates = [];
 
             foreach ($defaults as $goal) {
                 $goalPlatformId = $goal->platform_id ? (int) $goal->platform_id : null;
@@ -663,18 +665,34 @@ class CeoDashboardDataService
                     continue;
                 }
 
-                $effective[$goalPlatformId === null ? 'all' : (string) $goalPlatformId] = [
+                $candidates[] = [
+                    'specificity' => 1,
+                    'period_rank' => array_search((string) $goal->period, $periods, true),
+                    'key' => $goalPlatformId === null ? 'all' : (string) $goalPlatformId,
                     'target' => (float) $goal->target,
                     'target_currency' => strtoupper((string) ($goal->target_currency ?: $targetCurrency)),
-                    'period' => $period,
+                    'period' => (string) $goal->period,
                 ];
             }
 
             foreach ($overrides->where('user_id', $agent->id) as $override) {
-                $effective[(string) ((int) $override->platform_id)] = [
+                $candidates[] = [
+                    'specificity' => 0,
+                    'period_rank' => array_search((string) $override->period, $periods, true),
+                    'key' => (string) ((int) $override->platform_id),
                     'target' => (float) $override->target,
                     'target_currency' => strtoupper((string) ($override->target_currency ?: $targetCurrency)),
-                    'period' => $period,
+                    'period' => (string) $override->period,
+                ];
+            }
+
+            usort($candidates, fn (array $left, array $right) => [$left['period_rank'], $left['specificity']] <=> [$right['period_rank'], $right['specificity']]);
+
+            foreach ($candidates as $candidate) {
+                $effective[$candidate['key']] ??= [
+                    'target' => $candidate['target'],
+                    'target_currency' => $candidate['target_currency'],
+                    'period' => $candidate['period'],
                 ];
             }
 
@@ -685,11 +703,18 @@ class CeoDashboardDataService
             $targets[(int) $agent->id] = [
                 'target' => array_sum(array_column($effective, 'target')),
                 'target_currency' => $targetCurrency,
-                'period' => $period,
+                'period' => $effective[array_key_first($effective)]['period'],
             ];
         }
 
         return $targets;
+    }
+
+    private function goalPeriodPreference(string $period): array
+    {
+        return $period === 'weekly'
+            ? ['weekly', 'monthly']
+            : ['monthly', 'weekly'];
     }
 
     private function goalPeriodForContext(array $context): string

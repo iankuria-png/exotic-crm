@@ -1283,7 +1283,11 @@ class TeamActivityService
         }
 
         return $teamMembers
-            ->filter(function (User $teamMember) use ($platformId, $viewerPlatforms) {
+            ->filter(function (User $teamMember) use ($platformId, $viewer, $viewerPlatforms) {
+                if ($teamMember->is($viewer)) {
+                    return false;
+                }
+
                 if ($platformId !== null) {
                     return in_array($platformId, $viewerPlatforms, true) && $this->userHasPlatform($teamMember, $platformId);
                 }

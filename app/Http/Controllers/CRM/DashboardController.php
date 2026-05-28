@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Client;
 use App\Models\AgentGoal;
+use App\Models\AgentGoalOverride;
 use App\Models\Lead;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -27,6 +28,7 @@ use Carbon\CarbonInterval;
 use Carbon\CarbonPeriod;
 use Throwable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -786,9 +788,13 @@ class DashboardController extends Controller
 
     private function marketRevenueTargets(?array $platformIds, string $period, string $targetCurrency): array
     {
-        $targets = AgentGoal::query()
+        $periods = $period === 'weekly'
+            ? ['weekly', 'monthly']
+            : ['monthly', 'weekly'];
+
+        $defaults = AgentGoal::query()
             ->where('metric', 'revenue')
-            ->where('period', $period)
+            ->whereIn('period', $periods)
             ->whereNotNull('platform_id')
             ->where(function ($query) use ($targetCurrency) {
                 $query->whereNull('target_currency')
@@ -804,13 +810,51 @@ class DashboardController extends Controller
             })
             ->get(['platform_id', 'target', 'target_currency', 'period']);
 
-        return $targets
-            ->groupBy(fn (AgentGoal $goal) => (int) $goal->platform_id)
-            ->map(fn ($goals) => [
-                'target' => (float) $goals->sum(fn (AgentGoal $goal) => (int) $goal->target),
-                'target_currency' => strtoupper((string) ($goals->first()->target_currency ?: $targetCurrency)),
-                'period' => $period,
+        $overrides = AgentGoalOverride::query()
+            ->where('metric', 'revenue')
+            ->whereIn('period', $periods)
+            ->where(function ($query) use ($targetCurrency) {
+                $query->whereNull('target_currency')
+                    ->orWhere('target_currency', strtoupper($targetCurrency));
+            })
+            ->when(is_array($platformIds), function ($query) use ($platformIds) {
+                if (empty($platformIds)) {
+                    $query->whereRaw('1 = 0');
+                    return;
+                }
+
+                $query->whereIn('platform_id', $platformIds);
+            })
+            ->get(['platform_id', 'target', 'target_currency', 'period']);
+
+        return $defaults
+            ->map(fn (AgentGoal $goal) => [
+                'platform_id' => (int) $goal->platform_id,
+                'target' => (float) $goal->target,
+                'target_currency' => strtoupper((string) ($goal->target_currency ?: $targetCurrency)),
+                'period' => (string) $goal->period,
+                'period_rank' => array_search((string) $goal->period, $periods, true),
             ])
+            ->toBase()
+            ->merge($overrides->map(fn (AgentGoalOverride $goal) => [
+                'platform_id' => (int) $goal->platform_id,
+                'target' => (float) $goal->target,
+                'target_currency' => strtoupper((string) ($goal->target_currency ?: $targetCurrency)),
+                'period' => (string) $goal->period,
+                'period_rank' => array_search((string) $goal->period, $periods, true),
+            ])->toBase())
+            ->groupBy('platform_id')
+            ->map(function (Collection $goals) {
+                $preferredRank = (int) $goals->min('period_rank');
+                $preferred = $goals->where('period_rank', $preferredRank);
+                $first = $preferred->first();
+
+                return [
+                    'target' => (float) $preferred->sum('target'),
+                    'target_currency' => $first['target_currency'],
+                    'period' => $first['period'],
+                ];
+            })
             ->all();
     }
 
