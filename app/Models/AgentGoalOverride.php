@@ -14,6 +14,7 @@ class AgentGoalOverride extends Model
         'platform_id',
         'metric',
         'target',
+        'target_currency',
         'period',
         'set_by',
     ];

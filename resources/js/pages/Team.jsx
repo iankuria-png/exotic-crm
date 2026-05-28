@@ -34,6 +34,7 @@ const GOAL_PERIOD_OPTIONS = [
 const GOAL_ROLE_SCOPE_OPTIONS = [
     { value: 'sales', label: 'Sales only' },
     { value: 'marketing', label: 'Marketing only' },
+    { value: 'sub_admin', label: 'Sub-admins only' },
     { value: 'all', label: 'Everyone' },
 ];
 const ACTIVITY_ENTITY_TYPE_OPTIONS = [
@@ -234,6 +235,19 @@ function formatRole(role) {
 
 function formatCount(value) {
     return asNumber(value).toLocaleString();
+}
+
+function formatGoalValue(goalOrRow, key = 'current') {
+    const displayKey = `${key}_display`;
+    if (goalOrRow?.[displayKey]) {
+        return goalOrRow[displayKey];
+    }
+
+    if (goalOrRow?.target_currency && key === 'target') {
+        return formatCurrency(goalOrRow.target, goalOrRow.target_currency);
+    }
+
+    return formatCount(goalOrRow?.[key]);
 }
 
 function formatTrendMetricValue(metricKey, value) {
@@ -601,9 +615,11 @@ export default function Team() {
     const [goalRoleScope, setGoalRoleScope] = useState(DEFAULT_GOAL_ROLE_SCOPE);
     const [goalMetric, setGoalMetric] = useState('subs_activated');
     const [goalTarget, setGoalTarget] = useState('');
+    const [goalTargetCurrency, setGoalTargetCurrency] = useState('USD');
     const [goalOverrideAssigneeId, setGoalOverrideAssigneeId] = useState('');
     const [goalOverrideMetric, setGoalOverrideMetric] = useState('subs_activated');
     const [goalOverrideTarget, setGoalOverrideTarget] = useState('');
+    const [goalOverrideTargetCurrency, setGoalOverrideTargetCurrency] = useState('USD');
     const [selectedAgent, setSelectedAgent] = useState(null);
     const [goalToDelete, setGoalToDelete] = useState(null);
     const [goalOverrideToDelete, setGoalOverrideToDelete] = useState(null);
@@ -614,6 +630,12 @@ export default function Team() {
     const [activityItems, setActivityItems] = useState([]);
     const [activityLastPage, setActivityLastPage] = useState(1);
     const reportingCurrency = useReportingCurrency({ preferFlat: !platformFilter });
+
+    useEffect(() => {
+        const target = reportingCurrency.targetCurrency || 'USD';
+        setGoalTargetCurrency((current) => current || target);
+        setGoalOverrideTargetCurrency((current) => current || target);
+    }, [reportingCurrency.targetCurrency]);
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -1246,6 +1268,7 @@ export default function Team() {
         createGoalMutation.mutate({
             metric: goalMetric,
             target,
+            ...(goalMetric === 'revenue' ? { target_currency: goalTargetCurrency || reportingCurrency.targetCurrency || 'USD' } : {}),
             period: goalPeriod,
             platform_id: platformFilter ? Number(platformFilter) : null,
             role_scope: goalRoleScope,
@@ -1273,6 +1296,7 @@ export default function Team() {
             user_id: Number(goalOverrideAssigneeId),
             metric: goalOverrideMetric,
             target,
+            ...(goalOverrideMetric === 'revenue' ? { target_currency: goalOverrideTargetCurrency || reportingCurrency.targetCurrency || 'USD' } : {}),
             period: goalPeriod,
             platform_id: Number(platformFilter),
         });
@@ -1594,7 +1618,7 @@ export default function Team() {
                                                         </div>
                                                     </div>
                                                     <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                                                        {formatCount(goal.current)}/{formatCount(goal.target)} ({goal.percentage}%)
+                                                        {formatGoalValue(goal, 'current')} / {formatGoalValue(goal, 'target')} ({goal.percentage}%)
                                                     </span>
                                                 </div>
                                                 <div className="mt-3">
@@ -1659,7 +1683,7 @@ export default function Team() {
                             />
                         }
                     >
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_auto]">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(7rem,0.35fr)_auto]">
                             <FilterSelect
                                 label="Role scope"
                                 value={goalRoleScope}
@@ -1685,9 +1709,23 @@ export default function Team() {
                                     value={goalTarget}
                                     onChange={(event) => setGoalTarget(event.target.value)}
                                     className="crm-select-enhanced"
-                                    placeholder="15"
+                                    placeholder={goalMetric === 'revenue' ? '10000' : '15'}
                                 />
                             </label>
+                            {goalMetric === 'revenue' ? (
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                                        Currency
+                                    </span>
+                                    <input
+                                        type="text"
+                                        value={goalTargetCurrency}
+                                        onChange={(event) => setGoalTargetCurrency(event.target.value.toUpperCase().slice(0, 8))}
+                                        className="crm-select-enhanced uppercase"
+                                        placeholder={reportingCurrency.targetCurrency || 'USD'}
+                                    />
+                                </label>
+                            ) : <div className="hidden lg:block" aria-hidden="true" />}
                             <div className="flex items-end">
                                 <button
                                     type="button"
@@ -1723,7 +1761,7 @@ export default function Team() {
                                 message="Once sales or marketing teammates are assigned to this market, you can create individual overrides here."
                             />
                         ) : (
-                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(7rem,0.35fr)_auto]">
                                 <FilterSelect
                                     label="Assignee"
                                     value={goalOverrideAssigneeId}
@@ -1752,9 +1790,23 @@ export default function Team() {
                                         value={goalOverrideTarget}
                                         onChange={(event) => setGoalOverrideTarget(event.target.value)}
                                         className="crm-select-enhanced"
-                                        placeholder="15"
+                                        placeholder={goalOverrideMetric === 'revenue' ? '10000' : '15'}
                                     />
                                 </label>
+                                {goalOverrideMetric === 'revenue' ? (
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                                            Currency
+                                        </span>
+                                        <input
+                                            type="text"
+                                            value={goalOverrideTargetCurrency}
+                                            onChange={(event) => setGoalOverrideTargetCurrency(event.target.value.toUpperCase().slice(0, 8))}
+                                            className="crm-select-enhanced uppercase"
+                                            placeholder={reportingCurrency.targetCurrency || 'USD'}
+                                        />
+                                    </label>
+                                ) : <div className="hidden lg:block" aria-hidden="true" />}
                                 <div className="flex items-end">
                                     <button
                                         type="button"
@@ -1805,7 +1857,7 @@ export default function Team() {
                                                     <span>•</span>
                                                     <span>{roleScopeLabel(goal)}</span>
                                                     <span>•</span>
-                                                    <span>Target {formatCount(goal.target)}</span>
+                                                    <span>Target {formatGoalValue(goal, 'target')}</span>
                                                 </div>
                                             </div>
                                             <button
@@ -1830,7 +1882,7 @@ export default function Team() {
                                                             <p className="text-xs text-slate-500">{formatRole(row.role)}</p>
                                                         </div>
                                                         <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
-                                                            {formatCount(row.current)}/{formatCount(row.target)} ({row.percentage}%)
+                                                            {formatGoalValue(row, 'current')} / {formatGoalValue(row, 'target')} ({row.percentage}%)
                                                         </span>
                                                     </div>
                                                     <div className="mt-3">
@@ -1889,7 +1941,7 @@ export default function Team() {
                                                     <span>•</span>
                                                     <span>{goal.platform_name || 'Selected market'}</span>
                                                     <span>•</span>
-                                                    <span>Target {formatCount(goal.target)}</span>
+                                                    <span>Target {formatGoalValue(goal, 'target')}</span>
                                                 </div>
                                             </div>
                                             <button
@@ -1913,7 +1965,7 @@ export default function Team() {
                                                             <p className="text-xs text-slate-500">{formatRole(goal.progress.role)}</p>
                                                         </div>
                                                         <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
-                                                            {formatCount(goal.progress.current)}/{formatCount(goal.progress.target)} ({goal.progress.percentage}%)
+                                                            {formatGoalValue(goal.progress, 'current')} / {formatGoalValue(goal.progress, 'target')} ({goal.progress.percentage}%)
                                                         </span>
                                                     </div>
                                                     <div className="mt-3">
@@ -2061,7 +2113,7 @@ export default function Team() {
                                                 </div>
                                             </div>
                                             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                                                {formatCount(goal.current)}/{formatCount(goal.target)} ({goal.percentage}%)
+                                                {formatGoalValue(goal, 'current')} / {formatGoalValue(goal, 'target')} ({goal.percentage}%)
                                             </span>
                                         </div>
                                         <div className="mt-3">

@@ -6,6 +6,7 @@ use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Client;
+use App\Models\AgentGoal;
 use App\Models\Lead;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -52,7 +53,7 @@ class DashboardController extends Controller
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'search' => 'nullable|string|max:120',
-            'country_period' => 'nullable|in:week,month',
+            'country_period' => 'nullable|in:week,month,custom',
             'sales_view' => 'nullable|boolean',
             'currency_mode' => 'nullable|in:native,flat',
             'reporting_currency' => 'nullable|string|min:3|max:8',
@@ -584,7 +585,8 @@ class DashboardController extends Controller
                 $from,
                 $to,
                 $targetCurrency,
-                $shouldNormalizeRevenue
+                $shouldNormalizeRevenue,
+                (string) ($validated['country_period'] ?? 'month')
             )
         );
     }
@@ -692,9 +694,10 @@ class DashboardController extends Controller
         ]);
     }
 
-    private function buildCountryRevenue(?array $platformIds, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency, bool $shouldNormalizeRevenue): array
+    private function buildCountryRevenue(?array $platformIds, Carbon $rangeFrom, Carbon $rangeTo, string $targetCurrency, bool $shouldNormalizeRevenue, string $goalPeriod = 'month'): array
     {
         [$previousFrom, $previousTo] = $this->resolvePreviousMatchingWindow($rangeFrom, $rangeTo);
+        $revenueTargets = $this->marketRevenueTargets($platformIds, $goalPeriod === 'week' ? 'weekly' : 'monthly', $targetCurrency);
 
         $platforms = Platform::query();
         if (is_array($platformIds)) {
@@ -721,6 +724,9 @@ class DashboardController extends Controller
             $previousRevenueNormalized = $this->normalizeCountryRevenueRowsForMode($platformPreviousRows, $targetCurrency, $shouldNormalizeRevenue);
             $currentRevenue = $currentRevenueBreakdown['scalar_amount'];
             $previousRevenue = $previousRevenueBreakdown['scalar_amount'];
+            $target = $revenueTargets[(int) $platform->id] ?? null;
+            $targetAmount = $target ? (float) $target['target'] : null;
+            $progressValue = (float) ($currentRevenueNormalized['normalized_total'] ?? 0);
             $trend = $this->calculateComparableCountryTrend($currentRevenueBreakdown, $previousRevenueBreakdown);
             $normalizedTrend = null;
             if (
@@ -752,6 +758,15 @@ class DashboardController extends Controller
                 'previous_revenue_normalization_meta' => $previousRevenueNormalized['normalization_meta'],
                 'trend' => $trend,
                 'normalized_trend' => $normalizedTrend,
+                'target' => $target ? [
+                    'period' => $target['period'],
+                    'target' => $targetAmount,
+                    'target_currency' => $target['target_currency'],
+                    'target_display' => $target['target_currency'] . ' ' . number_format($targetAmount, 2),
+                    'current' => $progressValue,
+                    'current_display' => $target['target_currency'] . ' ' . number_format($progressValue, 2),
+                    'percentage' => $targetAmount && $targetAmount > 0 ? (int) min(100, round(($progressValue / $targetAmount) * 100)) : 0,
+                ] : null,
             ];
         }
 
@@ -767,6 +782,36 @@ class DashboardController extends Controller
         });
 
         return $result;
+    }
+
+    private function marketRevenueTargets(?array $platformIds, string $period, string $targetCurrency): array
+    {
+        $targets = AgentGoal::query()
+            ->where('metric', 'revenue')
+            ->where('period', $period)
+            ->whereNotNull('platform_id')
+            ->where(function ($query) use ($targetCurrency) {
+                $query->whereNull('target_currency')
+                    ->orWhere('target_currency', strtoupper($targetCurrency));
+            })
+            ->when(is_array($platformIds), function ($query) use ($platformIds) {
+                if (empty($platformIds)) {
+                    $query->whereRaw('1 = 0');
+                    return;
+                }
+
+                $query->whereIn('platform_id', $platformIds);
+            })
+            ->get(['platform_id', 'target', 'target_currency', 'period']);
+
+        return $targets
+            ->groupBy(fn (AgentGoal $goal) => (int) $goal->platform_id)
+            ->map(fn ($goals) => [
+                'target' => (float) $goals->sum(fn (AgentGoal $goal) => (int) $goal->target),
+                'target_currency' => strtoupper((string) ($goals->first()->target_currency ?: $targetCurrency)),
+                'period' => $period,
+            ])
+            ->all();
     }
 
     private function aggregateCountryRevenueRows(?array $platformIds, Carbon $from, Carbon $to)

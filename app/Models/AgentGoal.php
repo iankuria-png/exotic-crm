@@ -14,6 +14,7 @@ class AgentGoal extends Model
         'role_scope',
         'metric',
         'target',
+        'target_currency',
         'period',
         'set_by',
     ];

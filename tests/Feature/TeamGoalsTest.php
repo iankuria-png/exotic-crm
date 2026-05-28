@@ -170,6 +170,46 @@ class TeamGoalsTest extends TestCase
         $this->assertSame(3, $goal['current']);
     }
 
+    public function test_revenue_goal_tracks_normalized_payment_progress(): void
+    {
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform([
+            'currency_code' => 'USD',
+        ]);
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'revenue-goal-agent@example.test']);
+        $deal = $this->createTeamDeal($platform, $agent, [
+            'amount' => 2500,
+            'currency' => 'USD',
+        ]);
+
+        AgentGoal::query()->create([
+            'platform_id' => $platform->id,
+            'metric' => 'revenue',
+            'target' => 10000,
+            'target_currency' => 'USD',
+            'period' => 'weekly',
+            'role_scope' => 'sales',
+            'set_by' => $admin->id,
+        ]);
+
+        $this->createTeamPayment($platform, $deal, [
+            'amount' => 2500,
+            'currency' => 'USD',
+            'created_at' => now()->startOfWeek()->addDay(),
+            'completed_at' => now()->startOfWeek()->addDay(),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/goals?period=weekly&platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonPath('defaults.0.metric', 'revenue')
+            ->assertJsonPath('defaults.0.target_currency', 'USD')
+            ->assertJsonPath('defaults.0.progress.0.current', 2500)
+            ->assertJsonPath('defaults.0.progress.0.percentage', 25);
+    }
+
     public function test_manager_cannot_assign_sales_only_metric_to_marketing_user(): void
     {
         $admin = $this->createTeamUser('admin');
@@ -187,12 +227,12 @@ class TeamGoalsTest extends TestCase
         ])->assertStatus(422);
     }
 
-    public function test_goal_assignable_agents_remain_sales_and_marketing_only(): void
+    public function test_goal_assignable_agents_include_sub_admin_sales_and_marketing(): void
     {
         $admin = $this->createTeamUser('admin');
         $platform = $this->createTeamPlatform();
         $this->createTeamUser('admin', [], ['email' => 'assignable-admin@example.test']);
-        $this->createTeamUser('sub_admin', [$platform->id], ['email' => 'assignable-subadmin@example.test']);
+        $subAdmin = $this->createTeamUser('sub_admin', [$platform->id], ['email' => 'assignable-subadmin@example.test']);
         $salesUser = $this->createTeamUser('sales', [$platform->id], ['email' => 'assignable-sales@example.test']);
         $marketingUser = $this->createTeamUser('marketing', [$platform->id], ['email' => 'assignable-marketing@example.test']);
 
@@ -208,6 +248,6 @@ class TeamGoalsTest extends TestCase
             ->values()
             ->all();
 
-        $this->assertSame([$salesUser->id, $marketingUser->id], $assignableIds);
+        $this->assertSame([$subAdmin->id, $salesUser->id, $marketingUser->id], $assignableIds);
     }
 }

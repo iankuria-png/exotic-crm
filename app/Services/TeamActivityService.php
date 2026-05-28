@@ -27,6 +27,7 @@ class TeamActivityService
     public const GOAL_PERIOD_MONTHLY = 'monthly';
 
     public const AGENT_ROLES = [
+        MarketAuthorizationService::ROLE_SUB_ADMIN,
         MarketAuthorizationService::ROLE_SALES,
         MarketAuthorizationService::ROLE_MARKETING,
     ];
@@ -50,11 +51,13 @@ class TeamActivityService
 
     public const GOAL_ROLE_SCOPE_SALES = MarketAuthorizationService::ROLE_SALES;
     public const GOAL_ROLE_SCOPE_MARKETING = MarketAuthorizationService::ROLE_MARKETING;
+    public const GOAL_ROLE_SCOPE_SUB_ADMIN = MarketAuthorizationService::ROLE_SUB_ADMIN;
     public const GOAL_ROLE_SCOPE_ALL = 'all';
 
     public const GOAL_ROLE_SCOPES = [
         self::GOAL_ROLE_SCOPE_SALES,
         self::GOAL_ROLE_SCOPE_MARKETING,
+        self::GOAL_ROLE_SCOPE_SUB_ADMIN,
         self::GOAL_ROLE_SCOPE_ALL,
     ];
 
@@ -71,6 +74,7 @@ class TeamActivityService
         'credentials_sent',
         'free_trials_given',
         'discounts_given',
+        'revenue',
         'total_actions',
     ];
 
@@ -103,9 +107,15 @@ class TeamActivityService
         'credentials_sent' => [self::GOAL_ROLE_SCOPE_SALES],
         'free_trials_given' => [self::GOAL_ROLE_SCOPE_SALES],
         'discounts_given' => [self::GOAL_ROLE_SCOPE_SALES],
+        'revenue' => [
+            self::GOAL_ROLE_SCOPE_SALES,
+            self::GOAL_ROLE_SCOPE_SUB_ADMIN,
+            self::GOAL_ROLE_SCOPE_ALL,
+        ],
         'total_actions' => [
             self::GOAL_ROLE_SCOPE_SALES,
             self::GOAL_ROLE_SCOPE_MARKETING,
+            self::GOAL_ROLE_SCOPE_SUB_ADMIN,
             self::GOAL_ROLE_SCOPE_ALL,
         ],
     ];
@@ -560,7 +570,7 @@ class TeamActivityService
         ];
     }
 
-    public function setGoal(string $metric, int $target, string $period, ?int $platformId, string $roleScope, User $setter): AgentGoal
+    public function setGoal(string $metric, int $target, string $period, ?int $platformId, string $roleScope, ?string $targetCurrency, User $setter): AgentGoal
     {
         $this->assertManager($setter);
         $this->assertPlatformAccessible($setter, $platformId);
@@ -568,6 +578,7 @@ class TeamActivityService
         $metric = $this->normalizeGoalMetric($metric);
         $period = $this->normalizeGoalPeriod($period);
         $roleScope = $this->normalizeGoalRoleScope($roleScope);
+        $targetCurrency = $this->normalizeGoalTargetCurrency($metric, $targetCurrency);
         $this->assertGoalMetricAllowedForRoleScope($metric, $roleScope);
 
         $goal = AgentGoal::query()
@@ -590,6 +601,7 @@ class TeamActivityService
         $goal->fill([
             'role_scope' => $roleScope,
             'target' => $target,
+            'target_currency' => $targetCurrency,
             'set_by' => $setter->id,
         ]);
         $goal->save();
@@ -605,7 +617,7 @@ class TeamActivityService
         $goal->delete();
     }
 
-    public function setGoalOverride(int $userId, string $metric, int $target, string $period, int $platformId, User $setter): AgentGoalOverride
+    public function setGoalOverride(int $userId, string $metric, int $target, string $period, int $platformId, ?string $targetCurrency, User $setter): AgentGoalOverride
     {
         $this->assertManager($setter);
         $this->assertPlatformAccessible($setter, $platformId);
@@ -618,6 +630,7 @@ class TeamActivityService
 
         $metric = $this->normalizeGoalMetric($metric);
         $period = $this->normalizeGoalPeriod($period);
+        $targetCurrency = $this->normalizeGoalTargetCurrency($metric, $targetCurrency);
         $this->assertGoalMetricAllowedForRole($metric, $user->role);
 
         $goalOverride = AgentGoalOverride::query()
@@ -638,6 +651,7 @@ class TeamActivityService
 
         $goalOverride->fill([
             'target' => $target,
+            'target_currency' => $targetCurrency,
             'set_by' => $setter->id,
         ]);
         $goalOverride->save();
@@ -797,6 +811,7 @@ class TeamActivityService
             ->map(fn (string $metric) => [
                 'value' => $metric,
                 'label' => $this->metricLabel($metric),
+                'value_type' => $this->goalMetricValueType($metric),
                 'allowed_role_scopes' => $this->allowedGoalRoleScopesForMetric($metric),
             ])
             ->values()
@@ -1549,6 +1564,9 @@ class TeamActivityService
             'metric' => $goal->metric,
             'label' => $this->metricLabel($goal->metric),
             'target' => (int) $goal->target,
+            'target_currency' => $goal->target_currency,
+            'target_display' => $this->formatGoalValue($goal->metric, (float) $goal->target, $goal->target_currency),
+            'value_type' => $this->goalMetricValueType($goal->metric),
             'period' => $goal->period,
             'platform_id' => $goal->platform_id ? (int) $goal->platform_id : null,
             'platform_name' => $goal->platform?->name,
@@ -1570,6 +1588,9 @@ class TeamActivityService
             'metric' => $goalOverride->metric,
             'label' => $this->metricLabel($goalOverride->metric),
             'target' => (int) $goalOverride->target,
+            'target_currency' => $goalOverride->target_currency,
+            'target_display' => $this->formatGoalValue($goalOverride->metric, (float) $goalOverride->target, $goalOverride->target_currency),
+            'value_type' => $this->goalMetricValueType($goalOverride->metric),
             'period' => $goalOverride->period,
             'platform_id' => (int) $goalOverride->platform_id,
             'platform_name' => $goalOverride->platform?->name,
@@ -1592,8 +1613,8 @@ class TeamActivityService
     {
         $range = $this->goalPeriodRange($goal->period);
         $platformId = $goal->platform_id ? (int) $goal->platform_id : null;
-        $metrics = $this->aggregateActionMetricsForRange($range['start'], $range['end'], $viewer, $platformId, [$agent->id]);
-        $current = (int) (($metrics[$agent->id][$goal->metric] ?? 0));
+        $targetCurrency = $this->goalTargetCurrency($goal->metric, $goal->target_currency);
+        $current = $this->goalCurrentValue($goal->metric, $range['start'], $range['end'], $viewer, $platformId, (int) $agent->id, $targetCurrency);
         $percentage = $goal->target > 0
             ? (int) min(100, round(($current / $goal->target) * 100))
             : 0;
@@ -1604,6 +1625,9 @@ class TeamActivityService
             'role' => $agent->role,
             'current' => $current,
             'target' => (int) $goal->target,
+            'target_currency' => $targetCurrency,
+            'current_display' => $this->formatGoalValue($goal->metric, $current, $targetCurrency),
+            'target_display' => $this->formatGoalValue($goal->metric, (float) $goal->target, $targetCurrency),
             'percentage' => $percentage,
         ];
     }
@@ -1612,8 +1636,8 @@ class TeamActivityService
     {
         $range = $this->goalPeriodRange($goalOverride->period);
         $platformId = (int) $goalOverride->platform_id;
-        $metrics = $this->aggregateActionMetricsForRange($range['start'], $range['end'], $viewer, $platformId, [$agent->id]);
-        $current = (int) (($metrics[$agent->id][$goalOverride->metric] ?? 0));
+        $targetCurrency = $this->goalTargetCurrency($goalOverride->metric, $goalOverride->target_currency);
+        $current = $this->goalCurrentValue($goalOverride->metric, $range['start'], $range['end'], $viewer, $platformId, (int) $agent->id, $targetCurrency);
         $percentage = $goalOverride->target > 0
             ? (int) min(100, round(($current / $goalOverride->target) * 100))
             : 0;
@@ -1624,6 +1648,9 @@ class TeamActivityService
             'role' => $agent->role,
             'current' => $current,
             'target' => (int) $goalOverride->target,
+            'target_currency' => $targetCurrency,
+            'current_display' => $this->formatGoalValue($goalOverride->metric, $current, $targetCurrency),
+            'target_display' => $this->formatGoalValue($goalOverride->metric, (float) $goalOverride->target, $targetCurrency),
             'percentage' => $percentage,
         ];
     }
@@ -1637,12 +1664,33 @@ class TeamActivityService
         ];
     }
 
+    private function goalCurrentValue(
+        string $metric,
+        CarbonInterface $start,
+        CarbonInterface $end,
+        User $viewer,
+        ?int $platformId,
+        int $userId,
+        ?string $targetCurrency
+    ): float {
+        if ($metric === 'revenue') {
+            $currency = $targetCurrency ?: $this->reportingCurrencyService->resolveTargetCurrency();
+            $revenue = $this->aggregateRevenueByUser([$userId], $start, $end, $viewer, $platformId, $currency);
+
+            return (float) ($revenue[$userId]['normalized_revenue_total'] ?? 0);
+        }
+
+        $metrics = $this->aggregateActionMetricsForRange($start, $end, $viewer, $platformId, [$userId]);
+
+        return (float) (($metrics[$userId][$metric] ?? 0));
+    }
+
     private function formatSingleUserGoalProgress(AgentGoal $goal, User $user): array
     {
         $range = $this->goalPeriodRange($goal->period);
         $platformId = $goal->platform_id ? (int) $goal->platform_id : null;
-        $metrics = $this->aggregateActionMetricsForRange($range['start'], $range['end'], $user, $platformId, [$user->id]);
-        $current = (int) (($metrics[$user->id][$goal->metric] ?? 0));
+        $targetCurrency = $this->goalTargetCurrency($goal->metric, $goal->target_currency);
+        $current = $this->goalCurrentValue($goal->metric, $range['start'], $range['end'], $user, $platformId, (int) $user->id, $targetCurrency);
         $percentage = $goal->target > 0
             ? (int) min(100, round(($current / $goal->target) * 100))
             : 0;
@@ -1655,7 +1703,10 @@ class TeamActivityService
             'label' => $this->metricLabel($goal->metric),
             'period' => $goal->period,
             'target' => (int) $goal->target,
+            'target_currency' => $targetCurrency,
+            'target_display' => $this->formatGoalValue($goal->metric, (float) $goal->target, $targetCurrency),
             'current' => $current,
+            'current_display' => $this->formatGoalValue($goal->metric, $current, $targetCurrency),
             'percentage' => $percentage,
             'platform_id' => $goal->platform_id ? (int) $goal->platform_id : null,
             'platform_name' => $goal->platform?->name,
@@ -1668,8 +1719,8 @@ class TeamActivityService
     {
         $range = $this->goalPeriodRange($goalOverride->period);
         $platformId = (int) $goalOverride->platform_id;
-        $metrics = $this->aggregateActionMetricsForRange($range['start'], $range['end'], $user, $platformId, [$user->id]);
-        $current = (int) (($metrics[$user->id][$goalOverride->metric] ?? 0));
+        $targetCurrency = $this->goalTargetCurrency($goalOverride->metric, $goalOverride->target_currency);
+        $current = $this->goalCurrentValue($goalOverride->metric, $range['start'], $range['end'], $user, $platformId, (int) $user->id, $targetCurrency);
         $percentage = $goalOverride->target > 0
             ? (int) min(100, round(($current / $goalOverride->target) * 100))
             : 0;
@@ -1682,7 +1733,10 @@ class TeamActivityService
             'label' => $this->metricLabel($goalOverride->metric),
             'period' => $goalOverride->period,
             'target' => (int) $goalOverride->target,
+            'target_currency' => $targetCurrency,
+            'target_display' => $this->formatGoalValue($goalOverride->metric, (float) $goalOverride->target, $targetCurrency),
             'current' => $current,
+            'current_display' => $this->formatGoalValue($goalOverride->metric, $current, $targetCurrency),
             'percentage' => $percentage,
             'platform_id' => (int) $goalOverride->platform_id,
             'platform_name' => $goalOverride->platform?->name,
@@ -2014,9 +2068,33 @@ class TeamActivityService
             'credentials_sent' => 'Credentials Sent',
             'free_trials_given' => 'Free Trials Given',
             'discounts_given' => 'Discounts Given',
+            'revenue' => 'Revenue',
             'total_actions' => 'Total Actions',
             default => ucwords(str_replace('_', ' ', $metric)),
         };
+    }
+
+    private function goalMetricValueType(string $metric): string
+    {
+        return $metric === 'revenue' ? 'currency' : 'count';
+    }
+
+    private function goalTargetCurrency(string $metric, ?string $targetCurrency): ?string
+    {
+        if ($metric !== 'revenue') {
+            return null;
+        }
+
+        return $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
+    }
+
+    private function formatGoalValue(string $metric, float $value, ?string $targetCurrency): string
+    {
+        if ($metric === 'revenue') {
+            return ($targetCurrency ?: $this->reportingCurrencyService->resolveTargetCurrency()) . ' ' . $this->formatMoney($value);
+        }
+
+        return number_format((int) round($value));
     }
 
     private function visibleTeamRolesForViewer(User $viewer, string $roleFilter = self::ROLE_FILTER_ALL): array
@@ -2038,6 +2116,7 @@ class TeamActivityService
         return match ($roleScope) {
             self::GOAL_ROLE_SCOPE_SALES => 'Sales only',
             self::GOAL_ROLE_SCOPE_MARKETING => 'Marketing only',
+            self::GOAL_ROLE_SCOPE_SUB_ADMIN => 'Sub-admins only',
             self::GOAL_ROLE_SCOPE_ALL => 'Everyone',
             default => ucwords(str_replace('_', ' ', $roleScope)),
         };
@@ -2097,9 +2176,19 @@ class TeamActivityService
         return match ($roleScope) {
             self::GOAL_ROLE_SCOPE_SALES,
             self::GOAL_ROLE_SCOPE_MARKETING,
+            self::GOAL_ROLE_SCOPE_SUB_ADMIN,
             self::GOAL_ROLE_SCOPE_ALL => $roleScope,
             default => self::GOAL_ROLE_SCOPE_SALES,
         };
+    }
+
+    private function normalizeGoalTargetCurrency(string $metric, ?string $targetCurrency): ?string
+    {
+        if ($metric !== 'revenue') {
+            return null;
+        }
+
+        return $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
     }
 
     private function resolveNamedPeriodRange(string $period): array

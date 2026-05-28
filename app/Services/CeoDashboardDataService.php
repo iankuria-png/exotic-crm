@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\ClientActiveSnapshot;
+use App\Models\AgentGoal;
+use App\Models\AgentGoalOverride;
 use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
@@ -312,8 +314,9 @@ class CeoDashboardDataService
         $priorRows = $this->agentRevenueRows($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency']);
         $renewals = $this->agentRenewalRows($context['from'], $context['to'], $context['platform_id']);
         $activations = $this->agentActivationRows($context['from'], $context['to'], $context['platform_id']);
+        $targets = $this->agentRevenueTargets($agents, $context);
 
-        $payload = $agents->map(function (User $agent) use ($rows, $priorRows, $renewals, $activations, $context) {
+        $payload = $agents->map(function (User $agent) use ($rows, $priorRows, $renewals, $activations, $targets, $context) {
             $currentGroup = $rows->where('agent_id', $agent->id)->values();
             $priorGroup = $priorRows->where('agent_id', $agent->id)->values();
             $currentRevenue = $this->reportingCurrencyService->normalizeEventRows($currentGroup, $context['target_currency'], false);
@@ -327,6 +330,9 @@ class CeoDashboardDataService
                 ->all();
             $renewal = $renewals->get((int) $agent->id, ['recovered' => 0, 'due' => 0]);
             $activation = (int) ($activations->get((int) $agent->id) ?? 0);
+            $target = $targets[(int) $agent->id] ?? null;
+            $targetAmount = $target ? (float) $target['target'] : null;
+            $currentToTarget = (float) ($currentRevenue['normalized_total'] ?? 0);
 
             return [
                 'id' => (int) $agent->id,
@@ -347,6 +353,15 @@ class CeoDashboardDataService
                     'overflow_recoveries' => (int) ($renewal['overflow_recoveries'] ?? 0),
                     'rate' => (int) $renewal['due'] > 0 ? round(((int) $renewal['recovered'] / (int) $renewal['due']) * 100, 1) : null,
                 ],
+                'target' => $target ? [
+                    'period' => $target['period'],
+                    'target' => $targetAmount,
+                    'target_currency' => $target['target_currency'],
+                    'target_display' => $target['target_currency'] . ' ' . number_format($targetAmount, 2),
+                    'current' => $currentToTarget,
+                    'current_display' => $target['target_currency'] . ' ' . number_format($currentToTarget, 2),
+                    'percentage' => $targetAmount && $targetAmount > 0 ? (int) min(100, round(($currentToTarget / $targetAmount) * 100)) : 0,
+                ] : null,
                 'activations' => [
                     'count' => $activation,
                 ],
@@ -595,6 +610,102 @@ class CeoDashboardDataService
             ->groupByRaw($this->dateExpression())
             ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
             ->get();
+    }
+
+    private function agentRevenueTargets(Collection $agents, array $context): array
+    {
+        $period = $this->goalPeriodForContext($context);
+        $targetCurrency = strtoupper((string) $context['target_currency']);
+        $agentIds = $agents->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        if (empty($agentIds)) {
+            return [];
+        }
+
+        $defaults = AgentGoal::query()
+            ->where('metric', 'revenue')
+            ->where('period', $period)
+            ->where(function ($query) use ($targetCurrency) {
+                $query->whereNull('target_currency')
+                    ->orWhere('target_currency', $targetCurrency);
+            })
+            ->when($context['platform_id'], fn (Builder $query, int $id) => $query->where(function (Builder $scope) use ($id) {
+                $scope->whereNull('platform_id')
+                    ->orWhere('platform_id', $id);
+            }))
+            ->get(['platform_id', 'role_scope', 'target', 'target_currency', 'period']);
+
+        $overrides = AgentGoalOverride::query()
+            ->where('metric', 'revenue')
+            ->where('period', $period)
+            ->whereIn('user_id', $agentIds)
+            ->where(function ($query) use ($targetCurrency) {
+                $query->whereNull('target_currency')
+                    ->orWhere('target_currency', $targetCurrency);
+            })
+            ->when($context['platform_id'], fn (Builder $query, int $id) => $query->where('platform_id', $id))
+            ->get(['user_id', 'platform_id', 'target', 'target_currency', 'period']);
+
+        $targets = [];
+
+        foreach ($agents as $agent) {
+            $agentPlatforms = $agent->platforms->pluck('id')->map(fn ($id) => (int) $id)->all();
+            $effective = [];
+
+            foreach ($defaults as $goal) {
+                $goalPlatformId = $goal->platform_id ? (int) $goal->platform_id : null;
+
+                if (!$this->goalRoleScopeMatchesAgent((string) $goal->role_scope, (string) $agent->role)) {
+                    continue;
+                }
+
+                if ($goalPlatformId !== null && !in_array($goalPlatformId, $agentPlatforms, true)) {
+                    continue;
+                }
+
+                $effective[$goalPlatformId === null ? 'all' : (string) $goalPlatformId] = [
+                    'target' => (float) $goal->target,
+                    'target_currency' => strtoupper((string) ($goal->target_currency ?: $targetCurrency)),
+                    'period' => $period,
+                ];
+            }
+
+            foreach ($overrides->where('user_id', $agent->id) as $override) {
+                $effective[(string) ((int) $override->platform_id)] = [
+                    'target' => (float) $override->target,
+                    'target_currency' => strtoupper((string) ($override->target_currency ?: $targetCurrency)),
+                    'period' => $period,
+                ];
+            }
+
+            if (empty($effective)) {
+                continue;
+            }
+
+            $targets[(int) $agent->id] = [
+                'target' => array_sum(array_column($effective, 'target')),
+                'target_currency' => $targetCurrency,
+                'period' => $period,
+            ];
+        }
+
+        return $targets;
+    }
+
+    private function goalPeriodForContext(array $context): string
+    {
+        $days = $context['from']->diffInDays($context['to']) + 1;
+
+        return $days <= 7 ? 'weekly' : 'monthly';
+    }
+
+    private function goalRoleScopeMatchesAgent(string $roleScope, string $role): bool
+    {
+        if ($roleScope === 'all') {
+            return in_array($role, ['sales', 'marketing', 'sub_admin'], true);
+        }
+
+        return $roleScope === $role;
     }
 
     private function agentRenewalRows(Carbon $from, Carbon $to, ?int $platformId): Collection

@@ -6,7 +6,7 @@ import { formatDelta, moneyFromBreakdown } from './ceoFormatters';
 
 const SORTERS = {
     revenue: (agent) => Number(agent.revenue?.normalized_total ?? Object.values(agent.revenue?.source_breakdown || {}).reduce((sum, amount) => sum + Number(amount || 0), 0)),
-    renewals: (agent) => Number(agent.renewals?.rate ?? -1),
+    target: (agent) => Number(agent.target?.percentage ?? -1),
     activations: (agent) => Number(agent.activations?.count || 0),
     name: (agent) => agent.name || '',
 };
@@ -92,7 +92,7 @@ export default function AgentPerformanceWidget({ data, reporting, isLoading, err
                                         <button type="button" onClick={() => setSortKey('revenue')} className="hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">Revenue</button>
                                     </th>
                                     <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                                        <button type="button" onClick={() => setSortKey('renewals')} className="hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">Renewals</button>
+                                        <button type="button" onClick={() => setSortKey('target')} className="hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">Target</button>
                                     </th>
                                     <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                                         <button type="button" onClick={() => setSortKey('activations')} className="hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">Activations</button>
@@ -135,8 +135,20 @@ export default function AgentPerformanceWidget({ data, reporting, isLoading, err
                                                 <p className="text-xs text-slate-500">{formatDelta(agent.revenue?.delta_percent)}</p>
                                             </td>
                                             <td className="px-4 py-3 text-right">
-                                                <p className="text-sm font-semibold text-slate-900">{agent.renewals?.recovered || 0} / {agent.renewals?.due || 0}</p>
-                                                <p className="text-xs text-slate-500">{agent.renewals?.rate === null || agent.renewals?.rate === undefined ? 'No due base' : `${Number(agent.renewals.rate).toFixed(1)}%`}</p>
+                                                {agent.target ? (
+                                                    <div className="ml-auto max-w-[180px]">
+                                                        <p className="text-sm font-semibold text-slate-900">{agent.target.percentage}%</p>
+                                                        <p className="text-xs text-slate-500">{agent.target.current_display} / {agent.target.target_display}</p>
+                                                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                                                            <div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.max(Number(agent.target.percentage || 0), Number(agent.target.current || 0) > 0 ? 6 : 0)}%` }} />
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-slate-400">—</p>
+                                                        <p className="text-xs text-slate-500">No target</p>
+                                                    </div>
+                                                )}
                                             </td>
                                             <td className="px-4 py-3 text-right text-sm font-semibold text-slate-900">{Number(agent.activations?.count || 0).toLocaleString()}</td>
                                             <td className="px-4 py-3">

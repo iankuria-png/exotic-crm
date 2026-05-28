@@ -196,9 +196,10 @@ class TeamController extends Controller
         $validated = $request->validate([
             'metric' => 'required|string|max:50',
             'target' => 'required|integer|min:1',
+            'target_currency' => 'nullable|string|min:3|max:8',
             'period' => 'required|in:weekly,monthly',
             'platform_id' => 'nullable|integer|exists:platforms,id',
-            'role_scope' => 'nullable|in:sales,marketing,all',
+            'role_scope' => 'nullable|in:sales,marketing,sub_admin,all',
         ]);
 
         $goal = $this->teamActivityService->setGoal(
@@ -207,6 +208,7 @@ class TeamController extends Controller
             (string) $validated['period'],
             isset($validated['platform_id']) ? (int) $validated['platform_id'] : null,
             (string) ($validated['role_scope'] ?? 'sales'),
+            isset($validated['target_currency']) ? (string) $validated['target_currency'] : null,
             $request->user()
         );
 
@@ -215,6 +217,7 @@ class TeamController extends Controller
                 'id' => (int) $goal->id,
                 'metric' => $goal->metric,
                 'target' => (int) $goal->target,
+                'target_currency' => $goal->target_currency,
                 'period' => $goal->period,
                 'platform_id' => $goal->platform_id ? (int) $goal->platform_id : null,
                 'role_scope' => $goal->role_scope,
@@ -235,6 +238,7 @@ class TeamController extends Controller
             'user_id' => 'required|integer|exists:users,id',
             'metric' => 'required|string|max:50',
             'target' => 'required|integer|min:1',
+            'target_currency' => 'nullable|string|min:3|max:8',
             'period' => 'required|in:weekly,monthly',
             'platform_id' => 'required|integer|exists:platforms,id',
         ]);
@@ -245,6 +249,7 @@ class TeamController extends Controller
             (int) $validated['target'],
             (string) $validated['period'],
             (int) $validated['platform_id'],
+            isset($validated['target_currency']) ? (string) $validated['target_currency'] : null,
             $request->user()
         );
 
@@ -254,6 +259,7 @@ class TeamController extends Controller
                 'user_id' => (int) $goalOverride->user_id,
                 'metric' => $goalOverride->metric,
                 'target' => (int) $goalOverride->target,
+                'target_currency' => $goalOverride->target_currency,
                 'period' => $goalOverride->period,
                 'platform_id' => (int) $goalOverride->platform_id,
             ],

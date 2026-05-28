@@ -570,7 +570,9 @@ export default function CountryRevenueWidget({
                         const leadingValue = currencyMode === 'flat' && market.current_revenue_normalized !== null && market.current_revenue_normalized !== undefined
                             ? Number(market.current_revenue_normalized)
                             : (market.current_revenue ?? Object.values(market.current_revenue_breakdown || {}).reduce((sum, amount) => sum + Number(amount || 0), 0));
-                        const barWidth = topValue > 0 ? (leadingValue / topValue) * 100 : 0;
+                        const target = market.target || null;
+                        const targetPercentage = target ? Number(target.percentage || 0) : null;
+                        const barWidth = target ? targetPercentage : (topValue > 0 ? (leadingValue / topValue) * 100 : 0);
                         const trendValue = currencyMode === 'flat' ? market.normalized_trend : market.trend;
                         const trendState = describeTrendState(trendValue, leadingValue > 0);
 
@@ -604,6 +606,17 @@ export default function CountryRevenueWidget({
                                                     </div>
                                                     <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
                                                         <div className="h-full rounded-full bg-[linear-gradient(90deg,#14b8a6_0%,#0f766e_100%)] transition-all duration-500" style={{ width: `${Math.max(barWidth, leadingValue > 0 ? 8 : 0)}%` }} />
+                                                    </div>
+                                                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                                                        {target ? (
+                                                            <>
+                                                                <span className="font-semibold text-teal-700">{target.percentage}% of {target.period === 'weekly' ? 'weekly' : 'monthly'} target</span>
+                                                                <span>•</span>
+                                                                <span>{target.current_display} / {target.target_display}</span>
+                                                            </>
+                                                        ) : (
+                                                            <span>Ranked by revenue share until a target is set</span>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>
