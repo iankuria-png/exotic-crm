@@ -5,10 +5,13 @@ namespace Tests\Feature;
 use App\Models\BillingSubscriptionRule;
 use App\Models\Client;
 use App\Models\Deal;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\SubsidiaryTrialService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -91,6 +94,82 @@ class SubsidiaryTrialActivationTest extends TestCase
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors('subsidiary_trial.create_confirmed');
+    }
+
+    public function test_pending_intent_creates_linked_subsidiary_trial_deal_and_payment(): void
+    {
+        [, $targetPlatform, $deal, $user] = $this->fixture();
+        $targetProduct = Product::factory()->create([
+            'platform_id' => $targetPlatform->id,
+            'tier' => 'vip',
+            'weekly_price' => 0,
+        ]);
+        $targetPlatform->forceFill(['product_id' => $targetProduct->id])->save();
+        BillingSubscriptionRule::query()->create([
+            'market_id' => $targetPlatform->id,
+            'free_trial_json' => ['enabled' => true, 'duration_days' => 10],
+        ]);
+        $targetClient = Client::factory()->create([
+            'platform_id' => $targetPlatform->id,
+            'phone_normalized' => '255712345678',
+            'wp_post_id' => 9182,
+            'wp_user_id' => 91820,
+        ]);
+        $deal->forceFill([
+            'pending_subsidiary_trial' => [
+                'status' => 'pending',
+                'platform_id' => (int) $targetPlatform->id,
+                'duration_days' => 10,
+                'subsidiary_client_id' => (int) $targetClient->id,
+                'subsidiary_client_seed' => [
+                    'name' => $targetClient->name,
+                    'phone_normalized' => $targetClient->phone_normalized,
+                    'email' => $targetClient->email,
+                    'city' => $targetClient->city,
+                ],
+                'requested_by_user_id' => (int) $user->id,
+                'requested_at' => now()->toDateTimeString(),
+                'attempt_count' => 0,
+                'last_attempt_at' => null,
+                'last_error' => null,
+            ],
+        ])->save();
+
+        Http::fake([
+            rtrim($targetPlatform->wp_api_url, '/') . "/clients/{$targetClient->wp_post_id}/activate" => Http::response(['ok' => true], 200),
+            rtrim($targetPlatform->wp_api_url, '/') . "/clients/{$targetClient->wp_post_id}" => Http::response([
+                'wp_post_id' => (int) $targetClient->wp_post_id,
+                'wp_user_id' => (int) $targetClient->wp_user_id,
+                'name' => $targetClient->name,
+                'phone' => $targetClient->phone_normalized,
+                'email' => $targetClient->email,
+                'post_status' => 'publish',
+                'premium' => false,
+                'featured' => false,
+            ], 200),
+        ]);
+
+        $subsidiaryDeal = app(SubsidiaryTrialService::class)->activateIfPending($deal);
+
+        $this->assertNotNull($subsidiaryDeal);
+        $this->assertSame((int) $targetPlatform->id, (int) $subsidiaryDeal->platform_id);
+        $this->assertSame((int) $targetClient->id, (int) $subsidiaryDeal->client_id);
+        $this->assertSame((int) $targetProduct->id, (int) $subsidiaryDeal->product_id);
+        $this->assertSame('active', (string) $subsidiaryDeal->status);
+        $this->assertTrue((bool) $subsidiaryDeal->is_free_trial);
+        $this->assertSame(10, (int) $subsidiaryDeal->duration_days);
+
+        $main = $deal->fresh();
+        $this->assertSame((int) $subsidiaryDeal->id, (int) $main->linked_deal_id);
+        $this->assertNull($main->pending_subsidiary_trial);
+        $this->assertSame((int) $main->id, (int) $subsidiaryDeal->fresh()->linked_deal_id);
+
+        $payment = Payment::query()->where('deal_id', (int) $subsidiaryDeal->id)->first();
+        $this->assertNotNull($payment);
+        $this->assertSame('completed', (string) $payment->status);
+        $this->assertSame(0.0, (float) $payment->amount);
+        $this->assertSame((int) $main->id, (int) data_get($payment->raw_payload, 'main_deal_id'));
+        $this->assertSame((int) $payment->id, (int) $subsidiaryDeal->payment_id);
     }
 
     private function fixture(): array

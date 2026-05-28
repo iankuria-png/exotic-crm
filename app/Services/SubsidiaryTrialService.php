@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Billing\Repositories\BillingConfigurationRepository;
 use App\Models\Client;
 use App\Models\Deal;
+use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
 use App\Models\TimelineEvent;
@@ -160,12 +161,16 @@ class SubsidiaryTrialService
                     );
                 }
 
+                $payment = $this->subsidiaryTrialPayment($main, $trial, $client, $product, $durationDays, $actorId);
+
                 $activated = $this->subscriptionProvisioningService->activateDeal($trial, [
+                    'payment' => $payment,
                     'payment_method' => 'free_trial',
                     'duration_days' => $durationDays,
                     'is_free_trial' => true,
                     'free_trial_approved_by' => 'subsidiary_trial',
                     'actor_id' => $actorId,
+                    'payment_reference' => $payment->transaction_reference,
                     'timeline_context' => [
                         'source' => 'subsidiary_trial_from_deal',
                         'main_deal_id' => (int) $main->id,
@@ -335,6 +340,48 @@ class SubsidiaryTrialService
         }
 
         return $this->clientResolver->resolve($main->client, $target, (array) ($intent['subsidiary_client_seed'] ?? []));
+    }
+
+    private function subsidiaryTrialPayment(Deal $main, Deal $trial, Client $client, Product $product, int $durationDays, int $actorId): Payment
+    {
+        $existing = Payment::query()
+            ->where('deal_id', (int) $trial->id)
+            ->where('status', 'completed')
+            ->where('amount', 0)
+            ->where('transaction_reference', 'SUB-TRIAL-' . (int) $main->id . '-' . (int) $trial->id)
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        return Payment::create([
+            'platform_id' => (int) $trial->platform_id,
+            'product_id' => (int) $product->id,
+            'deal_id' => (int) $trial->id,
+            'client_id' => (int) $client->id,
+            'phone' => $client->phone_normalized,
+            'amount' => 0,
+            'currency' => $trial->currency ?: ($client->platform?->currency_code ?: $product->currency),
+            'transaction_uuid' => 'subsidiary_trial_' . (int) $main->id . '_' . (int) $trial->id,
+            'transaction_reference' => 'SUB-TRIAL-' . (int) $main->id . '-' . (int) $trial->id,
+            'status' => 'completed',
+            'duration' => $trial->duration,
+            'subscription_lifecycle' => $trial->subscription_lifecycle,
+            'subscription_lifecycle_source' => $trial->subscription_lifecycle_source,
+            'subscription_lifecycle_reason' => $trial->subscription_lifecycle_reason,
+            'raw_payload' => [
+                'source' => 'subsidiary_trial_from_deal',
+                'main_deal_id' => (int) $main->id,
+                'subsidiary_deal_id' => (int) $trial->id,
+                'duration_days' => $durationDays,
+                'approval_mode' => 'pin',
+            ],
+            'match_confidence' => 'manual',
+            'confirmed_by' => $actorId ?: null,
+            'confirmed_at' => now(),
+            'completed_at' => now(),
+        ]);
     }
 
     private function targetPayload(Platform $platform, Deal $main): array

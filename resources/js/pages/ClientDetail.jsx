@@ -699,6 +699,26 @@ function DefinitionRow({ label, value, mono = false }) {
     );
 }
 
+function subsidiaryTrialErrorMessage(code) {
+    switch (code) {
+        case 'free_trial_disabled':
+            return 'Free trials are not enabled for the subsidiary market.';
+        case 'no_matching_product':
+        case 'no_trial_product':
+            return 'No matching subscription package is available in the subsidiary market.';
+        case 'missing_wp_api_credentials':
+            return 'Subsidiary WordPress API credentials are incomplete.';
+        case 'missing_wp_db_credentials':
+            return 'Subsidiary WordPress database credentials are incomplete.';
+        case 'wp_provisioning_failed':
+            return 'Subsidiary WordPress provisioning failed.';
+        case 'client_sync_failed':
+            return 'Subsidiary client sync failed after provisioning.';
+        default:
+            return 'Subsidiary trial failed.';
+    }
+}
+
 export default function ClientDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -825,6 +845,19 @@ export default function ClientDetail() {
     });
     const platformPhonePrefix = client?.platform?.phone_prefix || '254';
     const clientPlatformId = Number(client?.platform_id || client?.platform?.id || 0);
+
+    useEffect(() => {
+        const failedDeal = (client?.deals || []).find((deal) => deal?.pending_subsidiary_trial?.status === 'failed');
+        if (!failedDeal) {
+            setSubsidiaryTrialBanner(null);
+            return;
+        }
+
+        setSubsidiaryTrialBanner({
+            dealId: failedDeal.id,
+            message: subsidiaryTrialErrorMessage(failedDeal.pending_subsidiary_trial?.last_error),
+        });
+    }, [client?.deals]);
 
     const { data: meData } = useQuery({
         queryKey: ['me'],
