@@ -53,6 +53,15 @@ class WpSyncService
         return $this->get('/clients', $params);
     }
 
+    public function searchClients(string $search, int $perPage = 20): array
+    {
+        return $this->get('/clients', [
+            'search' => $search,
+            'per_page' => $perPage,
+            'page' => 1,
+        ]);
+    }
+
     /**
      * Fetch a single client profile
      */

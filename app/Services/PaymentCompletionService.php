@@ -274,6 +274,16 @@ class PaymentCompletionService
                     'provisioning_status' => 'completed',
                     'transition' => 'subscription_provisioned',
                 ]));
+
+                if ($deal) {
+                    $dealId = (int) $deal->id;
+                    DB::afterCommit(function () use ($dealId): void {
+                        $freshDeal = Deal::query()->find($dealId);
+                        if ($freshDeal) {
+                            app(SubsidiaryTrialService::class)->activateIfPending($freshDeal);
+                        }
+                    });
+                }
             } else {
                 Log::warning('Successful payment could not be linked to a CRM client', [
                     'payment_id' => $payment->id,

@@ -308,6 +308,9 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/deals/{deal}', [DealController::class, 'show']);
         Route::patch('/deals/{deal}', [DealController::class, 'update']);
         Route::delete('/deals/{deal}', [DealController::class, 'destroy']);
+        Route::get('/deals/{deal}/subsidiary-trial-targets', [DealController::class, 'subsidiaryTrialTargets']);
+        Route::get('/deals/{deal}/subsidiary-trial-preview', [DealController::class, 'subsidiaryTrialPreview']);
+        Route::post('/deals/{deal}/subsidiary-trial-retry', [DealController::class, 'retrySubsidiaryTrial']);
         Route::post('/deals/{deal}/activate', [DealController::class, 'activate']);
         Route::post('/deals/{deal}/deactivate', [DealController::class, 'deactivate']);
         Route::post('/deals/{deal}/extend', [DealController::class, 'extend']);

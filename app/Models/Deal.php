@@ -42,6 +42,7 @@ class Deal extends Model
         'renewal_reminders_paused', 'renewal_paused_until', 'renewal_pause_reason',
         'origin', 'subscription_lifecycle', 'subscription_lifecycle_source', 'subscription_lifecycle_reason',
         'cancellation_reason_code', 'cancellation_notes', 'cancelled_payment_id',
+        'linked_deal_id', 'pending_subsidiary_trial',
     ];
 
     protected $casts = [
@@ -54,6 +55,7 @@ class Deal extends Model
         'is_free_trial' => 'boolean',
         'renewal_reminders_paused' => 'boolean',
         'renewal_paused_until' => 'datetime',
+        'pending_subsidiary_trial' => 'array',
     ];
 
     public function platform()
@@ -79,6 +81,11 @@ class Deal extends Model
     public function cancelledPayment()
     {
         return $this->belongsTo(Payment::class, 'cancelled_payment_id');
+    }
+
+    public function linkedDeal()
+    {
+        return $this->belongsTo(Deal::class, 'linked_deal_id');
     }
 
     public function product()

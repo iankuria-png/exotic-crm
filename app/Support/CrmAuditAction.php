@@ -29,6 +29,9 @@ final class CrmAuditAction
     public const DEAL_EXTEND = 'deal_extend';
     public const DEAL_RENEW = 'deal_renew';
     public const DEAL_FREE_TRIAL = 'deal_free_trial';
+    public const DEAL_SUBSIDIARY_TRIAL_ACTIVATE = 'deal_subsidiary_trial_activate';
+    public const DEAL_SUBSIDIARY_TRIAL_REUSED = 'deal_subsidiary_trial_reused';
+    public const DEAL_SUBSIDIARY_TRIAL_FAILED = 'deal_subsidiary_trial_failed';
     public const DEAL_DISCOUNT = 'deal_discount';
     public const DEAL_CREATE_CUSTOM = 'deal_create_custom';
     public const PRODUCT_CREATE_SALES = 'product_create_sales';

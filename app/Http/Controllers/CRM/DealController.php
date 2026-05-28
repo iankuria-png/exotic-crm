@@ -20,7 +20,9 @@ use App\Services\SubscriptionDeactivationService;
 use App\Services\ManualPaymentBundleService;
 use App\Services\SubscriptionLifecycleService;
 use App\Services\SubscriptionProvisioningService;
+use App\Services\SubsidiaryTrialService;
 use App\Services\WalletSettingsService;
+use App\Support\CrossPlatformPhoneResolver;
 use App\Support\DeactivationRequest;
 use App\Support\CrmAuditAction;
 use App\Support\DealDeactivationReason;
@@ -42,7 +44,8 @@ class DealController extends Controller
         private readonly ManualPaymentBundleService $manualPaymentBundleService,
         private readonly SubscriptionProvisioningService $subscriptionProvisioningService,
         private readonly SubscriptionLifecycleService $subscriptionLifecycleService,
-        private readonly WalletSettingsService $walletSettingsService
+        private readonly WalletSettingsService $walletSettingsService,
+        private readonly SubsidiaryTrialService $subsidiaryTrialService
     ) {
     }
 
@@ -153,6 +156,67 @@ class DealController extends Controller
         $deal->load(['client', 'product', 'platform', 'assignedAgent', 'payment', 'lead']);
 
         return response()->json($deal);
+    }
+
+    public function subsidiaryTrialTargets(Request $request, Deal $deal)
+    {
+        $this->authorizeDealAccess($request, $deal);
+
+        return response()->json($this->subsidiaryTrialService->targetsForDeal($deal, $request->user()));
+    }
+
+    public function subsidiaryTrialPreview(Request $request, Deal $deal)
+    {
+        $this->authorizeDealAccess($request, $deal);
+        $validated = $request->validate([
+            'platform_id' => 'required|integer|exists:platforms,id',
+        ]);
+
+        $targetId = (int) $validated['platform_id'];
+        if ($targetId === (int) $deal->platform_id) {
+            throw ValidationException::withMessages([
+                'platform_id' => 'Choose a different market for the subsidiary trial.',
+            ]);
+        }
+
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $targetId,
+            'You do not have access to this subsidiary market.'
+        );
+
+        return response()->json(
+            $this->subsidiaryTrialService->previewForDeal($deal, Platform::query()->findOrFail($targetId))
+        );
+    }
+
+    public function retrySubsidiaryTrial(Request $request, Deal $deal)
+    {
+        $this->authorizeDealAccess($request, $deal);
+        $validated = $request->validate([
+            'pin' => ['required', 'regex:/^\d{4,6}$/'],
+        ]);
+
+        if (!$this->walletSettingsService->freeTrialPinIsConfigured()) {
+            return response()->json([
+                'message' => 'Free-trial PIN is not configured. Ask an admin to set it in Settings first.',
+            ], 409);
+        }
+
+        if (!$this->walletSettingsService->verifyFreeTrialPin((string) $validated['pin'])) {
+            return response()->json([
+                'message' => 'Free-trial PIN is invalid.',
+            ], 422);
+        }
+
+        $deal = $this->subsidiaryTrialService->resetForRetry($deal, (int) $request->user()->id);
+        $this->subsidiaryTrialService->activateIfPending($deal);
+
+        $deal = $deal->fresh(['client', 'product', 'platform']);
+        $payload = $deal->toArray();
+        $payload['subsidiary_trial'] = $this->subsidiaryTrialService->statusPayload($deal);
+
+        return response()->json($payload);
     }
 
     public function destroy(Request $request, Deal $deal)
@@ -328,6 +392,13 @@ class DealController extends Controller
             'duration_days' => 'nullable|integer|min:1|max:365',
             'subscription_lifecycle' => 'nullable|in:new,renewal',
             'subscription_lifecycle_reason' => 'nullable|string|max:500',
+            'subsidiary_trial' => 'nullable|array',
+            'subsidiary_trial.enabled' => 'nullable|boolean',
+            'subsidiary_trial.platform_id' => 'nullable|integer|exists:platforms,id',
+            'subsidiary_trial.client_id' => 'nullable|integer|exists:clients,id',
+            'subsidiary_trial.create_confirmed' => 'nullable',
+            'subsidiary_trial.duration_days' => 'nullable|integer|min:1|max:90',
+            'subsidiary_trial.pin' => ['nullable', 'regex:/^\d{4,6}$/'],
         ]);
 
         if ($missingColumnsResponse = $this->missingSprint6DealColumnsResponse()) {
@@ -342,6 +413,8 @@ class DealController extends Controller
         if (!$client) {
             return response()->json(['message' => 'Deal has no associated client'], 422);
         }
+
+        $subsidiaryIntent = $this->buildSubsidiaryTrialIntent($request, $deal, $client, $validated);
 
         $paymentMethod = (string) $validated['payment_method'];
         if ($methodGuard = $this->disallowedPaymentMethodResponse((int) $client->platform_id, 'activation', $paymentMethod)) {
@@ -412,7 +485,10 @@ class DealController extends Controller
             );
 
             $deal->forceFill(
-                $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle)
+                array_merge(
+                    $this->subscriptionLifecycleService->toPersistenceAttributes($lifecycle),
+                    $subsidiaryIntent ? ['pending_subsidiary_trial' => $subsidiaryIntent] : []
+                )
             )->save();
 
             if ($paymentMethod !== 'free_trial') {
@@ -643,7 +719,19 @@ class DealController extends Controller
 
             DB::commit();
 
+            if ($subsidiaryIntent) {
+                $this->subsidiaryTrialService->activateIfPending($deal);
+                $deal = $deal->fresh(['client', 'product', 'platform']);
+            }
+
             $deal->load(['client', 'product', 'platform']);
+            if ($subsidiaryIntent) {
+                $payload = $deal->toArray();
+                $payload['subsidiary_trial'] = $this->subsidiaryTrialService->statusPayload($deal);
+
+                return response()->json($payload);
+            }
+
             return response()->json($deal);
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -1324,6 +1412,102 @@ class DealController extends Controller
         return response()->json([
             'message' => 'Free-trial PIN is invalid.',
         ], 422);
+    }
+
+    private function buildSubsidiaryTrialIntent(Request $request, Deal $deal, Client $client, array $validated): ?array
+    {
+        $input = $validated['subsidiary_trial'] ?? null;
+        if (!is_array($input) || !($input['enabled'] ?? false)) {
+            return null;
+        }
+
+        $targetId = (int) ($input['platform_id'] ?? 0);
+        if ($targetId <= 0) {
+            throw ValidationException::withMessages([
+                'subsidiary_trial.platform_id' => 'Choose a subsidiary market.',
+            ]);
+        }
+
+        if ($targetId === (int) $deal->platform_id) {
+            throw ValidationException::withMessages([
+                'subsidiary_trial.platform_id' => 'Choose a different market for the subsidiary trial.',
+            ]);
+        }
+
+        $this->marketAuthorizationService->ensureUserCanAccessPlatform(
+            $request->user(),
+            $targetId,
+            'You do not have access to this subsidiary market.'
+        );
+
+        $target = Platform::query()->findOrFail($targetId);
+        $clientId = isset($input['client_id']) ? (int) $input['client_id'] : null;
+        if ($clientId) {
+            $selectedClient = Client::query()
+                ->where('platform_id', $targetId)
+                ->find($clientId);
+            if (!$selectedClient) {
+                throw ValidationException::withMessages([
+                    'subsidiary_trial.client_id' => 'Selected subsidiary client must belong to the target market.',
+                ]);
+            }
+        } elseif (!filter_var($input['create_confirmed'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            throw ValidationException::withMessages([
+                'subsidiary_trial.create_confirmed' => 'Confirm that a new WordPress-provisioned subsidiary client may be created.',
+            ]);
+        }
+
+        $durationDays = (int) ($input['duration_days'] ?? 0);
+        if ($durationDays < 1 || $durationDays > 90) {
+            throw ValidationException::withMessages([
+                'subsidiary_trial.duration_days' => 'Enter a trial duration between 1 and 90 days.',
+            ]);
+        }
+
+        $pin = trim((string) ($input['pin'] ?? ''));
+        if ($pin === '' || !preg_match('/^\d{4,6}$/', $pin)) {
+            throw ValidationException::withMessages([
+                'subsidiary_trial.pin' => 'Enter the configured free-trial PIN.',
+            ]);
+        }
+
+        if (!$this->walletSettingsService->freeTrialPinIsConfigured()) {
+            throw ValidationException::withMessages([
+                'subsidiary_trial.pin' => 'Free-trial PIN is not configured. Ask an admin to set it in Settings first.',
+            ]);
+        }
+
+        if (!$this->walletSettingsService->verifyFreeTrialPin($pin)) {
+            throw ValidationException::withMessages([
+                'subsidiary_trial.pin' => 'Free-trial PIN is invalid.',
+            ]);
+        }
+
+        $targetPhone = app(CrossPlatformPhoneResolver::class)->resolve(
+            $client->phone_normalized,
+            (string) ($client->platform?->phone_prefix ?: ''),
+            (string) ($target->phone_prefix ?: '254')
+        );
+
+        return [
+            'status' => 'pending',
+            'platform_id' => $targetId,
+            'duration_days' => $durationDays,
+            'subsidiary_client_id' => $clientId,
+            'subsidiary_client_seed' => [
+                'name' => $client->name,
+                'phone_normalized' => $targetPhone,
+                'email' => $client->email,
+                'city' => $client->city,
+            ],
+            'pin_verified_at' => now()->toDateTimeString(),
+            'pin_verified_by_user_id' => (int) $request->user()->id,
+            'requested_by_user_id' => (int) $request->user()->id,
+            'requested_at' => now()->toDateTimeString(),
+            'attempt_count' => 0,
+            'last_attempt_at' => null,
+            'last_error' => null,
+        ];
     }
 
     private function discountPermissionResponse(

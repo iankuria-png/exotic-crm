@@ -9,6 +9,7 @@ import CredentialDispatchDrawer from '../components/CredentialDispatchDrawer';
 import CloseCaseDialog from '../components/CloseCaseDialog';
 import SupportBoardChat from '../components/SupportBoardChat';
 import ClientSubscriptionDeactivationDialog from '../components/subscriptions/ClientSubscriptionDeactivationDialog';
+import SubsidiaryTrialSection from '../components/clients/SubsidiaryTrialSection';
 import { useToast } from '../components/ToastProvider';
 import { getAllowedCrmPaymentMethods, getWalletAutoRenewPresentation } from '../utils/billingMethodPolicy';
 import { getDefaultPaymentLinkProviderKey, getEnabledPaymentLinkProviders } from '../utils/paymentLinkProviders';
@@ -739,6 +740,18 @@ export default function ClientDetail() {
     const [activationDiscountPercentage, setActivationDiscountPercentage] = useState('');
     const [activationDiscountPayableAmount, setActivationDiscountPayableAmount] = useState('');
     const [activationDiscountPin, setActivationDiscountPin] = useState('');
+    const [activationSubsidiaryTrial, setActivationSubsidiaryTrial] = useState({
+        enabled: false,
+        platform_id: '',
+        client_id: null,
+        selected_client_name: '',
+        create_confirmed: false,
+        duration_days: '',
+        pin: '',
+    });
+    const [activationSubsidiaryReady, setActivationSubsidiaryReady] = useState(true);
+    const [subsidiaryTrialBanner, setSubsidiaryTrialBanner] = useState(null);
+    const [subsidiaryRetryDialog, setSubsidiaryRetryDialog] = useState({ open: false, dealId: null, pin: '' });
     const [showSyncConfirm, setShowSyncConfirm] = useState(false);
     const [profileSection, setProfileSection] = useState('personal');
     const [profileForm, setProfileForm] = useState(null);
@@ -1110,7 +1123,7 @@ export default function ClientDetail() {
     });
 
     const activateDealMutation = useMutation({
-        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPayableAmount, discountPin, subscriptionLifecycle, subscriptionLifecycleReason }) =>
+        mutationFn: ({ dealId, reason, paymentMethod, paymentReference, freeTrialPin, paymentLinkProvider, discountPercentage, discountPayableAmount, discountPin, subscriptionLifecycle, subscriptionLifecycleReason, subsidiaryTrial }) =>
             api.post(`/crm/deals/${dealId}/activate`, {
                 reason,
                 payment_method: paymentMethod,
@@ -1126,10 +1139,20 @@ export default function ClientDetail() {
                         discount_pin: discountPin,
                     }
                     : {}),
+                ...(subsidiaryTrial?.enabled ? { subsidiary_trial: subsidiaryTrial } : {}),
             }).then((r) => r.data),
         onSuccess: (payload) => {
             queryClient.invalidateQueries({ queryKey: ['client', id] });
             queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            const subsidiaryTrial = payload?.subsidiary_trial || null;
+            if (subsidiaryTrial?.status === 'failed') {
+                setSubsidiaryTrialBanner({
+                    dealId: payload?.id || activationDialog.dealId,
+                    message: subsidiaryTrial?.error?.message || 'Subsidiary trial failed.',
+                });
+            } else if (subsidiaryTrial?.status === 'satisfied') {
+                setSubsidiaryTrialBanner(null);
+            }
             setActivationDialog({ open: false, dealId: null, dealLabel: '' });
             setActivationReason('Activation initiated from client profile');
             setActivationPaymentMethod(activationPaymentMethods[0] || '');
@@ -1142,10 +1165,42 @@ export default function ClientDetail() {
             setActivationDiscountPercentage('');
             setActivationDiscountPayableAmount('');
             setActivationDiscountPin('');
+            setActivationSubsidiaryTrial({
+                enabled: false,
+                platform_id: '',
+                client_id: null,
+                selected_client_name: '',
+                create_confirmed: false,
+                duration_days: '',
+                pin: '',
+            });
+            setActivationSubsidiaryReady(true);
             toast.success(payload?.message || 'Subscription activation request submitted.');
         },
         onError: (error) => {
             toast.error(error?.response?.data?.message || 'Subscription activation failed.');
+        },
+    });
+
+    const retrySubsidiaryTrialMutation = useMutation({
+        mutationFn: ({ dealId, pin }) => api.post(`/crm/deals/${dealId}/subsidiary-trial-retry`, { pin }).then((response) => response.data),
+        onSuccess: (payload) => {
+            queryClient.invalidateQueries({ queryKey: ['client', id] });
+            queryClient.invalidateQueries({ queryKey: ['client-timeline', id] });
+            if (payload?.subsidiary_trial?.status === 'failed') {
+                setSubsidiaryTrialBanner({
+                    dealId: payload?.id || subsidiaryRetryDialog.dealId,
+                    message: payload?.subsidiary_trial?.error?.message || 'Subsidiary trial failed.',
+                });
+                toast.warning('Subsidiary trial still needs attention.');
+            } else {
+                setSubsidiaryTrialBanner(null);
+                toast.success('Subsidiary trial activated.');
+            }
+            setSubsidiaryRetryDialog({ open: false, dealId: null, pin: '' });
+        },
+        onError: (error) => {
+            toast.error(error?.response?.data?.message || 'Retry failed.');
         },
     });
 
@@ -1804,6 +1859,16 @@ export default function ClientDetail() {
         setActivationDiscountPercentage('');
         setActivationDiscountPayableAmount('');
         setActivationDiscountPin('');
+        setActivationSubsidiaryTrial({
+            enabled: false,
+            platform_id: '',
+            client_id: null,
+            selected_client_name: '',
+            create_confirmed: false,
+            duration_days: '',
+            pin: '',
+        });
+        setActivationSubsidiaryReady(true);
     };
 
     const syncActivationDiscountFromPercentage = (value) => {
@@ -2001,6 +2066,16 @@ export default function ClientDetail() {
         setActivationDiscountPercentage('');
         setActivationDiscountPayableAmount('');
         setActivationDiscountPin('');
+        setActivationSubsidiaryTrial({
+            enabled: false,
+            platform_id: '',
+            client_id: null,
+            selected_client_name: '',
+            create_confirmed: false,
+            duration_days: '',
+            pin: '',
+        });
+        setActivationSubsidiaryReady(true);
     };
 
     const openDealActionDialog = (type, deal) => {
@@ -2075,6 +2150,11 @@ export default function ClientDetail() {
             return;
         }
 
+        if (activationSubsidiaryTrial.enabled && !activationSubsidiaryReady) {
+            toast.error('Resolve the subsidiary trial preview before submitting.');
+            return;
+        }
+
         activateDealMutation.mutate({
             dealId: activationDialog.dealId,
             reason: activationReason.trim() || 'Activation initiated from client profile',
@@ -2089,6 +2169,16 @@ export default function ClientDetail() {
             discountPercentage: activationApplyDiscount ? activationDiscountValue : 0,
             discountPayableAmount: activationApplyDiscount ? activationDiscountPayableValue : null,
             discountPin: activationDiscountPin.trim(),
+            subsidiaryTrial: activationSubsidiaryTrial.enabled
+                ? {
+                    enabled: true,
+                    platform_id: Number(activationSubsidiaryTrial.platform_id),
+                    client_id: activationSubsidiaryTrial.client_id ? Number(activationSubsidiaryTrial.client_id) : null,
+                    create_confirmed: Boolean(activationSubsidiaryTrial.create_confirmed),
+                    duration_days: Number(activationSubsidiaryTrial.duration_days || 0),
+                    pin: activationSubsidiaryTrial.pin,
+                }
+                : undefined,
         });
     };
 
@@ -2099,6 +2189,7 @@ export default function ClientDetail() {
         || (activationRequiresProvider && !activationPaymentLinkProvider)
         || (activationApplyDiscount && !activationDiscountValid)
         || (activationApplyDiscount && activationDiscountPin.trim().length < 4)
+        || (activationSubsidiaryTrial.enabled && !activationSubsidiaryReady)
         || (
             activationSubscriptionLifecycle !== resolveDialogPredictedLifecycle('activate', activationDeal)
             && !activationSubscriptionLifecycleReason.trim()
@@ -2262,6 +2353,24 @@ export default function ClientDetail() {
                 </svg>
                 Back to Clients
             </button>
+
+            {subsidiaryTrialBanner ? (
+                <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3" role="status" aria-live="polite">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <p className="text-sm font-semibold text-amber-900">Subscription activated. Subsidiary trial failed.</p>
+                            <p className="mt-0.5 text-xs text-amber-800">{subsidiaryTrialBanner.message}</p>
+                        </div>
+                        <button
+                            type="button"
+                            className="crm-btn-secondary"
+                            onClick={() => setSubsidiaryRetryDialog({ open: true, dealId: subsidiaryTrialBanner.dealId, pin: '' })}
+                        >
+                            Retry subsidiary trial
+                        </button>
+                    </div>
+                </section>
+            ) : null}
 
             {isCaseClosed ? (
                 <section className="rounded-lg border-l-4 border-amber-400 bg-amber-50 px-4 py-3" role="status" aria-live="polite">
@@ -4384,7 +4493,7 @@ export default function ClientDetail() {
 
             {activationDialog.open ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={closeActivationDialog}>
-                    <div className="flex w-full max-w-lg flex-col rounded-lg border border-slate-200 bg-white shadow-xl max-h-[90vh]" onClick={(event) => event.stopPropagation()}>
+                    <div className={`flex w-full flex-col rounded-lg border border-slate-200 bg-white shadow-xl max-h-[90vh] ${activationSubsidiaryTrial.enabled ? 'max-w-2xl' : 'max-w-lg'}`} onClick={(event) => event.stopPropagation()}>
                         <header className="crm-panel-header shrink-0">
                             <div>
                                 <h3 className="crm-panel-title">Activate Subscription</h3>
@@ -4585,6 +4694,14 @@ export default function ClientDetail() {
                                     ) : null}
                                 </div>
 
+                                <SubsidiaryTrialSection
+                                    dealId={activationDialog.dealId}
+                                    value={activationSubsidiaryTrial}
+                                    onChange={(patch) => setActivationSubsidiaryTrial((current) => ({ ...current, ...patch }))}
+                                    onReadyChange={setActivationSubsidiaryReady}
+                                    disabled={activateDealMutation.isPending}
+                                />
+
                             </div>
 
                             <div>
@@ -4618,11 +4735,59 @@ export default function ClientDetail() {
                             >
                                 {activateDealMutation.isPending
                                     ? 'Submitting...'
+                                    : activationSubsidiaryTrial.enabled
+                                        ? 'Activate subscription + trial'
                                     : activationPaymentMethod === 'stk'
                                         ? 'Send STK push'
                                         : activationPaymentMethod === 'link'
                                             ? 'Send payment link'
                                         : 'Activate subscription'}
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            ) : null}
+
+            {subsidiaryRetryDialog.open ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={() => setSubsidiaryRetryDialog({ open: false, dealId: null, pin: '' })}>
+                    <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+                        <header className="crm-panel-header">
+                            <div>
+                                <h3 className="crm-panel-title">Retry Subsidiary Trial</h3>
+                                <p className="crm-panel-subtitle">Enter the free-trial PIN to retry.</p>
+                            </div>
+                        </header>
+                        <div className="space-y-3 p-4">
+                            <label htmlFor="subsidiary-retry-pin" className="mb-1 block text-sm font-medium text-slate-700">Free-trial PIN</label>
+                            <input
+                                id="subsidiary-retry-pin"
+                                type="password"
+                                inputMode="numeric"
+                                maxLength={6}
+                                value={subsidiaryRetryDialog.pin}
+                                onChange={(event) => setSubsidiaryRetryDialog((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                                className="crm-input"
+                            />
+                        </div>
+                        <footer className="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
+                            <button
+                                type="button"
+                                className="crm-btn-secondary"
+                                disabled={retrySubsidiaryTrialMutation.isPending}
+                                onClick={() => setSubsidiaryRetryDialog({ open: false, dealId: null, pin: '' })}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="crm-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={retrySubsidiaryTrialMutation.isPending || subsidiaryRetryDialog.pin.trim().length < 4}
+                                onClick={() => retrySubsidiaryTrialMutation.mutate({
+                                    dealId: subsidiaryRetryDialog.dealId,
+                                    pin: subsidiaryRetryDialog.pin.trim(),
+                                })}
+                            >
+                                {retrySubsidiaryTrialMutation.isPending ? 'Retrying...' : 'Retry trial'}
                             </button>
                         </footer>
                     </div>
