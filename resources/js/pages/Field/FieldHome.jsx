@@ -108,11 +108,26 @@ export default function FieldHome() {
             />
 
             <section className="grid gap-4 md:grid-cols-4">
-                <MetricCard label="Clients Created" value={Number(summary.clients_created || 0).toLocaleString()} meta="field tagged accounts" tone="accent" />
+                <MetricCard
+                    label="Clients Created"
+                    value={Number(summary.clients_created || 0).toLocaleString()}
+                    meta={summary.clients_field_tagged != null
+                        ? `${Number(summary.clients_field_tagged).toLocaleString()} field-tagged`
+                        : 'all accounts you created'}
+                    tone="accent"
+                />
                 <MetricCard label="Trials Activated" value={Number(summary.trials_activated || summary.trials_active || 0).toLocaleString()} meta="after deposit" tone="success" />
                 <MetricCard label="Paid Conversions" value={Number(summary.paid_conversions || 0).toLocaleString()} meta="field-attributed" tone="default" />
                 <MetricCard label="Commission Earned" value={currency(summary.commission_earned || summary.commission_accrued || 0, summary.currency || 'KES')} meta="all earned status" tone="warning" />
             </section>
+
+            {Number(summary.clients_untagged || 0) > 0 ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+                    {Number(summary.clients_untagged).toLocaleString()} of your client(s) lost their field tag during a WordPress re-sync.
+                    They are still listed below. An admin can re-tag them by running{' '}
+                    <code className="rounded bg-amber-100 px-1.5 py-0.5">php artisan crm:backfill-field-signup-source --apply</code>.
+                </div>
+            ) : null}
 
             <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
                 <div className="crm-surface overflow-hidden">

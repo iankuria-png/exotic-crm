@@ -39,15 +39,22 @@ class FieldSalesController extends Controller
     public function home(Request $request)
     {
         $user = $request->user();
-        $clientQuery = Client::query()
+
+        // Source of truth for "clients I created" is created_by, not signup_source.
+        // signup_source can drift if a downstream WP re-sync clobbers the 'field' tag;
+        // the agent must still see their work even when tagging breaks.
+        $createdByQuery = Client::query()
             ->with(['platform:id,name,currency_code', 'activeDeal.product:id,name,display_name'])
-            ->where('signup_source', 'field')
             ->where('created_by', (int) $user->id);
-        $this->marketAuthorizationService->applyPlatformScope($clientQuery, $user);
+        $this->marketAuthorizationService->applyPlatformScope($createdByQuery, $user);
+
+        $fieldTaggedCount = (clone $createdByQuery)->where('signup_source', 'field')->count();
+        $createdByCount = (clone $createdByQuery)->count();
+        $untaggedCount = max(0, $createdByCount - $fieldTaggedCount);
 
         $commissionQuery = Commission::query()->where('agent_user_id', (int) $user->id);
 
-        $recentClients = (clone $clientQuery)->latest('id')->limit(10)->get();
+        $recentClients = (clone $createdByQuery)->latest('id')->limit(10)->get();
         $trialsActivated = Deal::query()
             ->where('activated_by_field_agent', (int) $user->id)
             ->where('is_free_trial', true)
@@ -63,7 +70,9 @@ class FieldSalesController extends Controller
 
         return response()->json([
             'summary' => [
-                'clients_created' => (clone $clientQuery)->count(),
+                'clients_created' => $createdByCount,
+                'clients_field_tagged' => $fieldTaggedCount,
+                'clients_untagged' => $untaggedCount,
                 'trials_active' => $trialsActivated,
                 'trials_activated' => $trialsActivated,
                 'paid_conversions' => $paidConversions,
@@ -396,8 +405,8 @@ class FieldSalesController extends Controller
             ->get(['id', 'name', 'email']);
 
         $rows = $agents->map(function (User $agent) use ($from, $to, $validated) {
+            // created_by is the durable attribution; signup_source can drift on WP re-sync.
             $clients = Client::query()
-                ->where('signup_source', 'field')
                 ->where('created_by', (int) $agent->id)
                 ->whereBetween('created_at', [$from, $to])
                 ->when(!empty($validated['market_id']), fn ($query) => $query->where('platform_id', (int) $validated['market_id']));

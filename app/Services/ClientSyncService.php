@@ -195,9 +195,11 @@ class ClientSyncService
             $syncData['notactive'] = (bool) ($wpClient['notactive'] ?? false);
         }
 
-        // Only write signup_source if WP provides one (prevents clobbering crm_provisioned/crm_manual)
+        // signup_source is a CRM-side attribution signal. 'field' is set by the field-sales
+        // flow and must never be clobbered by a re-sync, because WP only ever reports
+        // 'crm_provisioned' (see WpDirectProvisioningService::provisionEscort).
         $wpSignupSource = $wpClient['signup_source'] ?? null;
-        if ($wpSignupSource !== null) {
+        if ($wpSignupSource !== null && $client->signup_source !== 'field') {
             $syncData['signup_source'] = $wpSignupSource;
         }
 
@@ -604,7 +606,10 @@ class ClientSyncService
         $premiumExpire = $this->ensureUnixTimestamp($wpClient['premium_expire'] ?? null);
         $featuredExpire = $this->ensureUnixTimestamp($wpClient['featured_expire'] ?? null);
         $newBadgeMode = $this->resolveNewBadgeMode($wpClient);
-        $signupSource = $wpClient['signup_source'] ?? $existing?->signup_source;
+        // Preserve 'field' attribution against WP overrides (WP only knows 'crm_provisioned').
+        $signupSource = ($existing?->signup_source === 'field')
+            ? 'field'
+            : ($wpClient['signup_source'] ?? $existing?->signup_source);
 
         return [
             'platform_id' => (int) $this->platform->id,
