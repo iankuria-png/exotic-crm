@@ -9,6 +9,7 @@ use App\Models\AgentSession;
 use App\Models\AuditLog;
 use App\Models\Deal;
 use App\Models\Lead;
+use App\Models\MarketRevenueTarget;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
@@ -549,6 +550,10 @@ class TeamActivityService
             ->orderBy('user_id')
             ->orderBy('metric')
             ->get();
+        $marketTargets = $this->marketRevenueTargetsQuery($viewer, $platformId, $normalizedPeriod)
+            ->with(['platform:id,name,country', 'setter:id,name'])
+            ->orderBy('platform_id')
+            ->get();
 
         $formattedDefaults = $defaults
             ->map(fn (AgentGoal $goal) => $this->formatGoal($goal, $agents, $viewer))
@@ -564,10 +569,52 @@ class TeamActivityService
                 ->all(),
             'data' => $formattedDefaults,
             'defaults' => $formattedDefaults,
+            'market_targets' => $marketTargets
+                ->map(fn (MarketRevenueTarget $target) => $this->formatMarketRevenueTarget($target, $overrides))
+                ->values()
+                ->all(),
             'overrides' => $overrides
                 ->map(fn (AgentGoalOverride $goalOverride) => $this->formatGoalOverride($goalOverride, $viewer))
                 ->all(),
         ];
+    }
+
+    public function setMarketRevenueTarget(int $platformId, float $target, string $period, ?string $targetCurrency, User $setter): MarketRevenueTarget
+    {
+        $this->assertManager($setter);
+        $this->assertPlatformAccessible($setter, $platformId);
+
+        $period = $this->normalizeGoalPeriod($period);
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
+
+        $marketTarget = MarketRevenueTarget::query()
+            ->where('platform_id', $platformId)
+            ->where('period', $period)
+            ->first();
+
+        if (!$marketTarget) {
+            $marketTarget = new MarketRevenueTarget([
+                'platform_id' => $platformId,
+                'period' => $period,
+            ]);
+        }
+
+        $marketTarget->fill([
+            'target' => $target,
+            'target_currency' => $targetCurrency,
+            'set_by' => $setter->id,
+        ]);
+        $marketTarget->save();
+
+        return $marketTarget->fresh(['platform:id,name,country', 'setter:id,name']);
+    }
+
+    public function deleteMarketRevenueTarget(MarketRevenueTarget $target, User $viewer): void
+    {
+        $this->assertManager($viewer);
+        $this->assertPlatformAccessible($viewer, (int) $target->platform_id);
+
+        $target->delete();
     }
 
     public function setGoal(string $metric, int $target, string $period, ?int $platformId, string $roleScope, ?string $targetCurrency, User $setter): AgentGoal
@@ -1787,6 +1834,51 @@ class TeamActivityService
             ->when($platformId === null, function ($query) use ($viewer) {
                 $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
             });
+    }
+
+    private function marketRevenueTargetsQuery(User $viewer, ?int $platformId, string $period)
+    {
+        return MarketRevenueTarget::query()
+            ->where('period', $period)
+            ->when($platformId !== null, fn ($query) => $query->where('platform_id', $platformId))
+            ->when($platformId === null, function ($query) use ($viewer) {
+                $this->marketAuthorizationService->applyPlatformScope($query, $viewer);
+            });
+    }
+
+    private function formatMarketRevenueTarget(MarketRevenueTarget $target, Collection $overrides): array
+    {
+        $assigned = $overrides
+            ->where('metric', 'revenue')
+            ->where('platform_id', (int) $target->platform_id)
+            ->where('period', $target->period)
+            ->sum(fn (AgentGoalOverride $goal) => (float) $goal->target);
+        $targetAmount = (float) $target->target;
+        $gap = $targetAmount - (float) $assigned;
+        $assignedPercentage = $targetAmount > 0
+            ? (int) min(999, round(((float) $assigned / $targetAmount) * 100))
+            : 0;
+
+        return [
+            'id' => (int) $target->id,
+            'platform_id' => (int) $target->platform_id,
+            'platform_name' => $target->platform?->name,
+            'platform_country' => $target->platform?->country,
+            'period' => $target->period,
+            'target' => $targetAmount,
+            'target_currency' => $target->target_currency,
+            'target_display' => $this->formatGoalValue('revenue', $targetAmount, $target->target_currency),
+            'assigned' => (float) $assigned,
+            'assigned_display' => $this->formatGoalValue('revenue', (float) $assigned, $target->target_currency),
+            'gap' => $gap,
+            'gap_display' => $this->formatGoalValue('revenue', abs($gap), $target->target_currency),
+            'assigned_percentage' => $assignedPercentage,
+            'is_over_allocated' => $gap < 0,
+            'set_by' => $target->setter ? [
+                'id' => (int) $target->setter->id,
+                'name' => $target->setter->name,
+            ] : null,
+        ];
     }
 
     private function goalKey(?int $platformId, string $metric, string $period): string

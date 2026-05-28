@@ -616,6 +616,8 @@ export default function Team() {
     const [goalMetric, setGoalMetric] = useState('subs_activated');
     const [goalTarget, setGoalTarget] = useState('');
     const [goalTargetCurrency, setGoalTargetCurrency] = useState('USD');
+    const [marketTarget, setMarketTarget] = useState('');
+    const [marketTargetCurrency, setMarketTargetCurrency] = useState('USD');
     const [goalOverrideAssigneeId, setGoalOverrideAssigneeId] = useState('');
     const [goalOverrideMetric, setGoalOverrideMetric] = useState('subs_activated');
     const [goalOverrideTarget, setGoalOverrideTarget] = useState('');
@@ -635,6 +637,7 @@ export default function Team() {
         const target = reportingCurrency.targetCurrency || 'USD';
         setGoalTargetCurrency((current) => current || target);
         setGoalOverrideTargetCurrency((current) => current || target);
+        setMarketTargetCurrency((current) => current || target);
     }, [reportingCurrency.targetCurrency]);
 
     useEffect(() => {
@@ -756,6 +759,7 @@ export default function Team() {
     const availableGoalMetrics = goalsQuery.data?.available_metrics || [];
     const availableRoleScopes = goalsQuery.data?.role_scopes || GOAL_ROLE_SCOPE_OPTIONS;
     const assignableAgents = goalsQuery.data?.assignable_agents || [];
+    const marketTargets = goalsQuery.data?.market_targets || [];
     const defaultGoals = goalsQuery.data?.defaults || goalsQuery.data?.data || [];
     const individualGoals = goalsQuery.data?.overrides || [];
 
@@ -889,6 +893,20 @@ export default function Team() {
         },
     });
 
+    const createMarketTargetMutation = useMutation({
+        mutationFn: (payload) => api.post('/crm/team/goals/market-revenue-targets', payload).then((response) => response.data),
+        onSuccess: () => {
+            toast.success('Market revenue target saved successfully.');
+            setMarketTarget('');
+            queryClient.invalidateQueries({ queryKey: ['team', 'goals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard-country-revenue'] });
+            queryClient.invalidateQueries({ queryKey: ['ceo-dashboard'] });
+        },
+        onError: (error) => {
+            toast.error(getApiErrorMessage(error, 'We could not save that market target.'));
+        },
+    });
+
     const createGoalOverrideMutation = useMutation({
         mutationFn: (payload) => api.post('/crm/team/goals/overrides', payload).then((response) => response.data),
         onSuccess: () => {
@@ -914,6 +932,19 @@ export default function Team() {
         },
         onError: (error) => {
             toast.error(getApiErrorMessage(error, 'We could not delete that goal.'));
+        },
+    });
+
+    const deleteMarketTargetMutation = useMutation({
+        mutationFn: (targetId) => api.delete(`/crm/team/goals/market-revenue-targets/${targetId}`),
+        onSuccess: () => {
+            toast.success('Market revenue target removed.');
+            queryClient.invalidateQueries({ queryKey: ['team', 'goals'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard-country-revenue'] });
+            queryClient.invalidateQueries({ queryKey: ['ceo-dashboard'] });
+        },
+        onError: (error) => {
+            toast.error(getApiErrorMessage(error, 'We could not delete that market target.'));
         },
     });
 
@@ -1272,6 +1303,27 @@ export default function Team() {
             period: goalPeriod,
             platform_id: platformFilter ? Number(platformFilter) : null,
             role_scope: goalRoleScope,
+        });
+    };
+
+    const handleCreateMarketTarget = () => {
+        const target = Number(marketTarget);
+
+        if (!platformFilter) {
+            toast.warning('Choose a market before setting a market revenue target.');
+            return;
+        }
+
+        if (!Number.isFinite(target) || target < 1) {
+            toast.warning('Set a market target greater than zero.');
+            return;
+        }
+
+        createMarketTargetMutation.mutate({
+            target,
+            target_currency: marketTargetCurrency || reportingCurrency.targetCurrency || 'USD',
+            period: goalPeriod,
+            platform_id: Number(platformFilter),
         });
     };
 
@@ -1671,8 +1723,10 @@ export default function Team() {
             {activeTab === 'goals' ? (
                 <>
                     <SectionFrame
-                        title="Create default goal"
-                        subtitle={`Defaults apply to ${selectedPlatformLabel}. Role scope keeps each target aligned to the right team.`}
+                        title="Set market revenue target"
+                        subtitle={platformFilter
+                            ? `Company revenue goal for ${selectedPlatformLabel}. Agent revenue goals below are allocations against this market target.`
+                            : 'Choose one market first. Market targets are the official revenue goal for that market.'}
                         action={
                             <FilterSelect
                                 label="Goal period"
@@ -1682,6 +1736,118 @@ export default function Team() {
                                 className="min-w-[9rem]"
                             />
                         }
+                    >
+                        {!platformFilter ? (
+                            <TeamEmptyState
+                                title="Choose a market to set its revenue target"
+                                message="Market revenue targets keep the executive market widget separate from individual agent accountability."
+                            />
+                        ) : (
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(7rem,0.35fr)_auto]">
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                                        Market target
+                                    </span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={marketTarget}
+                                        onChange={(event) => setMarketTarget(event.target.value)}
+                                        className="crm-select-enhanced"
+                                        placeholder="10000"
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                                        Currency
+                                    </span>
+                                    <input
+                                        type="text"
+                                        value={marketTargetCurrency}
+                                        onChange={(event) => setMarketTargetCurrency(event.target.value.toUpperCase().slice(0, 8))}
+                                        className="crm-select-enhanced uppercase"
+                                        placeholder={reportingCurrency.targetCurrency || 'USD'}
+                                    />
+                                </label>
+                                <div className="flex items-end">
+                                    <button
+                                        type="button"
+                                        onClick={handleCreateMarketTarget}
+                                        disabled={createMarketTargetMutation.isPending}
+                                        className="crm-btn-primary w-full px-4 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
+                                    >
+                                        {createMarketTargetMutation.isPending ? 'Saving...' : 'Save market target'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </SectionFrame>
+
+                    <SectionFrame
+                        title={`${goalPeriodLabel(goalPeriod)} market revenue targets`}
+                        subtitle="Official market goals with assigned agent allocation coverage."
+                    >
+                        {goalsQuery.isLoading && !goalsQuery.data ? (
+                            <div className="space-y-3">
+                                <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+                                <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
+                            </div>
+                        ) : goalsQuery.isError ? (
+                            <TeamErrorState
+                                message={getApiErrorMessage(goalsQuery.error, 'Market revenue targets could not be loaded.')}
+                                onRetry={() => goalsQuery.refetch()}
+                            />
+                        ) : marketTargets.length === 0 ? (
+                            <TeamEmptyState
+                                title="No market revenue target set yet"
+                                message="Set one above to drive the Top Performing Markets progress bar from a real market goal."
+                            />
+                        ) : (
+                            <div className="grid gap-3 xl:grid-cols-2">
+                                {marketTargets.map((target) => (
+                                    <article key={target.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div>
+                                                <p className="font-semibold text-slate-900">{target.platform_country || target.platform_name || 'Market'} revenue target</p>
+                                                <p className="mt-1 text-xs text-slate-500">
+                                                    {goalPeriodLabel(target.period)} • {target.target_display}
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => deleteMarketTargetMutation.mutate(target.id)}
+                                                disabled={deleteMarketTargetMutation.isPending}
+                                                className="crm-btn-secondary px-3 py-1.5 text-xs text-rose-700 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+                                            <span className="font-medium text-slate-600">Assigned to agents</span>
+                                            <span className="crm-mono font-semibold text-slate-900">{target.assigned_display} / {target.target_display} ({target.assigned_percentage}%)</span>
+                                        </div>
+                                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                                            <div className="h-full rounded-full bg-teal-600 transition-all duration-500" style={{ width: `${Math.min(100, Math.max(target.assigned_percentage || 0, target.assigned > 0 ? 6 : 0))}%` }} />
+                                        </div>
+                                        <div className="mt-3 inline-flex items-center gap-2 text-xs font-medium text-slate-500">
+                                            <span className={`h-2 w-2 rounded-full ${target.is_over_allocated ? 'bg-amber-500' : target.gap > 0 ? 'bg-slate-400' : 'bg-emerald-500'}`} aria-hidden="true" />
+                                            <span>
+                                                {target.is_over_allocated
+                                                    ? `${target.gap_display} over-assigned`
+                                                    : target.gap > 0
+                                                        ? `${target.gap_display} still unassigned`
+                                                        : 'Fully allocated'}
+                                            </span>
+                                        </div>
+                                    </article>
+                                ))}
+                            </div>
+                        )}
+                    </SectionFrame>
+
+                    <SectionFrame
+                        title="Create default goal"
+                        subtitle={`Defaults apply to ${selectedPlatformLabel}. Use these for non-revenue activity or shared agent allocation rules.`}
                     >
                         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(7rem,0.35fr)_auto]">
                             <FilterSelect

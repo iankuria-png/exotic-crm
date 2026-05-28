@@ -5,6 +5,7 @@ namespace App\Http\Controllers\CRM;
 use App\Http\Controllers\Controller;
 use App\Models\AgentGoal;
 use App\Models\AgentGoalOverride;
+use App\Models\MarketRevenueTarget;
 use App\Models\User;
 use App\Services\ReportingCurrencyService;
 use App\Services\TeamActivityService;
@@ -228,6 +229,41 @@ class TeamController extends Controller
     public function deleteGoal(Request $request, AgentGoal $goal)
     {
         $this->teamActivityService->deleteGoal($goal, $request->user());
+
+        return response()->noContent();
+    }
+
+    public function setMarketRevenueTarget(Request $request)
+    {
+        $validated = $request->validate([
+            'target' => 'required|numeric|min:1',
+            'target_currency' => 'nullable|string|min:3|max:8',
+            'period' => 'required|in:weekly,monthly',
+            'platform_id' => 'required|integer|exists:platforms,id',
+        ]);
+
+        $target = $this->teamActivityService->setMarketRevenueTarget(
+            (int) $validated['platform_id'],
+            (float) $validated['target'],
+            (string) $validated['period'],
+            isset($validated['target_currency']) ? (string) $validated['target_currency'] : null,
+            $request->user()
+        );
+
+        return response()->json([
+            'market_target' => [
+                'id' => (int) $target->id,
+                'platform_id' => (int) $target->platform_id,
+                'period' => $target->period,
+                'target' => (float) $target->target,
+                'target_currency' => $target->target_currency,
+            ],
+        ], 201);
+    }
+
+    public function deleteMarketRevenueTarget(Request $request, MarketRevenueTarget $target)
+    {
+        $this->teamActivityService->deleteMarketRevenueTarget($target, $request->user());
 
         return response()->noContent();
     }

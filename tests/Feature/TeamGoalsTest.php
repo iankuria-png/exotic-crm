@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\AgentGoal;
 use App\Models\AgentGoalOverride;
+use App\Models\MarketRevenueTarget;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\InteractsWithTeamActivityFixtures;
@@ -88,6 +89,47 @@ class TeamGoalsTest extends TestCase
 
         $this->deleteJson('/api/crm/team/goals/overrides/' . $goalOverride->id)->assertNoContent();
         $this->assertDatabaseCount('agent_goal_overrides', 0);
+    }
+
+    public function test_admin_can_upsert_and_delete_market_revenue_target_with_allocation_summary(): void
+    {
+        $admin = $this->createTeamUser('admin');
+        $platform = $this->createTeamPlatform(['name' => 'Kenya', 'country' => 'Kenya']);
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'market-target-agent@example.test']);
+
+        AgentGoalOverride::query()->create([
+            'user_id' => $agent->id,
+            'platform_id' => $platform->id,
+            'metric' => 'revenue',
+            'target' => 5000,
+            'target_currency' => 'USD',
+            'period' => 'weekly',
+            'set_by' => $admin->id,
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $this->postJson('/api/crm/team/goals/market-revenue-targets', [
+            'target' => 10000,
+            'target_currency' => 'USD',
+            'period' => 'weekly',
+            'platform_id' => $platform->id,
+        ])->assertCreated()
+            ->assertJsonPath('market_target.platform_id', $platform->id)
+            ->assertJsonPath('market_target.target_currency', 'USD');
+
+        $response = $this->getJson('/api/crm/team/goals?period=weekly&platform_id=' . $platform->id);
+
+        $response->assertOk()
+            ->assertJsonPath('market_targets.0.platform_id', $platform->id)
+            ->assertJsonPath('market_targets.0.target', 10000)
+            ->assertJsonPath('market_targets.0.assigned', 5000)
+            ->assertJsonPath('market_targets.0.gap', 5000)
+            ->assertJsonPath('market_targets.0.assigned_percentage', 50);
+
+        $target = MarketRevenueTarget::query()->firstOrFail();
+        $this->deleteJson('/api/crm/team/goals/market-revenue-targets/' . $target->id)->assertNoContent();
+        $this->assertDatabaseCount('market_revenue_targets', 0);
     }
 
     public function test_sales_scoped_default_goals_exclude_marketing_progress_rows(): void

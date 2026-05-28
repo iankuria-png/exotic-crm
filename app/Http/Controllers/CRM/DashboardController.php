@@ -6,8 +6,8 @@ use App\Helpers\CurrencyBreakdown;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Client;
-use App\Models\AgentGoal;
 use App\Models\AgentGoalOverride;
+use App\Models\MarketRevenueTarget;
 use App\Models\Lead;
 use App\Models\Deal;
 use App\Models\Payment;
@@ -762,6 +762,7 @@ class DashboardController extends Controller
                 'normalized_trend' => $normalizedTrend,
                 'target' => $target ? [
                     'period' => $target['period'],
+                    'source' => $target['source'] ?? 'agent_allocations',
                     'target' => $targetAmount,
                     'target_currency' => $target['target_currency'],
                     'target_display' => $target['target_currency'] . ' ' . number_format($targetAmount, 2),
@@ -792,13 +793,10 @@ class DashboardController extends Controller
             ? ['weekly', 'monthly']
             : ['monthly', 'weekly'];
 
-        $defaults = AgentGoal::query()
-            ->where('metric', 'revenue')
+        $marketTargets = MarketRevenueTarget::query()
             ->whereIn('period', $periods)
-            ->whereNotNull('platform_id')
             ->where(function ($query) use ($targetCurrency) {
-                $query->whereNull('target_currency')
-                    ->orWhere('target_currency', strtoupper($targetCurrency));
+                $query->where('target_currency', strtoupper($targetCurrency));
             })
             ->when(is_array($platformIds), function ($query) use ($platformIds) {
                 if (empty($platformIds)) {
@@ -810,7 +808,7 @@ class DashboardController extends Controller
             })
             ->get(['platform_id', 'target', 'target_currency', 'period']);
 
-        $overrides = AgentGoalOverride::query()
+        $agentAllocations = AgentGoalOverride::query()
             ->where('metric', 'revenue')
             ->whereIn('period', $periods)
             ->where(function ($query) use ($targetCurrency) {
@@ -827,22 +825,37 @@ class DashboardController extends Controller
             })
             ->get(['platform_id', 'target', 'target_currency', 'period']);
 
-        return $defaults
-            ->map(fn (AgentGoal $goal) => [
+        $explicitTargets = $marketTargets
+            ->map(fn (MarketRevenueTarget $target) => [
+                'platform_id' => (int) $target->platform_id,
+                'target' => (float) $target->target,
+                'target_currency' => strtoupper((string) $target->target_currency),
+                'period' => (string) $target->period,
+                'period_rank' => array_search((string) $target->period, $periods, true),
+                'source' => 'market_target',
+            ])
+            ->groupBy('platform_id')
+            ->map(function (Collection $targets) {
+                $preferredRank = (int) $targets->min('period_rank');
+                $preferred = $targets->where('period_rank', $preferredRank);
+                $first = $preferred->first();
+
+                return [
+                    'target' => (float) $preferred->sum('target'),
+                    'target_currency' => $first['target_currency'],
+                    'period' => $first['period'],
+                    'source' => 'market_target',
+                ];
+            });
+
+        $allocationFallbacks = $agentAllocations
+            ->map(fn (AgentGoalOverride $goal) => [
                 'platform_id' => (int) $goal->platform_id,
                 'target' => (float) $goal->target,
                 'target_currency' => strtoupper((string) ($goal->target_currency ?: $targetCurrency)),
                 'period' => (string) $goal->period,
                 'period_rank' => array_search((string) $goal->period, $periods, true),
             ])
-            ->toBase()
-            ->merge($overrides->map(fn (AgentGoalOverride $goal) => [
-                'platform_id' => (int) $goal->platform_id,
-                'target' => (float) $goal->target,
-                'target_currency' => strtoupper((string) ($goal->target_currency ?: $targetCurrency)),
-                'period' => (string) $goal->period,
-                'period_rank' => array_search((string) $goal->period, $periods, true),
-            ])->toBase())
             ->groupBy('platform_id')
             ->map(function (Collection $goals) {
                 $preferredRank = (int) $goals->min('period_rank');
@@ -853,9 +866,17 @@ class DashboardController extends Controller
                     'target' => (float) $preferred->sum('target'),
                     'target_currency' => $first['target_currency'],
                     'period' => $first['period'],
+                    'source' => 'agent_allocations',
                 ];
-            })
-            ->all();
+            });
+
+        $targets = $allocationFallbacks->all();
+
+        foreach ($explicitTargets as $platformId => $target) {
+            $targets[(int) $platformId] = $target;
+        }
+
+        return $targets;
     }
 
     private function aggregateCountryRevenueRows(?array $platformIds, Carbon $from, Carbon $to)

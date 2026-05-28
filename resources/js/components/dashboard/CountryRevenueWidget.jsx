@@ -613,9 +613,15 @@ export default function CountryRevenueWidget({
                                                                 <span className="font-semibold text-teal-700">{target.percentage}% of {target.period === 'weekly' ? 'weekly' : 'monthly'} target</span>
                                                                 <span>•</span>
                                                                 <span>{target.current_display} / {target.target_display}</span>
+                                                                {target.source === 'agent_allocations' ? (
+                                                                    <>
+                                                                        <span>•</span>
+                                                                        <span>From assigned agent goals</span>
+                                                                    </>
+                                                                ) : null}
                                                             </>
                                                         ) : (
-                                                            <span>Ranked by revenue share until a target is set</span>
+                                                            <span>Ranked by revenue share until a market target is set</span>
                                                         )}
                                                     </div>
                                                 </div>

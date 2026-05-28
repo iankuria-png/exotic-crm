@@ -189,6 +189,8 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::get('/presence', [TeamController::class, 'presence']);
         Route::get('/leaderboard', [TeamController::class, 'leaderboard']);
         Route::get('/goals', [TeamController::class, 'goals']);
+        Route::post('/goals/market-revenue-targets', [TeamController::class, 'setMarketRevenueTarget']);
+        Route::delete('/goals/market-revenue-targets/{target}', [TeamController::class, 'deleteMarketRevenueTarget']);
         Route::post('/goals', [TeamController::class, 'setGoal']);
         Route::post('/goals/overrides', [TeamController::class, 'setGoalOverride']);
         Route::delete('/goals/overrides/{goalOverride}', [TeamController::class, 'deleteGoalOverride']);
