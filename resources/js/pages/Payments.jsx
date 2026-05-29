@@ -655,6 +655,50 @@ function structuredDiagnosticsTone(status) {
     return 'sandbox';
 }
 
+function isUrlLikeValue(value) {
+    return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+}
+
+function shortIdFromUrl(value) {
+    const trimmed = String(value).trim().replace(/\/+$/, '');
+    const segment = trimmed.split('/').pop() || trimmed;
+    return segment || trimmed;
+}
+
+function DiagnosticEntryValue({ value }) {
+    const [revealed, setRevealed] = useState(false);
+
+    if (!value) {
+        return <>—</>;
+    }
+
+    if (!isUrlLikeValue(value)) {
+        return <>{value}</>;
+    }
+
+    const shortId = shortIdFromUrl(value);
+
+    return (
+        <span className="inline-flex flex-wrap items-center gap-1.5 align-middle">
+            <code className="break-all font-mono text-slate-700">{revealed ? value : shortId}</code>
+            <button
+                type="button"
+                onClick={() => setRevealed((prev) => !prev)}
+                className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-100"
+            >
+                {revealed ? 'Hide' : 'Reveal'}
+            </button>
+            <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(value)}
+                className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-100"
+            >
+                Copy
+            </button>
+        </span>
+    );
+}
+
 function StructuredDiagnosticsSection({ section }) {
     const entries = Array.isArray(section?.entries) ? section.entries : [];
     const items = Array.isArray(section?.items) ? section.items : [];
@@ -679,7 +723,8 @@ function StructuredDiagnosticsSection({ section }) {
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     {entries.map((entry) => (
                         <p key={`${section?.key}-${entry.label}`} className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                            <span className="font-semibold text-slate-800">{entry.label}:</span> {entry.value || '—'}
+                            <span className="font-semibold text-slate-800">{entry.label}:</span>{' '}
+                            <DiagnosticEntryValue value={entry.value} />
                         </p>
                     ))}
                 </div>
