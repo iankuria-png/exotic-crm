@@ -488,18 +488,24 @@ class BillingGatewayService
         }
 
         $topic = strtolower((string) ($payload['topic'] ?? $payload['eventType'] ?? ''));
-        $resourceStatus = strtolower((string) ($payload['resourceStatus'] ?? ''));
-        if (str_contains($topic, 'reversed') || $resourceStatus === 'reversed') {
+        $resourceStatus = strtolower(trim((string) ($payload['resourceStatus'] ?? '')));
+        // KopoKopo carries the real outcome in attributes.status (Success/Failed/Pending).
+        $transactionStatus = strtolower(trim((string) ($payload['status'] ?? '')));
+
+        $responseMeta = [
+            'topic' => $payload['topic'] ?? $payload['eventType'] ?? null,
+            'status' => $payload['status'] ?? null,
+            'resourceStatus' => $payload['resourceStatus'] ?? null,
+            'reference' => $payload['reference'] ?? null,
+            'metadata_payment_id' => $metadata['payment_id'] ?? null,
+        ];
+
+        if (str_contains($topic, 'reversed') || $resourceStatus === 'reversed' || $transactionStatus === 'reversed') {
             $failed = $this->failPayment($payment, 'M-Pesa transaction was reversed.', $payload);
             $this->recordBillingCallbackAttempt($failed, 'kopokopo_webhook', 'failed', [
                 'error_code' => 'reversed',
                 'error_message' => 'M-Pesa transaction was reversed.',
-                'response_meta' => [
-                    'topic' => $payload['topic'] ?? $payload['eventType'] ?? null,
-                    'resourceStatus' => $payload['resourceStatus'] ?? null,
-                    'reference' => $payload['reference'] ?? null,
-                    'metadata_payment_id' => $metadata['payment_id'] ?? null,
-                ],
+                'response_meta' => $responseMeta,
             ]);
 
             return [
@@ -508,21 +514,70 @@ class BillingGatewayService
             ];
         }
 
+        // Customer declined the STK prompt, or KopoKopo could not collect the funds.
+        $failureStatuses = ['failed', 'cancelled', 'canceled', 'rejected', 'declined', 'expired'];
+        if (in_array($transactionStatus, $failureStatuses, true) || in_array($resourceStatus, $failureStatuses, true)) {
+            $reason = $this->describeKopokopoFailure($payload);
+            $failed = $this->failPayment($payment, $reason, $payload);
+            $this->recordBillingCallbackAttempt($failed, 'kopokopo_webhook', 'failed', [
+                'error_code' => 'provider_declined',
+                'error_message' => $reason,
+                'response_meta' => $responseMeta,
+            ]);
+
+            return [
+                'payment' => $failed,
+                'status' => 'failed',
+            ];
+        }
+
+        // Only credit the wallet when KopoKopo explicitly confirms funds were received.
+        // Any other state (Pending/unknown) must NOT mutate the balance.
+        $successStatuses = ['success', 'received', 'completed'];
+        if (!in_array($transactionStatus, $successStatuses, true) && !in_array($resourceStatus, $successStatuses, true)) {
+            $this->recordBillingCallbackAttempt($payment, 'kopokopo_webhook', 'pending', [
+                'error_code' => 'awaiting_confirmation',
+                'error_message' => 'KopoKopo callback received without a confirmed success status.',
+                'response_meta' => $responseMeta,
+            ]);
+
+            return [
+                'payment' => $payment->fresh() ?? $payment,
+                'status' => 'pending',
+            ];
+        }
+
         $completed = $this->paymentCompletionService->complete($payment, $payload, [
             'transaction_reference' => $payload['reference'] ?? $payment->transaction_reference,
         ]);
         $this->recordBillingCallbackAttempt($completed['payment'], 'kopokopo_webhook', 'success', [
-            'response_meta' => [
-                'topic' => $payload['topic'] ?? $payload['eventType'] ?? null,
-                'resourceStatus' => $payload['resourceStatus'] ?? null,
-                'reference' => $payload['reference'] ?? null,
-                'metadata_payment_id' => $metadata['payment_id'] ?? null,
-            ],
+            'response_meta' => $responseMeta,
         ]);
 
         return array_merge($completed, [
             'status' => 'completed',
         ]);
+    }
+
+    private function describeKopokopoFailure(array $payload): string
+    {
+        $errors = $payload['errors'] ?? null;
+        if (is_array($errors) && $errors !== []) {
+            $messages = [];
+            foreach ($errors as $error) {
+                if (is_array($error)) {
+                    $messages[] = trim((string) ($error['description'] ?? $error['message'] ?? $error['code'] ?? ''));
+                } elseif (is_string($error)) {
+                    $messages[] = trim($error);
+                }
+            }
+            $messages = array_filter($messages);
+            if ($messages !== []) {
+                return 'M-Pesa payment was not completed: ' . implode('; ', $messages);
+            }
+        }
+
+        return 'M-Pesa payment was not completed (customer declined or funds were not received).';
     }
 
     public function handlePawaPayCallback(string $rawBody, array $payload, array $headers = [], array $requestContext = []): array
