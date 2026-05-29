@@ -176,7 +176,7 @@ class SettingsController extends Controller
                 'sms_provider' => $smsProvider,
                 'push_provider' => $pushProvider,
                 'kopokopo' => [
-                    'status' => config('services.kopokopo.client_id') && config('services.kopokopo.client_secret')
+                    'status' => config('services.kopokopo.client_id') && config('services.kopokopo.client_secret') && config('services.kopokopo.api_key')
                         ? 'connected'
                         : 'pending',
                     'base_url' => config('services.kopokopo.base_url'),
@@ -5096,7 +5096,7 @@ class SettingsController extends Controller
             'sms_provider' => $smsProvider,
             'push_provider' => $pushProvider,
             'kopokopo' => [
-                'status' => config('services.kopokopo.client_id') && config('services.kopokopo.client_secret')
+                'status' => config('services.kopokopo.client_id') && config('services.kopokopo.client_secret') && config('services.kopokopo.api_key')
                     ? 'connected'
                     : 'pending',
                 'base_url' => config('services.kopokopo.base_url'),

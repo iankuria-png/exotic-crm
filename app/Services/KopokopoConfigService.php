@@ -63,7 +63,8 @@ class KopokopoConfigService
         return !empty($resolved['base_url'])
             && !empty($resolved['till_number'])
             && !empty($resolved['client_id'])
-            && !empty($resolved['client_secret']);
+            && !empty($resolved['client_secret'])
+            && !empty($resolved['api_key']);
     }
 
     private function resolveConfig(): array

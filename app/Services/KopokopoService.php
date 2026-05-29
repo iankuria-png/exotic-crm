@@ -10,10 +10,55 @@ class KopokopoService
 {
     protected $k2;
 
+    private ?string $lastAuthError = null;
+
     public function __construct(
         private readonly KopokopoConfigService $configService
     ) {
         $this->k2 = null;
+    }
+
+    public function lastAuthError(): ?string
+    {
+        return $this->lastAuthError;
+    }
+
+    private function cleanCredential(?string $value): string
+    {
+        return trim((string) ($value ?? ''));
+    }
+
+    /**
+     * Extract a non-sensitive description of a KopoKopo token failure.
+     * Returns only the OAuth error code/description/HTTP status — never credential values.
+     */
+    private function describeTokenError(array $result): ?string
+    {
+        $data = $result['data'] ?? [];
+
+        $error = trim((string) ($data['error'] ?? ''));
+        $description = trim((string) ($data['errorDescription'] ?? $data['error_description'] ?? ''));
+        $status = $data['httpStatus'] ?? $data['status'] ?? null;
+
+        $parts = [];
+        if ($error !== '') {
+            $parts[] = $error;
+        }
+        if ($description !== '') {
+            $parts[] = $description;
+        }
+
+        if ($parts === []) {
+            return $status !== null ? "HTTP {$status}" : null;
+        }
+
+        $reason = implode(': ', $parts);
+
+        if ($status !== null && $error === '') {
+            $reason = "HTTP {$status} {$reason}";
+        }
+
+        return $reason;
     }
 
     protected function client(array $configOverride = [])
@@ -24,10 +69,10 @@ class KopokopoService
 
         $config = array_replace($this->configService->currentConfig(masked: false), $configOverride);
         $options = [
-            'clientId' => $config['client_id'] ?? null,
-            'clientSecret' => $config['client_secret'] ?? null,
-            'apiKey' => $config['api_key'] ?? null,
-            'baseUrl' => $config['base_url'] ?? null,
+            'clientId' => $this->cleanCredential($config['client_id'] ?? null),
+            'clientSecret' => $this->cleanCredential($config['client_secret'] ?? null),
+            'apiKey' => $this->cleanCredential($config['api_key'] ?? null),
+            'baseUrl' => rtrim($this->cleanCredential($config['base_url'] ?? null), '/'),
         ];
 
         $requiredKeys = ['clientId', 'clientSecret', 'apiKey', 'baseUrl'];
@@ -48,17 +93,21 @@ class KopokopoService
 
     public function getAccessToken(array $configOverride = [])
     {
+        $this->lastAuthError = null;
+
         try {
             $tokenService = $this->client($configOverride)->TokenService();
             $result = $tokenService->getToken();
 
-            if ($result['status'] === 'success') {
+            if (($result['status'] ?? null) === 'success') {
                 return $result['data']['accessToken'];
             }
 
+            $this->lastAuthError = $this->describeTokenError(is_array($result) ? $result : []);
             Log::error('Failed to get Kopokopo access token', ['response' => $result]);
             return null;
         } catch (\Exception $e) {
+            $this->lastAuthError = $e->getMessage();
             Log::error('Kopokopo token error: ' . $e->getMessage());
             return null;
         }
@@ -67,11 +116,13 @@ class KopokopoService
     public function initiateStkPush($phone, $amount, $callbackUrl, $metadata = [], array $configOverride = [])
     {
         $accessToken = $this->getAccessToken($configOverride);
-        
+
         if (!$accessToken) {
+            $reason = $this->lastAuthError;
+
             return [
                 'status' => false,
-                'error' => 'Failed to authenticate with payment gateway'
+                'error' => 'KopoKopo authentication failed' . ($reason ? ': ' . $reason : '.')
             ];
         }
 
