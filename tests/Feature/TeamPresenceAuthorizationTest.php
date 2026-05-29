@@ -85,6 +85,41 @@ class TeamPresenceAuthorizationTest extends TestCase
         $this->assertSame([$agentB->id, $agentBoth->id], $ids);
     }
 
+    public function test_presence_only_uses_recent_open_sessions_for_online_state(): void
+    {
+        $platform = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
+        $admin = $this->createTeamUser('admin');
+        $agent = $this->createTeamUser('sales', [$platform->id], ['email' => 'history-heavy-agent@example.test']);
+
+        for ($i = 0; $i < 150; $i++) {
+            $endedAt = now()->subDays(30)->addMinutes($i);
+            $this->createTeamSession($agent, 'old-session-' . $i, [
+                'started_at' => (clone $endedAt)->subMinutes(20),
+                'last_heartbeat_at' => $endedAt,
+                'ended_at' => $endedAt,
+            ]);
+        }
+
+        $this->createTeamSession($agent, 'current-session-1', [
+            'started_at' => now()->subMinutes(6),
+            'last_heartbeat_at' => now()->subMinute(),
+            'ended_at' => null,
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/crm/team/presence');
+
+        $response->assertOk();
+
+        $row = collect($response->json('data'))->firstWhere('user_id', $agent->id);
+
+        $this->assertNotNull($row);
+        $this->assertTrue((bool) $row['is_online']);
+        $this->assertSame(1, (int) $row['session_count']);
+        $this->assertSame(1, (int) $response->json('summary.online_now'));
+    }
+
     public function test_sales_user_cannot_access_presence_route(): void
     {
         $platform = $this->createTeamPlatform();

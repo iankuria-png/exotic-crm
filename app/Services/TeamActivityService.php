@@ -235,11 +235,20 @@ class TeamActivityService
 
         $agentIds = $agents->pluck('id')->all();
         $cutoff = $this->staleCutoff();
-        $sessionsByUser = AgentSession::query()
+        $recentOpenSessionsByUser = AgentSession::query()
             ->whereIn('user_id', $agentIds)
-            ->orderByDesc('last_heartbeat_at')
-            ->get()
+            ->whereNull('ended_at')
+            ->whereNotNull('last_heartbeat_at')
+            ->where('last_heartbeat_at', '>=', $cutoff)
+            ->orderBy('started_at')
+            ->get(['user_id', 'started_at', 'last_heartbeat_at'])
             ->groupBy('user_id');
+        $lastSeenByUser = AgentSession::query()
+            ->whereIn('user_id', $agentIds)
+            ->select('user_id')
+            ->selectRaw('MAX(COALESCE(ended_at, last_heartbeat_at, started_at)) as last_seen_at')
+            ->groupBy('user_id')
+            ->pluck('last_seen_at', 'user_id');
 
         $latestActions = $this->latestActionsByUser($agentIds, $viewer, $platformId);
         $todayMetrics = $this->aggregateActionMetricsForRange(
@@ -250,12 +259,8 @@ class TeamActivityService
             $agentIds
         );
 
-        $rows = $agents->map(function (User $agent) use ($sessionsByUser, $cutoff, $latestActions) {
-            $sessions = $sessionsByUser->get($agent->id, collect());
-            $recentOpenSessions = $sessions
-                ->filter(fn (AgentSession $session) => $session->ended_at === null && $session->last_heartbeat_at && $session->last_heartbeat_at->gte($cutoff))
-                ->values();
-
+        $rows = $agents->map(function (User $agent) use ($recentOpenSessionsByUser, $lastSeenByUser, $latestActions) {
+            $recentOpenSessions = $recentOpenSessionsByUser->get($agent->id, collect())->values();
             $isOnline = $recentOpenSessions->isNotEmpty();
             $currentDuration = 0;
 
@@ -271,11 +276,7 @@ class TeamActivityService
                 }
             }
 
-            $lastSeen = $sessions
-                ->map(fn (AgentSession $session) => $session->ended_at ?: $session->last_heartbeat_at ?: $session->started_at)
-                ->filter()
-                ->sortDesc()
-                ->first();
+            $lastSeen = $this->safeTimestamp($lastSeenByUser->get($agent->id));
 
             return [
                 'user_id' => (int) $agent->id,
@@ -297,6 +298,23 @@ class TeamActivityService
             ],
             'data' => $rows->all(),
         ];
+    }
+
+    private function safeTimestamp(mixed $value): ?CarbonInterface
+    {
+        if ($value instanceof CarbonInterface) {
+            return $value;
+        }
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public function getLeaderboard(
