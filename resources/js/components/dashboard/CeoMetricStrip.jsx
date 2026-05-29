@@ -55,7 +55,7 @@ function metricSubHint(key, metric) {
 export default function CeoMetricStrip({ metrics = {}, reporting, isLoading, onOpen }) {
     const order = [
         ['collected_revenue', 'Collected Revenue'],
-        ['active_clients', 'Active Users'],
+        ['active_clients', 'Active Subscribers'],
         ['new_user_revenue', 'New User Revenue'],
         ['existing_user_revenue', 'Existing User Revenue'],
     ];

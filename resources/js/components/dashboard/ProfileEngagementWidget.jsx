@@ -118,6 +118,8 @@ export default function ProfileEngagementWidget({
     toDate,
     onOpenProfile,
     onOpenReport,
+    headerControl = null,
+    subtitle,
 }) {
     const enabled = Boolean(platformFilter);
     const windowLabel = describeWindow(fromDate, toDate);
@@ -163,16 +165,21 @@ export default function ProfileEngagementWidget({
     return (
         <SectionFrame
             title="Profile Engagement"
-            subtitle={`Selected market performance across the ${windowLabel}. Deltas compare against the previous matching window.`}
-            action={onOpenReport ? (
-                <button
-                    type="button"
-                    onClick={onOpenReport}
-                    disabled={!enabled}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                    Open report
-                </button>
+            subtitle={subtitle || `Selected market performance across the ${windowLabel}. Deltas compare against the previous matching window.`}
+            action={(headerControl || onOpenReport) ? (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                    {headerControl}
+                    {onOpenReport ? (
+                        <button
+                            type="button"
+                            onClick={onOpenReport}
+                            disabled={!enabled}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            Open report
+                        </button>
+                    ) : null}
+                </div>
             ) : null}
         >
             {!enabled ? (

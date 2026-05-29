@@ -11,8 +11,10 @@ import MarketRevenuePieWidget from '../components/dashboard/MarketRevenuePieWidg
 import RevenueTrendWidget from '../components/dashboard/RevenueTrendWidget';
 import RecentPaymentsWidget from '../components/dashboard/RecentPaymentsWidget';
 import AgentPerformanceWidget from '../components/dashboard/AgentPerformanceWidget';
+import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import useCeoReportingCurrency from '../hooks/useCeoReportingCurrency';
+import { marketLabel } from '../components/dashboard/ceoFormatters';
 
 function toInputDate(date) {
     const year = date.getFullYear();
@@ -56,6 +58,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const [trendComparison, setTrendComparison] = useState(true);
     const [recentLimit, setRecentLimit] = useState(10);
     const [recentChannel, setRecentChannel] = useState('all');
+    const [engagementMarket, setEngagementMarket] = useState(null);
 
     const queryParams = useMemo(() => ({
         horizon,
@@ -137,6 +140,43 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
     const handleMarketScope = (marketId) => {
         setPlatformFilter(marketId ? String(marketId) : null);
     };
+
+    // Profile Engagement is a single-market widget (the backend report requires one platform_id),
+    // so it carries its own market selector, decoupled from the global scope. It defaults to the
+    // globally-scoped market when one is set, otherwise the first accessible market.
+    const firstMarketId = marketOptions[0]
+        ? String(marketOptions[0].id || marketOptions[0].platform_id)
+        : null;
+    const engagementPlatform = engagementMarket || platformFilter || firstMarketId;
+    const engagementMarketOption = marketOptions.find(
+        (market) => String(market.id || market.platform_id) === String(engagementPlatform),
+    ) || null;
+    const engagementMarketName = engagementMarketOption
+        ? marketLabel({
+            name: engagementMarketOption.name || engagementMarketOption.platform_name,
+            country: engagementMarketOption.country || engagementMarketOption.platform_country,
+        })
+        : null;
+
+    const engagementSwitcher = (
+        <select
+            value={engagementPlatform || ''}
+            onChange={(event) => setEngagementMarket(event.target.value || null)}
+            disabled={marketOptions.length === 0}
+            className="h-9 min-w-[200px] rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Profile engagement market"
+        >
+            {marketOptions.length === 0 ? <option value="">No markets available</option> : null}
+            {marketOptions.map((market) => (
+                <option key={market.id || market.platform_id} value={market.id || market.platform_id}>
+                    {marketLabel({
+                        name: market.name || market.platform_name,
+                        country: market.country || market.platform_country,
+                    })}
+                </option>
+            ))}
+        </select>
+    );
 
     return (
         <div className="space-y-4">
@@ -247,6 +287,18 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 errorMessage={agentPerformanceQuery.isError ? apiError(agentPerformanceQuery.error, 'Agent performance could not be loaded.') : null}
                 focusedAgentId={focusedAgentId}
                 onOpenTeam={() => navigate('/team')}
+            />
+
+            <ProfileEngagementWidget
+                platformFilter={engagementPlatform}
+                fromDate={window?.from || customRange.from}
+                toDate={window?.to || customRange.to}
+                onOpenProfile={(clientId) => navigate(`/clients/${clientId}?tab=analytics`)}
+                onOpenReport={() => navigate('/reports')}
+                headerControl={engagementSwitcher}
+                subtitle={engagementMarketName
+                    ? `WordPress profile performance for ${engagementMarketName} across the selected window. Deltas compare against the previous matching window.`
+                    : undefined}
             />
         </div>
     );

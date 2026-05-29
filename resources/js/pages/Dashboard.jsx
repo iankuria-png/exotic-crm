@@ -567,7 +567,7 @@ function OperationsDashboard() {
         },
         {
             key: 'clients',
-            label: 'Active Clients',
+            label: 'Active Profiles',
             value: 'Unavailable',
             hint: 'Coverage metrics are hidden until the dashboard summary succeeds.',
             tone: 'danger',
@@ -606,7 +606,7 @@ function OperationsDashboard() {
         },
         {
             key: 'clients',
-            label: 'Active Clients',
+            label: 'Active Profiles',
             value: activeClients.toLocaleString(),
             hint: `${Math.round(activeCoverage)}% coverage of ${totalClients.toLocaleString()} records`,
             tone: 'default',

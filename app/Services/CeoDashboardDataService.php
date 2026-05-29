@@ -47,7 +47,7 @@ class CeoDashboardDataService
                     'href' => '/payments',
                 ],
                 'active_clients' => [
-                    'label' => 'Active Users',
+                    'label' => 'Active Subscribers',
                     'value' => $currentActive,
                     'prior_value' => $startActive,
                     'delta_percent' => $this->percentDelta($currentActive['count'], $startActive['count']),
