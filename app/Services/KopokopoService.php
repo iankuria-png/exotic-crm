@@ -161,18 +161,20 @@ class KopokopoService
 
     public function normalizePhone($phone)
     {
-        $phone = preg_replace('/[^0-9]/', '', $phone);
-        
+        $phone = preg_replace('/[^0-9]/', '', (string) $phone);
+
         // Convert to 254 format if it starts with 0
         if (str_starts_with($phone, '0')) {
             $phone = '254' . substr($phone, 1);
         }
-        // Ensure it's in 254 format
+        // Bare local number (e.g. 712345678) — prepend country code
         elseif (!str_starts_with($phone, '254')) {
-            $phone = '254' . ltrim($phone, '254');
+            $phone = '254' . $phone;
         }
-        
-        return $phone;
+
+        // KopoKopo's SDK validates against /^\+254\d{9}$/ and rejects
+        // anything without the leading "+" as "Invalid phone number format".
+        return '+' . $phone;
     }
 
     public function handleWebhook($payload, $signature)
