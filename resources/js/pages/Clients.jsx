@@ -369,10 +369,10 @@ export default function Clients() {
     const toast = useToast();
     const { user } = useAuth();
     const isReadOnly = user?.role === 'marketing';
-    const canBulkRefreshThumbnails = ['admin', 'sub_admin', 'sales'].includes(String(user?.role || ''));
+    const canBulkRefreshThumbnails = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const canDeleteClients = ['admin', 'sub_admin'].includes(String(user?.role || ''));
     const canSelectClients = canBulkRefreshThumbnails || canDeleteClients;
-    const canCloseCases = ['admin', 'sub_admin', 'sales'].includes(String(user?.role || ''));
+    const canCloseCases = ['admin', 'sub_admin', 'sales', 'field_sales'].includes(String(user?.role || ''));
     const [searchParams, setSearchParams] = useSearchParams();
     const allowedTabs = new Set(['all', 'conversion', 'closed']);
     const tabParam = searchParams.get('tab') || 'all';

@@ -62,6 +62,7 @@ class ClientProvisioningWorkflowTest extends TestCase
         $this->assertSame('1998-06-15', $meta['birthday'] ?? null);
         $this->assertSame('167', $meta['height'] ?? null);
         $this->assertSame('55', $meta['weight'] ?? null);
+        $this->assertSame('crm_provisioned', $meta['signup_source'] ?? null);
 
         $post = DB::connection($connectionName)
             ->table('posts')
@@ -95,6 +96,7 @@ class ClientProvisioningWorkflowTest extends TestCase
             'phone' => '254700000001',
             'post_status' => 'private',
             'password' => 'password123',
+            'signup_source' => 'field',
         ]);
 
         $meta = DB::connection($connectionName)
@@ -105,6 +107,7 @@ class ClientProvisioningWorkflowTest extends TestCase
 
         $this->assertSame('254700000001', $meta['phone'] ?? null);
         $this->assertSame('254700000001', $meta['whatsapp'] ?? null);
+        $this->assertSame('field', $meta['signup_source'] ?? null);
         $this->assertArrayNotHasKey('birthday', $meta);
         $this->assertArrayNotHasKey('height', $meta);
         $this->assertArrayNotHasKey('weight', $meta);

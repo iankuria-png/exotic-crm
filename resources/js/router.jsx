@@ -85,6 +85,13 @@ function ProtectedRoute({ children }) {
         const path = location.pathname || '/';
         const allowed = path.startsWith('/field')
             || path.startsWith('/clients')
+            || path.startsWith('/deals')
+            || path.startsWith('/payments')
+            || path.startsWith('/leads')
+            || path.startsWith('/conversations')
+            || path.startsWith('/campaigns')
+            || path.startsWith('/kyc')
+            || path.startsWith('/reports')
             || path.startsWith('/faq')
             || path.startsWith('/university');
 

@@ -55,6 +55,10 @@ class WpDirectProvisioningService
         $bio = trim((string) ($payload['bio'] ?? $payload['content'] ?? ''));
         $website = trim((string) ($payload['website'] ?? ''));
         $personalPhone = trim((string) ($payload['personal_phone'] ?? ''));
+        $signupSource = trim((string) ($payload['signup_source'] ?? 'crm_provisioned'));
+        if (!in_array($signupSource, ['crm_provisioned', 'field'], true)) {
+            $signupSource = 'crm_provisioned';
+        }
 
         $requestedUsername = trim((string) ($payload['username'] ?? ''));
         $providedPassword = (string) ($payload['password'] ?? '');
@@ -79,7 +83,8 @@ class WpDirectProvisioningService
             $birthday,
             $height,
             $weight,
-            $bio
+            $bio,
+            $signupSource
         ): array {
             $postType = $this->resolveProfilePostType();
 
@@ -116,7 +121,8 @@ class WpDirectProvisioningService
                 weight: $weight,
                 website: $website,
                 personalPhone: $personalPhone,
-                postStatus: $postStatus
+                postStatus: $postStatus,
+                signupSource: $signupSource
             );
             $this->assignCityTaxonomy($postId, $city);
 
@@ -286,7 +292,8 @@ class WpDirectProvisioningService
         string $weight,
         string $website,
         string $personalPhone,
-        string $postStatus
+        string $postStatus,
+        string $signupSource = 'crm_provisioned'
     ): void {
         if ($phone !== '') {
             $this->upsertPostMeta($postId, 'phone', $phone);
@@ -324,7 +331,7 @@ class WpDirectProvisioningService
             hash('sha256', $name . '|' . $postId . '|' . now()->timestamp . '|' . Str::random(20))
         );
 
-        $this->upsertPostMeta($postId, 'signup_source', 'crm_provisioned');
+        $this->upsertPostMeta($postId, 'signup_source', $signupSource);
 
         if ($postStatus !== 'publish') {
             $this->upsertPostMeta($postId, 'notactive', '1');

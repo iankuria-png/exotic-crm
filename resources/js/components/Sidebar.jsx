@@ -60,6 +60,8 @@ const fieldSalesGroups = [
         items: [
             { to: '/field/home', label: 'Home', icon: 'M3.75 12h16.5M6.75 6.75h10.5M6.75 17.25h10.5M4.5 4.5h15v15h-15v-15Z' },
             { to: '/clients?signup_source=field', label: 'Clients', icon: 'M15.75 7.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 19.5a6.75 6.75 0 0 1 13.5 0' },
+            { to: '/deals', label: 'Subscriptions', icon: 'M12 3.75v16.5m3.375-13.125h-4.5a2.625 2.625 0 0 0 0 5.25h2.25a2.625 2.625 0 1 1 0 5.25H8.25M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
+            { to: '/payments', label: 'Payments', icon: 'M2.25 8.25h19.5M4.5 5.25h15a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25v-9A2.25 2.25 0 0 1 4.5 5.25Zm12 8.25h1.5' },
             { to: '/field/commissions', label: 'Commissions', icon: 'M12 6v12m3.75-8.25h-4.5a2.25 2.25 0 0 0 0 4.5h1.5a2.25 2.25 0 1 1 0 4.5H8.25M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
         ],
     },

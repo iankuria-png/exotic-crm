@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Services\CommissionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -30,6 +31,11 @@ class FieldSalesWorkflowTest extends TestCase
             'status' => 'active',
             'assigned_market_ids' => [$platform->id],
         ]);
+        $salesAgent = User::factory()->create([
+            'role' => 'sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
 
         $ownClient = Client::factory()->create([
             'platform_id' => $platform->id,
@@ -37,28 +43,122 @@ class FieldSalesWorkflowTest extends TestCase
             'created_by' => $agent->id,
             'phone_normalized' => '254700000001',
         ]);
-        Client::factory()->create([
+        $otherClient = Client::factory()->create([
             'platform_id' => $platform->id,
             'signup_source' => 'field',
             'created_by' => $otherAgent->id,
             'phone_normalized' => '254700000001',
         ]);
-        Client::factory()->create([
+        $recoveredClient = Client::factory()->create([
             'platform_id' => $platform->id,
             'signup_source' => 'crm_provisioned',
             'created_by' => $agent->id,
+            'phone_normalized' => '254700000002',
+        ]);
+        $nonFieldClient = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'signup_source' => 'crm_provisioned',
+            'created_by' => $salesAgent->id,
+            'phone_normalized' => '254700000003',
         ]);
 
         Sanctum::actingAs($agent);
 
-        $this->getJson('/api/crm/clients?signup_source=field')
+        $response = $this->getJson('/api/crm/clients?signup_source=field')
             ->assertOk()
-            ->assertJsonPath('data.0.signup_source', 'field');
+            ->json('data');
+
+        $this->assertContains($ownClient->id, collect($response)->pluck('id')->all());
+        $this->assertContains($recoveredClient->id, collect($response)->pluck('id')->all());
+        $this->assertContains($otherClient->id, collect($response)->pluck('id')->all());
+        $this->assertNotContains($nonFieldClient->id, collect($response)->pluck('id')->all());
 
         $this->getJson('/api/crm/field/home')
             ->assertOk()
-            ->assertJsonPath('summary.clients_created', 1)
-            ->assertJsonPath('recent_clients.0.id', $ownClient->id);
+            ->assertJsonPath('summary.clients_created', 2)
+            ->assertJsonPath('summary.clients_field_tagged', 1)
+            ->assertJsonPath('summary.clients_untagged', 1);
+    }
+
+    public function test_field_sales_can_update_clients_and_activate_subscriptions(): void
+    {
+        $platform = Platform::factory()->create([
+            'wp_api_url' => 'https://field-sales.example.test/wp-json/exotic-crm-sync/v1',
+            'wp_api_user' => 'crm-user',
+            'wp_api_password' => 'secret',
+        ]);
+        $agent = User::factory()->create([
+            'role' => 'field_sales',
+            'status' => 'active',
+            'assigned_market_ids' => [$platform->id],
+        ]);
+        $client = Client::factory()->create([
+            'platform_id' => $platform->id,
+            'signup_source' => 'field',
+            'created_by' => $agent->id,
+            'assigned_to' => $agent->id,
+            'profile_status' => 'private',
+            'wp_post_id' => 99001,
+            'wp_user_id' => 199001,
+        ]);
+        $product = Product::factory()->create([
+            'platform_id' => $platform->id,
+            'tier' => 'premium',
+            'monthly_price' => 3200,
+            'currency' => 'KES',
+        ]);
+        $deal = Deal::factory()->create([
+            'platform_id' => $platform->id,
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+            'plan_type' => 'premium',
+            'amount' => 3200,
+            'currency' => 'KES',
+            'duration' => 'monthly',
+            'status' => 'pending',
+            'activated_at' => null,
+            'expires_at' => null,
+            'assigned_to' => $agent->id,
+        ]);
+
+        $baseUrl = rtrim((string) $platform->wp_api_url, '/');
+        Http::fake([
+            "{$baseUrl}/clients/{$client->wp_post_id}/activate" => Http::response(['success' => true], 200),
+            "{$baseUrl}/clients/{$client->wp_post_id}" => Http::response([
+                'wp_post_id' => (int) $client->wp_post_id,
+                'wp_user_id' => (int) $client->wp_user_id,
+                'name' => 'Edited Field Client',
+                'phone' => (string) $client->phone_normalized,
+                'email' => (string) $client->email,
+                'city' => 'Mombasa Town',
+                'post_status' => 'publish',
+                'premium' => true,
+                'featured' => false,
+                'verified' => false,
+                'signup_source' => 'field',
+                'escort_expire' => now()->addDays(30)->timestamp,
+                'last_online' => null,
+            ], 200),
+            '*' => Http::response([], 200),
+        ]);
+
+        Sanctum::actingAs($agent);
+
+        $this->patchJson("/api/crm/clients/{$client->id}", [
+            'city' => 'Mombasa Town',
+        ])->assertOk()
+            ->assertJsonPath('city', 'Mombasa Town');
+
+        $this->postJson("/api/crm/deals/{$deal->id}/activate", [
+            'reason' => 'Field sales paid activation',
+            'payment_method' => 'manual',
+            'payment_reference' => 'FIELD-MPESA-001',
+            'duration_days' => 30,
+        ])->assertOk()
+            ->assertJsonPath('status', 'active');
+
+        $this->assertSame('active', $deal->fresh()->status);
+        $this->assertSame('field', $client->fresh()->signup_source);
     }
 
     public function test_commissions_are_recorded_idempotently_and_paid_by_agent_currency(): void

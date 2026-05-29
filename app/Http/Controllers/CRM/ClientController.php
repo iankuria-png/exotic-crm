@@ -152,7 +152,14 @@ class ClientController extends Controller
         }
 
         if ($request->filled('signup_source')) {
-            $query->where('signup_source', $request->signup_source);
+            if ((string) $request->signup_source === 'field') {
+                $query->where(function ($sourceQuery) {
+                    $sourceQuery->where('signup_source', 'field')
+                        ->orWhereHas('creator', fn ($creatorQuery) => $creatorQuery->where('role', MarketAuthorizationService::ROLE_FIELD_SALES));
+                });
+            } else {
+                $query->where('signup_source', $request->signup_source);
+            }
         }
 
         if ($request->filled('created_by')) {
@@ -2855,6 +2862,7 @@ class ClientController extends Controller
             'post_status' => $profileStatus,
             'username' => !empty($payload['wp_username']) ? trim((string) $payload['wp_username']) : '',
             'password' => !empty($payload['wp_password']) ? (string) $payload['wp_password'] : '',
+            'signup_source' => $signupSource,
         ]);
 
         $wpPostId = (int) ($provisioningResult['wp_post_id'] ?? 0);
