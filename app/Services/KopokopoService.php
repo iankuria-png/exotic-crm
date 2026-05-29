@@ -29,6 +29,41 @@ class KopokopoService
     }
 
     /**
+     * Flatten the KopoKopo SDK's structured STK error into a single string.
+     * Never returns an array, so callers can safely treat it as a message.
+     */
+    private function describeStkError($response): string
+    {
+        $data = is_array($response) ? ($response['data'] ?? null) : null;
+
+        if (is_array($data)) {
+            $code = $this->stringifyErrorPart($data['errorCode'] ?? null);
+            $message = $this->stringifyErrorPart($data['errorMessage'] ?? null);
+            $parts = array_values(array_filter([$code, $message], static fn ($value) => $value !== ''));
+
+            if ($parts !== []) {
+                return 'KopoKopo STK request rejected: ' . implode(' - ', $parts);
+            }
+        } else {
+            $flat = $this->stringifyErrorPart($data);
+            if ($flat !== '') {
+                return 'KopoKopo STK request rejected: ' . $flat;
+            }
+        }
+
+        return 'KopoKopo STK request was rejected by the payment gateway.';
+    }
+
+    private function stringifyErrorPart($value): string
+    {
+        if (is_array($value)) {
+            return trim((string) json_encode($value));
+        }
+
+        return trim((string) $value);
+    }
+
+    /**
      * Extract a non-sensitive description of a KopoKopo token failure.
      * Returns only the OAuth error code/description/HTTP status — never credential values.
      */
@@ -143,6 +178,16 @@ class KopokopoService
                 'accessToken' => $accessToken,
                 'metadata' => $metadata,
             ]);
+
+            // On rejection the SDK returns ['status' => 'error', 'data' => [...]],
+            // where data is a structured array. Flatten it to a string error so
+            // callers never stringify an array (PHP "Array to string conversion").
+            if (($response['status'] ?? null) !== 'success') {
+                return [
+                    'status' => false,
+                    'error' => $this->describeStkError($response),
+                ];
+            }
 
             return $response;
         } catch (\Exception $e) {

@@ -1053,7 +1053,10 @@ class BillingGatewayService
             $providerResponse = is_array($result) ? $result : null;
 
             if (($result['status'] ?? null) !== 'success') {
-                $message = (string) ($result['error'] ?? $result['data'] ?? 'M-Pesa STK push failed.');
+                $rawMessage = $result['error'] ?? $result['data'] ?? 'M-Pesa STK push failed.';
+                $message = is_array($rawMessage)
+                    ? (string) (json_encode($rawMessage) ?: 'M-Pesa STK push failed.')
+                    : (string) $rawMessage;
                 $this->failPayment($payment, $message, $providerResponse ?? []);
                 $paymentAlreadyFailed = true;
 
