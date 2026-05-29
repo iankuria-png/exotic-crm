@@ -8,8 +8,17 @@ export default function KillSwitchToggle({ disabled, onToggle, profile }) {
             type="button"
             disabled={disabled}
             onClick={() => {
-                const action = enabled ? 'disable' : 'enable';
-                if (window.confirm(`Are you sure you want to ${action} the kill switch for ${profile.profile_name}?`)) {
+                if (!enabled) {
+                    const confirmation = window.prompt(`Type KILL SWITCH to block sends for ${profile.profile_name}.`);
+                    if (confirmation !== 'KILL SWITCH') {
+                        return;
+                    }
+
+                    onToggle(profile, !enabled);
+                    return;
+                }
+
+                if (window.confirm(`Disable the kill switch for ${profile.profile_name}? Sends may resume immediately if routing points to this profile.`)) {
                     onToggle(profile, !enabled);
                 }
             }}

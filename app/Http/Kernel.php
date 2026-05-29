@@ -77,6 +77,7 @@ class Kernel extends HttpKernel
         'verify.wordpress.shared_key' => \App\Http\Middleware\VerifyWordPressSharedKey::class,
         'verify.kyc.upload' => \App\Http\Middleware\VerifyKycUploadToken::class,
         'wp.service.auth' => \App\Http\Middleware\WpServiceAuth::class,
+        'whatsapp.sidecar.hmac' => \App\Http\Middleware\VerifyWhatsAppSidecarHmac::class,
     ];
     
     protected function schedule(Schedule $schedule)

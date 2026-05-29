@@ -53,6 +53,9 @@ final class CrmAuditAction
     public const WHATSAPP_SENDER_BANNED = 'whatsapp_sender_banned';
     public const WHATSAPP_SENDER_RETIRED = 'whatsapp_sender_retired';
     public const WHATSAPP_SENDER_QUARANTINED = 'whatsapp_sender_quarantined';
+    public const WHATSAPP_SENDER_REPAIR_STARTED = 'whatsapp_sender_repair_started';
+    public const WHATSAPP_SENDER_LOGGED_OUT = 'whatsapp_sender_logged_out';
+    public const WHATSAPP_AUTH_BLOB_FETCH = 'whatsapp_auth_blob_fetch';
     public const RENEWAL_SMS_SENT = 'renewal_sms_sent';
     public const RENEWAL_SMS_FAILED = 'renewal_sms_failed';
     public const RENEWAL_WHATSAPP_SENT = 'renewal_whatsapp_sent';

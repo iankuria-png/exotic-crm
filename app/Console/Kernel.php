@@ -171,6 +171,13 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_refresh_retention_insights.log'));
 
+        $schedule->command('crm:reset-whatsapp-sender-limits')
+            ->name('crm_reset_whatsapp_sender_limits')
+            ->hourly()
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_reset_whatsapp_sender_limits.log'));
+
         $schedule->command('crm:kyc-reverify-sweep')
             ->name('crm_kyc_reverify_sweep')
             ->dailyAt('02:25')

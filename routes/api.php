@@ -27,6 +27,7 @@ use App\Http\Controllers\CRM\ErrorLogController;
 use App\Http\Controllers\CRM\FieldSalesController;
 use App\Http\Controllers\CRM\ManualPaymentBundleController;
 use App\Http\Controllers\CRM\MessagingController;
+use App\Http\Controllers\CRM\MessagingSidecarController;
 use App\Http\Controllers\CRM\MessagingWebhookController;
 use App\Http\Controllers\CRM\SeoSettingsController;
 use App\Http\Controllers\CRM\SettingsController;
@@ -102,6 +103,11 @@ Route::middleware(['verify.kyc.upload'])->prefix('kyc')->group(function () {
 
 Route::get('/crm/messaging/webhook/meta', [MessagingWebhookController::class, 'verifyMeta']);
 Route::post('/crm/messaging/webhook/meta', [MessagingWebhookController::class, 'receiveMeta']);
+Route::middleware('whatsapp.sidecar.hmac')->group(function () {
+    Route::post('/crm/messaging/sidecar/restore-sessions', [MessagingSidecarController::class, 'restoreSessions']);
+    Route::get('/crm/messaging/sidecar/senders/{sender}/auth-blob', [MessagingSidecarController::class, 'authBlob']);
+    Route::post('/crm/messaging/webhook/baileys', [MessagingSidecarController::class, 'baileysWebhook']);
+});
 
 // Image proxy — public but rate-limited; domain allowlist enforced server-side
 Route::get('/crm/image-proxy', [ImageProxyController::class, 'show'])->middleware('throttle:120,1');
@@ -620,6 +626,11 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::delete('/whatsapp/profiles/{profile}', [MessagingController::class, 'destroyProfile']);
         Route::post('/whatsapp/profiles/{profile}/test', [MessagingController::class, 'testProfile']);
         Route::post('/whatsapp/profiles/{profile}/kill-switch', [MessagingController::class, 'toggleKillSwitch']);
+        Route::get('/whatsapp/senders', [MessagingController::class, 'senders']);
+        Route::post('/whatsapp/profiles/{profile}/senders', [MessagingController::class, 'storeSender']);
+        Route::post('/whatsapp/senders/{sender}/repair', [MessagingController::class, 'repairSender']);
+        Route::post('/whatsapp/senders/{sender}/logout', [MessagingController::class, 'logoutSender']);
+        Route::post('/whatsapp/senders/{sender}/retire', [MessagingController::class, 'retireSender']);
         Route::get('/whatsapp/routing/{market}/{messageType}', [MessagingController::class, 'showRouting']);
         Route::put('/whatsapp/routing/{market}/{messageType}', [MessagingController::class, 'updateRouting']);
         Route::get('/messages', [MessagingController::class, 'messages']);

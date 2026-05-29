@@ -90,6 +90,15 @@ return [
             'trim',
             explode(',', env('WHATSAPP_STOP_KEYWORDS', 'stop,unsubscribe,cancel,end,quit,stopall'))
         )),
+        'sidecar_url' => env('WHATSAPP_SIDECAR_URL', 'http://127.0.0.1:4080'),
+        'sidecar_hmac_secret' => env('WHATSAPP_SIDECAR_HMAC_SECRET'),
+        'sidecar_hmac_secret_previous' => env('WHATSAPP_SIDECAR_HMAC_SECRET_PREVIOUS'),
+        'sidecar_laravel_hmac_secret' => env('WHATSAPP_SIDECAR_LARAVEL_HMAC_SECRET', env('WHATSAPP_SIDECAR_HMAC_SECRET')),
+        'sidecar_laravel_hmac_secret_previous' => env('WHATSAPP_SIDECAR_LARAVEL_HMAC_SECRET_PREVIOUS', env('WHATSAPP_SIDECAR_HMAC_SECRET_PREVIOUS')),
+        'sidecar_clock_skew_seconds' => (int) env('WHATSAPP_SIDECAR_CLOCK_SKEW_SECONDS', 300),
+        'restore_token_ttl_seconds' => (int) env('WHATSAPP_SIDECAR_RESTORE_TOKEN_TTL_SECONDS', 120),
+        'auth_blob_fetch_limit_per_hour' => (int) env('WHATSAPP_AUTH_BLOB_FETCH_LIMIT_PER_HOUR', 3),
+        'baileys_mature_daily_limit' => (int) env('WHATSAPP_BAILEYS_MATURE_DAILY_LIMIT', 500),
     ],
 
     'exotic_crm_sync' => [

@@ -53,6 +53,10 @@ class MessagingDispatcher
             return $whatsAppResult;
         }
 
+        if (!$whatsAppResult->shouldFallbackToSms) {
+            return $whatsAppResult;
+        }
+
         $smsResult = $this->dispatchSms($to, $body, $context);
 
         return new DispatchResult(

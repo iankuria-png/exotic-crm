@@ -4,12 +4,15 @@ namespace App\Services\Messaging;
 
 use App\Models\TimelineEvent;
 use App\Models\WhatsAppMessage;
+use App\Models\WhatsAppMessageAttempt;
 use App\Models\WhatsAppProviderProfile;
 use App\Models\WhatsAppRoutingRule;
 use App\Services\AuditService;
+use App\Services\Messaging\Engines\BaileysEngine;
 use App\Services\Messaging\Engines\MetaCloudApiEngine;
 use App\Support\CrmAuditAction;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class WhatsAppGatewayService
 {
@@ -18,11 +21,13 @@ class WhatsAppGatewayService
 
     public function __construct(
         MetaCloudApiEngine $metaCloudApiEngine,
+        BaileysEngine $baileysEngine,
         private readonly SuppressionService $suppressionService,
         private readonly AuditService $auditService,
     ) {
         $this->engines = [
             $metaCloudApiEngine->id() => $metaCloudApiEngine,
+            $baileysEngine->id() => $baileysEngine,
         ];
     }
 
@@ -38,75 +43,115 @@ class WhatsAppGatewayService
             );
         }
 
-        $profile = $this->resolveProfile($request);
-        if (!$profile) {
-            $message = $this->createMessage($request, null, 'rejected', 'no_route', 'No enabled WhatsApp routing profile is configured.');
-
-            return new DispatchResult(false, 'whatsapp', 'rejected', $message, errorCode: 'no_route', errorMessage: 'No enabled WhatsApp routing profile is configured.');
-        }
-
-        if ($profile->kill_switch_enabled) {
-            $message = $this->createMessage($request, $profile, 'rejected', 'kill_switch_enabled', 'WhatsApp profile kill switch is enabled.');
-            $this->recordFailureEvents($message, $request, 'WhatsApp profile kill switch is enabled.');
-
-            return new DispatchResult(false, 'whatsapp', 'rejected', $message, errorCode: 'kill_switch_enabled', errorMessage: 'WhatsApp profile kill switch is enabled.');
-        }
+        [$profiles, $fallbackToSms] = $this->resolveRoute($request);
+        $firstProfile = $profiles[0] ?? null;
 
         if ($this->suppressionService->isSuppressed($request->recipient->phoneE164, 'whatsapp', $request->recipient->platformId)) {
-            $message = $this->createMessage($request, $profile, 'suppressed', 'suppressed', 'Recipient has an active WhatsApp opt-out.');
+            $message = $this->createMessage($request, $firstProfile, 'suppressed', 'suppressed', 'Recipient has an active WhatsApp opt-out.');
 
             return new DispatchResult(false, 'whatsapp', 'suppressed', $message, errorCode: 'suppressed', errorMessage: 'Recipient has an active WhatsApp opt-out.');
         }
 
-        $message = $this->createMessage($request, $profile, 'queued');
-        $engine = $this->engines[$profile->engine] ?? null;
+        if (!$firstProfile) {
+            $message = $this->createMessage($request, null, 'rejected', 'no_route', 'No enabled WhatsApp routing profile is configured.');
 
-        if (!$engine) {
-            $message->forceFill([
-                'status' => 'failed',
-                'error_code' => 'engine_unavailable',
-                'error_message' => 'WhatsApp engine is not available.',
-                'failed_at' => now(),
-            ])->save();
-            $this->recordFailureEvents($message, $request, 'WhatsApp engine is not available.');
-
-            return new DispatchResult(false, 'whatsapp', 'failed', $message, errorCode: 'engine_unavailable', errorMessage: 'WhatsApp engine is not available.');
+            return new DispatchResult(
+                false,
+                'whatsapp',
+                'rejected',
+                $message,
+                errorCode: 'no_route',
+                errorMessage: 'No enabled WhatsApp routing profile is configured.',
+                shouldFallbackToSms: $fallbackToSms,
+            );
         }
 
-        try {
-            $result = $engine->send($request->withProfile($profile));
-        } catch (\Throwable $exception) {
-            Log::error('WhatsApp dispatch failed', [
-                'profile_id' => $profile->id,
-                'message_id' => $message->id,
-                'error' => $exception->getMessage(),
-            ]);
+        $message = $this->createMessage($request, $firstProfile, 'queued');
+        $lastResult = null;
 
-            $result = SendResult::failed('failed', 'exception', $exception->getMessage());
+        foreach ($profiles as $index => $profile) {
+            $attempt = $this->startAttempt($message, $profile, $index + 1);
+
+            if ($profile->kill_switch_enabled) {
+                $lastResult = SendResult::failed('rejected', 'kill_switch_enabled', 'WhatsApp profile kill switch is enabled.');
+                $this->finishAttempt($attempt, $lastResult);
+                continue;
+            }
+
+            $engine = $this->engines[$profile->engine] ?? null;
+            if (!$engine) {
+                $lastResult = SendResult::failed('failed', 'engine_unavailable', 'WhatsApp engine is not available.');
+                $this->finishAttempt($attempt, $lastResult);
+                continue;
+            }
+
+            try {
+                $startedAt = microtime(true);
+                $result = $engine->send($request->withProfile($profile)->withContext([
+                    'attempt_uuid' => $attempt->attempt_uuid,
+                ]));
+                $attempt->latency_ms = (int) round((microtime(true) - $startedAt) * 1000);
+            } catch (\Throwable $exception) {
+                Log::error('WhatsApp dispatch failed', [
+                    'profile_id' => $profile->id,
+                    'message_id' => $message->id,
+                    'attempt_id' => $attempt->id,
+                    'error' => $exception->getMessage(),
+                ]);
+
+                $result = SendResult::failed('failed', 'exception', $exception->getMessage());
+            }
+
+            $lastResult = $result;
+            $this->finishAttempt($attempt, $result);
+
+            if ($result->success) {
+                $message->forceFill([
+                    'engine' => $profile->engine,
+                    'provider_profile_id' => $profile->id,
+                    'sender_id' => $result->senderId,
+                    'status' => $result->status,
+                    'provider_message_id' => $result->providerMessageId,
+                    'error_code' => null,
+                    'error_message' => null,
+                    'cost_micros' => $result->costMicros,
+                    'sent_at' => now(),
+                    'failed_at' => null,
+                ])->save();
+
+                $this->recordSentEvents($message, $request);
+
+                return new DispatchResult(
+                    success: true,
+                    channel: 'whatsapp',
+                    status: $result->status,
+                    whatsAppMessage: $message->refresh(),
+                    errorCode: null,
+                    errorMessage: null,
+                    shouldFallbackToSms: false,
+                );
+            }
         }
+
+        $lastResult ??= SendResult::failed('failed', 'unknown_failure', 'WhatsApp dispatch failed.');
 
         $message->forceFill([
-            'status' => $result->status,
-            'provider_message_id' => $result->providerMessageId,
-            'error_code' => $result->errorCode,
-            'error_message' => $result->errorMessage,
-            'sent_at' => $result->success ? now() : null,
-            'failed_at' => $result->success ? null : now(),
+            'status' => $lastResult->status,
+            'error_code' => $lastResult->errorCode,
+            'error_message' => $lastResult->errorMessage,
+            'failed_at' => now(),
         ])->save();
 
-        if ($result->success) {
-            $this->recordSentEvents($message, $request);
-        } else {
-            $this->recordFailureEvents($message, $request, $result->errorMessage);
-        }
+        $this->recordFailureEvents($message, $request, $lastResult->errorMessage);
 
         return new DispatchResult(
-            success: $result->success,
+            success: false,
             channel: 'whatsapp',
-            status: $result->status,
+            status: $lastResult->status,
             whatsAppMessage: $message->refresh(),
-            errorCode: $result->errorCode,
-            errorMessage: $result->errorMessage,
+            errorCode: $lastResult->errorCode,
+            errorMessage: $lastResult->errorMessage,
+            shouldFallbackToSms: $fallbackToSms,
         );
     }
 
@@ -122,30 +167,71 @@ class WhatsAppGatewayService
             ->first();
     }
 
-    private function resolveProfile(SendRequest $request): ?WhatsAppProviderProfile
+    /**
+     * @return array{0: list<WhatsAppProviderProfile>, 1: bool}
+     */
+    private function resolveRoute(SendRequest $request): array
     {
         $forcedProfileId = $request->context['provider_profile_id'] ?? null;
         if ($forcedProfileId) {
-            return WhatsAppProviderProfile::query()
+            $profile = WhatsAppProviderProfile::query()
                 ->whereKey((int) $forcedProfileId)
                 ->where('active', true)
                 ->first();
+
+            return [$profile ? [$profile] : [], false];
         }
 
         $rule = WhatsAppRoutingRule::query()
-            ->with('primaryProfile')
+            ->with(['primaryProfile', 'fallbackProfile'])
             ->where('market_id', $request->recipient->platformId)
             ->where('message_type', $request->messageType)
             ->where('enabled', true)
             ->first();
 
-        $profile = $rule?->primaryProfile;
-
-        if (!$profile || !$profile->active) {
-            return null;
+        if (!$rule) {
+            return [[], false];
         }
 
-        return $profile;
+        $profiles = collect([$rule->primaryProfile, $rule->fallbackProfile])
+            ->filter(fn ($profile) => $profile instanceof WhatsAppProviderProfile && $profile->active)
+            ->unique('id')
+            ->values()
+            ->all();
+
+        return [$profiles, (bool) $rule->fallback_to_sms];
+    }
+
+    private function startAttempt(WhatsAppMessage $message, WhatsAppProviderProfile $profile, int $attemptNumber): WhatsAppMessageAttempt
+    {
+        return WhatsAppMessageAttempt::create([
+            'whatsapp_message_id' => $message->id,
+            'attempt_number' => $attemptNumber,
+            'engine' => $profile->engine,
+            'provider_profile_id' => $profile->id,
+            'attempt_uuid' => (string) Str::uuid(),
+            'status' => WhatsAppMessageAttempt::STATUS_ACCEPTED,
+            'started_at' => now(),
+        ]);
+    }
+
+    private function finishAttempt(WhatsAppMessageAttempt $attempt, SendResult $result): void
+    {
+        $attempt->forceFill([
+            'sender_id' => $result->senderId,
+            'status' => $result->success ? WhatsAppMessageAttempt::STATUS_ACCEPTED : $this->failedAttemptStatus($result),
+            'error_code' => $result->errorCode,
+            'error_message' => $result->errorMessage,
+            'latency_ms' => $attempt->latency_ms,
+            'finished_at' => now(),
+        ])->save();
+    }
+
+    private function failedAttemptStatus(SendResult $result): string
+    {
+        return $result->status === 'rejected'
+            ? WhatsAppMessageAttempt::STATUS_REJECTED
+            : WhatsAppMessageAttempt::STATUS_FAILED;
     }
 
     private function createMessage(

@@ -65,6 +65,11 @@ class WhatsAppMessage extends Model
         return $this->belongsTo(WhatsAppSender::class, 'sender_id');
     }
 
+    public function attempts()
+    {
+        return $this->hasMany(WhatsAppMessageAttempt::class, 'whatsapp_message_id');
+    }
+
     public function client()
     {
         return $this->belongsTo(Client::class);

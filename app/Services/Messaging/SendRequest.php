@@ -37,4 +37,21 @@ final class SendRequest
             profile: $profile,
         );
     }
+
+    public function withContext(array $context): self
+    {
+        return new self(
+            recipient: $this->recipient,
+            body: $this->body,
+            messageType: $this->messageType,
+            idempotencyKey: $this->idempotencyKey,
+            templateId: $this->templateId,
+            templateName: $this->templateName,
+            templateLanguage: $this->templateLanguage,
+            templateComponents: $this->templateComponents,
+            mediaUrl: $this->mediaUrl,
+            context: array_merge($this->context, $context),
+            profile: $this->profile,
+        );
+    }
 }

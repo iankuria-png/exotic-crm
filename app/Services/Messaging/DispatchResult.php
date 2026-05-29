@@ -15,6 +15,7 @@ final class DispatchResult
         public readonly ?string $errorCode = null,
         public readonly ?string $errorMessage = null,
         public readonly bool $fallbackAttempted = false,
+        public readonly bool $shouldFallbackToSms = false,
     ) {
     }
 
@@ -29,6 +30,7 @@ final class DispatchResult
             'error_code' => $this->errorCode,
             'error_message' => $this->errorMessage,
             'fallback_attempted' => $this->fallbackAttempted,
+            'should_fallback_to_sms' => $this->shouldFallbackToSms,
         ];
     }
 }
