@@ -6,6 +6,19 @@ import { storeAuthSnapshot } from '../utils/authStorage';
 
 const brandLogo = '/Exotic%20Online%20Adv%20Logo-01-ChOpI09X.png';
 
+// Only allow same-origin relative paths as a post-login redirect, never an
+// absolute/protocol-relative URL (open-redirect guard).
+function isSafeInternalPath(path) {
+    return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') && !path.startsWith('/login');
+}
+
+function consumePostLoginRedirect() {
+    const stored = sessionStorage.getItem('post_login_redirect');
+    sessionStorage.removeItem('post_login_redirect');
+
+    return isSafeInternalPath(stored) ? stored : '/';
+}
+
 const highlights = [
     'Track leads, payments, and subscriptions from one workspace.',
     'Stay aligned with market teams through shared operational context.',
@@ -35,6 +48,13 @@ export default function Login() {
                     setError(errorMessage);
                 }
 
+                // Preserve a post-login destination (e.g. /b/{token}) across the
+                // Google OAuth round-trip, which cannot carry query state itself.
+                const requestedNext = params.get('next');
+                if (requestedNext && isSafeInternalPath(requestedNext)) {
+                    sessionStorage.setItem('post_login_redirect', requestedNext);
+                }
+
                 try {
                     const { data } = await api.get('/crm/setup/status');
                     if (!cancelled && data?.is_first_run) {
@@ -61,7 +81,7 @@ export default function Login() {
                     const meResponse = await api.get('/crm/me');
                     if (!cancelled) {
                         storeAuthSnapshot(meResponse.data.token || '', meResponse.data.user);
-                        navigate('/', { replace: true });
+                        navigate(consumePostLoginRedirect(), { replace: true });
                     }
                 }
             } finally {
@@ -85,7 +105,7 @@ export default function Login() {
 
         try {
             await login(email, password);
-            navigate('/', { replace: true });
+            navigate(consumePostLoginRedirect(), { replace: true });
         } catch (err) {
             setError(err.response?.data?.message || 'Invalid credentials');
         } finally {

@@ -2,6 +2,7 @@ import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
+import BriefingShare from './pages/BriefingShare';
 import Dashboard from './pages/Dashboard';
 import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
@@ -112,6 +113,7 @@ export default function AppRouter() {
         <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/setup" element={<Setup />} />
+            <Route path="/b/:token" element={<BriefingShare />} />
             <Route path="/university/verify/:code" element={<CertificateView />} />
             <Route
                 path="/*"

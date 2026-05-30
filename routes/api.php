@@ -12,6 +12,8 @@ use App\Http\Controllers\API\BillingController;
 use App\Http\Controllers\API\SmsLogController;
 use App\Http\Controllers\API\ActivityLogController;
 use App\Http\Controllers\AfricanCountryController;
+use App\Http\Controllers\CRM\AiBriefingSettingsController;
+use App\Http\Controllers\CRM\AiBriefingShareController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 use App\Http\Controllers\CRM\AuthSettingsController;
 use App\Http\Controllers\CRM\CeoDashboardController;
@@ -648,6 +650,19 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
     Route::post('/settings/roles/users', [SettingsController::class, 'storeUser'])->middleware('role:admin');
     Route::patch('/settings/roles/{user}', [SettingsController::class, 'updateRole'])->middleware('role:admin');
     Route::post('/settings/roles/{user}/impersonation-link', [SettingsController::class, 'impersonationLink'])->middleware('role:admin');
+
+    // AI weekly briefings — shared link resolution (recipient or admin/CEO override).
+    Route::get('/briefings/shared/{token}', [AiBriefingShareController::class, 'show']);
+
+    // AI workspace configuration (read/configure + dry-run preview only).
+    Route::middleware('role:admin,sub_admin')->prefix('settings/ai')->group(function () {
+        Route::get('/', [AiBriefingSettingsController::class, 'show']);
+        Route::patch('/briefings', [AiBriefingSettingsController::class, 'update']);
+        Route::patch('/insights', [AiBriefingSettingsController::class, 'updateInsights']);
+        Route::put('/recipients', [AiBriefingSettingsController::class, 'saveRecipients']);
+        Route::post('/briefings/preview', [AiBriefingSettingsController::class, 'preview']);
+        Route::get('/history', [AiBriefingSettingsController::class, 'history']);
+    });
 });
 
 // ==================== ALL ROUTES ARE PUBLIC (No authentication required) ====================

@@ -62,6 +62,75 @@ class AiBriefingSettingsService
         return (array) data_get($this->settings(), 'schedule', []);
     }
 
+    /**
+     * Curated recipient list. Each entry: user_id (required), name, phone,
+     * audience, optional scope_platform_ids, opt_out.
+     *
+     * @return array<int, array>
+     */
+    public function recipients(): array
+    {
+        return array_values(array_filter(
+            (array) data_get($this->settings(), 'recipients', []),
+            fn ($entry) => is_array($entry) && (int) ($entry['user_id'] ?? 0) > 0
+        ));
+    }
+
+    /**
+     * Opted-in recipients for an audience (opt_out=false).
+     *
+     * @return array<int, array>
+     */
+    public function activeRecipientsForAudience(string $audience): array
+    {
+        return array_values(array_filter(
+            $this->recipients(),
+            fn (array $r) => ($r['audience'] ?? null) === $audience && !(bool) ($r['opt_out'] ?? false)
+        ));
+    }
+
+    public function saveRecipients(array $recipients, ?int $actorId = null): array
+    {
+        $clean = [];
+        foreach ($recipients as $entry) {
+            $userId = (int) ($entry['user_id'] ?? 0);
+            if ($userId <= 0) {
+                continue; // user_id is mandatory — deep-link auth depends on it
+            }
+
+            $audience = in_array(($entry['audience'] ?? 'sales'), ['ceo', 'sales'], true)
+                ? $entry['audience']
+                : 'sales';
+
+            $scope = $entry['scope_platform_ids'] ?? null;
+            if (is_array($scope)) {
+                $scope = array_values(array_unique(array_filter(array_map('intval', $scope), fn ($id) => $id > 0)));
+                $scope = $scope === [] ? null : $scope;
+            } else {
+                $scope = null;
+            }
+
+            $clean[] = [
+                'user_id' => $userId,
+                'name' => trim((string) ($entry['name'] ?? '')) ?: null,
+                'phone' => trim((string) ($entry['phone'] ?? '')) ?: null,
+                'audience' => $audience,
+                'scope_platform_ids' => $scope,
+                'opt_out' => (bool) ($entry['opt_out'] ?? false),
+            ];
+        }
+
+        $current = $this->settings();
+        $current['recipients'] = $clean;
+
+        IntegrationSetting::query()->updateOrCreate(
+            ['key' => self::KEY],
+            ['value' => $current, 'updated_by' => $actorId]
+        );
+
+        return $this->recipients();
+    }
+
     public function save(array $input, ?int $actorId = null): array
     {
         $current = $this->settings();

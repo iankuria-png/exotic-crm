@@ -86,6 +86,41 @@ class MetricsSnapshotService
         ];
     }
 
+    /**
+     * Prioritized "who to call" renewal list scoped to the given markets.
+     * Used by the AUTHENTICATED briefing page (PII allowed) — never sourced from
+     * the PII-free reporting views.
+     *
+     * @param  int[]|null  $platformIds
+     */
+    public function priorityCalls(?array $platformIds, int $days = 7, int $limit = 15): array
+    {
+        $platformIds = $this->normalizePlatformIds($platformIds);
+        $now = Carbon::now();
+        $until = $now->copy()->addDays($days)->endOfDay();
+
+        return \App\Models\Deal::query()
+            ->with(['client:id,name,phone_normalized,platform_id', 'platform:id,name,country'])
+            ->where('status', 'active')
+            ->whereNotNull('expires_at')
+            ->whereBetween('expires_at', [$now, $until])
+            ->when($platformIds !== null, fn (Builder $q) => $q->whereIn('platform_id', $platformIds))
+            ->orderBy('expires_at')
+            ->limit($limit)
+            ->get()
+            ->map(fn ($deal) => [
+                'deal_id'    => (int) $deal->id,
+                'client_id'  => $deal->client_id ? (int) $deal->client_id : null,
+                'client_name' => $deal->client?->name,
+                'phone'      => $deal->client?->phone_normalized,
+                'market'     => $deal->platform?->name,
+                'amount'     => $deal->amount !== null ? (float) $deal->amount : null,
+                'currency'   => $deal->currency,
+                'expires_at' => optional($deal->expires_at)->toIso8601String(),
+            ])
+            ->all();
+    }
+
     private function revenue(Carbon $from, Carbon $to, ?array $platformIds, string $targetCurrency): array
     {
         $query = $this->basePayments($from, $to, $platformIds);

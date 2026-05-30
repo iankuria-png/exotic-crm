@@ -43,6 +43,24 @@ class Kernel extends ConsoleKernel
             ->onOneServer()
             ->sendOutputTo(storage_path('logs/crm_compute_daily_stats.log'));
 
+        // Weekly AI briefings — Monday morning (Africa/Nairobi), after daily stats
+        // have been computed. The feature also self-guards on ai.briefings.enabled.
+        $schedule->command('crm:ai-briefing --audience=ceo --period=weekly')
+            ->name('crm_ai_briefing_ceo')
+            ->weeklyOn(1, '07:30')
+            ->timezone('Africa/Nairobi')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_ai_briefing.log'), true);
+
+        $schedule->command('crm:ai-briefing --audience=sales --period=weekly')
+            ->name('crm_ai_briefing_sales')
+            ->weeklyOn(1, '07:45')
+            ->timezone('Africa/Nairobi')
+            ->withoutOverlapping(30)
+            ->onOneServer()
+            ->sendOutputTo(storage_path('logs/crm_ai_briefing.log'), true);
+
         $schedule->command('crm:snapshot-active-clients')
             ->name('crm_snapshot_active_clients')
             ->dailyAt('00:15')
