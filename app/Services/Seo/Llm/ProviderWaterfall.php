@@ -7,22 +7,43 @@ use Illuminate\Support\Facades\Log;
 
 class ProviderWaterfall
 {
+    /**
+     * Per-provider attempt log from the most recent generate() call.
+     * Each entry: ['provider' => string, 'status' => 'success'|'failed', 'error' => ?string].
+     * Recorded for observability (e.g. AiGateway); SEO callers can ignore it.
+     *
+     * @var array<int, array{provider: string, status: string, error: ?string}>
+     */
+    private array $lastAttempts = [];
+
     /** @param  LlmClient[]  $adapters */
     public function __construct(private readonly array $adapters) {}
+
+    /**
+     * @return array<int, array{provider: string, status: string, error: ?string}>
+     */
+    public function lastAttempts(): array
+    {
+        return $this->lastAttempts;
+    }
 
     public function generate(string $system, string $user, array $opts = []): LlmResponse
     {
         $failures = [];
+        $this->lastAttempts = [];
 
         foreach ($this->adapters as $adapter) {
+            $provider = $adapter->name();
+
             try {
                 $resp           = $adapter->generate($system, $user, $opts);
-                $resp->provider = $adapter->name();
+                $resp->provider = $provider;
+                $this->lastAttempts[] = ['provider' => $provider, 'status' => 'success', 'error' => null];
                 return $resp;
             } catch (\Throwable $e) {
-                $provider = $adapter->name();
                 $message = $this->summarizeProviderError($e->getMessage());
                 $failures[$provider] = $message;
+                $this->lastAttempts[] = ['provider' => $provider, 'status' => 'failed', 'error' => $message];
 
                 Log::warning('seo.provider_failed', [
                     'provider' => $provider,

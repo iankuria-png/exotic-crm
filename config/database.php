@@ -71,6 +71,31 @@ return [
             ]) : [],
         ],
 
+        // Dedicated read-only connection for the AI "Talk to Your Data" feature.
+        // Defaults to the primary mysql credentials so local/dev works without a
+        // separate user; in production point DB_RO_* at a GRANT SELECT-only account
+        // (see docs/ai-readonly-db-grants.md). The SqlSafetyValidator is the primary
+        // guard; this connection is defense-in-depth.
+        'mysql_readonly' => [
+            'driver' => 'mysql',
+            'url' => env('DB_RO_URL', env('DATABASE_URL')),
+            'host' => env('DB_RO_HOST', env('DB_HOST', '127.0.0.1')),
+            'port' => env('DB_RO_PORT', env('DB_PORT', '3306')),
+            'database' => env('DB_RO_DATABASE', env('DB_DATABASE', 'forge')),
+            'username' => env('DB_RO_USERNAME', env('DB_USERNAME', 'forge')),
+            'password' => env('DB_RO_PASSWORD', env('DB_PASSWORD', '')),
+            'unix_socket' => env('DB_RO_SOCKET', env('DB_SOCKET', '')),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                ...($mysqlSslCaOption !== null ? [$mysqlSslCaOption => env('MYSQL_ATTR_SSL_CA')] : []),
+            ]) : [],
+        ],
+
         'pgsql' => [
             'driver' => 'pgsql',
             'url' => env('DATABASE_URL'),
