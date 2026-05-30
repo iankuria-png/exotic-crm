@@ -14,6 +14,7 @@ use App\Http\Controllers\API\ActivityLogController;
 use App\Http\Controllers\AfricanCountryController;
 use App\Http\Controllers\CRM\AiBriefingSettingsController;
 use App\Http\Controllers\CRM\AiBriefingShareController;
+use App\Http\Controllers\CRM\AiInsightsController;
 use App\Http\Controllers\CRM\AuthController as CrmAuthController;
 use App\Http\Controllers\CRM\AuthSettingsController;
 use App\Http\Controllers\CRM\CeoDashboardController;
@@ -662,6 +663,13 @@ Route::middleware(['auth:sanctum', 'crm.active', 'crm.impersonation'])->prefix('
         Route::put('/recipients', [AiBriefingSettingsController::class, 'saveRecipients']);
         Route::post('/briefings/preview', [AiBriefingSettingsController::class, 'preview']);
         Route::get('/history', [AiBriefingSettingsController::class, 'history']);
+    });
+
+    // Talk to Your Data + Project Intelligence (read / validate / summarize only).
+    // Gated to admin + sub_admin (CEO is admin); sales/field receive 403.
+    Route::middleware('role:admin,sub_admin')->prefix('ai')->group(function () {
+        Route::get('/insights/health', [AiInsightsController::class, 'health']);
+        Route::post('/ask', [AiInsightsController::class, 'ask']);
     });
 });
 

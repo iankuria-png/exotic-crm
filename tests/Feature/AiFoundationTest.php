@@ -190,11 +190,21 @@ class AiFoundationTest extends TestCase
         $service->save([
             'default_row_limit' => 250,
             'sources' => ['business_data' => false],
+            'project_intelligence' => [
+                'enabled' => false,
+                'commit_lookback' => 12,
+                'include_deployment_history' => false,
+                'show_commit_urls' => false,
+            ],
         ], null);
 
         $fresh = app(AiInsightsSettingsService::class);
         $this->assertSame(250, $fresh->defaultRowLimit());
         $this->assertFalse($fresh->sourceEnabled('business_data'));
+        $this->assertFalse($fresh->projectIntelligenceEnabled());
+        $this->assertSame(12, $fresh->projectCommitLookback());
+        $this->assertFalse($fresh->includeDeploymentHistory());
+        $this->assertFalse($fresh->showCommitUrls());
     }
 
     private function bindFakeProvider(\Closure $generate): void

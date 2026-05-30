@@ -76,6 +76,11 @@ class AiBriefingSettingsController extends Controller
             'chart_suggestions'    => ['sometimes', 'boolean'],
             'rate_limit_per_minute' => ['sometimes', 'integer', 'min:1', 'max:120'],
             'daily_cost_cap_usd'   => ['sometimes', 'numeric', 'min:0'],
+            'project_intelligence' => ['sometimes', 'array'],
+            'project_intelligence.enabled' => ['sometimes', 'boolean'],
+            'project_intelligence.commit_lookback' => ['sometimes', 'integer', 'min:1', 'max:200'],
+            'project_intelligence.include_deployment_history' => ['sometimes', 'boolean'],
+            'project_intelligence.show_commit_urls' => ['sometimes', 'boolean'],
         ]);
 
         $settings = $this->insightsSettings->save($data, $request->user()?->id);

@@ -11,6 +11,7 @@ import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWi
 import RevenueByPackageWidget from '../components/dashboard/RevenueByPackageWidget';
 import SalesDashboardView from '../components/dashboard/SalesDashboardView';
 import CeoDashboard from './CeoDashboard';
+import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import useReportingCurrency from '../hooks/useReportingCurrency';
 import { useAuth } from '../hooks/useAuth';
@@ -1113,10 +1114,16 @@ export default function Dashboard() {
                         Switch to CEO view
                     </button>
                 </div>
+                <AiInsightsPanel user={user} />
                 <OperationsDashboard />
             </div>
         );
     }
 
-    return <OperationsDashboard />;
+    return (
+        <div className="space-y-4">
+            <AiInsightsPanel user={user} />
+            <OperationsDashboard />
+        </div>
+    );
 }

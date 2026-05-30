@@ -13,6 +13,7 @@ import RecentPaymentsWidget from '../components/dashboard/RecentPaymentsWidget';
 import AgentPerformanceWidget from '../components/dashboard/AgentPerformanceWidget';
 import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWidget';
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
+import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useCeoReportingCurrency from '../hooks/useCeoReportingCurrency';
 import { marketLabel } from '../components/dashboard/ceoFormatters';
 
@@ -212,6 +213,8 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onMarketClick={handleMarketScope}
                 onAgentClick={setFocusedAgentId}
             />
+
+            <AiInsightsPanel user={user} />
 
             <section className="grid gap-4 2xl:grid-cols-2">
                 <div>

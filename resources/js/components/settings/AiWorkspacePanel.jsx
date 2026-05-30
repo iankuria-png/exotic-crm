@@ -9,6 +9,8 @@ const SUBTABS = [
     { id: 'recipients', label: 'Recipients' },
     { id: 'schedule', label: 'Schedule & SMS' },
     { id: 'cost', label: 'Cost & Providers' },
+    { id: 'insights', label: 'Talk to Data' },
+    { id: 'project', label: 'Project Intelligence' },
     { id: 'audit', label: 'Audit' },
 ];
 
@@ -65,6 +67,8 @@ export default function AiWorkspacePanel() {
             ) : null}
             {subTab === 'schedule' ? <ScheduleSection data={data} toast={toast} queryClient={queryClient} /> : null}
             {subTab === 'cost' ? <CostSection data={data} toast={toast} queryClient={queryClient} /> : null}
+            {subTab === 'insights' ? <TalkToDataSection data={data} toast={toast} queryClient={queryClient} /> : null}
+            {subTab === 'project' ? <ProjectIntelligenceSection data={data} toast={toast} queryClient={queryClient} /> : null}
             {subTab === 'audit' ? <AuditSection /> : null}
         </div>
     );
@@ -86,6 +90,7 @@ function OverviewSection({ data }) {
     const toast = useToast();
     const queryClient = useQueryClient();
     const b = data.briefings || {};
+    const insights = data.insights || {};
     const [previewAudience, setPreviewAudience] = useState('ceo');
     const [preview, setPreview] = useState(null);
 
@@ -140,6 +145,10 @@ function OverviewSection({ data }) {
                     <Stat label="Link TTL (days)" value={b.link_ttl_days ?? '—'} />
                     <Stat label="Weekly cost cap" value={`$${Number(b.weekly_cost_cap_usd ?? 0).toFixed(2)}`} />
                     <Stat label="Timezone" value={b.timezone || '—'} />
+                    <Stat label="Talk to Data" value={insights.enabled ? 'Enabled' : 'Disabled'} />
+                    <Stat label="Read connection" value={insights.read_connection || 'mysql_readonly'} />
+                    <Stat label="SQL row cap" value={insights.max_row_limit ?? '—'} />
+                    <Stat label="Project source" value={insights.project_intelligence?.enabled ? 'Enabled' : 'Disabled'} />
                 </dl>
             </div>
 
@@ -607,6 +616,245 @@ function CostSection({ data, toast, queryClient }) {
                     className="rounded-md bg-teal-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-700 disabled:opacity-60"
                 >
                     {mutation.isPending ? 'Saving…' : 'Save'}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function TalkToDataSection({ data, toast, queryClient }) {
+    const i = data.insights || {};
+    const [form, setForm] = useState({
+        enabled: !!i.enabled,
+        allowed_roles: Array.isArray(i.allowed_roles) ? i.allowed_roles : ['admin', 'sub_admin'],
+        sources: {
+            business_data: i.sources?.business_data ?? true,
+            sales_data: i.sources?.sales_data ?? true,
+            project_status: i.sources?.project_status ?? true,
+            hybrid: i.sources?.hybrid ?? true,
+        },
+        default_row_limit: i.default_row_limit ?? 100,
+        max_row_limit: i.max_row_limit ?? 1000,
+        sql_timeout_seconds: i.sql_timeout_seconds ?? 10,
+        show_generated_sql: i.show_generated_sql ?? true,
+        chart_suggestions: i.chart_suggestions ?? true,
+        rate_limit_per_minute: i.rate_limit_per_minute ?? 12,
+        daily_cost_cap_usd: i.daily_cost_cap_usd ?? 5,
+    });
+
+    const mutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/ai/insights', payload).then((r) => r.data),
+        onSuccess: () => {
+            toast.success('Talk to Data settings saved.');
+            queryClient.invalidateQueries({ queryKey: ['ai-settings'] });
+            queryClient.invalidateQueries({ queryKey: ['ai-insights-health'] });
+        },
+        onError: (err) => toast.error(err?.response?.data?.message || 'Could not save Talk to Data settings.'),
+    });
+
+    const setSource = (key, value) => setForm((cur) => ({
+        ...cur,
+        sources: { ...cur.sources, [key]: value },
+    }));
+
+    const setRole = (role, checked) => setForm((cur) => ({
+        ...cur,
+        allowed_roles: checked
+            ? Array.from(new Set([...cur.allowed_roles, role]))
+            : cur.allowed_roles.filter((item) => item !== role),
+    }));
+
+    const save = () => mutation.mutate({
+        ...form,
+        default_row_limit: Number(form.default_row_limit),
+        max_row_limit: Number(form.max_row_limit),
+        sql_timeout_seconds: Number(form.sql_timeout_seconds),
+        rate_limit_per_minute: Number(form.rate_limit_per_minute),
+        daily_cost_cap_usd: Number(form.daily_cost_cap_usd),
+    });
+
+    return (
+        <div className="crm-surface space-y-4 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Talk to Data</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                        Natural-language questions are converted to validated SELECT-only queries against PII-free views.
+                    </p>
+                </div>
+                <Badge ok={form.enabled}>{form.enabled ? 'Enabled' : 'Disabled'}</Badge>
+            </div>
+
+            <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                    type="checkbox"
+                    checked={form.enabled}
+                    onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                />
+                Enable dashboard chat for allowed roles
+            </label>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 p-3">
+                    <h4 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sources</h4>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {[
+                            ['business_data', 'Business Data'],
+                            ['sales_data', 'Sales Data'],
+                            ['project_status', 'Project Status'],
+                            ['hybrid', 'Hybrid'],
+                        ].map(([key, label]) => (
+                            <label key={key} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={!!form.sources[key]}
+                                    onChange={(e) => setSource(key, e.target.checked)}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                                />
+                                {label}
+                            </label>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 p-3">
+                    <h4 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Roles</h4>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {['admin', 'sub_admin'].map((role) => (
+                            <label key={role} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={form.allowed_roles.includes(role)}
+                                    onChange={(e) => setRole(role, e.target.checked)}
+                                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                                />
+                                {role}
+                            </label>
+                        ))}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">CEO access follows the user flag even when role lists change.</p>
+                </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <Field label="Default row limit">
+                    <input type="number" min="1" value={form.default_row_limit} onChange={(e) => setForm({ ...form, default_row_limit: e.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500" />
+                </Field>
+                <Field label="Maximum row limit">
+                    <input type="number" min="1" value={form.max_row_limit} onChange={(e) => setForm({ ...form, max_row_limit: e.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500" />
+                </Field>
+                <Field label="SQL timeout (seconds)">
+                    <input type="number" min="1" max="60" value={form.sql_timeout_seconds} onChange={(e) => setForm({ ...form, sql_timeout_seconds: e.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500" />
+                </Field>
+                <Field label="Rate limit per minute">
+                    <input type="number" min="1" max="120" value={form.rate_limit_per_minute} onChange={(e) => setForm({ ...form, rate_limit_per_minute: e.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500" />
+                </Field>
+                <Field label="Daily cost cap (USD)">
+                    <input type="number" min="0" step="0.5" value={form.daily_cost_cap_usd} onChange={(e) => setForm({ ...form, daily_cost_cap_usd: e.target.value })} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500" />
+                </Field>
+                <Field label="Evidence display">
+                    <div className="space-y-2 rounded-md border border-slate-200 px-3 py-2">
+                        <label className="flex min-h-8 items-center gap-2 text-sm">
+                            <input type="checkbox" checked={form.show_generated_sql} onChange={(e) => setForm({ ...form, show_generated_sql: e.target.checked })} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+                            Show generated SQL
+                        </label>
+                        <label className="flex min-h-8 items-center gap-2 text-sm">
+                            <input type="checkbox" checked={form.chart_suggestions} onChange={(e) => setForm({ ...form, chart_suggestions: e.target.checked })} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+                            Suggest charts
+                        </label>
+                    </div>
+                </Field>
+            </div>
+
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                Read connection: <span className="font-semibold text-slate-800">{i.read_connection || 'mysql_readonly'}</span>. Database grants are managed by the deployment runbook.
+            </div>
+
+            <div className="flex justify-end">
+                <button type="button" onClick={save} disabled={mutation.isPending} className="rounded-md bg-teal-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-700 disabled:opacity-60">
+                    {mutation.isPending ? 'Saving…' : 'Save Talk to Data'}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function ProjectIntelligenceSection({ data, toast, queryClient }) {
+    const project = data.insights?.project_intelligence || {};
+    const [form, setForm] = useState({
+        enabled: project.enabled ?? true,
+        commit_lookback: project.commit_lookback ?? 50,
+        include_deployment_history: project.include_deployment_history ?? true,
+        show_commit_urls: project.show_commit_urls ?? true,
+    });
+
+    const mutation = useMutation({
+        mutationFn: (payload) => api.patch('/crm/settings/ai/insights', { project_intelligence: payload }).then((r) => r.data),
+        onSuccess: () => {
+            toast.success('Project intelligence settings saved.');
+            queryClient.invalidateQueries({ queryKey: ['ai-settings'] });
+            queryClient.invalidateQueries({ queryKey: ['ai-insights-health'] });
+        },
+        onError: (err) => toast.error(err?.response?.data?.message || 'Could not save project intelligence settings.'),
+    });
+
+    return (
+        <div className="crm-surface space-y-4 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Project Intelligence</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                        Read-only commit and deployment evidence for project-status questions.
+                    </p>
+                </div>
+                <Badge ok={form.enabled}>{form.enabled ? 'Enabled' : 'Disabled'}</Badge>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Commit lookback">
+                    <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        value={form.commit_lookback}
+                        onChange={(e) => setForm({ ...form, commit_lookback: e.target.value })}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500"
+                    />
+                </Field>
+                <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+                    <label className="flex min-h-11 items-center gap-2 text-sm font-medium text-slate-700">
+                        <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+                        Enable Project Status source
+                    </label>
+                    <label className="flex min-h-11 items-center gap-2 text-sm font-medium text-slate-700">
+                        <input type="checkbox" checked={form.include_deployment_history} onChange={(e) => setForm({ ...form, include_deployment_history: e.target.checked })} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+                        Include deployment history
+                    </label>
+                    <label className="flex min-h-11 items-center gap-2 text-sm font-medium text-slate-700">
+                        <input type="checkbox" checked={form.show_commit_urls} onChange={(e) => setForm({ ...form, show_commit_urls: e.target.checked })} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+                        Show commit URLs in answers
+                    </label>
+                </div>
+            </div>
+
+            <AiStateBlock
+                variant="empty"
+                title="Read-only evidence only"
+                message="The chat can summarize commits and deployment history, but cannot deploy, roll back, create PRs, edit files, or run commands."
+            />
+
+            <div className="flex justify-end">
+                <button
+                    type="button"
+                    onClick={() => mutation.mutate({
+                        ...form,
+                        commit_lookback: Number(form.commit_lookback),
+                    })}
+                    disabled={mutation.isPending}
+                    className="rounded-md bg-teal-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-700 disabled:opacity-60"
+                >
+                    {mutation.isPending ? 'Saving…' : 'Save Project Intelligence'}
                 </button>
             </div>
         </div>

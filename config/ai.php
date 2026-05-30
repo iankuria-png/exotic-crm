@@ -47,6 +47,10 @@ return [
         'default_row_limit' => (int) env('AI_INSIGHTS_DEFAULT_ROW_LIMIT', 100),
         'max_row_limit' => (int) env('AI_INSIGHTS_MAX_ROW_LIMIT', 1000),
         'sql_timeout_seconds' => (int) env('AI_INSIGHTS_SQL_TIMEOUT', 10),
+        // Connection used to EXECUTE validated read-only SQL. Defaults to the
+        // SELECT-only mysql_readonly account; tests point this at the default
+        // connection so the in-memory reporting views are reachable.
+        'read_connection' => env('AI_INSIGHTS_READ_CONNECTION', 'mysql_readonly'),
         'chart_suggestions' => true,
         'show_generated_sql' => true,
         'rate_limit_per_minute' => (int) env('AI_INSIGHTS_RATE_LIMIT', 12),
