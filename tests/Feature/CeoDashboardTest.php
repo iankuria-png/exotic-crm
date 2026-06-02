@@ -335,6 +335,7 @@ class CeoDashboardTest extends TestCase
             'deal_id' => $deal->id,
             'amount' => 300,
             'status' => 'completed',
+            'created_at' => '2026-05-12 12:00:00',
             'completed_at' => '2026-05-12 12:00:00',
         ]);
 
@@ -393,6 +394,7 @@ class CeoDashboardTest extends TestCase
             'deal_id' => $deal->id,
             'amount' => 300,
             'status' => 'completed',
+            'created_at' => '2026-05-12 12:00:00',
             'completed_at' => '2026-05-12 12:00:00',
         ]);
 
@@ -451,6 +453,7 @@ class CeoDashboardTest extends TestCase
             'deal_id' => $deal->id,
             'amount' => 300,
             'status' => 'completed',
+            'created_at' => '2026-05-12 12:00:00',
             'completed_at' => '2026-05-12 12:00:00',
         ]);
 

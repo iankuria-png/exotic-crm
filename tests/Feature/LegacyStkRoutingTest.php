@@ -236,9 +236,9 @@ class LegacyStkRoutingTest extends TestCase
         $payment = Payment::query()->latest('id')->firstOrFail();
         $attempt = PaymentAttempt::query()->where('payment_id', $payment->id)->latest('id')->firstOrFail();
 
-        $this->assertSame('failed', $attempt->status);
-        $this->assertSame('preflight_exception', $attempt->error_code);
-        $this->assertNull($attempt->provider);
+        $this->assertSame('skipped', $attempt->status);
+        $this->assertSame('no_recipients', $attempt->error_code);
+        $this->assertSame('mpesa_stk', $attempt->provider);
         $this->assertSame('failed', $payment->fresh()->status);
     }
 

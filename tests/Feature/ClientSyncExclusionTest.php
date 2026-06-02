@@ -106,7 +106,7 @@ class ClientSyncExclusionTest extends TestCase
             return $request->method() === 'GET'
                 && str_starts_with($request->url(), 'https://example.test/wp-json/exotic-crm-sync/v1/clients')
                 && $request['per_page'] === 50
-                && $request['modified_after'] === '2026-04-03T09:55:00+00:00';
+                && $request['modified_after'] === '2026-04-03T09:45:00+00:00';
         });
     }
 

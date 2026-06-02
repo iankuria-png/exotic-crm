@@ -7,6 +7,7 @@ use App\Models\Client;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\User;
+use App\Services\PaymentLinkService;
 use App\Services\WalletSettingsService;
 use App\Support\CrmAuditAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -38,7 +39,7 @@ class SandboxPaymentReconcileTest extends TestCase
             'status' => 'pending',
             'completed_at' => null,
             'raw_payload' => [],
-            'payment_data' => [],
+            'payment_data' => $this->sandboxCheckoutPaymentData('WTU-SANDBOX-RECON-001'),
         ]);
 
         Sanctum::actingAs($user);
@@ -106,7 +107,7 @@ class SandboxPaymentReconcileTest extends TestCase
             'status' => 'pending',
             'completed_at' => null,
             'raw_payload' => [],
-            'payment_data' => [],
+            'payment_data' => $this->sandboxCheckoutPaymentData('WTU-SANDBOX-RECON-FAIL-001'),
         ]);
 
         Sanctum::actingAs($user);
@@ -207,7 +208,7 @@ class SandboxPaymentReconcileTest extends TestCase
             'status' => 'pending',
             'completed_at' => null,
             'raw_payload' => [],
-            'payment_data' => [],
+            'payment_data' => $this->sandboxCheckoutPaymentData('WTU-SANDBOX-ALIAS-001'),
         ]);
 
         BillingRoutingDecision::query()->create([
@@ -365,6 +366,17 @@ class SandboxPaymentReconcileTest extends TestCase
             'platform' => $platform->fresh(),
             'client' => $client->fresh(['platform']),
             'user' => $user->fresh(),
+        ];
+    }
+
+    private function sandboxCheckoutPaymentData(string $reference): array
+    {
+        return [
+            'link_proxy' => [
+                'mode' => PaymentLinkService::MODE_PROXY_HOSTED_CHECKOUT,
+                'provider_reference' => $reference,
+                'initialized_at' => now()->toIso8601String(),
+            ],
         ];
     }
 }

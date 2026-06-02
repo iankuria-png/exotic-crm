@@ -36,6 +36,7 @@ class SyncClientsCommandTest extends TestCase
         ]);
 
         Http::fake([
+            'https://kenya.example.test/wp-json/exotic-crm-sync/v1/sync/meta' => Http::response([], 404),
             'https://kenya.example.test/wp-json/exotic-crm-sync/v1/clients*' => Http::response([
                 'data' => [[
                     'wp_post_id' => 9101,
@@ -49,9 +50,11 @@ class SyncClientsCommandTest extends TestCase
                 ]],
                 'pages' => 1,
             ], 200),
+            'https://tanzania.example.test/wp-json/exotic-crm-sync/v1/sync/meta' => Http::response([], 404),
             'https://tanzania.example.test/wp-json/exotic-crm-sync/v1/clients*' => Http::response([
                 'message' => 'Upstream outage',
             ], 500),
+            'https://ghana.example.test/wp-json/exotic-crm-sync/v1/sync/meta' => Http::response([], 404),
             'https://ghana.example.test/wp-json/exotic-crm-sync/v1/clients*' => Http::response([
                 'data' => [[
                     'wp_post_id' => 9301,
@@ -96,7 +99,7 @@ class SyncClientsCommandTest extends TestCase
         $this->assertSame('success', $platformC->sync_last_status);
         $this->assertSame('scheduler', data_get($platformC->sync_last_result, 'trigger'));
 
-        Http::assertSentCount(3);
+        Http::assertSentCount(8);
     }
 
     public function test_command_skips_markets_without_complete_wordpress_credentials(): void
@@ -116,6 +119,7 @@ class SyncClientsCommandTest extends TestCase
         ]);
 
         Http::fake([
+            'https://complete.example.test/wp-json/exotic-crm-sync/v1/sync/meta' => Http::response([], 404),
             'https://complete.example.test/wp-json/exotic-crm-sync/v1/clients*' => Http::response([
                 'data' => [[
                     'wp_post_id' => 9401,
@@ -140,6 +144,6 @@ class SyncClientsCommandTest extends TestCase
             'wp_post_id' => 9401,
         ]);
 
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
     }
 }

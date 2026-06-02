@@ -17,6 +17,8 @@ class TeamLeaderboardAggregationTest extends TestCase
 
     public function test_today_leaderboard_returns_one_row_per_agent_and_preserves_currency_breakdown(): void
     {
+        Carbon::setTestNow(Carbon::parse('2026-06-02 12:00:00'));
+
         $admin = $this->createTeamUser('admin');
         $platformKes = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
         $platformTzs = $this->createTeamPlatform(['name' => 'Tanzania', 'currency_code' => 'TZS', 'domain' => 'tz.test']);
@@ -143,6 +145,8 @@ class TeamLeaderboardAggregationTest extends TestCase
         $this->assertStringContainsString('TZS 8,000', (string) $response->json('data.0.revenue_display'));
         $this->assertSame(41.54, (float) $response->json('data.0.normalized_revenue_total'));
         $this->assertSame(false, $response->json('data.0.revenue_normalization_meta.partial'));
+
+        Carbon::setTestNow();
     }
 
     public function test_week_leaderboard_combines_historical_daily_stats_with_live_today_activity(): void
@@ -212,9 +216,11 @@ class TeamLeaderboardAggregationTest extends TestCase
 
     public function test_admin_leaderboard_includes_manager_rows_and_honors_role_filters(): void
     {
+        Carbon::setTestNow(Carbon::parse('2026-06-02 12:00:00'));
+
         $adminViewer = $this->createTeamUser('admin');
         $platform = $this->createTeamPlatform(['name' => 'Kenya', 'currency_code' => 'KES']);
-        $peerAdmin = $this->createTeamUser('admin', [], ['email' => 'peer-admin@example.test']);
+        $peerAdmin = $this->createTeamUser('admin', [$platform->id], ['email' => 'peer-admin@example.test']);
         $subAdmin = $this->createTeamUser('sub_admin', [$platform->id], ['email' => 'peer-subadmin@example.test']);
         $sales = $this->createTeamUser('sales', [$platform->id], ['email' => 'peer-sales@example.test']);
         $marketing = $this->createTeamUser('marketing', [$platform->id], ['email' => 'peer-marketing@example.test']);
@@ -286,6 +292,8 @@ class TeamLeaderboardAggregationTest extends TestCase
             ->assertJsonPath('role_filter', 'marketing')
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.user_id', $marketing->id);
+
+        Carbon::setTestNow();
     }
 
     public function test_flat_leaderboard_ranks_by_collected_payment_revenue_not_activated_deals(): void

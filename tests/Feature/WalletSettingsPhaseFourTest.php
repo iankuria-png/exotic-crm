@@ -277,6 +277,7 @@ class WalletSettingsPhaseFourTest extends TestCase
             'enabled' => true,
             'mode_override' => 'sandbox',
             'currency_code' => 'KES',
+            'multi_currency_wallet_enabled' => false,
             'max_single_topup' => '75000.00',
             'max_wallet_balance' => '250000.00',
             'topup_presets' => ['500.00', '1000.00', '2500.00'],

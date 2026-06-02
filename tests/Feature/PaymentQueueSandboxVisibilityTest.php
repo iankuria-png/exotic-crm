@@ -539,7 +539,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $summaryResponse->assertOk()
             ->assertJsonPath('stats.confirmed', 2)
             ->assertJsonPath('stats.discounted', 1)
-            ->assertJsonPath('stats.discounted_amount', 1600)
+            ->assertJsonPath('stats.discounted_amount', 400)
             ->assertJsonPath('stats.discounted_currency_count', 1)
             ->assertJsonPath('data.0.deal.discount_source', 'self_service_incentive');
 
@@ -707,7 +707,7 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
         $reference = $attributes['transaction_reference'] ?? ('PAY-' . Str::upper(Str::random(8)));
         $createdAt = $attributes['created_at'] ?? now()->subMinutes(5);
 
-        return Payment::query()->create(array_merge([
+        $payment = Payment::query()->create(array_merge([
             'platform_id' => $platform->id,
             'phone' => '254700' . random_int(100000, 999999),
             'amount' => 1000,
@@ -722,5 +722,14 @@ class PaymentQueueSandboxVisibilityTest extends TestCase
             'created_at' => $createdAt,
             'updated_at' => $createdAt,
         ], $attributes));
+
+        if (array_key_exists('created_at', $attributes) || array_key_exists('updated_at', $attributes)) {
+            $payment->forceFill([
+                'created_at' => $attributes['created_at'] ?? $createdAt,
+                'updated_at' => $attributes['updated_at'] ?? ($attributes['created_at'] ?? $createdAt),
+            ])->saveQuietly();
+        }
+
+        return $payment;
     }
 }

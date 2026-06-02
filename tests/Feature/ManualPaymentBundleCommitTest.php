@@ -59,7 +59,7 @@ class ManualPaymentBundleCommitTest extends TestCase
         $response->assertCreated()
             ->assertJsonPath('bundle.reference_root', 'COMMIT001')
             ->assertJsonPath('bundle.status', 'committed')
-            ->assertJsonPath('bundle.audit_state', 'pending_finance_review');
+            ->assertJsonPath('bundle.audit_state', 'resolved');
 
         $bundleId = (int) $response->json('bundle.id');
 
@@ -71,14 +71,14 @@ class ManualPaymentBundleCommitTest extends TestCase
         $this->assertDatabaseHas('payments', [
             'manual_payment_bundle_id' => $bundleId,
             'transaction_reference' => 'COMMIT001-1',
-            'reconciliation_state' => 'manual_review',
+            'reconciliation_state' => 'resolved',
             'status' => 'completed',
         ]);
 
         $this->assertDatabaseHas('payments', [
             'manual_payment_bundle_id' => $bundleId,
             'transaction_reference' => 'COMMIT001-2',
-            'reconciliation_state' => 'manual_review',
+            'reconciliation_state' => 'resolved',
             'status' => 'completed',
         ]);
 

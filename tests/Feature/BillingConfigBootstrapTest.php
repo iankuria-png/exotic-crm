@@ -33,6 +33,22 @@ class BillingConfigBootstrapTest extends TestCase
             'paypal' => ['enabled' => false],
         ];
 
+        config()->set('billing.enabled', false);
+        config()->set('billing.registry.enabled', false);
+        config()->set('billing.routing.enabled', false);
+        config()->set('billing.provider_transactions.enabled', false);
+        config()->set('billing.dual_write.enabled', false);
+        config()->set('billing.shadow_read.enabled', false);
+        config()->set('billing.billing_system_live_read.enabled', false);
+        config()->set('billing.workspace.enabled', false);
+        config()->set('billing.diagnostics.v2.enabled', false);
+        config()->set('billing.wordpress.versioned_payloads.enabled', false);
+        config()->set('billing.wallet_auto_renew.enabled', false);
+        config()->set('billing.provider_family', $expectedProviderFamilies);
+        config()->set('billing.market_surface_cutover', []);
+
+        (new AppServiceProvider($this->app))->register();
+
         $this->assertFalse(config('billing.enabled'));
         $this->assertSame($expectedFeatures, config('billing.features'));
         $this->assertFalse(config('billing.registry.enabled'));
