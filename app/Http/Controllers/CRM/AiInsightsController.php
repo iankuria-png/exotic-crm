@@ -9,6 +9,7 @@ use App\Services\Ai\AiGateway;
 use App\Services\Ai\AiInsightsSettingsService;
 use App\Services\Ai\AiQuestionRouter;
 use App\Services\Ai\Exceptions\SqlValidationException;
+use App\Services\Ai\MetricsSnapshotService;
 use App\Services\Ai\ProjectIntelligenceService;
 use App\Services\Ai\SqlSafetyValidator;
 use App\Services\Seo\Exceptions\AllProvidersFailedException;
@@ -47,6 +48,7 @@ class AiInsightsController extends Controller
         private readonly AiInsightsSettingsService $settings,
         private readonly AiQuestionRouter $router,
         private readonly SqlSafetyValidator $validator,
+        private readonly MetricsSnapshotService $metrics,
         private readonly ProjectIntelligenceService $project,
         private readonly AiGateway $gateway,
     ) {}
@@ -66,9 +68,16 @@ class AiInsightsController extends Controller
         $validated = $request->validate([
             'question' => ['required', 'string', 'min:3', 'max:1000'],
             'source'   => ['nullable', 'string', 'in:business_data,sales_data,project_status,hybrid'],
+            'context' => ['nullable', 'array'],
+            'context.from' => ['nullable', 'date'],
+            'context.to' => ['nullable', 'date', 'after_or_equal:context.from'],
+            'context.reporting_currency' => ['nullable', 'string', 'min:3', 'max:8'],
+            'context.currency_mode' => ['nullable', 'string', 'in:native,flat'],
+            'context.platform_id' => ['nullable', 'integer'],
         ]);
 
         $question = trim($validated['question']);
+        $context = (array) ($validated['context'] ?? []);
 
         // Rate limit (per user, per minute).
         $rateKey = 'ai-insights:' . $user->id;
@@ -131,7 +140,7 @@ class AiInsightsController extends Controller
 
         try {
             if ($this->router->usesSql($source)) {
-                $this->answerFromData($user, $question, $source, $payload);
+                $this->answerFromData($user, $question, $source, $context, $payload);
             }
 
             if ($this->router->usesProject($source)) {
@@ -222,8 +231,12 @@ class AiInsightsController extends Controller
     // Data (NL -> SQL) path
     // ---------------------------------------------------------------------
 
-    private function answerFromData(User $user, string $question, string $source, array &$payload): void
+    private function answerFromData(User $user, string $question, string $source, array $context, array &$payload): void
     {
+        if ($this->tryDashboardRevenueAnswer($user, $question, $context, $payload)) {
+            return;
+        }
+
         $scope = $this->resolveScope($user);
 
         $system = $this->sqlSystemPrompt($scope);
@@ -257,6 +270,148 @@ class AiInsightsController extends Controller
 
         $answer = $this->summarizeData($user, $question, $rowArrays, $columns);
         $payload['answer'] = $this->mergeAnswer($payload['answer'], $answer);
+        $payload['follow_up_suggestions'] = $this->followUpSuggestions($question, $source, $rowArrays);
+    }
+
+    private function tryDashboardRevenueAnswer(User $user, string $question, array $context, array &$payload): bool
+    {
+        if (!$this->isDashboardRevenueQuestion($question)) {
+            return false;
+        }
+
+        [$from, $to] = $this->resolveDashboardWindow($context);
+        $currency = $this->resolveContextCurrency($context);
+        $scope = $this->resolveDashboardScope($user, $context);
+        $markets = $this->metrics->topMarketsForDashboardWindow($scope, $from, $to, $currency, 25);
+
+        $rows = collect($markets)
+            ->filter(fn (array $market) => (float) ($market['current_revenue_normalized'] ?? 0) > 0)
+            ->map(fn (array $market) => [
+                'rank' => (int) $market['rank'],
+                'platform_id' => (int) $market['platform_id'],
+                'market_name' => $market['name'],
+                'market_country' => $market['country'],
+                'revenue_usd' => $market['current_revenue_normalized'],
+                'payments_count' => (int) $market['payments_count'],
+                'share_percent' => $market['share_percent'],
+            ])
+            ->values()
+            ->all();
+
+        $columns = ['rank', 'platform_id', 'market_name', 'market_country', 'revenue_usd', 'payments_count', 'share_percent'];
+        $payload['rows'] = $rows;
+        $payload['columns'] = $columns;
+        $payload['column_meta'] = array_merge($this->columnMeta($columns), [
+            'payments_count' => ['type' => 'number', 'currency' => null],
+            'rank' => ['type' => 'number', 'currency' => null],
+            'share_percent' => ['type' => 'percent', 'currency' => null],
+        ]);
+        $payload['row_count'] = count($rows);
+        $payload['chart'] = $rows === [] ? null : ['type' => 'bar', 'x' => 'market_name', 'y' => 'revenue_usd'];
+        $payload['generated_sql'] = null;
+
+        $answerPayload = $this->dashboardRevenueNarrative($rows, $markets, $from, $to, $currency);
+        $payload['answer'] = $answerPayload['answer'];
+        $payload['structured_answer'] = $answerPayload['structured_answer'];
+        $payload['follow_up_suggestions'] = $answerPayload['follow_up_suggestions'];
+        $payload['evidence_source'] = [
+            'label' => 'Top Performing Markets',
+            'method' => 'Dashboard FX normalization',
+            'window' => [
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+            ],
+        ];
+
+        try {
+            $interaction = AiInteraction::create([
+                'feature' => 'insights_dashboard_metric',
+                'user_id' => $user->id,
+                'prompt' => mb_substr($question, 0, 1000),
+                'prompt_hash' => hash('sha256', $question),
+                'result_summary' => $payload['answer'],
+                'status' => 'success',
+                'provider' => null,
+                'input_tokens' => 0,
+                'output_tokens' => 0,
+                'est_cost_usd' => 0,
+            ]);
+            $payload['interaction_ids'][] = $interaction->id;
+        } catch (\Throwable $e) {
+            Log::info('ai.insights.dashboard_metric_log_failed', ['error' => $e->getMessage()]);
+        }
+
+        return true;
+    }
+
+    private function dashboardRevenueNarrative(array $rows, array $markets, Carbon $from, Carbon $to, string $currency): array
+    {
+        if ($rows === []) {
+            $window = $this->formatWindowLabel($from, $to);
+
+            return [
+                'answer' => "No revenue was found in the Top Performing Markets window ({$window}).",
+                'structured_answer' => [
+                    'type' => 'ranked_revenue',
+                    'headline' => 'No revenue in this window',
+                    'summary' => "The dashboard-normalized market revenue total is {$currency} 0.00 for {$window}.",
+                    'metrics' => [],
+                    'bullets' => [],
+                ],
+                'follow_up_suggestions' => [
+                    'Show revenue by market for the previous 30 days.',
+                    'Which agents had payments in this same window?',
+                    'What recent payments are included?',
+                ],
+            ];
+        }
+
+        $top = $rows[0];
+        $window = $this->formatWindowLabel($from, $to);
+        $topDisplay = $this->formatMoney((float) $top['revenue_usd'], $currency);
+        $share = $top['share_percent'] !== null ? number_format((float) $top['share_percent'], 1) . '%' : 'n/a';
+        $topName = $top['market_name'] ?: $top['market_country'];
+        $runnerUps = collect($rows)->slice(1, 2)
+            ->map(fn (array $row) => ($row['market_name'] ?: $row['market_country']) . ' at ' . $this->formatMoney((float) $row['revenue_usd'], $currency))
+            ->values()
+            ->all();
+
+        $answer = "{$topName} has the most revenue in the dashboard window ({$window}) with {$topDisplay}"
+            . " across " . number_format((int) $top['payments_count']) . " payment(s), representing {$share} of normalized market revenue.";
+
+        if ($runnerUps !== []) {
+            $answer .= ' Next: ' . implode(', ', $runnerUps) . '.';
+        }
+
+        $partialFx = collect($markets)->contains(fn (array $market) => (bool) data_get($market, 'current_revenue_normalization_meta.partial'));
+        if ($partialFx) {
+            $answer .= ' Some FX rates are missing, so normalized totals are partial.';
+        }
+
+        return [
+            'answer' => $answer,
+            'structured_answer' => [
+                'type' => 'ranked_revenue',
+                'headline' => "{$topName} leads the selected window",
+                'summary' => $answer,
+                'metrics' => [
+                    ['label' => 'Top market', 'value' => $topName, 'detail' => $top['market_country']],
+                    ['label' => 'Revenue', 'value' => $topDisplay, 'detail' => "{$currency} normalized"],
+                    ['label' => 'Payments', 'value' => number_format((int) $top['payments_count']), 'detail' => $window],
+                    ['label' => 'Share', 'value' => $share, 'detail' => 'of ranked revenue'],
+                ],
+                'bullets' => collect($rows)->take(3)->map(fn (array $row) => [
+                    'label' => '#' . $row['rank'] . ' ' . ($row['market_name'] ?: $row['market_country']),
+                    'value' => $this->formatMoney((float) $row['revenue_usd'], $currency),
+                    'detail' => number_format((int) $row['payments_count']) . ' payment(s)',
+                ])->values()->all(),
+            ],
+            'follow_up_suggestions' => [
+                "Why is {$topName} leading?",
+                'Compare this with the previous 30 days.',
+                'Show the payment count behind this ranking.',
+            ],
+        ];
     }
 
     private function summarizeData(User $user, string $question, array $rows, array $columns): string
@@ -322,6 +477,16 @@ class AiInsightsController extends Controller
         $meta = [];
 
         foreach ($columns as $column) {
+            if ($this->isPercentColumn($column)) {
+                $meta[$column] = ['type' => 'percent', 'currency' => null];
+                continue;
+            }
+
+            if ($this->isCountColumn($column)) {
+                $meta[$column] = ['type' => 'number', 'currency' => null];
+                continue;
+            }
+
             $meta[$column] = [
                 'type' => $this->isMoneyColumn($column) ? 'money' : 'text',
                 'currency' => $this->isMoneyColumn($column) ? $this->settings->reportingCurrency() : null,
@@ -351,6 +516,20 @@ class AiInsightsController extends Controller
             'price',
             'payment',
         ]) && !Str::contains($name, ['count', 'payments_count']);
+    }
+
+    private function isPercentColumn(string $column): bool
+    {
+        $name = strtolower($column);
+
+        return Str::contains($name, ['percent', 'percentage', 'share']);
+    }
+
+    private function isCountColumn(string $column): bool
+    {
+        $name = strtolower($column);
+
+        return Str::endsWith($name, ['_count']) || in_array($name, ['count', 'rank'], true);
     }
 
     // ---------------------------------------------------------------------
@@ -442,6 +621,122 @@ class AiInsightsController extends Controller
 
         // sub_admin (and any other allowed non-admin) is restricted to their markets.
         return $user->assignedMarketIds();
+    }
+
+    /**
+     * Dashboard metric answers should honor the visible widget scope. Admin/CEO
+     * can ask org-wide or selected-market questions; sub-admins stay restricted
+     * to their assigned markets even if the client sends a different platform id.
+     *
+     * @return int[]|null
+     */
+    private function resolveDashboardScope(User $user, array $context): ?array
+    {
+        $baseScope = $this->resolveScope($user);
+        $requestedPlatformId = isset($context['platform_id']) ? (int) $context['platform_id'] : 0;
+
+        if ($requestedPlatformId > 0) {
+            if (is_array($baseScope) && !in_array($requestedPlatformId, $baseScope, true)) {
+                return [];
+            }
+
+            return [$requestedPlatformId];
+        }
+
+        return $baseScope;
+    }
+
+    /**
+     * @return array{0: Carbon, 1: Carbon}
+     */
+    private function resolveDashboardWindow(array $context): array
+    {
+        if (!empty($context['from']) && !empty($context['to'])) {
+            $from = Carbon::parse((string) $context['from'])->startOfDay();
+            $to = Carbon::parse((string) $context['to'])->endOfDay();
+
+            if ($from->lte($to)) {
+                return [$from, $to];
+            }
+        }
+
+        return [Carbon::now()->subDays(29)->startOfDay(), Carbon::now()->endOfDay()];
+    }
+
+    private function resolveContextCurrency(array $context): string
+    {
+        $currency = strtoupper(trim((string) ($context['reporting_currency'] ?? $this->settings->reportingCurrency())));
+
+        return $currency !== '' ? $currency : $this->settings->reportingCurrency();
+    }
+
+    private function isDashboardRevenueQuestion(string $question): bool
+    {
+        $text = mb_strtolower($question);
+
+        $mentionsRevenue = Str::contains($text, ['revenue', 'sales', 'collected', 'payments']);
+        $mentionsMarket = Str::contains($text, ['market', 'markets', 'country', 'countries', 'platform', 'platforms']);
+        $asksRanking = Str::contains($text, [
+            'most',
+            'top',
+            'highest',
+            'best',
+            'performing',
+            'leader',
+            'rank',
+            'ranking',
+        ]);
+
+        return $mentionsRevenue && $mentionsMarket && $asksRanking;
+    }
+
+    private function formatWindowLabel(Carbon $from, Carbon $to): string
+    {
+        return $from->toDateString() === $to->toDateString()
+            ? $from->toDateString()
+            : $from->toDateString() . ' to ' . $to->toDateString();
+    }
+
+    private function formatMoney(float $amount, string $currency): string
+    {
+        return strtoupper($currency) . ' ' . number_format($amount, 2);
+    }
+
+    private function followUpSuggestions(string $question, string $source, array $rows): array
+    {
+        if ($rows !== [] && $this->isDashboardRevenueQuestion($question)) {
+            $first = $rows[0];
+            $market = (string) ($first['market_name'] ?? $first['market_country'] ?? 'the leading market');
+
+            return [
+                "Why is {$market} leading?",
+                'Compare this with the previous 30 days.',
+                'Show the payment count behind this ranking.',
+            ];
+        }
+
+        return match ($source) {
+            'sales_data' => [
+                'Which agent should we focus on next?',
+                'Show the same result by market.',
+                'Which sales rows changed most recently?',
+            ],
+            'project_status' => [
+                'What looks risky in those commits?',
+                'Which changes are pending deployment?',
+                'Show related billing or payment commits.',
+            ],
+            'hybrid' => [
+                'Separate the business and project evidence.',
+                'What should we verify next?',
+                'Which commits could explain the business trend?',
+            ],
+            default => [
+                'Show the top 10 rows for the same window.',
+                'Compare this with the previous 30 days.',
+                'Break this down by market.',
+            ],
+        };
     }
 
     private function looksLikeMutation(string $question): bool

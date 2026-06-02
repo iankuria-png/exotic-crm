@@ -137,6 +137,13 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
         || null;
     const window = summaryQuery.data?.window || trendQuery.data?.window;
     const normalizationMeta = summaryQuery.data?.metrics?.collected_revenue?.value?.normalization_meta;
+    const aiInsightContext = useMemo(() => ({
+        ...(window?.from ? { from: window.from } : {}),
+        ...(window?.to ? { to: window.to } : {}),
+        ...(platformFilter ? { platform_id: Number(platformFilter) } : {}),
+        currency_mode: reporting.displayMode,
+        reporting_currency: reporting.targetCurrency,
+    }), [platformFilter, reporting.displayMode, reporting.targetCurrency, window?.from, window?.to]);
 
     const handleMarketScope = (marketId) => {
         setPlatformFilter(marketId ? String(marketId) : null);
@@ -214,7 +221,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onAgentClick={setFocusedAgentId}
             />
 
-            <AiInsightsPanel user={user} />
+            <AiInsightsPanel user={user} context={aiInsightContext} />
 
             <section className="grid gap-4 2xl:grid-cols-2">
                 <div>

@@ -121,6 +121,98 @@ class MetricsSnapshotService
             ->all();
     }
 
+    /**
+     * Dashboard-aligned market ranking used by Talk to Your Data for questions
+     * such as "which country has the most revenue". This intentionally mirrors
+     * the Top Performing Markets widget: reportable payments, wallet top-ups
+     * excluded, payments.created_at windowing, and ReportingCurrencyService FX
+     * normalization over grouped event rows.
+     *
+     * @param  int[]|null  $platformIds  null = org-wide, [] = no accessible markets
+     */
+    public function topMarketsForDashboardWindow(
+        ?array $platformIds,
+        Carbon $from,
+        Carbon $to,
+        ?string $targetCurrency = null,
+        int $limit = 25
+    ): array {
+        if ($platformIds !== null) {
+            $platformIds = collect($platformIds)
+                ->map(fn ($id) => (int) $id)
+                ->filter(fn (int $id) => $id > 0)
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($platformIds === []) {
+                return [];
+            }
+        }
+
+        $targetCurrency = $this->reportingCurrencyService->resolveTargetCurrency($targetCurrency);
+        $from = $from->copy()->startOfDay();
+        $to = $to->copy()->endOfDay();
+
+        $rows = Payment::query()
+            ->leftJoin('platforms', 'platforms.id', '=', 'payments.platform_id')
+            ->reportableSuccessful()
+            ->excludingWalletTopups()
+            ->whereBetween('payments.created_at', [$from, $to])
+            ->when($platformIds !== null, fn (Builder $query) => $query->whereIn('payments.platform_id', $platformIds))
+            ->select(DB::raw($this->dateExpression() . ' as event_date'))
+            ->selectRaw('payments.platform_id as platform_id')
+            ->selectRaw('platforms.country as platform_country')
+            ->selectRaw('platforms.name as platform_name')
+            ->selectRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}') as currency")
+            ->selectRaw('SUM(payments.amount) as amount')
+            ->selectRaw('COUNT(payments.id) as payments_count')
+            ->groupByRaw($this->dateExpression())
+            ->groupBy('payments.platform_id')
+            ->groupBy('platforms.country')
+            ->groupBy('platforms.name')
+            ->groupByRaw("COALESCE(payments.currency, platforms.currency_code, '{$targetCurrency}')")
+            ->get();
+
+        $ranked = $rows
+            ->groupBy(fn ($row) => (int) $row->platform_id)
+            ->map(function (Collection $group) use ($targetCurrency) {
+                $normalized = $this->reportingCurrencyService->normalizeEventRows($group, $targetCurrency, false);
+                $breakdown = $group
+                    ->groupBy(fn ($row) => strtoupper((string) $row->currency))
+                    ->map(fn (Collection $currencyRows) => round((float) $currencyRows->sum(fn ($row) => (float) $row->amount), 2))
+                    ->sortKeys()
+                    ->all();
+
+                return [
+                    'platform_id' => (int) $group->first()->platform_id,
+                    'name' => (string) ($group->first()->platform_name ?: 'Unassigned market'),
+                    'country' => (string) ($group->first()->platform_country ?: ''),
+                    'current_revenue_breakdown' => $breakdown,
+                    'current_revenue_normalized' => $normalized['normalized_total'],
+                    'current_revenue_normalized_display' => $normalized['normalized_display'],
+                    'current_revenue_normalization_meta' => $normalized['normalization_meta'],
+                    'normalized_currency' => $normalized['normalized_currency'] ?? $targetCurrency,
+                    'payments_count' => (int) $group->sum(fn ($row) => (int) $row->payments_count),
+                ];
+            })
+            ->sortByDesc(fn (array $row) => (float) ($row['current_revenue_normalized'] ?? array_sum($row['current_revenue_breakdown'] ?? [])))
+            ->values();
+
+        $total = (float) $ranked->sum(fn (array $row) => (float) ($row['current_revenue_normalized'] ?? 0));
+
+        return $ranked
+            ->take(max(1, $limit))
+            ->map(function (array $row, int $index) use ($total) {
+                $value = (float) ($row['current_revenue_normalized'] ?? 0);
+                $row['rank'] = $index + 1;
+                $row['share_percent'] = $total > 0 ? round(($value / $total) * 100, 1) : null;
+
+                return $row;
+            })
+            ->all();
+    }
+
     private function revenue(Carbon $from, Carbon $to, ?array $platformIds, string $targetCurrency): array
     {
         $query = $this->basePayments($from, $to, $platformIds);
@@ -281,4 +373,5 @@ class MetricsSnapshotService
             ? 'date(COALESCE(payments.completed_at, payments.created_at))'
             : 'DATE(COALESCE(payments.completed_at, payments.created_at))';
     }
+
 }

@@ -21,8 +21,8 @@ const SOURCE_DESCRIPTIONS = {
 
 const SUGGESTIONS = {
     business_data: [
-        'Which markets had the most revenue this month?',
-        'Show revenue by market for the last 30 days.',
+        'Which market has the most revenue in this dashboard window?',
+        'Show revenue by market for the selected window.',
         'Which countries are growing fastest?',
     ],
     sales_data: [
@@ -48,7 +48,7 @@ function canUseAiInsights(user) {
     return !!user && (user.is_ceo || ['admin', 'sub_admin'].includes(user.role));
 }
 
-export default function AiInsightsPanel({ user }) {
+export default function AiInsightsPanel({ user, context = null }) {
     const [question, setQuestion] = useState('');
     const [source, setSource] = useState('auto');
     const [answer, setAnswer] = useState(null);
@@ -100,6 +100,7 @@ export default function AiInsightsPanel({ user }) {
         askMutation.mutate({
             question: trimmed,
             ...(source !== 'auto' ? { source } : {}),
+            ...(context ? { context } : {}),
         });
     };
 
@@ -234,6 +235,8 @@ export default function AiInsightsPanel({ user }) {
                                 activeSource={activeSource}
                                 showGeneratedSql={!!health.show_generated_sql}
                                 currency={reportingCurrency}
+                                onAskFollowUp={submit}
+                                isAsking={askMutation.isPending}
                             />
                         ) : (
                             <AiStateBlock
@@ -257,12 +260,13 @@ function StatusBadge({ ok, children }) {
     );
 }
 
-function AnswerPanel({ answer, activeSource, showGeneratedSql, currency }) {
+function AnswerPanel({ answer, activeSource, showGeneratedSql, currency, onAskFollowUp, isAsking }) {
     const isOk = answer.status === 'ok';
     const rows = Array.isArray(answer.rows) ? answer.rows : [];
     const columns = Array.isArray(answer.columns) ? answer.columns : [];
     const columnMeta = answer.column_meta || {};
     const statusCopy = statusMessage(answer);
+    const cleanedAnswer = cleanText(answer.answer || '');
 
     return (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -290,9 +294,7 @@ function AnswerPanel({ answer, activeSource, showGeneratedSql, currency }) {
 
             <div className="space-y-4 p-4">
                 {isOk ? (
-                    <div className="border-l-4 border-teal-500 bg-teal-50/70 px-4 py-3">
-                        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-900">{answer.answer || 'No narrative answer was returned.'}</p>
-                    </div>
+                    <AnswerSummary answer={answer} fallbackText={cleanedAnswer || 'No narrative answer was returned.'} />
                 ) : (
                     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                         <p className="font-semibold">{statusCopy.title}</p>
@@ -322,6 +324,7 @@ function AnswerPanel({ answer, activeSource, showGeneratedSql, currency }) {
                             </pre>
                         ) : null}
                         {answer.project ? <ProjectEvidence project={answer.project} /> : null}
+                        {answer.evidence_source ? <EvidenceSource source={answer.evidence_source} /> : null}
                         {answer.chart ? (
                             <p className="text-xs text-slate-500">
                                 Chart suggestion: {answer.chart.type} using {answer.chart.x} and {answer.chart.y}.
@@ -332,6 +335,140 @@ function AnswerPanel({ answer, activeSource, showGeneratedSql, currency }) {
                         ) : null}
                     </div>
                 </details>
+
+                {isOk ? (
+                    <FollowUpComposer
+                        suggestions={answer.follow_up_suggestions}
+                        onAsk={onAskFollowUp}
+                        disabled={isAsking}
+                    />
+                ) : null}
+            </div>
+        </div>
+    );
+}
+
+function AnswerSummary({ answer, fallbackText }) {
+    const structured = answer.structured_answer || null;
+
+    if (!structured) {
+        return <NarrativeBlock text={fallbackText} />;
+    }
+
+    const metrics = Array.isArray(structured.metrics) ? structured.metrics : [];
+    const bullets = Array.isArray(structured.bullets) ? structured.bullets : [];
+
+    return (
+        <div className="space-y-3">
+            <div className="border-l-4 border-teal-500 bg-teal-50/70 px-4 py-3">
+                <p className="text-base font-semibold text-slate-950">{cleanText(structured.headline || 'Answer')}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-700">{cleanText(structured.summary || fallbackText)}</p>
+            </div>
+
+            {metrics.length > 0 ? (
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                    {metrics.map((metric, index) => (
+                        <div key={`${metric.label || index}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p className="text-xs font-semibold uppercase text-slate-500">{metric.label || 'Metric'}</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-950">{cleanText(metric.value || '-')}</p>
+                            {metric.detail ? <p className="mt-0.5 text-xs text-slate-500">{cleanText(metric.detail)}</p> : null}
+                        </div>
+                    ))}
+                </div>
+            ) : null}
+
+            {bullets.length > 0 ? (
+                <div className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white">
+                    {bullets.map((item, index) => (
+                        <div key={`${item.label || index}`} className="grid gap-2 px-3 py-2 sm:grid-cols-[1fr_auto] sm:items-center">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-800">{cleanText(item.label || `#${index + 1}`)}</p>
+                                {item.detail ? <p className="mt-0.5 text-xs text-slate-500">{cleanText(item.detail)}</p> : null}
+                            </div>
+                            <p className="crm-mono text-sm font-semibold text-slate-950">{cleanText(item.value || '')}</p>
+                        </div>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function NarrativeBlock({ text }) {
+    const cleaned = cleanText(text);
+    const parts = cleaned
+        .split(/(?<=[.!?])\s+/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+    const lead = parts[0] || cleaned;
+    const rest = parts.slice(1, 4);
+
+    return (
+        <div className="border-l-4 border-teal-500 bg-teal-50/70 px-4 py-3">
+            <p className="text-sm leading-6 text-slate-900">{lead}</p>
+            {rest.length > 0 ? (
+                <ul className="mt-2 space-y-1 text-sm leading-6 text-slate-700">
+                    {rest.map((part) => <li key={part}>{part}</li>)}
+                </ul>
+            ) : null}
+        </div>
+    );
+}
+
+function FollowUpComposer({ suggestions, onAsk, disabled }) {
+    const [draft, setDraft] = useState('');
+    const prompts = Array.isArray(suggestions) && suggestions.length > 0
+        ? suggestions.slice(0, 3)
+        : ['Compare this with the previous 30 days.', 'Show the top 10 rows.', 'Break this down by market.'];
+
+    const submit = (prompt = draft) => {
+        const text = String(prompt || '').trim();
+        if (!text || disabled) return;
+        setDraft('');
+        onAsk?.(text);
+    };
+
+    return (
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-end">
+                <div className="min-w-0 flex-1">
+                    <label htmlFor="ai-follow-up-question" className="text-xs font-semibold uppercase text-slate-500">Follow up</label>
+                    <input
+                        id="ai-follow-up-question"
+                        type="text"
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                                event.preventDefault();
+                                submit();
+                            }
+                        }}
+                        placeholder="Ask a follow-up using the same dashboard context."
+                        className="mt-1 min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                    />
+                </div>
+                <button
+                    type="button"
+                    onClick={() => submit()}
+                    disabled={disabled || draft.trim().length < 3}
+                    className="min-h-11 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Ask follow-up
+                </button>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+                {prompts.map((prompt) => (
+                    <button
+                        key={prompt}
+                        type="button"
+                        onClick={() => submit(prompt)}
+                        disabled={disabled}
+                        className="min-h-11 rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-xs font-semibold text-slate-600 transition hover:border-teal-200 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
+                    >
+                        {prompt}
+                    </button>
+                ))}
             </div>
         </div>
     );
@@ -405,6 +542,10 @@ function formatColumnLabel(column) {
 function formatCellValue(value, column, columnMeta = {}, currency = 'USD') {
     if (value === null || value === undefined || value === '') {
         return '-';
+    }
+
+    if (columnMeta[column]?.type === 'percent' && isNumericValue(value)) {
+        return `${Number(value).toFixed(1)}%`;
     }
 
     if (isMoneyColumn(column, columnMeta) && isNumericValue(value)) {
@@ -509,6 +650,30 @@ function ProjectEvidence({ project }) {
             ) : null}
         </div>
     );
+}
+
+function EvidenceSource({ source }) {
+    const window = source?.window;
+    const windowLabel = window?.from && window?.to
+        ? `${window.from} to ${window.to}`
+        : null;
+
+    return (
+        <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+            <p className="font-semibold text-slate-800">{source.label || 'Evidence source'}</p>
+            <p className="mt-1 text-xs text-slate-500">
+                {[source.method, windowLabel].filter(Boolean).join(' / ')}
+            </p>
+        </div>
+    );
+}
+
+function cleanText(value) {
+    return String(value || '')
+        .replace(/\*\*/g, '')
+        .replace(/__/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 function CopyButton({ text }) {

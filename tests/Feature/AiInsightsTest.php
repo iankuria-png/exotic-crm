@@ -7,6 +7,7 @@ use App\Models\Deal;
 use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\Product;
+use App\Models\ReportingFxRate;
 use App\Models\User;
 use App\Services\Ai\ProjectIntelligenceService;
 use App\Services\Seo\Llm\Adapters\DeepSeekAdapter;
@@ -74,6 +75,62 @@ class AiInsightsTest extends TestCase
         $this->assertStringContainsString('Summary from rows', $response->json('answer'));
         $this->assertSame(2, AiInteraction::where('feature', 'like', 'insights%')->count());
         $this->assertNotNull(AiInteraction::where('feature', 'insights_sql')->first()?->generated_sql);
+    }
+
+    public function test_market_revenue_question_uses_dashboard_fx_normalized_ranking(): void
+    {
+        config(['services.reporting_fx.enabled' => true]);
+        Carbon::setTestNow(Carbon::parse('2026-05-30 12:00:00'));
+        $this->bindFailingAi();
+
+        [$ghana, $ghanaProduct] = $this->market('Ghana', 'Ghana', 'GHS');
+        [$kenya, $kenyaProduct] = $this->market('Kenya', 'Kenya', 'KES');
+
+        $this->rate('GHS', '2026-05-10', 0.10);
+        $this->rate('KES', '2026-05-10', 0.01);
+        $this->rate('GHS', '2026-06-01', 0.10);
+        $this->rate('KES', '2026-06-01', 0.01);
+
+        $this->payment($ghana, $ghanaProduct, [
+            'amount' => 120000,
+            'currency' => 'GHS',
+            'created_at' => '2026-05-10 09:00:00',
+            'completed_at' => '2026-06-01 09:00:00',
+        ]);
+        $this->payment($kenya, $kenyaProduct, [
+            'amount' => 500000,
+            'currency' => 'KES',
+            'created_at' => '2026-05-10 10:00:00',
+            'completed_at' => '2026-06-01 10:00:00',
+        ]);
+
+        Sanctum::actingAs($this->user(['role' => 'admin']));
+
+        $dashboard = $this->getJson('/api/crm/dashboard/country-revenue?from=2026-05-01&to=2026-05-30&currency_mode=flat&reporting_currency=USD')
+            ->assertOk();
+
+        $response = $this->postJson('/api/crm/ai/ask', [
+            'question' => 'What country has the most revenue this month?',
+            'source' => 'business_data',
+            'context' => [
+                'from' => '2026-05-01',
+                'to' => '2026-05-30',
+                'currency_mode' => 'flat',
+                'reporting_currency' => 'USD',
+            ],
+        ])->assertOk();
+
+        $response->assertJsonPath('status', 'ok')
+            ->assertJsonPath('source', 'business_data')
+            ->assertJsonPath('rows.0.market_name', $dashboard->json('0.name'))
+            ->assertJsonPath('rows.0.revenue_usd', $dashboard->json('0.current_revenue_normalized'))
+            ->assertJsonPath('structured_answer.metrics.0.value', $dashboard->json('0.name'));
+
+        $this->assertStringContainsString($dashboard->json('0.name'), $response->json('answer'));
+        $this->assertSame(0, AiInteraction::where('feature', 'insights_sql')->count());
+        $this->assertSame(1, AiInteraction::where('feature', 'insights_dashboard_metric')->count());
+
+        Carbon::setTestNow();
     }
 
     public function test_invalid_json_sql_payload_is_rejected(): void
@@ -419,16 +476,28 @@ class AiInsightsTest extends TestCase
     }
 
     /** @return array{0: Platform, 1: Product} */
-    private function market(string $name = 'Market', string $country = 'Kenya'): array
+    private function market(string $name = 'Market', string $country = 'Kenya', string $currency = 'USD'): array
     {
         $platform = Platform::factory()->create([
             'name' => $name . ' ' . Str::random(5),
             'country' => $country,
-            'currency_code' => 'USD',
+            'currency_code' => $currency,
         ]);
-        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => 'USD']);
+        $product = Product::factory()->create(['platform_id' => $platform->id, 'currency' => $currency]);
 
         return [$platform, $product];
+    }
+
+    private function rate(string $source, string $date, float $rate): void
+    {
+        ReportingFxRate::query()->create([
+            'provider' => 'manual',
+            'source_currency' => $source,
+            'target_currency' => 'USD',
+            'rate_date' => $date,
+            'rate' => $rate,
+            'fetched_at' => now(),
+        ]);
     }
 
     private function payment(Platform $platform, Product $product, array $overrides = []): Payment
