@@ -63,9 +63,12 @@ class AiInsightsTest extends TestCase
 
         $response->assertJsonPath('status', 'ok')
             ->assertJsonPath('source', 'business_data')
+            ->assertJsonPath('reporting_currency', 'USD')
             ->assertJsonPath('row_count', 1)
             ->assertJsonPath('rows.0.platform_id', $platform->id)
-            ->assertJsonPath('columns.0', 'platform_id');
+            ->assertJsonPath('columns.0', 'platform_id')
+            ->assertJsonPath('column_meta.revenue_usd.type', 'money')
+            ->assertJsonPath('column_meta.revenue_usd.currency', 'USD');
 
         $this->assertStringContainsString('vw_market_revenue', $response->json('generated_sql'));
         $this->assertStringContainsString('Summary from rows', $response->json('answer'));

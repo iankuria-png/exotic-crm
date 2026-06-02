@@ -11,6 +11,14 @@ const SOURCE_LABELS = {
     hybrid: 'Hybrid',
 };
 
+const SOURCE_DESCRIPTIONS = {
+    auto: 'Route by question',
+    business_data: 'Revenue, markets, payments',
+    sales_data: 'Agents, targets, pipeline',
+    project_status: 'Commits and deploys',
+    hybrid: 'Business plus project evidence',
+};
+
 const SUGGESTIONS = {
     business_data: [
         'Which markets had the most revenue this month?',
@@ -71,6 +79,7 @@ export default function AiInsightsPanel({ user }) {
 
     const health = healthQuery.data || {};
     const sources = health.sources || {};
+    const reportingCurrency = answer?.reporting_currency || health.reporting_currency || 'USD';
     const activeSource = answer?.source || (source === 'auto' ? 'auto' : source);
     const visibleSuggestions = useMemo(() => {
         const key = source === 'auto' ? 'business_data' : source;
@@ -102,21 +111,22 @@ export default function AiInsightsPanel({ user }) {
     };
 
     return (
-        <section className="rounded-lg border border-slate-200 bg-white shadow-sm" aria-label="Talk to Your Data">
-            <div className="border-b border-slate-200 px-4 py-3">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Talk to Your Data</p>
-                        <h2 className="mt-1 text-lg font-semibold text-slate-950">Ask read-only questions</h2>
-                        <p className="mt-1 max-w-3xl text-sm text-slate-500">
-                            Answers use validated reporting views and read-only project evidence. No actions are executed from chat.
-                        </p>
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm" aria-label="Talk to Your Data">
+            <div className="border-b border-slate-200 bg-slate-50/80 px-4 py-3">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="min-w-0">
+                        <p className="text-xs font-semibold uppercase text-slate-500">AI analyst</p>
+                        <div className="mt-1 flex flex-wrap items-end gap-x-3 gap-y-1">
+                            <h2 className="text-xl font-semibold text-slate-950">Talk to Your Data</h2>
+                            <span className="text-sm font-medium text-slate-500">Reporting in {reportingCurrency}</span>
+                        </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <div className="grid grid-cols-2 gap-2 text-xs sm:flex sm:flex-wrap sm:items-center">
                         <StatusBadge ok={!!health.enabled}>{health.enabled ? 'Enabled' : 'Disabled'}</StatusBadge>
                         <StatusBadge ok={health.scope !== 'empty'}>{health.scope === 'market_scoped' ? 'Market scoped' : 'Org wide'}</StatusBadge>
+                        <StatusBadge ok>{reportingCurrency}</StatusBadge>
                         {health.daily_cost_cap_usd !== undefined ? (
-                            <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-600">
+                            <span className="rounded-md border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600">
                                 ${Number(health.daily_cost_used_usd || 0).toFixed(4)} / ${Number(health.daily_cost_cap_usd || 0).toFixed(2)}
                             </span>
                         ) : null}
@@ -142,8 +152,10 @@ export default function AiInsightsPanel({ user }) {
                     message="Enable Talk to Data in Settings before asking dashboard questions."
                 />
             ) : (
-                <div className="space-y-4 p-4">
-                    <div className="flex flex-wrap gap-2" aria-label="Insight source">
+                <div className="grid gap-4 p-4 xl:grid-cols-[260px_minmax(0,1fr)]">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="Insight source">
+                        <p className="mb-2 text-xs font-semibold uppercase text-slate-500">Source</p>
+                        <div className="grid gap-2">
                         {CHIP_ORDER.map((key) => {
                             const available = sourceAvailable(key);
                             return (
@@ -154,68 +166,83 @@ export default function AiInsightsPanel({ user }) {
                                     disabled={!available}
                                     aria-pressed={source === key}
                                     title={!available ? `${SOURCE_LABELS[key]} is disabled or unavailable` : SOURCE_LABELS[key]}
-                                    className={`min-h-11 rounded-md border px-3 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                                    className={`min-h-11 rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                                         source === key
-                                            ? 'border-teal-300 bg-teal-50 text-teal-800'
-                                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                            ? 'border-teal-300 bg-white text-teal-900 shadow-sm'
+                                            : 'border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white'
                                     } disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400`}
                                 >
-                                    {SOURCE_LABELS[key]}
+                                    <span className="flex items-center justify-between gap-3">
+                                        <span>
+                                            <span className="block text-sm font-semibold">{SOURCE_LABELS[key]}</span>
+                                            <span className="mt-0.5 block text-xs font-medium text-slate-500">{SOURCE_DESCRIPTIONS[key]}</span>
+                                        </span>
+                                        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${available ? 'bg-emerald-400' : 'bg-slate-300'}`} aria-hidden="true" />
+                                    </span>
                                 </button>
                             );
                         })}
+                        </div>
                     </div>
 
-                    <form
-                        className="grid gap-2 lg:grid-cols-[1fr_auto]"
-                        onSubmit={(event) => {
-                            event.preventDefault();
-                            submit();
-                        }}
-                    >
-                        <label className="sr-only" htmlFor="ai-insights-question">Question</label>
-                        <textarea
-                            id="ai-insights-question"
-                            value={question}
-                            onChange={(event) => setQuestion(event.target.value)}
-                            rows={3}
-                            placeholder="Ask about revenue, agent performance, deploy status, or recent commits."
-                            className="min-h-[88px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
-                        />
-                        <button
-                            type="submit"
-                            disabled={askMutation.isPending || question.trim().length < 3}
-                            className="min-h-11 rounded-md bg-teal-600 px-5 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    <div className="min-w-0 space-y-4">
+                        <form
+                            className="rounded-md border border-slate-200 bg-white p-3"
+                            onSubmit={(event) => {
+                                event.preventDefault();
+                                submit();
+                            }}
                         >
-                            {askMutation.isPending ? 'Asking...' : 'Ask'}
-                        </button>
-                    </form>
+                            <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+                                <label className="sr-only" htmlFor="ai-insights-question">Question</label>
+                                <textarea
+                                    id="ai-insights-question"
+                                    value={question}
+                                    onChange={(event) => setQuestion(event.target.value)}
+                                    rows={3}
+                                    placeholder="Ask about revenue, agent performance, deploy status, or recent commits."
+                                    className="min-h-[104px] w-full resize-y rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-800 focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-100"
+                                />
+                                <button
+                                    type="submit"
+                                    disabled={askMutation.isPending || question.trim().length < 3}
+                                    className="min-h-11 rounded-md bg-teal-600 px-6 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-[104px]"
+                                >
+                                    {askMutation.isPending ? 'Asking...' : 'Ask'}
+                                </button>
+                            </div>
+                            <div className="mt-3 grid gap-2 md:grid-cols-3">
+                                {visibleSuggestions.map((prompt) => (
+                                    <button
+                                        key={prompt}
+                                        type="button"
+                                        onClick={() => submit(prompt)}
+                                        disabled={askMutation.isPending}
+                                        className="min-h-11 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs font-semibold text-slate-600 transition hover:border-teal-200 hover:bg-white hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
+                                    >
+                                        {prompt}
+                                    </button>
+                                ))}
+                            </div>
+                        </form>
 
-                    <div className="flex flex-wrap gap-2">
-                        {visibleSuggestions.map((prompt) => (
-                            <button
-                                key={prompt}
-                                type="button"
-                                onClick={() => submit(prompt)}
-                                disabled={askMutation.isPending}
-                                className="min-h-11 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs font-medium text-slate-600 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
-                            >
-                                {prompt}
-                            </button>
-                        ))}
+                        {askMutation.isPending ? (
+                            <AiStateBlock variant="loading" message="Validating sources and gathering evidence..." />
+                        ) : answer ? (
+                            <AnswerPanel
+                                answer={answer}
+                                activeSource={activeSource}
+                                showGeneratedSql={!!health.show_generated_sql}
+                                currency={reportingCurrency}
+                            />
+                        ) : (
+                            <AiStateBlock
+                                variant="empty"
+                                title="No question asked yet"
+                                message="Choose a source or leave Auto selected, then ask a bounded read-only question."
+                            />
+                        )}
                     </div>
-
-                    {askMutation.isPending ? (
-                        <AiStateBlock variant="loading" message="Validating sources and gathering evidence..." />
-                    ) : answer ? (
-                        <AnswerPanel answer={answer} activeSource={activeSource} showGeneratedSql={!!health.show_generated_sql} />
-                    ) : (
-                        <AiStateBlock
-                            variant="empty"
-                            title="No question asked yet"
-                            message="Choose a source or leave Auto selected, then ask a bounded read-only question."
-                        />
-                    )}
                 </div>
             )}
         </section>
@@ -230,32 +257,42 @@ function StatusBadge({ ok, children }) {
     );
 }
 
-function AnswerPanel({ answer, activeSource, showGeneratedSql }) {
+function AnswerPanel({ answer, activeSource, showGeneratedSql, currency }) {
     const isOk = answer.status === 'ok';
     const rows = Array.isArray(answer.rows) ? answer.rows : [];
     const columns = Array.isArray(answer.columns) ? answer.columns : [];
+    const columnMeta = answer.column_meta || {};
     const statusCopy = statusMessage(answer);
 
     return (
-        <div className="rounded-lg border border-slate-200 bg-slate-50/70">
-            <div className="border-b border-slate-200 bg-white px-4 py-3">
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        <p className="text-xs font-semibold uppercase text-slate-500">
                             {SOURCE_LABELS[answer.source || activeSource] || 'Answer'}
                         </p>
-                        <h3 className="mt-1 text-sm font-semibold text-slate-950">{isOk ? 'Answer' : statusCopy.title}</h3>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <h3 className="text-base font-semibold text-slate-950">{isOk ? 'Answer' : statusCopy.title}</h3>
+                            {isOk ? (
+                                <span className="rounded-md bg-white px-2 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                                    {rows.length} row{rows.length === 1 ? '' : 's'} / {currency}
+                                </span>
+                            ) : null}
+                        </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
                         {answer.answer ? <CopyButton text={answer.answer} /> : null}
-                        {rows.length > 0 ? <ExportButton rows={rows} columns={columns} /> : null}
+                        {rows.length > 0 ? <ExportButton rows={rows} columns={columns} columnMeta={columnMeta} currency={currency} /> : null}
                     </div>
                 </div>
             </div>
 
             <div className="space-y-4 p-4">
                 {isOk ? (
-                    <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">{answer.answer || 'No narrative answer was returned.'}</p>
+                    <div className="border-l-4 border-teal-500 bg-teal-50/70 px-4 py-3">
+                        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-900">{answer.answer || 'No narrative answer was returned.'}</p>
+                    </div>
                 ) : (
                     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                         <p className="font-semibold">{statusCopy.title}</p>
@@ -265,7 +302,7 @@ function AnswerPanel({ answer, activeSource, showGeneratedSql }) {
                 )}
 
                 {rows.length > 0 ? (
-                    <ResultTable rows={rows} columns={columns} />
+                    <ResultTable rows={rows} columns={columns} columnMeta={columnMeta} currency={currency} />
                 ) : isOk ? (
                     <AiStateBlock
                         variant="empty"
@@ -274,7 +311,7 @@ function AnswerPanel({ answer, activeSource, showGeneratedSql }) {
                     />
                 ) : null}
 
-                <details className="rounded-md border border-slate-200 bg-white">
+                <details className="rounded-md border border-slate-200 bg-slate-50">
                     <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
                         Evidence
                     </summary>
@@ -315,32 +352,106 @@ function statusMessage(answer) {
     return { title, message };
 }
 
-function ResultTable({ rows, columns }) {
+function ResultTable({ rows, columns, columnMeta, currency }) {
     return (
-        <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
-            <table className="min-w-full text-sm">
-                <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-[0.08em] text-slate-500">
-                        {columns.map((column) => (
-                            <th key={column} className="px-3 py-2 font-semibold">{column}</th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows.slice(0, 25).map((row, index) => (
-                        <tr key={index} className="border-b border-slate-100 last:border-0">
+        <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+            <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                    <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
                             {columns.map((column) => (
-                                <td key={column} className="px-3 py-2 text-slate-700">
-                                    {String(row[column] ?? '')}
-                                </td>
+                                <th
+                                    key={column}
+                                    className={`whitespace-nowrap px-3 py-2 font-semibold ${isNumericColumn(rows, column) ? 'text-right' : 'text-left'}`}
+                                >
+                                    {formatColumnLabel(column)}
+                                </th>
                             ))}
                         </tr>
-                    ))}
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        {rows.slice(0, 25).map((row, index) => (
+                            <tr key={index} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                                {columns.map((column) => (
+                                    <td
+                                        key={column}
+                                        className={`whitespace-nowrap px-3 py-2 text-slate-700 ${isNumericColumn(rows, column) ? 'text-right crm-mono tabular-nums' : ''} ${isMoneyColumn(column, columnMeta) ? 'font-semibold text-slate-900' : ''}`}
+                                    >
+                                        {formatCellValue(row[column], column, columnMeta, currency)}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
             {rows.length > 25 ? <p className="px-3 py-2 text-xs text-slate-500">Showing first 25 rows.</p> : null}
         </div>
     );
+}
+
+function formatColumnLabel(column) {
+    const label = String(column || '')
+        .replaceAll('_', ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+
+    return label
+        .replace(/\bUsd\b/g, 'USD')
+        .replace(/\bId\b/g, 'ID')
+        .replace(/\bMrr\b/g, 'MRR')
+        .replace(/\bArr\b/g, 'ARR');
+}
+
+function formatCellValue(value, column, columnMeta = {}, currency = 'USD') {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+
+    if (isMoneyColumn(column, columnMeta) && isNumericValue(value)) {
+        return new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(Number(value));
+    }
+
+    if (isNumericValue(value)) {
+        const number = Number(value);
+
+        if (Number.isInteger(number)) {
+            return new Intl.NumberFormat('en-US').format(number);
+        }
+
+        return new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+        }).format(number);
+    }
+
+    return String(value);
+}
+
+function isMoneyColumn(column, columnMeta = {}) {
+    if (columnMeta[column]?.type === 'money') {
+        return true;
+    }
+
+    const name = String(column || '').toLowerCase();
+
+    if (name.endsWith('_id') || name.endsWith('_count') || ['id', 'count', 'payments_count'].includes(name)) {
+        return false;
+    }
+
+    return ['revenue', 'amount', 'total', 'cost', 'usd', 'mrr', 'arr', 'ltv', 'price'].some((token) => name.includes(token));
+}
+
+function isNumericValue(value) {
+    return value !== null && value !== '' && !Array.isArray(value) && Number.isFinite(Number(value));
+}
+
+function isNumericColumn(rows, column) {
+    return rows.some((row) => isNumericValue(row?.[column]));
 }
 
 function ProjectEvidence({ project }) {
@@ -359,7 +470,7 @@ function ProjectEvidence({ project }) {
         <div className="space-y-3">
             {commits.length > 0 ? (
                 <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Commits</p>
+                    <p className="text-xs font-semibold uppercase text-slate-500">Commits</p>
                     <ul className="mt-2 divide-y divide-slate-100 rounded-md border border-slate-200 bg-white">
                         {commits.slice(0, 8).map((commit) => (
                             <li key={commit.sha || commit.short_sha} className="px-3 py-2 text-sm">
@@ -385,7 +496,7 @@ function ProjectEvidence({ project }) {
 
             {deployments.length > 0 ? (
                 <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Deployments</p>
+                    <p className="text-xs font-semibold uppercase text-slate-500">Deployments</p>
                     <ul className="mt-2 divide-y divide-slate-100 rounded-md border border-slate-200 bg-white">
                         {deployments.slice(0, 5).map((deployment, index) => (
                             <li key={`${deployment.sha || deployment.short_sha || index}`} className="px-3 py-2 text-sm text-slate-700">
@@ -418,11 +529,11 @@ function CopyButton({ text }) {
     );
 }
 
-function ExportButton({ rows, columns }) {
+function ExportButton({ rows, columns, columnMeta, currency }) {
     const exportCsv = () => {
         const escape = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
-        const csv = [columns.map(escape).join(',')]
-            .concat(rows.map((row) => columns.map((column) => escape(row[column])).join(',')))
+        const csv = [columns.map((column) => escape(formatColumnLabel(column))).join(',')]
+            .concat(rows.map((row) => columns.map((column) => escape(formatCellValue(row[column], column, columnMeta, currency))).join(',')))
             .join('\n');
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
         const url = URL.createObjectURL(blob);

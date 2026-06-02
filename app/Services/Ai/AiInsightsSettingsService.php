@@ -70,6 +70,13 @@ class AiInsightsSettingsService
         return (float) data_get($this->settings(), 'daily_cost_cap_usd', 5.00);
     }
 
+    public function reportingCurrency(): string
+    {
+        $currency = strtoupper(trim((string) data_get($this->settings(), 'reporting_currency', 'USD')));
+
+        return $currency !== '' ? $currency : 'USD';
+    }
+
     public function projectIntelligenceSettings(): array
     {
         return array_replace_recursive(

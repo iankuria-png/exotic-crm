@@ -117,9 +117,11 @@ class AiInsightsController extends Controller
             'status'        => 'ok',
             'source'        => $source,
             'question'      => $question,
+            'reporting_currency' => $this->settings->reportingCurrency(),
             'answer'        => null,
             'rows'          => [],
             'columns'       => [],
+            'column_meta'    => [],
             'row_count'     => 0,
             'generated_sql' => null,
             'chart'         => null,
@@ -204,6 +206,7 @@ class AiInsightsController extends Controller
             'rate_limit_per_minute' => $this->settings->rateLimitPerMinute(),
             'daily_cost_cap_usd' => $this->settings->dailyCostCapUsd(),
             'daily_cost_used_usd'=> $this->dailyCostUsed(),
+            'reporting_currency' => $this->settings->reportingCurrency(),
             'read_connection'    => $readConnection,
             'project_intelligence' => [
                 'enabled' => $this->project->enabled(),
@@ -246,6 +249,7 @@ class AiInsightsController extends Controller
         $payload['generated_sql'] = $validatedSql['sql'];
         $payload['rows']          = $rowArrays;
         $payload['columns']       = $columns;
+        $payload['column_meta']   = $this->columnMeta($columns);
         $payload['row_count']     = count($rowArrays);
         $payload['chart']         = $this->settings->chartSuggestions()
             ? $this->suggestChart($columns, $rowArrays)
@@ -261,11 +265,13 @@ class AiInsightsController extends Controller
             return 'No matching records were found for that question.';
         }
 
-        $preview = array_slice($rows, 0, 30);
+        $preview = array_slice($this->formatRowsForSummary($rows, $columns), 0, 30);
+        $currency = $this->settings->reportingCurrency();
         $system = 'You are a precise analytics summarizer for a sales CRM. You are given a question and the actual '
             . 'rows returned by a read-only SQL query against reporting views (already market-scoped and PII-free). '
             . 'Answer the question in 1-3 sentences using ONLY these rows. Cite concrete figures. Never invent data. '
-            . 'If the rows do not answer the question, say so plainly.';
+            . "If the rows do not answer the question, say so plainly. All monetary values are {$currency}-normalized; "
+            . "format money as {$currency} with exactly 2 decimal places.";
 
         $userMsg = "Question: {$question}\n\nColumns: " . implode(', ', $columns)
             . "\n\nRows (JSON):\n" . json_encode($preview, JSON_UNESCAPED_SLASHES);
@@ -293,6 +299,58 @@ class AiInsightsController extends Controller
             count($rows) === 1 ? '' : 's',
             implode(', ', $columns)
         );
+    }
+
+    private function formatRowsForSummary(array $rows, array $columns): array
+    {
+        $moneyColumns = array_filter($columns, fn ($column) => $this->isMoneyColumn((string) $column));
+        $currency = $this->settings->reportingCurrency();
+
+        return array_map(function (array $row) use ($moneyColumns, $currency) {
+            foreach ($moneyColumns as $column) {
+                if (array_key_exists($column, $row) && is_numeric($row[$column])) {
+                    $row[$column] = $currency . ' ' . number_format((float) $row[$column], 2, '.', ',');
+                }
+            }
+
+            return $row;
+        }, $rows);
+    }
+
+    private function columnMeta(array $columns): array
+    {
+        $meta = [];
+
+        foreach ($columns as $column) {
+            $meta[$column] = [
+                'type' => $this->isMoneyColumn($column) ? 'money' : 'text',
+                'currency' => $this->isMoneyColumn($column) ? $this->settings->reportingCurrency() : null,
+            ];
+        }
+
+        return $meta;
+    }
+
+    private function isMoneyColumn(string $column): bool
+    {
+        $name = strtolower($column);
+
+        if (Str::endsWith($name, ['_id', '_count']) || in_array($name, ['id', 'count', 'payments_count'], true)) {
+            return false;
+        }
+
+        return Str::contains($name, [
+            'revenue',
+            'amount',
+            'total',
+            'cost',
+            'usd',
+            'mrr',
+            'arr',
+            'ltv',
+            'price',
+            'payment',
+        ]) && !Str::contains($name, ['count', 'payments_count']);
     }
 
     // ---------------------------------------------------------------------
@@ -524,11 +582,12 @@ class AiInsightsController extends Controller
         $views = (array) config('ai.reporting_views', []);
         $maxLimit = $this->settings->maxRowLimit();
         $defaultLimit = $this->settings->defaultRowLimit();
+        $currency = $this->settings->reportingCurrency();
 
         $schema = <<<SCHEMA
 You translate a business question into a SINGLE read-only MySQL SELECT statement.
 
-You may ONLY read these reporting views (all amounts are USD-normalized, all rows are PII-free):
+You may ONLY read these reporting views (all monetary amounts are {$currency}-normalized, all rows are PII-free):
 
 - vw_payments_usd(payment_id, platform_id, market_country, source_currency, amount_original, amount_usd, status, payment_date)
 - vw_market_revenue(platform_id, market_name, market_country, revenue_date, revenue_usd, payments_count)
@@ -542,6 +601,8 @@ HARD RULES (a safety validator will reject violations):
 - No INSERT/UPDATE/DELETE/DDL/SET/USE or any non-SELECT keyword.
 - Always include a LIMIT (<= {$maxLimit}; default {$defaultLimit}).
 - ALWAYS include platform_id in the SELECT list.
+- Prefer *_usd amount columns for every money answer; do not use amount_original unless the user explicitly asks for source-currency raw values.
+- Alias derived monetary totals with a *_usd suffix and ROUND monetary expressions to 2 decimals.
 SCHEMA;
 
         if (is_array($scope)) {
