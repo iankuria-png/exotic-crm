@@ -21,6 +21,7 @@ import BulkBioModal from '../components/seo/BulkBioModal';
 import { useAuth } from '../hooks/useAuth';
 import { RETENTION_BEHAVIOR_TAGS, RETENTION_BANDS, retentionBandClasses, retentionBandTone } from '../utils/retention';
 import { proxyImageUrl } from '../utils/imageProxy';
+import { CLIENT_SEGMENTS, CLIENT_SEGMENT_KEYS } from '../utils/clientSegments';
 
 const CSV_ERROR_PREVIEW_LIMIT = 8;
 const DASHBOARD_MARKET_STORAGE_KEY = 'exoticcrm.dashboard.market_filter';
@@ -364,6 +365,7 @@ export default function Clients() {
     const allowedRetentionBands = new Set([...RETENTION_BANDS, 'watch']);
     const allowedBehaviorTags = new Set(RETENTION_BEHAVIOR_TAGS);
     const allowedNewUsersFilters = new Set(['today', '7d', '30d', 'custom']);
+    const allowedClientSegments = new Set(CLIENT_SEGMENT_KEYS);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -452,6 +454,10 @@ export default function Clients() {
     const [createdTo, setCreatedTo] = useState(() => normalizeDateInputValue(searchParams.get('created_to')));
     const [sortOption, setSortOption] = useState(() => resolveInitialSortOption(searchParams));
     const [cityFilter, setCityFilter] = useState(() => (searchParams.get('city') || '').trim());
+    const [segmentFilter, setSegmentFilter] = useState(() => {
+        const requested = (searchParams.get('segment') || '').trim();
+        return allowedClientSegments.has(requested) ? requested : '';
+    });
 
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showCsvModal, setShowCsvModal] = useState(false);
@@ -511,6 +517,7 @@ export default function Clients() {
             signupSourceFilter,
             retentionBandFilter,
             behaviorTagFilter,
+            segmentFilter,
             resolvedCreatedRange.createdFrom,
             resolvedCreatedRange.createdTo,
             sortParams.sort_by,
@@ -533,6 +540,7 @@ export default function Clients() {
                     ...(signupSourceFilter && { signup_source: signupSourceFilter }),
                     ...(retentionBandFilter && { retention_band: retentionBandFilter }),
                     ...(behaviorTagFilter && { behavior_tag: behaviorTagFilter }),
+                    ...(segmentFilter && { segment: segmentFilter }),
                     ...(resolvedCreatedRange.createdFrom && { created_from: resolvedCreatedRange.createdFrom }),
                     ...(resolvedCreatedRange.createdTo && { created_to: resolvedCreatedRange.createdTo }),
                     ...sortParams,
@@ -1092,6 +1100,7 @@ export default function Clients() {
                 with_chat: Number(data.stats.with_chat || 0),
                 retention_watch: Number(data.stats.retention_watch || 0),
                 total: Number(data.stats.total || 0),
+                segments: data.stats.segments || {},
             };
         }
 
@@ -1107,6 +1116,7 @@ export default function Clients() {
             with_chat: rows.filter((row) => Number(row.sb_user_id || 0) > 0).length,
             retention_watch: rows.filter((row) => ['Watchlist', 'Needs Attention', 'Critical'].includes(String(row.retention_insight?.band || row.retentionInsight?.band || ''))).length,
             total: Number(data?.total || rows.length),
+            segments: {},
         };
     }, [data?.stats, data?.total, rows]);
 
@@ -1124,6 +1134,7 @@ export default function Clients() {
             && verifiedFilter === ''
             && onlineFilter === ''
             && newUsersFilter === ''
+            && segmentFilter === ''
         ) return 'active';
 
         if (
@@ -1136,6 +1147,7 @@ export default function Clients() {
             && retentionBandFilter === ''
             && behaviorTagFilter === ''
             && hasChatFilter === ''
+            && segmentFilter === ''
         ) return 'new_users';
 
         if (
@@ -1144,6 +1156,7 @@ export default function Clients() {
             && planFilter === ''
             && onlineFilter === ''
             && newUsersFilter === ''
+            && segmentFilter === ''
         ) return 'verified';
 
         if (
@@ -1154,6 +1167,7 @@ export default function Clients() {
             && onlineFilter === ''
             && newUsersFilter === ''
             && behaviorTagFilter === ''
+            && segmentFilter === ''
         ) return 'retention_watch';
 
         return '';
@@ -1164,6 +1178,7 @@ export default function Clients() {
         onlineFilter,
         planFilter,
         retentionBandFilter,
+        segmentFilter,
         signupSourceFilter,
         statusFilter,
         verifiedFilter,
@@ -1181,6 +1196,7 @@ export default function Clients() {
             setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
+            setSegmentFilter('');
             setPage(1);
             return;
         }
@@ -1192,6 +1208,7 @@ export default function Clients() {
             setNewUsersFilter('');
             setCreatedFrom('');
             setCreatedTo('');
+            setSegmentFilter('');
         } else if (metricKey === 'new_users') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1199,6 +1216,7 @@ export default function Clients() {
             setNewUsersFilter('7d');
             setCreatedFrom('');
             setCreatedTo('');
+            setSegmentFilter('');
         } else if (metricKey === 'verified') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1209,6 +1227,7 @@ export default function Clients() {
             setSignupSourceFilter('');
             setRetentionBandFilter('');
             setBehaviorTagFilter('');
+            setSegmentFilter('');
         } else if (metricKey === 'retention_watch') {
             setStatusFilter('');
             setPlanFilter('');
@@ -1219,9 +1238,15 @@ export default function Clients() {
             setSignupSourceFilter('');
             setRetentionBandFilter('watch');
             setBehaviorTagFilter('');
+            setSegmentFilter('');
         }
 
         setOnlineFilter('');
+        setPage(1);
+    };
+
+    const applySegmentFilter = (segmentKey) => {
+        setSegmentFilter((current) => current === segmentKey ? '' : segmentKey);
         setPage(1);
     };
 
@@ -1238,6 +1263,7 @@ export default function Clients() {
         || signupSourceFilter
         || retentionBandFilter
         || behaviorTagFilter
+        || segmentFilter
         || newUsersFilter
         || createdFrom
         || createdTo
@@ -1576,6 +1602,32 @@ export default function Clients() {
 
             <p className="px-1 text-xs text-slate-500">Click a metric card to segment the table. Click the same card again to clear.</p>
 
+            <section className="flex flex-wrap gap-2 px-1" aria-label="Client lifecycle segments">
+                {CLIENT_SEGMENTS.map((segment) => {
+                    const isActive = segmentFilter === segment.key;
+                    const count = Number(stats.segments?.[segment.key] || 0);
+
+                    return (
+                        <button
+                            key={segment.key}
+                            type="button"
+                            onClick={() => applySegmentFilter(segment.key)}
+                            className={[
+                                'inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500',
+                                isActive
+                                    ? segment.activeClasses
+                                    : `${segment.classes} hover:border-slate-300 hover:bg-white`,
+                            ].join(' ')}
+                        >
+                            <span>{segment.label}</span>
+                            <span className={isActive ? 'crm-mono text-white/85' : 'crm-mono text-slate-500'}>
+                                {count.toLocaleString()}
+                            </span>
+                        </button>
+                    );
+                })}
+            </section>
+
             <section className="crm-filter-row space-y-4" data-tour="clients-filters">
                 <div className="grid gap-3 xl:grid-cols-6">
                     <form onSubmit={handleSearch} className="min-w-0 xl:col-span-2">
@@ -1799,6 +1851,7 @@ export default function Clients() {
                                 setSignupSourceFilter('');
                                 setRetentionBandFilter('');
                                 setBehaviorTagFilter('');
+                                setSegmentFilter('');
                                 setNewUsersFilter('');
                                 setCreatedFrom('');
                                 setCreatedTo('');

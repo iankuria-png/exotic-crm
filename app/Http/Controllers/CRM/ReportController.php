@@ -12,6 +12,7 @@ use App\Models\Payment;
 use App\Models\Platform;
 use App\Models\RenewalRun;
 use App\Services\MarketAuthorizationService;
+use App\Services\ClientFunnelService;
 use App\Services\ReportingCurrencyService;
 use App\Services\ScorecardDataService;
 use App\Services\WpSyncService;
@@ -25,6 +26,7 @@ class ReportController extends Controller
 {
     public function __construct(
         private readonly MarketAuthorizationService $marketAuthorizationService,
+        private readonly ClientFunnelService $clientFunnelService,
         private readonly ReportingCurrencyService $reportingCurrencyService,
         private readonly ScorecardDataService $scorecardDataService
     ) {
@@ -39,6 +41,9 @@ class ReportController extends Controller
             'currency_mode' => 'nullable|in:native,flat',
             'reporting_currency' => 'nullable|string|min:3|max:8',
         ]);
+
+        $hasExplicitFrom = $request->filled('from');
+        $hasExplicitTo = $request->filled('to');
 
         $from = !empty($validated['from'])
             ? Carbon::parse($validated['from'])->startOfDay()
@@ -85,6 +90,12 @@ class ReportController extends Controller
             $leadsQuery->whereIn('platform_id', $platformIds);
             $dealsQuery->whereIn('platform_id', $platformIds);
         }
+
+        $clientFunnelQuery = Client::query()
+            ->when(is_array($platformIds), fn (Builder $builder) => $builder->whereIn('platform_id', $platformIds))
+            ->when($hasExplicitFrom, fn (Builder $builder) => $builder->where('created_at', '>=', $from))
+            ->when($hasExplicitTo, fn (Builder $builder) => $builder->where('created_at', '<=', $to));
+        $clientFunnel = $this->clientFunnelService->build($clientFunnelQuery);
 
         $funnelStageLabels = [
             'new' => 'New',
@@ -389,6 +400,12 @@ class ReportController extends Controller
                 'converted' => (int) $leadFunnel['converted'],
                 'lost' => (int) $leadFunnel['lost'],
             ],
+            'client_funnel_stages' => $clientFunnel['stages'],
+            'client_funnel_totals' => $clientFunnel['totals'],
+            'paid_offpath' => $clientFunnel['annotations']['paid_offpath'],
+            'active_unpaid' => $clientFunnel['annotations']['active_unpaid'],
+            'payment_failed_only' => $clientFunnel['annotations']['payment_failed_only'],
+            'churned' => $clientFunnel['annotations']['churned'],
             'revenue_trend' => $revenueTrendRows,
             'lead_sources' => $leadSources,
             'package_revenue' => $packageRevenue,

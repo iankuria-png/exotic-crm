@@ -17,6 +17,7 @@ use App\Exceptions\ClientCaseClosureException;
 use App\Services\AuditService;
 use App\Services\ClientCaseClosureService;
 use App\Services\ClientDeletionService;
+use App\Services\ClientSegmentService;
 use App\Services\ClientSubscriptionActionResolver;
 use App\Services\ClientSubscriptionDeactivationService;
 use App\Services\ClientWpLinkRepairService;
@@ -73,11 +74,16 @@ class ClientController extends Controller
         private readonly ClientProfileUrlSearchService $clientProfileUrlSearchService,
         private readonly ClientProfileImageService $clientProfileImageService,
         private readonly ClientCaseClosureService $clientCaseClosureService,
+        private readonly ClientSegmentService $clientSegmentService,
     ) {
     }
 
     public function index(Request $request)
     {
+        $validated = $request->validate([
+            'segment' => 'nullable|string|in:' . implode(',', ClientSegmentService::keys()),
+        ]);
+
         $requestedPlatformId = $this->marketAuthorizationService->ensureRequestedPlatformIsAccessible(
             $request,
             'platform_id',
@@ -223,6 +229,13 @@ class ClientController extends Controller
         }
 
         $statsQuery = clone $query;
+        $segmentCounts = $this->clientSegmentService->segmentCounts(clone $statsQuery);
+
+        $segment = trim((string) ($validated['segment'] ?? ''));
+        if ($segment !== '') {
+            $this->clientSegmentService->applySegment($query, $segment);
+        }
+
         $premiumStatsQuery = clone $statsQuery;
         $newUsersStatsQuery = clone $statsQuery;
         $this->applyCanonicalPlanFilter($premiumStatsQuery, 'premium');
@@ -252,6 +265,7 @@ class ClientController extends Controller
             'retention_watch' => (clone $statsQuery)->whereHas('retentionInsight', function ($builder) {
                 $builder->whereIn('band', ClientRetentionInsightService::WATCH_BANDS);
             })->count(),
+            'segments' => $segmentCounts,
             'closed_recent' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(30))->count(),
             'closed_recent_7d' => (clone $closedStatsBase)->closed()->where('closed_at', '>=', now()->subDays(7))->count(),
             'purging_soon' => (clone $closedStatsBase)->closed()->whereNotNull('purge_after')->where('purge_after', '<=', now()->addDays(7))->count(),

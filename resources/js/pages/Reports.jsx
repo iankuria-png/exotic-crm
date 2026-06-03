@@ -158,8 +158,8 @@ function FunnelFlow({ stages, totals }) {
             })}
             <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 sm:grid-cols-3">
                 <p><span className="font-semibold">Total:</span> {asNumber(totals?.total).toLocaleString()}</p>
-                <p><span className="font-semibold">Workable:</span> {asNumber(totals?.workable).toLocaleString()}</p>
-                <p><span className="font-semibold">Converted:</span> {asNumber(totals?.converted).toLocaleString()}</p>
+                <p><span className="font-semibold">Paid:</span> {asNumber(totals?.paid).toLocaleString()}</p>
+                <p><span className="font-semibold">Retained:</span> {asNumber(totals?.retained).toLocaleString()}</p>
             </div>
         </div>
     );
@@ -334,14 +334,14 @@ export default function Reports() {
 
         return reportCurrency;
     }, [kpis.total_revenue_breakdown, kpis.revenue_mtd_breakdown, reportCurrency]);
-    const funnel = data?.lead_funnel || {};
-    const funnelStages = (data?.lead_funnel_stages || []).map((stage) => ({
+    const leadFunnel = data?.lead_funnel || {};
+    const funnelStages = (data?.client_funnel_stages || []).map((stage) => ({
         ...stage,
         count: asNumber(stage.count),
     }));
-    const funnelTotals = data?.lead_funnel_totals || {};
+    const funnelTotals = data?.client_funnel_totals || {};
 
-    const conversionRate = kpis.conversion_rate ?? percent(asNumber(funnel.converted), Object.values(funnel).reduce((sum, value) => sum + asNumber(value), 0));
+    const conversionRate = kpis.conversion_rate ?? percent(asNumber(leadFunnel.converted), Object.values(leadFunnel).reduce((sum, value) => sum + asNumber(value), 0));
     const renewalRate = kpis.renewal_rate ?? 0;
 
     // Detect mixed-currency scope from the report-wide revenue breakdown.
@@ -564,11 +564,22 @@ export default function Reports() {
 
                     <section className="grid gap-4 xl:grid-cols-12">
                         <div className="space-y-4 xl:col-span-6">
-                            <ReportPanel title="Sales Funnel" subtitle="Lead progression and drop-off through the pipeline">
+                            <ReportPanel title="Customer funnel" subtitle="Where signups drop off on the way to paying & staying.">
                                 {isLoading ? <p className="text-sm text-slate-500">Loading funnel data...</p> : (
                                     funnelStages.length > 0
-                                        ? <FunnelFlow stages={funnelStages} totals={funnelTotals} />
-                                        : <InsightEmptyState title="No funnel activity" message="No leads were captured in this reporting window." />
+                                        ? (
+                                            <div className="space-y-3">
+                                                <FunnelFlow stages={funnelStages} totals={funnelTotals} />
+                                                <p className="text-xs text-slate-500">
+                                                    {asNumber(data?.payment_failed_only).toLocaleString()} attempted but never completed payment
+                                                    {' · '}
+                                                    {asNumber(data?.churned).toLocaleString()} paid then churned
+                                                    {' · '}
+                                                    {asNumber(data?.paid_offpath).toLocaleString()} paid without completing their profile
+                                                </p>
+                                            </div>
+                                        )
+                                        : <InsightEmptyState title="No funnel activity" message="No client signups were captured in this reporting window." />
                                 )}
                             </ReportPanel>
 
