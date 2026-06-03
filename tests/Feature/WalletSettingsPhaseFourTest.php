@@ -125,6 +125,7 @@ class WalletSettingsPhaseFourTest extends TestCase
             'enabled' => true,
             'mode_override' => 'sandbox',
             'currency_code' => 'GHS',
+            'min_single_topup' => '250.00',
             'max_single_topup' => '75000.00',
             'max_wallet_balance' => '250000.00',
             'topup_presets' => ['500.00', '1000.00', '2500.00'],
@@ -278,6 +279,7 @@ class WalletSettingsPhaseFourTest extends TestCase
             'mode_override' => 'sandbox',
             'currency_code' => 'KES',
             'multi_currency_wallet_enabled' => false,
+            'min_single_topup' => '250.00',
             'max_single_topup' => '75000.00',
             'max_wallet_balance' => '250000.00',
             'topup_presets' => ['500.00', '1000.00', '2500.00'],
@@ -296,6 +298,8 @@ class WalletSettingsPhaseFourTest extends TestCase
             ->assertJsonPath('wallet.enabled', true)
             ->assertJsonPath('wallet.effective_mode', 'sandbox')
             ->assertJsonPath('wallet.providers.mpesa_stk.enabled', true)
+            ->assertJsonPath('wallet.min_single_topup', '250.00')
+            ->assertJsonPath('wallet.limits_by_currency.KES.min_single_topup', '250.00')
             ->assertJsonPath('wallet.topup_presets.2', '2500.00')
             ->assertJsonPath('wallet_config_sync.status', 'synced')
             ->assertJsonPath('wallet_credentials_sync.status', 'synced')

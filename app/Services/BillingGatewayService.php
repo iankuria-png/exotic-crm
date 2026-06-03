@@ -1173,6 +1173,10 @@ class BillingGatewayService
         $currencyLimits = is_array($limitsByCurrency[$currency] ?? null) ? $limitsByCurrency[$currency] : [];
         $effectiveCurrencies = $client->platform?->effectiveCurrencies() ?? [];
         $singleCurrencyFallback = count($effectiveCurrencies) === 1;
+        $minSingleTopup = round((float) (
+            $currencyLimits['min_single_topup']
+            ?? ($singleCurrencyFallback ? ($wallet['min_single_topup'] ?? 0) : 0)
+        ), 2);
         $maxSingleTopup = round((float) (
             $currencyLimits['max_single_topup']
             ?? ($singleCurrencyFallback ? ($wallet['max_single_topup'] ?? 0) : 0)
@@ -1183,8 +1187,13 @@ class BillingGatewayService
         ), 2);
         $currentBalance = round((float) $this->walletService->balanceFor($client, $currency), 2);
 
-        if ($minAmount > 0 && $amount < $minAmount) {
-            throw new InvalidArgumentException('Top-up amount is below the provider minimum.');
+        $effectiveMinAmount = max($minAmount, $minSingleTopup);
+        if ($effectiveMinAmount > 0 && $amount < $effectiveMinAmount) {
+            throw new InvalidArgumentException(
+                $minSingleTopup > $minAmount
+                    ? 'Top-up amount is below the market minimum.'
+                    : 'Top-up amount is below the provider minimum.'
+            );
         }
 
         if ($maxAmount > 0 && $amount > $maxAmount) {

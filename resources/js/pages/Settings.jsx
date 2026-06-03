@@ -893,6 +893,7 @@ function defaultWalletPlatformForm(currency = 'KES') {
         supported_currencies: [currency],
         effective_currencies: [currency],
         multi_currency_wallet_enabled: false,
+        min_single_topup: '100.00',
         max_single_topup: '50000.00',
         max_wallet_balance: '200000.00',
         topup_presets: presets,
@@ -901,6 +902,7 @@ function defaultWalletPlatformForm(currency = 'KES') {
         },
         limits_by_currency: {
             [currency]: {
+                min_single_topup: '100.00',
                 max_single_topup: '50000.00',
                 max_wallet_balance: '200000.00',
             },
@@ -939,6 +941,9 @@ function buildWalletPlatformForm(platform) {
     }, {});
     const limitsByCurrency = supportedCurrencies.reduce((carry, currency) => {
         carry[currency] = {
+            min_single_topup: wallet.limits_by_currency?.[currency]?.min_single_topup
+                || (currency === primaryCurrency ? wallet.min_single_topup : '')
+                || fallback.min_single_topup,
             max_single_topup: wallet.limits_by_currency?.[currency]?.max_single_topup
                 || (currency === primaryCurrency ? wallet.max_single_topup : '')
                 || fallback.max_single_topup,
@@ -959,6 +964,7 @@ function buildWalletPlatformForm(platform) {
             ? platform.effective_currencies.map((value) => String(value).toUpperCase())
             : [primaryCurrency],
         multi_currency_wallet_enabled: Boolean(platform?.multi_currency_wallet_enabled),
+        min_single_topup: wallet.min_single_topup || fallback.min_single_topup,
         max_single_topup: wallet.max_single_topup || fallback.max_single_topup,
         max_wallet_balance: wallet.max_wallet_balance || fallback.max_wallet_balance,
         topup_presets: Array.isArray(wallet.topup_presets) && wallet.topup_presets.length > 0
@@ -2128,6 +2134,7 @@ function IntegrationsWorkspace({
                 }
                 if (!limitsByCurrency[currency]) {
                     limitsByCurrency[currency] = {
+                        min_single_topup: currency === current.currency_code ? current.min_single_topup : '',
                         max_single_topup: currency === current.currency_code ? current.max_single_topup : '',
                         max_wallet_balance: currency === current.currency_code ? current.max_wallet_balance : '',
                     };
@@ -2178,7 +2185,11 @@ function IntegrationsWorkspace({
                 },
             },
             ...(currency === current.currency_code
-                ? (field === 'max_single_topup' ? { max_single_topup: value } : { max_wallet_balance: value })
+                ? ({
+                    min_single_topup: field === 'min_single_topup' ? value : current.min_single_topup,
+                    max_single_topup: field === 'max_single_topup' ? value : current.max_single_topup,
+                    max_wallet_balance: field === 'max_wallet_balance' ? value : current.max_wallet_balance,
+                })
                 : {}),
         }));
     };
@@ -2280,16 +2291,23 @@ function IntegrationsWorkspace({
                 return;
             }
 
+            const minSingleTopup = String(walletPlatformForm.limits_by_currency?.[currency]?.min_single_topup || '').trim();
             const maxSingleTopup = String(walletPlatformForm.limits_by_currency?.[currency]?.max_single_topup || '').trim();
             const maxWalletBalance = String(walletPlatformForm.limits_by_currency?.[currency]?.max_wallet_balance || '').trim();
 
-            if (!maxSingleTopup || !maxWalletBalance) {
-                toast.error(`${currency} needs both max single top-up and max wallet balance.`);
+            if (!minSingleTopup || !maxSingleTopup || !maxWalletBalance) {
+                toast.error(`${currency} needs min top-up, max single top-up, and max wallet balance.`);
+                return;
+            }
+
+            if (Number(minSingleTopup) > Number(maxSingleTopup)) {
+                toast.error(`${currency} minimum top-up cannot exceed the max single top-up.`);
                 return;
             }
 
             topupPresetsByCurrency[currency] = presets;
             limitsByCurrency[currency] = {
+                min_single_topup: minSingleTopup,
                 max_single_topup: maxSingleTopup,
                 max_wallet_balance: maxWalletBalance,
             };
@@ -2312,6 +2330,7 @@ function IntegrationsWorkspace({
                 currency_code: primaryCurrency,
                 supported_currencies: supportedCurrencies,
                 multi_currency_wallet_enabled: Boolean(walletPlatformForm.multi_currency_wallet_enabled),
+                min_single_topup: limitsByCurrency[primaryCurrency]?.min_single_topup || walletPlatformForm.min_single_topup.trim(),
                 max_single_topup: limitsByCurrency[primaryCurrency]?.max_single_topup || walletPlatformForm.max_single_topup.trim(),
                 max_wallet_balance: limitsByCurrency[primaryCurrency]?.max_wallet_balance || walletPlatformForm.max_wallet_balance.trim(),
                 topup_presets: topupPresetsByCurrency[primaryCurrency] || [],
@@ -4077,7 +4096,16 @@ function IntegrationsWorkspace({
                                                     <div className="space-y-3">
                                                         {(walletPlatformForm.supported_currencies || [walletPlatformForm.currency_code]).map((currency) => (
                                                             <div key={`wallet-currency-${currency}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                                                                <div className="grid gap-3 md:grid-cols-2">
+                                                                <div className="grid gap-3 md:grid-cols-3">
+                                                                    <div>
+                                                                        <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{currency} min top-up</label>
+                                                                        <input
+                                                                            value={walletPlatformForm.limits_by_currency?.[currency]?.min_single_topup || ''}
+                                                                            onChange={(event) => updateWalletLimitByCurrency(currency, 'min_single_topup', event.target.value)}
+                                                                            className="crm-input"
+                                                                            placeholder="Min top-up"
+                                                                        />
+                                                                    </div>
                                                                     <div>
                                                                         <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{currency} max single top-up</label>
                                                                         <input

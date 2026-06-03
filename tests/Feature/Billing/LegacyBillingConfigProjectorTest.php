@@ -59,6 +59,7 @@ class LegacyBillingConfigProjectorTest extends TestCase
             'currency_code' => 'GHS',
             'topup_preset_json' => ['150.00', '300.00'],
             'limit_json' => [
+                'min_single_topup' => '200.00',
                 'max_single_topup' => '9000.00',
                 'max_wallet_balance' => '120000.00',
             ],
@@ -161,6 +162,7 @@ class LegacyBillingConfigProjectorTest extends TestCase
             'currency_code' => 'GHS',
             'topup_preset_json' => ['150.00', '300.00', '900.00'],
             'limit_json' => [
+                'min_single_topup' => '200.00',
                 'max_single_topup' => '9000.00',
                 'max_wallet_balance' => '120000.00',
             ],
@@ -249,6 +251,7 @@ class LegacyBillingConfigProjectorTest extends TestCase
         $this->assertTrue($runtime['enabled']);
         $this->assertSame('sandbox', $runtime['mode_override']);
         $this->assertSame('GHS', $runtime['currency_code']);
+        $this->assertSame('200.00', $runtime['min_single_topup']);
         $this->assertSame('9000.00', $runtime['max_single_topup']);
         $this->assertSame('120000.00', $runtime['max_wallet_balance']);
         $this->assertSame(['150.00', '300.00', '900.00'], $runtime['topup_presets']);

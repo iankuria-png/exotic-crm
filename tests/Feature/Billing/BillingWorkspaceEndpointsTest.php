@@ -717,6 +717,7 @@ class BillingWorkspaceEndpointsTest extends TestCase
             'currency_code' => 'KES',
             'topup_preset_json' => ['500.00', '1000.00', '2500.00'],
             'limit_json' => [
+                'min_single_topup' => '250.00',
                 'max_single_topup' => '50000.00',
                 'max_wallet_balance' => '200000.00',
             ],
@@ -736,6 +737,7 @@ class BillingWorkspaceEndpointsTest extends TestCase
             ->assertJsonPath('wallet_rule.enabled', true)
             ->assertJsonPath('wallet_rule.currency_code', 'KES')
             ->assertJsonPath('wallet_rule.topup_preset_json.0', '500.00')
+            ->assertJsonPath('wallet_rule.limit_json.min_single_topup', '250.00')
             ->assertJsonPath('wallet_rule.limit_json.max_single_topup', '50000.00')
             ->assertJsonPath('wallet_rule.auto_renew_json.enabled', true)
             ->assertJsonPath('wallet_rule.ui_json.recent_transactions_limit', '6');

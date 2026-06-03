@@ -65,6 +65,11 @@ class LegacyBillingConfigProjector
                 $projected['topup_presets_by_currency'] = $presetsByCurrency;
             }
 
+            $minSingleTopup = data_get($walletRule->limit_json, 'min_single_topup');
+            if ($this->filled($minSingleTopup)) {
+                $projected['min_single_topup'] = $this->formatMoneyString($minSingleTopup, $projected['min_single_topup'] ?? '100.00');
+            }
+
             $maxSingleTopup = data_get($walletRule->limit_json, 'max_single_topup');
             if ($this->filled($maxSingleTopup)) {
                 $projected['max_single_topup'] = $this->formatMoneyString($maxSingleTopup, $projected['max_single_topup'] ?? '50000.00');
@@ -75,11 +80,12 @@ class LegacyBillingConfigProjector
                 $projected['max_wallet_balance'] = $this->formatMoneyString($maxWalletBalance, $projected['max_wallet_balance'] ?? '200000.00');
             }
 
-            if (isset($projected['max_single_topup']) || isset($projected['max_wallet_balance'])) {
+            if (isset($projected['min_single_topup']) || isset($projected['max_single_topup']) || isset($projected['max_wallet_balance'])) {
                 $projected['limits_by_currency'] = array_merge(
                     is_array($projected['limits_by_currency'] ?? null) ? $projected['limits_by_currency'] : [],
                     [
                         $primaryCurrency => array_filter([
+                            'min_single_topup' => $projected['min_single_topup'] ?? null,
                             'max_single_topup' => $projected['max_single_topup'] ?? null,
                             'max_wallet_balance' => $projected['max_wallet_balance'] ?? null,
                         ], static fn ($value) => $value !== null && $value !== ''),
@@ -94,11 +100,15 @@ class LegacyBillingConfigProjector
                     }
 
                     $normalized = [];
-                    foreach (['max_single_topup', 'max_wallet_balance'] as $key) {
+                    foreach (['min_single_topup', 'max_single_topup', 'max_wallet_balance'] as $key) {
                         if ($this->filled($values[$key] ?? null)) {
                             $normalized[$key] = $this->formatMoneyString(
                                 $values[$key],
-                                $projected[$key] ?? ($key === 'max_single_topup' ? '50000.00' : '200000.00')
+                                $projected[$key] ?? match ($key) {
+                                    'min_single_topup' => '100.00',
+                                    'max_single_topup' => '50000.00',
+                                    default => '200000.00',
+                                }
                             );
                         }
                     }

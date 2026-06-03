@@ -12,6 +12,7 @@ function makeDraft(walletRule, market) {
         topup_presets_text: Array.isArray(walletRule?.topup_preset_json)
             ? walletRule.topup_preset_json.join(', ')
             : '',
+        min_single_topup: walletRule?.limit_json?.min_single_topup || walletRule?.limit_json?.min_single || '',
         max_single_topup: walletRule?.limit_json?.max_single_topup || walletRule?.limit_json?.max_single || '',
         max_wallet_balance:
             walletRule?.limit_json?.max_wallet_balance || walletRule?.limit_json?.max_balance || '',
@@ -35,6 +36,7 @@ function normalizeDraft(draft) {
             .map((value) => value.trim())
             .filter(Boolean)
             .join('|'),
+        min_single_topup: String(draft.min_single_topup || '').trim(),
         max_single_topup: String(draft.max_single_topup || '').trim(),
         max_wallet_balance: String(draft.max_wallet_balance || '').trim(),
         auto_renew_enabled: Boolean(draft.auto_renew_enabled),
@@ -117,6 +119,7 @@ export default function WalletRulesTab({ platforms = [] }) {
             currency_code: String(draft.currency_code || '').trim().toUpperCase(),
             topup_preset_json: presets,
             limit_json: {
+                min_single_topup: String(draft.min_single_topup || '').trim(),
                 max_single_topup: String(draft.max_single_topup || '').trim(),
                 max_wallet_balance: String(draft.max_wallet_balance || '').trim(),
             },
@@ -325,6 +328,12 @@ export default function WalletRulesTab({ platforms = [] }) {
                             onChange={(value) => setDraft((current) => ({ ...current, recent_transactions_limit: value }))}
                         />
                         <Field
+                            label="Min top-up"
+                            value={draft.min_single_topup}
+                            disabled={!editable}
+                            onChange={(value) => setDraft((current) => ({ ...current, min_single_topup: value }))}
+                        />
+                        <Field
                             label="Max single top-up"
                             value={draft.max_single_topup}
                             disabled={!editable}
@@ -408,9 +417,9 @@ export default function WalletRulesTab({ platforms = [] }) {
             <section className="rounded-3xl border border-slate-200 bg-slate-50/80 p-5">
                 <div className="grid gap-4 xl:grid-cols-4">
                     <MetricCard label="Currency" value={draft.currency_code || '—'} tone="slate" />
+                    <MetricCard label="Min top-up" value={draft.min_single_topup || '—'} tone="slate" />
                     <MetricCard label="Presets" value={String(String(draft.topup_presets_text || '').split(',').map((entry) => entry.trim()).filter(Boolean).length)} tone="slate" />
                     <MetricCard label="Auto-renew" value={draft.auto_renew_enabled ? 'On' : 'Off'} tone={draft.auto_renew_enabled ? 'emerald' : 'slate'} />
-                    <MetricCard label="Workspace mode" value={editable ? 'Editable' : 'Review'} tone={editable ? 'emerald' : 'slate'} />
                 </div>
             </section>
 

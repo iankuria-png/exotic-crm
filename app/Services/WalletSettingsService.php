@@ -681,6 +681,7 @@ class WalletSettingsService
             'currency_code' => $primaryCurrency,
             'supported_currencies' => [$primaryCurrency],
             'multi_currency_wallet_enabled' => (bool) $platform->multi_currency_wallet_enabled,
+            'min_single_topup' => '100.00',
             'max_single_topup' => '50000.00',
             'max_wallet_balance' => '200000.00',
             'topup_presets' => ['500.00', '1000.00', '2000.00', '5000.00'],
@@ -689,6 +690,7 @@ class WalletSettingsService
             ],
             'limits_by_currency' => [
                 $primaryCurrency => [
+                    'min_single_topup' => '100.00',
                     'max_single_topup' => '50000.00',
                     'max_wallet_balance' => '200000.00',
                 ],
@@ -760,6 +762,10 @@ class WalletSettingsService
                 ? $configuredLimitsByCurrency[$currency]
                 : [];
             $limitsByCurrency[$currency] = [
+                'min_single_topup' => $this->formatMoneyString(
+                    $limitSource['min_single_topup'] ?? ($currency === $primaryCurrency ? ($settings['min_single_topup'] ?? null) : null),
+                    '100.00'
+                ),
                 'max_single_topup' => $this->formatMoneyString(
                     $limitSource['max_single_topup'] ?? ($currency === $primaryCurrency ? ($settings['max_single_topup'] ?? null) : null),
                     '50000.00'
@@ -777,6 +783,7 @@ class WalletSettingsService
         $settings['topup_presets_by_currency'] = $topupByCurrency;
         $settings['limits_by_currency'] = $limitsByCurrency;
         $settings['topup_presets'] = $topupByCurrency[$primaryCurrency] ?? ($settings['topup_presets'] ?? []);
+        $settings['min_single_topup'] = $limitsByCurrency[$primaryCurrency]['min_single_topup'] ?? ($settings['min_single_topup'] ?? '100.00');
         $settings['max_single_topup'] = $limitsByCurrency[$primaryCurrency]['max_single_topup'] ?? ($settings['max_single_topup'] ?? '50000.00');
         $settings['max_wallet_balance'] = $limitsByCurrency[$primaryCurrency]['max_wallet_balance'] ?? ($settings['max_wallet_balance'] ?? '200000.00');
 
@@ -1026,7 +1033,7 @@ class WalletSettingsService
             $merged['multi_currency_wallet_enabled'] = (bool) $incoming['multi_currency_wallet_enabled'];
         }
 
-        foreach (['max_single_topup', 'max_wallet_balance'] as $key) {
+        foreach (['min_single_topup', 'max_single_topup', 'max_wallet_balance'] as $key) {
             if (array_key_exists($key, $incoming)) {
                 $merged[$key] = $this->formatMoneyString($incoming[$key], $merged[$key]);
             }
@@ -1078,7 +1085,7 @@ class WalletSettingsService
                     }
 
                     $normalized = [];
-                    foreach (['max_single_topup', 'max_wallet_balance'] as $key) {
+                    foreach (['min_single_topup', 'max_single_topup', 'max_wallet_balance'] as $key) {
                         if (array_key_exists($key, $values)) {
                             $normalized[$key] = $this->formatMoneyString($values[$key], null);
                         }
@@ -1138,6 +1145,7 @@ class WalletSettingsService
                 is_array($merged['limits_by_currency'] ?? null) ? $merged['limits_by_currency'] : [],
                 [
                     $primaryCurrency => array_filter([
+                        'min_single_topup' => $merged['min_single_topup'] ?? null,
                         'max_single_topup' => $merged['max_single_topup'] ?? null,
                         'max_wallet_balance' => $merged['max_wallet_balance'] ?? null,
                     ], static fn ($value) => $value !== null && $value !== ''),
