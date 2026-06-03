@@ -15,6 +15,7 @@ import ProfileEngagementWidget from '../components/dashboard/ProfileEngagementWi
 import FxNormalizationNotice from '../components/FxNormalizationNotice';
 import AiInsightsPanel from '../components/ai/AiInsightsPanel';
 import useCeoReportingCurrency from '../hooks/useCeoReportingCurrency';
+import useDashboardWidgets from '../hooks/useDashboardWidgets';
 import { marketLabel } from '../components/dashboard/ceoFormatters';
 
 function toInputDate(date) {
@@ -50,6 +51,7 @@ function compactWindowLabel(window) {
 export default function CeoDashboard({ user, onSwitchAdminView }) {
     const navigate = useNavigate();
     const reporting = useCeoReportingCurrency();
+    const { config: widgetConfig } = useDashboardWidgets();
     const [horizon, setHorizon] = useState('30d');
     const [customRange, setCustomRange] = useState(defaultCustomRange);
     const [platformFilter, setPlatformFilter] = useState(null);
@@ -221,7 +223,7 @@ export default function CeoDashboard({ user, onSwitchAdminView }) {
                 onAgentClick={setFocusedAgentId}
             />
 
-            <AiInsightsPanel user={user} context={aiInsightContext} />
+            {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} context={aiInsightContext} /> : null}
 
             <section className="grid gap-4 2xl:grid-cols-2">
                 <div>
