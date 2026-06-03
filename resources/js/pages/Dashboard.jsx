@@ -1065,6 +1065,7 @@ function OperationsDashboard() {
 export default function Dashboard() {
     const navigate = useNavigate();
     const { user, isLoading } = useAuth();
+    const { config: widgetConfig } = useDashboardWidgets();
     const [ceoViewMode, setCeoViewMode] = useState(() => {
         if (typeof window === 'undefined') return 'ceo';
         return window.localStorage.getItem(CEO_VIEW_MODE_STORAGE_KEY) || 'ceo';
@@ -1114,7 +1115,7 @@ export default function Dashboard() {
                         Switch to CEO view
                     </button>
                 </div>
-                <AiInsightsPanel user={user} />
+                {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} /> : null}
                 <OperationsDashboard />
             </div>
         );
@@ -1122,7 +1123,7 @@ export default function Dashboard() {
 
     return (
         <div className="space-y-4">
-            <AiInsightsPanel user={user} />
+            {widgetConfig.ai_analyst ? <AiInsightsPanel user={user} /> : null}
             <OperationsDashboard />
         </div>
     );

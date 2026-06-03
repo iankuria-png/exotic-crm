@@ -13,6 +13,7 @@ const DEFAULT_CONFIG = {
     quick_stats: true,
     recent_activity: true,
     comms_balance: true,
+    ai_analyst: true,
 };
 
 const WIDGET_LABELS = {
@@ -26,6 +27,7 @@ const WIDGET_LABELS = {
     quick_stats: { name: 'Quick Stats', description: 'New leads, pending follow-ups, and active campaigns' },
     recent_activity: { name: 'Recent Activity', description: 'Latest timeline events across the system' },
     comms_balance: { name: 'Comms & Delivery', description: 'SMS delivery stats and recent send metrics' },
+    ai_analyst: { name: 'Talk to Your Data', description: 'AI analyst question box, source selector, and answers' },
 };
 
 let listeners = [];
