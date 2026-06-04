@@ -499,6 +499,11 @@ function OperationsDashboard() {
     const paymentRecoveryFailed = hasDashboardError ? null : asNumber(kpis.payment_recovery_failed);
     const paymentRecoveryUnmatched = hasDashboardError ? null : asNumber(kpis.payment_recovery_unmatched);
     const paymentRecoveryQueueTotal = hasDashboardError ? null : asNumber(kpis.payment_recovery_queue_total);
+    const failedPaymentRecovery = hasDashboardError ? {} : (kpis.failed_payment_recovery || {});
+    const failedPaymentRecoveryRate = Number(failedPaymentRecovery.payment_recovery_rate || 0);
+    const failedPaymentRecoveryCustomersRate = Number(failedPaymentRecovery.customer_recovery_rate || 0);
+    const failedPaymentsWindow = asNumber(failedPaymentRecovery.failed_payments);
+    const recoveredPaymentsWindow = asNumber(failedPaymentRecovery.recovered_payments);
     const renewalRisk72h = hasDashboardError ? null : asNumber(kpis.renewal_risk_72h ?? kpis.expiring_soon);
     const renewalPipeline14d = hasDashboardError ? null : asNumber(kpis.renewal_pipeline_4_14d);
     const renewalWorkload14d = hasDashboardError ? null : asNumber(kpis.renewal_workload_14d ?? ((renewalRisk72h ?? 0) + (renewalPipeline14d ?? 0)));
@@ -578,6 +583,7 @@ function OperationsDashboard() {
             label: 'Payment Recovery Queue',
             value: 'Unavailable',
             hint: 'Recovery queue metrics could not be loaded.',
+            subHint: 'Failed-payment recovery rate is hidden until the summary endpoint recovers.',
             tone: 'danger',
         },
         {
@@ -620,6 +626,9 @@ function OperationsDashboard() {
             hint: paymentRecoveryQueueTotal > 0
                 ? `${paymentRecoveryFailed} failed • ${paymentRecoveryPending} pending • ${paymentRecoveryUnmatched} unmatched`
                 : 'No payment recovery backlog',
+            subHint: failedPaymentsWindow > 0
+                ? `${failedPaymentRecoveryRate.toFixed(1)}% recovered · ${recoveredPaymentsWindow}/${failedPaymentsWindow} failed payments · ${failedPaymentRecoveryCustomersRate.toFixed(1)}% of customers`
+                : 'No failed payments in selected range',
             tone: paymentRecoveryQueueTotal > 0 ? 'danger' : 'default',
             onClick: () => navigate(withMarketScope('/payments?status=recovery_queue')),
         },

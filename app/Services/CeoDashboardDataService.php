@@ -19,7 +19,8 @@ use Illuminate\Support\Str;
 class CeoDashboardDataService
 {
     public function __construct(
-        private readonly ReportingCurrencyService $reportingCurrencyService
+        private readonly ReportingCurrencyService $reportingCurrencyService,
+        private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService
     ) {
     }
 
@@ -32,6 +33,9 @@ class CeoDashboardDataService
         $startActive = $this->activeClientSnapshot($context['from']->copy()->subDay(), $context['platform_id']);
         $currentCustomerMix = $this->customerRevenueMix($context['from'], $context['to'], $context['platform_id'], $context['target_currency']);
         $priorCustomerMix = $this->customerRevenueMix($context['prior_from'], $context['prior_to'], $context['platform_id'], $context['target_currency']);
+        $platformIds = $context['platform_id'] ? [(int) $context['platform_id']] : null;
+        $currentRecovery = $this->paymentRecoveryMetricService->compute($platformIds, $context['from'], $context['to']);
+        $priorRecovery = $this->paymentRecoveryMetricService->compute($platformIds, $context['prior_from'], $context['prior_to']);
         $marketPie = $this->marketPie($request)['markets'] ?? [];
         $agentPerformance = $this->agentPerformance($request)['agents'] ?? [];
 
@@ -66,6 +70,13 @@ class CeoDashboardDataService
                     'prior_value' => $priorCustomerMix['buckets']['existing_active'],
                     'delta_percent' => $this->percentDelta($currentCustomerMix['buckets']['existing_active']['normalized_amount'], $priorCustomerMix['buckets']['existing_active']['normalized_amount']),
                     'href' => '/payments?customer_mix_segment=existing_active',
+                ],
+                'failed_payment_recovery' => [
+                    'label' => 'Failed Payment Recovery',
+                    'value' => $currentRecovery,
+                    'prior_value' => $priorRecovery,
+                    'delta_percent' => $this->percentDelta($currentRecovery['payment_recovery_rate'], $priorRecovery['payment_recovery_rate']),
+                    'href' => '/payments?status=recovery_queue',
                 ],
             ],
             'customer_mix' => $currentCustomerMix,

@@ -27,6 +27,10 @@ function metricValue(key, metric, reporting) {
         return Number(metric.value?.count || 0).toLocaleString();
     }
 
+    if (key === 'failed_payment_recovery') {
+        return `${Number(metric.value?.payment_recovery_rate || 0).toFixed(1)}%`;
+    }
+
     return Number(metric.value?.count || 0).toLocaleString();
 }
 
@@ -49,6 +53,14 @@ function metricSubHint(key, metric) {
         return `${Number(metric.value?.payments_count || 0).toLocaleString()} successful payments`;
     }
 
+    if (key === 'failed_payment_recovery') {
+        const recovered = Number(metric.value?.recovered_payments || 0).toLocaleString();
+        const failed = Number(metric.value?.failed_payments || 0).toLocaleString();
+        const customerRate = Number(metric.value?.customer_recovery_rate || 0).toFixed(1);
+
+        return `${recovered}/${failed} failed payments · ${customerRate}% of customers`;
+    }
+
     return 'Compared with the prior matching window';
 }
 
@@ -58,10 +70,11 @@ export default function CeoMetricStrip({ metrics = {}, reporting, isLoading, onO
         ['active_clients', 'Active Subscribers'],
         ['new_user_revenue', 'New User Revenue'],
         ['existing_user_revenue', 'Existing User Revenue'],
+        ['failed_payment_recovery', 'Failed Payment Recovery'],
     ];
 
     return (
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             {order.map(([key, fallbackLabel]) => {
                 const metric = metrics[key];
                 const tone = deltaTone(metric?.delta_percent);

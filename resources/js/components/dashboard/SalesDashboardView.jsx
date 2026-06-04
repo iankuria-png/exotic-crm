@@ -266,6 +266,10 @@ function SalesHero({
     const leadContacts = asNumber(summaryRow.leads_contacted);
     const activations = asNumber(summaryRow.subs_activated);
     const recoveryQueue = asNumber(summary?.kpis?.payment_recovery_queue_total);
+    const failedRecovery = summary?.kpis?.failed_payment_recovery || {};
+    const recoveryRate = asNumber(failedRecovery.payment_recovery_rate);
+    const failedPayments = asNumber(failedRecovery.failed_payments);
+    const recoveredPayments = asNumber(failedRecovery.recovered_payments);
     const renewalWorkload = asNumber(summary?.kpis?.renewal_workload_14d);
     const activeGoals = Array.isArray(myStats?.goals) ? myStats.goals : [];
     const goalsBehind = activeGoals.filter((goal) => asNumber(goal.percentage) < 60).length;
@@ -379,7 +383,11 @@ function SalesHero({
                         >
                             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-200">Recovery queue</p>
                             <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{recoveryQueue.toLocaleString()}</p>
-                            <p className="mt-1 text-sm text-slate-200">payments waiting</p>
+                            <p className="mt-1 text-sm text-slate-200">
+                                {failedPayments > 0
+                                    ? `${recoveryRate.toFixed(1)}% recovered · ${recoveredPayments}/${failedPayments}`
+                                    : 'payments waiting'}
+                            </p>
                         </button>
                         <button
                             type="button"
@@ -807,6 +815,11 @@ function PaymentRecoveryCard({ kpis, onOpen, isLoading }) {
     const failed = asNumber(kpis.payment_recovery_failed);
     const pending = asNumber(kpis.payment_recovery_pending);
     const unmatched = asNumber(kpis.payment_recovery_unmatched);
+    const recoveryMetric = kpis.failed_payment_recovery || {};
+    const failedPayments = asNumber(recoveryMetric.failed_payments);
+    const recoveredPayments = asNumber(recoveryMetric.recovered_payments);
+    const paymentRecoveryRate = asNumber(recoveryMetric.payment_recovery_rate);
+    const customerRecoveryRate = asNumber(recoveryMetric.customer_recovery_rate);
     const breakdownRows = [
         {
             label: 'Failed payments',
@@ -871,13 +884,24 @@ function PaymentRecoveryCard({ kpis, onOpen, isLoading }) {
             ) : (
             <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white">
                 <div className="border-b border-slate-200 px-4 py-4">
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px]">
                         <div>
                             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Queue total</p>
                             <p className="mt-2 text-[2.4rem] leading-none font-semibold tracking-[-0.04em] text-slate-950">{queueTotal.toLocaleString()}</p>
                             <p className="mt-2 text-sm text-slate-500">payments waiting for review or reconciliation</p>
                         </div>
-                        <Badge label={primaryLabel} tone={primaryTone} />
+                        <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-3 py-3 text-right">
+                            <div className="flex justify-end">
+                                <Badge label={primaryLabel} tone={primaryTone} />
+                            </div>
+                            <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recovery rate</p>
+                            <p className="mt-1 text-2xl leading-none font-semibold tracking-[-0.03em] text-slate-950">{paymentRecoveryRate.toFixed(1)}%</p>
+                            <p className="mt-2 text-xs leading-5 text-slate-500">
+                                {failedPayments > 0
+                                    ? `${recoveredPayments}/${failedPayments} failed payments · ${customerRecoveryRate.toFixed(1)}% customers`
+                                    : 'No failed payments in this window'}
+                            </p>
+                        </div>
                     </div>
                 </div>
                 <div className="divide-y divide-slate-200">

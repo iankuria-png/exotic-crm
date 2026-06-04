@@ -19,6 +19,7 @@ use App\Models\TimelineEvent;
 use App\Services\ClientRetentionInsightService;
 use App\Services\ClientSyncRunService;
 use App\Services\MarketAuthorizationService;
+use App\Services\PaymentRecoveryMetricService;
 use App\Services\RenewalService;
 use App\Services\ReportingCurrencyService;
 use App\Services\SupportBoardService;
@@ -45,7 +46,8 @@ class DashboardController extends Controller
         private readonly RenewalService $renewalService,
         private readonly ClientRetentionInsightService $clientRetentionInsightService,
         private readonly ReportingCurrencyService $reportingCurrencyService,
-        private readonly ClientSyncRunService $clientSyncRunService
+        private readonly ClientSyncRunService $clientSyncRunService,
+        private readonly PaymentRecoveryMetricService $paymentRecoveryMetricService
     ) {
     }
 
@@ -264,6 +266,11 @@ class DashboardController extends Controller
             $paymentRecoveryUnmatched = (clone $unmatchedQueueQuery)->count();
             $unmatchedPaymentsWindow = (clone $unmatchedPaymentsWindowQuery)->count();
             $paymentRecoveryTotal = $paymentRecoveryPending + $paymentRecoveryFailed + $paymentRecoveryUnmatched;
+            $failedPaymentRecovery = $this->paymentRecoveryMetricService->compute(
+                is_array($platformIds) ? $platformIds : null,
+                $from,
+                $to
+            );
 
             $renewalSummary = $this->renewalService->buildSummary([
                 'platform_ids' => is_array($platformIds) ? $platformIds : null,
@@ -396,6 +403,7 @@ class DashboardController extends Controller
                 'payment_recovery_pending' => $paymentRecoveryPending,
                 'payment_recovery_failed' => $paymentRecoveryFailed,
                 'payment_recovery_unmatched' => $paymentRecoveryUnmatched,
+                'failed_payment_recovery' => $failedPaymentRecovery,
                 'unmatched_payments_window' => $unmatchedPaymentsWindow,
                 'unmatched_payments' => $unmatchedPaymentsWindow,
                 'renewal_risk_72h' => $renewalRisk72h,
